@@ -27,7 +27,7 @@
     "fx:test": "node tools/fx-test.mjs",
     "validate:registry": "node tools/registry-validate.mjs registry",
     "legacy:verify": "node tools/legacy-verify.mjs",
-    "test": "node --test --test-timeout=300000 \"tests/*.test.mjs\" \"tests/outputs/*.test.mjs\"",
+    "test": "node tools/run-tests.mjs",
     "validate:outputs": "node tools/outputs-validate-presets.mjs",
     "label": "node tools/label/server.mjs",
     "validate:games": "node tools/game-validate.mjs data/games",
