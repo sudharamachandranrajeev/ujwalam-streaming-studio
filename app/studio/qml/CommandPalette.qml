@@ -12,6 +12,7 @@ Popup {
     objectName: "paletteBox"
     required property var store
     required property var settings     // the Settings dialog: its pages are commands too
+    property var windows: ({})         // the More menu windows: {growth: GrowthWindow, ...}, each with show()
     // Hidden test mode (never on screen): drawn inside the never-shown window, not as a window of its own.
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: true
@@ -38,6 +39,8 @@ Popup {
         list.push({ text: "Add a scene", words: "new scene add create", run: () => s.addScene() });
         if (s.activeScene !== "")
             list.push({ text: "Add a layer to this scene", words: "new layer add source image video text browser", run: () => s.addLayer(s.activeScene) });
+        if (s.flags["growth"] === true && windows.growth)
+            list.push({ text: "Growth numbers", words: "growth youtube numbers views likes statistics analytics", run: () => windows.growth.show() });
         for (const g of settings.groups)
             for (const p of g.pages)
                 list.push({ text: "Settings: " + p, words: "settings options preferences " + p + " " + (settings.pageWords[p] || ""),
