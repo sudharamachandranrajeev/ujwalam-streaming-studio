@@ -504,6 +504,7 @@ const Data &defaultData()
 // ---- LU2: live reload of the current pack (D324) ----
 QFileSystemWatcher *g_watch = nullptr;
 QTimer *g_reloadTimer = nullptr;
+int g_reloadTries = 0; // retries of a pack file that could not be read (reloadCurrent)
 QByteArray g_fileHash; // content hash of the pack file the current look came from (empty: embedded)
 int g_reloads = 0, g_rejects = 0;
 QString g_lastReject;
@@ -1147,15 +1148,23 @@ void reloadCurrent()
 {
 	if (!g_cur.valid)
 		return;
+	// A file that is missing (between delete and rename) or cannot be opened (a scanner or the saving program holds it)
+	// is tried again a few times: no further file event may come, and that version would never be seen (a broken
+	// save went unreported under load, 2026-11-14). An embedded-only pack just runs out of tries.
+	const auto again = []() {
+		if (++g_reloadTries <= 10)
+			g_reloadTimer->start(300);
+	};
 	const QString p = packFile(g_cur.id);
 	if (p.isEmpty())
-		return; // embedded pack only, or the file is between delete and rename: the next event retries
+		return again();
 	if (g_watch && !g_watch->files().contains(p))
 		g_watch->addPath(p); // a save through rename replaced the watched file
 	bool ok = false;
 	const QByteArray b = readBytes(p, &ok);
 	if (!ok)
-		return;
+		return again();
+	g_reloadTries = 0;
 	const QByteArray h = hashOf(b);
 	if (h == g_fileHash)
 		return;
@@ -1192,7 +1201,7 @@ void startWatch()
 	g_reloadTimer = new QTimer(qApp);
 	g_reloadTimer->setSingleShot(true);
 	QObject::connect(g_reloadTimer, &QTimer::timeout, qApp, []() { reloadCurrent(); });
-	const auto kick = [](const QString &) { g_reloadTimer->start(200); };
+	const auto kick = [](const QString &) { g_reloadTries = 0; g_reloadTimer->start(200); }; // a new event: new tries
 	QObject::connect(g_watch, &QFileSystemWatcher::fileChanged, qApp, kick);
 	QObject::connect(g_watch, &QFileSystemWatcher::directoryChanged, qApp, kick);
 	for (const QString &dir : searchDirs())

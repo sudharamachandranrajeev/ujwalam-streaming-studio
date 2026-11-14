@@ -66,7 +66,8 @@ describe('QML studio themes (headless probe)', { skip }, () => {
     try {
       const running = startShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: String(ms),
         UJWALAM_STUDIO_PROBE_ACTIONS: actions.join(','), ...env });
-      if (during) await during();
+      // A failed step still waits for the shell to end: it holds its log file open until then (EPERM on cleanup).
+      if (during) await during().catch(async (e) => { await running; throw e; });
       const r = await running;
       assert.equal(r.code, 0, r.err);
       const m = /^studio probe: (.+)$/m.exec(r.out);
