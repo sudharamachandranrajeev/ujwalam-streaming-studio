@@ -116,8 +116,10 @@ describe('QML studio themes (headless probe)', { skip }, () => {
   });
 
   test('High performance switches live and keeps through a theme switch', async () => {
-    const { p, s } = await probe({ actions: ['theme:teal-grid', 'effects:performance', 'theme:sand-teal'] });
-    assert.ok(p.actions.every((a) => a.done), JSON.stringify(p.actions));
+    // The probe reads the window at a fixed time; under full-CI load the last switch had not run by then (2 of 3 actions
+    // listed, every() still true; 2026-11-14). Count them, and give it the time.
+    const { p, s } = await probe({ ms: 14000, actions: ['theme:teal-grid', 'effects:performance', 'theme:sand-teal'] });
+    assert.deepEqual(p.actions.map((a) => [a.action, a.done]), [['theme:teal-grid', true], ['effects:performance', true], ['theme:sand-teal', true]]);
     assert.deepEqual([p.theme, s.effects, s.motion], ['sand-teal', 'performance', false], 'flat mode: no animation');
   });
 
@@ -152,24 +154,25 @@ describe('QML studio themes (headless probe)', { skip }, () => {
     const write = (accent) => { const p = pack('violet-night'); p.id = 'lu-reload'; p.name = 'Reload test'; p.colors.accent = accent; writeViaRename(file, `${JSON.stringify(p, null, 2)}\n`); };
     write('#112233');
     // Each step waits until the studio's log says it has seen the one before (fixed sleeps lost the race under full-CI
-    // load twice on 2026-11-14: the broken file was replaced before the busy window read it). The log is flushed per line.
+    // load on 2026-11-14: the broken file was replaced before the busy window read it). The log is flushed per line.
+    // Under full-CI load a restyle of the software-drawn window holds its event loop for seconds, so each wait is long
+    // and there is one valid save (the fix) rather than two: the final colour shows a valid save applies live.
     const logs = tmp('ujw-qmlth-log-');
     const logText = () => readdirSync(logs).filter((f) => f.startsWith('studio-')).map((f) => readFileSync(path.join(logs, f), 'utf8')).join('');
     const count = (re) => (logText().match(re) ?? []).length;
     const until = async (cond, ms, what) => { const end = Date.now() + ms; while (!cond()) { if (Date.now() > end) throw new Error(`studio log: no ${what}:\n${logText()}`); await sleep(100); } };
     const applied = /lu-reload\.json changed on disk; applied/g;
     const { p, s } = await probe({
-      ms: 22000,
+      ms: 32000,
       env: { UJWALAM_THEMES_DIR: themes, UJWALAM_THEME: 'lu-reload', UJWALAM_STUDIO_LOG_DIR: logs },
       during: async () => {
+        await until(() => /studio dev started/.test(logText()), 12000, 'start');
         await sleep(3000);
-        write('#445566');
-        await until(() => count(applied) >= 1, 6000, 'reload of the first change');
         const good = readFileSync(file, 'utf8');
         writeViaRename(file, good.slice(0, Math.floor(good.length / 2)));
-        await until(() => count(/lu-reload\.json not applied/g) >= 1, 6000, 'refusal of the broken file');
+        await until(() => count(/lu-reload\.json not applied/g) >= 1, 12000, 'refusal of the broken file');
         write('#778899');
-        await until(() => count(applied) >= 2, 6000, 'reload of the fix');
+        await until(() => count(applied) >= 1, 12000, 'reload of the fix');
       },
     });
     assert.equal(p.theme, 'lu-reload');
