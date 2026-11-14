@@ -264,5 +264,17 @@ class RenderTests(unittest.TestCase):
         self.assertAlmostEqual(info["duration"], m["seconds"], delta=0.15, msg="the teaser is in the rendered file")
 
 
+class HookLineTests(unittest.TestCase):
+    def test_only_a_planned_hook_that_moved_the_opening_is_logged(self):
+        # 2026-11-14 real run: a story montage ({"on": False, "used": "story"}) has no peakOut, and reading it failed
+        # every reel of the run ("montage: NOT MADE (KeyError: 'peakOut')").
+        self.assertIsNone(clipper._hook_line("m1", {"on": False, "used": "story"}))
+        self.assertIsNone(clipper._hook_line("m1", {"on": False}))
+        self.assertIsNone(clipper._hook_line("m1", {"on": True, "used": "none", "reason": "x"}))
+        self.assertIsNone(clipper._hook_line("m1", {"on": True, "used": "already", "peakOut": 1.0}))
+        self.assertEqual(clipper._hook_line("m1", {"on": True, "used": "teaser", "peakOut": 2.25}),
+                         "montage m1: opens on its strongest moment (teaser, at 2.2 s)")
+
+
 if __name__ == "__main__":
     unittest.main()

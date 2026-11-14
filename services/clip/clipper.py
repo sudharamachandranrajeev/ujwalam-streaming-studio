@@ -1047,6 +1047,14 @@ def _hook_score(ffmpeg, wd, fname, m, typ, ex):
     return dict(m.get("hook") or {"on": False}, score=rh.hook_score(m["pieces"], kills, m.get("medals"), ex["hcfg"], motion))
 
 
+def _hook_line(cid, hook):
+    """The log line of a reel whose planned hook moved its opening, else None. Only a planned hook (on) carries peakOut:
+    a story montage is {"on": False, "used": "story"} (2026-11-14: reading peakOut there failed every reel of the run)."""
+    if not hook.get("on") or hook.get("used") in (None, "already", "none") or "peakOut" not in hook:
+        return None
+    return f"montage {cid}: opens on its strongest moment ({hook['used']}, at {hook['peakOut']:.1f} s)"
+
+
 def cmd_montage(a):
     """Kill montages (clip_montage.py, data/clip/montage.json) from the detector hits of the H recording, cut from the
     V recording of the same session -> DIR/montage/clips/<id>/montage-v.mp4 + DIR/montage/render.json +
@@ -1168,8 +1176,9 @@ def cmd_montage(a):
             if os.path.isfile(os.path.join(wd, "montage-v.mp4.part")):
                 os.replace(os.path.join(wd, "montage-v.mp4.part"), done)
             hook = _hook_score(ffmpeg, wd, "montage-v.mp4", m, typ, ex)
-            if hook.get("used") not in (None, "already", "none"):
-                print(f"montage {cid}: opens on its strongest moment ({hook['used']}, at {hook['peakOut']:.1f} s)")
+            line = _hook_line(cid, hook)
+            if line:
+                print(line)
             files.append({"layout": "montage-v", "file": "montage-v.mp4", "geometry": "canvas",
                           "sourceAudioTracks": vinfo["audio_tracks"], **({"thumbnail": True} if thumb else {})})
             kills = m.get("kills", sum(p["kills"] for p in m["pieces"]))
