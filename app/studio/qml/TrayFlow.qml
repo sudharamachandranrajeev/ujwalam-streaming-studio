@@ -87,6 +87,13 @@ QtObject {
                 return leave();
             }
             commitQuit(token, () => {
+                // The commit is a second request (Codex review of Q4 A): check again before exiting. The lock is still
+                // held after a commit, so a cancel here releases it.
+                if (!Tray.stillFinished(countdown)) {
+                    releaseQuit(token);
+                    Api.log("studio tray: not quitting (a task started or the window came back meanwhile)");
+                    return;
+                }
                 Api.log("studio tray: all tasks finished; exiting");
                 Api.log("studio tray probe: " + JSON.stringify(Tray.probe()));
                 Qt.quit(); // exit 0: the launcher stops everything else (D280)
