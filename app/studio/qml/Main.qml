@@ -41,6 +41,7 @@ ApplicationWindow {
         s.report = reportDlg.probe();
         s["import"] = importDlg.probe();
         s.posts = postsDlg.probe();
+        s.more = bar.moreProbe();
         s.alerts = alerts.probe();
         s.tasks = taskCenter.probe();
         s.tray = Object.assign(Tray.probe(), { closeAsked: closeDlg.asked, closeChoice: closeDlg.choice, stay: trayFlow.stay });
@@ -61,6 +62,7 @@ ApplicationWindow {
         if (String(action).startsWith("report-")) return reportDlg.probeAction(String(action));
         if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
         if (String(action).startsWith("posts-")) return postsDlg.probeAction(String(action));
+        if (action === "more-open" || String(action).startsWith("more:")) return bar.moreAction(String(action));
         if (String(action).startsWith("scene-hotkey:")) return sceneKey(parseInt(String(action).slice(13), 10)); // Ctrl+N (D382); scene-key: is the scene list's F2 / Del
         // Live controls (Q4 A), the widget probe's names: close, close-choice:<tray|stop|cancel>, tray:<click|open|stop>, tasks:*.
         if (action === "close") { Qt.callLater(win.close); return true } // as the window's X; the question opens on the next turn
@@ -119,6 +121,7 @@ ApplicationWindow {
         objectName: "onAirBar"
         store: studioStore
         taskCenter: taskCenter
+        windows: ({ growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg })
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
         height: 56
     }

@@ -10,6 +10,7 @@ Rectangle {
     id: bar
     required property var store
     property var taskCenter: null // TaskCenter.qml: the task chip opens its panel
+    property var windows: ({})    // the More menu's windows (Main.qml): importer, feedback, posts, growth, report
     color: Theme.c.panel
     border.width: 1
     border.color: Theme.c.border
@@ -27,6 +28,14 @@ Rectangle {
         const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
         return h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
     }
+    // ---- probe (tests): more-open, more:<item id> (import, feedback, posts, growth, report) ----
+    function moreProbe() { return { open: moreMenu.opened, items: moreMenu.items() } }
+    function moreAction(a) {
+        if (a === "more-open") { moreBtn.clicked(); return true }
+        if (a.startsWith("more:")) return moreMenu.opened && moreMenu.trigger(a.slice(5));
+        return false;
+    }
+
     readonly property var oa: store.onAir || {}
     readonly property string mbps: typeof oa.kbps === "number" && oa.kbps > 0 ? (oa.kbps / 1000).toFixed(1) + " Mbps" : ""
     readonly property string sinkTip: Array.isArray(oa.sinks) ? oa.sinks.map(s => (s.platform || s.id) + ": " + s.state +
@@ -93,6 +102,34 @@ Rectangle {
         id: controls
         anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
         spacing: 8
+        // More (the widget's More menu, same order and tips): the flag-gated items show only with their flag on.
+        UButton {
+            id: moreBtn
+            objectName: "moreBtn"
+            text: "More"
+            iconName: "more"
+            onClicked: moreMenu.popup(moreBtn, 0, moreBtn.height + 4)
+            UMenu {
+                id: moreMenu
+                objectName: "moreMenu"
+                readonly property var f: bar.store.flags || ({})
+                UMenuItem { objectName: "moreMenu:import"; text: "Import Meld session…"
+                            tip: "Make a new project file from the Meld session, check it against the host, then load it."
+                            onTriggered: bar.windows.importer.show() }
+                UMenuItem { objectName: "moreMenu:feedback"; text: "Feedback notes…"
+                            tip: "Add a note to each feedback moment (feedback hotkey while streaming)."
+                            onTriggered: bar.windows.feedback.show() }
+                UMenuItem { objectName: "moreMenu:posts"; text: "Posts…"; visible: moreMenu.f["posting"] === true; height: visible ? implicitHeight : 0
+                            tip: "Review clip packages. Nothing is uploaded until you click Upload."
+                            onTriggered: bar.windows.posts.show() }
+                UMenuItem { objectName: "moreMenu:growth"; text: "Growth numbers…"; visible: moreMenu.f["growth"] === true; height: visible ? implicitHeight : 0
+                            tip: "Your own YouTube numbers for the videos Ujwalam posted. Read only."
+                            onTriggered: bar.windows.growth.show() }
+                UMenuItem { objectName: "moreMenu:report"; text: "Report a problem…"; visible: moreMenu.f["report-button"] === true; height: visible ? implicitHeight : 0
+                            tip: "Opens a prefilled GitHub issue in your browser; you review it before submitting."
+                            onTriggered: bar.windows.report.show() }
+            }
+        }
         UButton {
             objectName: "settingsBtn"
             text: "Settings"

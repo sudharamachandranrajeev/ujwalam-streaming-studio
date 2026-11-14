@@ -31,7 +31,8 @@ the 2026-11-14 handover session.
 ## C. Clips and posts
 - [ ] Clips chip with plain-words state; "Make clips?" question after a recording or stream; first-run Settings
 - [ ] My clips folder button (`ui/api/clips/open`)
-- [ ] More menu (flag-gated items)
+- [x] More menu (flag-gated items): Import, Feedback, Posts, Growth numbers, Report, in the widget order with its tips
+      (`tests/studio-qml-more-windows.test.mjs` 9/9). Review reads goes beside My clips, as in the widget (row below)
 - [x] Posts window (flag `posting`): review, Approve, Reject, Save, Open folder, Upload as private, Check status, Retry
       (`tests/studio-qml-posts.test.mjs` 4/4; Upload is read as enabled/disabled only, never pressed in a test)
 - [x] Growth numbers window (flag `growth`) (`65f6e08`, `tests/studio-qml-growth.test.mjs` 5/5)

@@ -76,6 +76,21 @@ describe('QML studio: More menu windows (headless probe)', { skip }, () => {
   const done = (p) => p.actions.map((a) => a.done);
   const enc = encodeURIComponent;
 
+  describe('More menu', () => {
+    test('flags off: Import and Feedback only; an item opens its window', async () => {
+      const { p, s } = await probe({ actions: ['more:import', 'more-open', 'more:posts', 'more:feedback'] });
+      assert.deepEqual(done(p), [false, true, false, true], 'closed menu runs nothing; a hidden item cannot be picked');
+      assert.equal(s.more.open, false, 'picking an item closes the menu');
+      assert.equal(s.feedback.open, true);
+    });
+    test('flags on: Posts, Growth numbers and Report a problem show, in the widget order', async () => {
+      const { s } = await probe({ flagIds: ['posting', 'growth', 'report-button'], actions: ['more-open'] });
+      assert.equal(s.more.open, true);
+      assert.deepEqual(s.more.items.map((i) => i.id), ['import', 'feedback', 'posts', 'growth', 'report']);
+      assert.ok(s.more.items.every((i) => i.enabled && i.tip !== ''), 'every item enabled with a tip');
+    });
+  });
+
   describe('Feedback notes', () => {
     function moments() {
       const dir = tmp('ujw-qmlmw-fb-');
