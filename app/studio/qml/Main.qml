@@ -28,6 +28,10 @@ ApplicationWindow {
         s.motionMode = Theme.motionMode();
         s.motion = Theme.motion;
         s.effects = Theme.effects();
+        const cols = {}; // what the QML items paint with
+        for (const k in Theme.c) cols[k] = String(Theme.c[k]);
+        s.themeColors = cols;
+        s.themeDark = Theme.dark;
         s.palette = cmdPalette.probe();
         return s;
     }
