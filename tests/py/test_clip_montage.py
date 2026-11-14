@@ -293,6 +293,42 @@ class LiveRecutTests(unittest.TestCase):
             self.assertEqual([(round(p["start"] + 545.0, 2), round(p["end"] + 545.0, 2)) for p in c["pieces"]],
                              [(548.0, 562.5), (577.0, 582.5)])
 
+class RecutValidateTests(unittest.TestCase):
+    """2026-11-14 real run: 12 of 25 re-cut live clips failed validate ("duration 38.23s (want 59.72s)") although they
+    rendered right; validate wanted the first piece's start to the last piece's end."""
+
+    def test_a_recut_clip_is_checked_against_its_rendered_length(self):
+        import json
+        import tempfile
+        from types import SimpleNamespace
+        from unittest import mock
+        import clipper
+        pieces = [{"start": 0.0, "end": 2.144}, {"start": 7.644, "end": 12.144}, {"start": 17.144, "end": 38.144},
+                  {"start": 43.144, "end": 52.144}, {"start": 57.144, "end": 59.717}]
+        m = {"pieces": pieces, "seconds": round(sum(p["end"] - p["start"] for p in pieces), 3)}
+        out = clipper._pieces_out_sec(m, 0.25, True, 60)
+        self.assertAlmostEqual(out, 38.234, places=3, msg="the real run's L24 rendered 38.23 s")
+        self.assertEqual(clipper._pieces_out_sec(m, 0.25, True, 30), 30.0, "cut at the type's maximum")
+        with tempfile.TemporaryDirectory() as d:
+            doc = {"recording": "live-saves", "frame": {"width": 1080, "height": 1920}, "clips": [
+                {"id": "L24", "start": 0.0, "end": 59.717, "captions": {"status": "off"},
+                 "files": [{"layout": "stream-v", "file": "a.mp4", "geometry": "canvas", "outSec": out}]},
+                {"id": "L17", "start": 30.681, "end": 50.681, "captions": {"status": "off"},
+                 "files": [{"layout": "stream-v", "file": "b.mp4", "geometry": "canvas"}]}]}
+            with open(os.path.join(d, clipper.RENDER), "w", encoding="utf-8") as f:
+                json.dump(doc, f)
+            seen = []
+
+            def fake(ffmpeg, ffprobe, path, expected_dur, *rest, **kw):
+                seen.append(round(expected_dur, 3))
+                return {"ok": True, "issues": [], "audio": {"tracks": 1, "loudness": []}}
+            a = SimpleNamespace(out=d, targets=None, ffmpeg=None, ffprobe=None, no_decode=True)
+            with mock.patch.object(clipper, "_tools", return_value=("ffmpeg", "ffprobe")), \
+                    mock.patch.object(clipper.val, "validate_file", side_effect=fake):
+                self.assertEqual(clipper.cmd_validate(a), 0)
+            self.assertEqual(seen, [38.234, 20.0], "the rendered length for the re-cut clip; start to end otherwise")
+
+
 def match(i, start, end, end_screen=None, qualifies=False, result=None, mode="mp"):
     return {"index": i, "start": float(start), "end": float(end), "mode": mode, "result": result,
             "endScreenAt": end_screen, "resultAt": end_screen if result else None, "reel": {"qualifies": qualifies}}

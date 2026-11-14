@@ -451,8 +451,8 @@ def cmd_validate(a):
     total = sum(len(c["files"]) for c in rdoc["clips"])
     progress_line("validate", 0, total, "checking clip files")
     for c in rdoc["clips"]:
-        exp = float(c["end"]) - float(c["start"])
         for f in c["files"]:
+            exp = float(f["outSec"]) if f.get("outSec") is not None else float(c["end"]) - float(c["start"])
             p = os.path.join(a.out, "clips", c["id"], f["file"])
             res = val.validate_file(ffmpeg, ffprobe, p, exp, frame, targets, decode=not getattr(a, "no_decode", False),
                                     source_tracks=f.get("sourceAudioTracks"))
@@ -689,12 +689,17 @@ def cmd_live_review(a):
                       if pieces_path and sinfo.get("has_audio") else (None, None))
         for lid in wanted:
             try:
+                out_sec = None
                 if pieces_path and by_id[lid].get("kind") == "canvas":
                     name = _render_pieces(ffmpeg, c["file"], m["pieces"], frame, encoder, wd, lid, sinfo, fade_ms,
                                           lim_live["maxSec"], ass, fdir, tr, thumb, ttl, mus)
+                    out_sec = _pieces_out_sec(m, xd, thumb, lim_live["maxSec"])
                 else:
                     name = rnd.render_variant(ffmpeg, c["file"], sinfo, c, by_id[lid], frame, encoder, wd)
                 files.append({"layout": lid, "file": name, "geometry": by_id[lid].get("geometry", "unverified"),
+                              # validate's expected length: a re-cut clip is its pieces minus the cross-faded joins,
+                              # not its first piece's start to its last piece's end
+                              **({"outSec": out_sec} if out_sec is not None else {}),
                               "sourceAudioTracks": sinfo.get("audio_tracks"),
                               **({"thumbnail": True} if thumb and pieces_path and by_id[lid].get("kind") == "canvas" else {})})
                 if by_id[lid].get("kind") == "canvas" and hook.get("score") is None:
@@ -1047,6 +1052,12 @@ def _hook_score(ffmpeg, wd, fname, m, typ, ex):
     return dict(m.get("hook") or {"on": False}, score=rh.hook_score(m["pieces"], kills, m.get("medals"), ex["hcfg"], motion))
 
 
+def _pieces_out_sec(m, xd, thumb, max_sec):
+    """Length of a reel rendered from its pieces: the pieces, minus each cross-faded join, plus the start frame, cut at
+    the type's maximum (-t)."""
+    return round(min(m["seconds"] - xd * (len(m["pieces"]) - 1) + (1 / 60 if thumb else 0.0), float(max_sec)), 3)
+
+
 def _hook_line(cid, hook):
     """The log line of a reel whose planned hook moved its opening, else None. Only a planned hook (on) carries peakOut:
     a story montage is {"on": False, "used": "story"} (2026-11-14: reading peakOut there failed every reel of the run)."""
@@ -1198,9 +1209,7 @@ def cmd_montage(a):
             errors.append({"layout": "montage-v", "error": r.stderr.strip()[-300:]})
             failed += 1
             eprint(f"montage {cid}: FAILED")
-        # the render is cut at the type's maximum (-t), start frame included
-        out_sec = round(min(m["seconds"] - xd * (len(m["pieces"]) - 1) + (1 / 60 if thumb else 0.0),
-                            float(lim[typ]["maxSec"])), 3)
+        out_sec = _pieces_out_sec(m, xd, thumb, lim[typ]["maxSec"])
         rows.append({"id": cid, "start": 0.0, "end": out_sec, "score": m["score"], "labels": m["labels"],
                      "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec, "title": tirec, "music": murec,
                      "pieces": m["pieces"], "part": m.get("part"), "parts": m.get("parts"),
