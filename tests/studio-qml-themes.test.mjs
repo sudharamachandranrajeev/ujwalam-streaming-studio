@@ -16,6 +16,9 @@ import { createFlags } from '../services/flags/index.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 import { EXE, qtDir } from '../app/studio/tools/build.mjs';
 import { writeViaRename } from '../tools/soak/stage.mjs';
+import { readReference } from '../services/scene-builder/read.mjs';
+import { themeFromRead, writeThemePack } from '../services/scene-builder/theme.mjs';
+import { stylePanels, writePng } from './helpers/sb-fixtures.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const UI = path.join(REPO, 'ui');
@@ -130,13 +133,25 @@ describe('QML studio themes (headless probe)', { skip }, () => {
     assert.ok(!cards.includes('broken'), cards.join(','));
   });
 
+  // Twin of scene-builder-theme's headless Qt probe: a pack the scene builder made from a reference picture (SB4) loads
+  // as a custom theme with its own colours. Component variants are widget stylesheet features (not in the QML style).
+  test('a scene-builder pack (SB4, from a drawn reference) loads as a custom theme with its colours, no QML error', async () => {
+    const themes = tmp('ujw-qmlth-sb4-');
+    const { pack: made } = themeFromRead(await readReference(writePng(stylePanels({ glow: true }).canvas, tmp('ujw-qmlth-ref-'), 'glow')), { name: 'Sb4 Probe' });
+    writeThemePack(made, themes);
+    const { p, s } = await probe({ actions: ['settings-open', 'settings-page:Appearance'], env: { UJWALAM_THEMES_DIR: themes, UJWALAM_THEME: made.id } });
+    assert.equal(p.theme, made.id);
+    for (const t of ['bg', 'panel', 'text', 'accent']) assert.equal(s.themeColors[t].toLowerCase(), made.colors[t].toLowerCase(), t);
+    assert.ok(p.tree.some((n) => n.name === `themeCard:${made.id}`), 'listed in Settings > Appearance');
+  });
+
   test('the pack in use reloads when its file changes: valid applies live, broken keeps the last good look, a fix applies again', async () => {
     const themes = tmp('ujw-qmlth-reload-');
     const file = path.join(themes, 'lu-reload.json');
     const write = (accent) => { const p = pack('violet-night'); p.id = 'lu-reload'; p.name = 'Reload test'; p.colors.accent = accent; writeViaRename(file, `${JSON.stringify(p, null, 2)}\n`); };
     write('#112233');
     const { p, s } = await probe({
-      ms: 9000,
+      ms: 12000,
       env: { UJWALAM_THEMES_DIR: themes, UJWALAM_THEME: 'lu-reload' },
       during: async () => {
         await sleep(3000);
@@ -144,11 +159,14 @@ describe('QML studio themes (headless probe)', { skip }, () => {
         await sleep(1500);
         const good = readFileSync(file, 'utf8');
         writeViaRename(file, good.slice(0, Math.floor(good.length / 2)));
-        await sleep(1500);
+        // The broken version must be on disk long enough to be read: a busy software-rendered window can take more than
+        // 1.5 s to get to its file event, and then it only ever sees the fixed version (seen under load, 2026-11-14).
+        await sleep(3500);
         write('#778899');
       },
     });
     assert.equal(p.theme, 'lu-reload');
     assert.equal(s.themeColors.accent.toLowerCase(), '#778899', 'the QML colours follow the reloaded pack');
+    assert.deepEqual(s.tasks.toastLog.filter((x) => /^Theme not applied/.test(x)), ['Theme not applied: the file has a problem'], 'the refused file is said once, in a notification');
   });
 });

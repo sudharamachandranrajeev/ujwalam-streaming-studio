@@ -1,4 +1,4 @@
-# Q4 side column: Inspector, Outputs panel, Bots box (QML studio) — 2026-11-14
+# Q4 side column: Inspector, Look panel, Outputs panel, Bots box (QML studio) — 2026-11-14
 
 Plan: `docs/plan/2026-11-11-qml-studio-plan.md` Q4; checklist `docs/plan/2026-11-14-qml-parity-checklist.md` rows B
 (Inspector) and D (Outputs panel, Bots box). QML twins of the widget's INSPECTOR box (`main_window.cpp`
@@ -39,6 +39,38 @@ Stream; a switch already in that state is refused; bots: 2 rows / 4 buttons, Sta
 reads "up" with Stop on afterwards, Stop of a copy not started by Ujwalam is refused; inspector: empty text, values and
 canvas line, Apply patch `{x:100, rotation:12.3, crop:{left:10}}`, Nothing changed, Undo changes, out-of-range width
 held to 16384.
+
+## Look panel (added the same day)
+
+- The effect type table moved out of `main_window.cpp` into `app/studio/src/fx_types.h/.cpp` (one table for both
+  studios); `QmlApi::fxTypes()` hands it to QML; `QmlApi::chooseColour()` opens the system colour picker (never in test
+  mode).
+- `app/studio/qml/LookPanel.qml`: cards per type in the widget's group order (rounded first in Shape), switch, sliders
+  with number boxes (`UValueSlider.qml`), colour swatch + hex box; at most 6 effects (a 7th says why); offline sends
+  250 ms after the last change, live waits for Apply; a reload keeps unsent changes of the same layer.
+
+```
+node --test --test-name-pattern="Look panel" tests/studio-qml-editing.test.mjs                       -> pass 3, fail 0
+node --test --test-name-pattern="Look panel|Copy look|shared slider ..." tests/studio-qt-shell.test.mjs -> pass 2, fail 0 (widget after the table move)
+```
+
+Covered: groups and order, rounded first, at least 9 cards, `layers.setEffects {scene, layer:'cam', effects:[{type:'rounded', radius:40}]}`
+reached the fake host and is undoable; on/off removes; a typed 9999 is held to 500; no Look without a selected layer;
+the 7th effect refused with the note; live: nothing sent before Apply.
+
+## Volume box (added the same day)
+
+- The mixer strip's volume is now `UValueSlider` (slider + dB box, the widget's ValueSlider, D330). `USlider` takes the
+  wheel only while it has focus (`wheelEnabled: activeFocus`), so scrolling never moves a slider by accident.
+- New generic probe action in `qml_studio.cpp`: `wheel:<notches>:<focus|nofocus>:<objectName>` (a real QWheelEvent at
+  the item's centre; "focus" activates the window and focuses the item first, as a click would). Mixer probe
+  `volume-type:<strip>:<dB>` types into the real box and presses Enter.
+
+```
+node --test --test-name-pattern=volume tests/studio-qml-editing.test.mjs -> pass 1, fail 0
+```
+
+Sent `mixer.setVolume` dB values: `[-6, -8]` (typed -6; 3 unfocused notches sent nothing; 2 focused notches down).
 
 ## Not covered
 

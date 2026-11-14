@@ -13,7 +13,7 @@
         { "id": "preview-v", "anchor": "previewV", "title": "Vertical picture (V)", "text": "This is the tall picture for vertical videos. Keep the important parts inside it so nothing gets cut off." },
         { "id": "look", "anchor": "look", "title": "Look", "text": "Select a layer, then use Look to round its corners, add a shadow or a filter. Move the sliders and watch the previews." },
         { "id": "mixer", "anchor": "mixer", "title": "Audio mixer", "text": "One strip for each sound: game, microphone, music. Mute a strip, or press CUE to hear only that sound in your headphones while your viewers hear nothing extra." },
-        { "id": "stream", "anchor": "ctlStream", "title": "Start stream", "text": "This goes live. Ujwalam asks you to type a confirmation first, so you can never go live by accident." },
+        { "id": "stream", "anchor": "ctlStream", "title": "Start stream", "text": "This goes live. Ujwalam first shows what will start and waits for one click from you, so you never go live by accident." },
         { "id": "record", "anchor": "ctlRecord", "title": "Record", "text": "Record saves your show to a file on this PC. Press it again to stop." },
         { "id": "clip", "anchor": "ctlClip", "title": "Save clip", "text": "Saves the last 60 seconds, in both the wide and the tall picture, as clip files. Use it right after something great happens." },
         { "id": "mark", "anchor": "ctlMark", "title": "Mark moment", "text": "Marks this exact moment so the clip maker looks at it first. Press it when you think a clip is coming." },
@@ -42,7 +42,7 @@
       "steps": [
         { "id": "posting-folder", "anchor": "myClips", "title": "Start from your clips", "text": "Posting works on finished clips. They are saved in this folder first." },
         { "id": "posting-more", "anchor": "more", "title": "The Posts view", "text": "Open More. If Posts is in the list, posting is switched on in this build. It shows one package per clip to read and approve." },
-        { "id": "posting-settings", "anchor": "settings", "title": "Switches", "text": "Posting is off until you turn it on under Settings, Advanced. Turning it on asks you to type a confirmation." },
+        { "id": "posting-settings", "anchor": "settings", "title": "Switches", "text": "Posting is off until you turn it on under Settings, Advanced, and click Save." },
         { "id": "posting-help", "anchor": "help", "title": "What is built", "text": "Press ? and open Posting your clips to see exactly what works today and what still needs your yes." }
       ]
     }

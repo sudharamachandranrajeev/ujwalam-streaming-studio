@@ -10,6 +10,7 @@ Rectangle {
     id: bar
     required property var store
     property var taskCenter: null // TaskCenter.qml: the task chip opens its panel
+    property var guide: null      // Guide.qml: the ? button opens its help panel
     property var windows: ({})    // the More menu's windows (Main.qml): importer, feedback, posts, growth, report
     color: Theme.c.panel
     border.width: 1
@@ -113,14 +114,7 @@ Rectangle {
             tip: "Optional: confirm or correct what the clip maker was not sure of. Nothing waits for it."
             onClicked: if (bar.windows.review) bar.windows.review.show()
         }
-        UChip {
-            objectName: "chipStats"
-            visible: bar.width >= 1360 // a narrow window keeps the controls readable; the status line still shows the host
-            text: "Dropped " + bar.store.dropped + "  ·  " + bar.store.fps.toFixed(0) + " fps  ·  CPU " + bar.store.cpu.toFixed(0) + "%  ·  GPU " + bar.store.gpu.toFixed(0) + "%"
-            on: bar.store.dropped > 0 && bar.store.live
-            token: "danger"
-            tip: "Frames dropped since the start, frames per second, and the load of this computer"
-        }
+        // The stats chip is gone: the stats cards under the side column show the same numbers (D287, as the widget).
     }
 
     Row {
@@ -141,6 +135,9 @@ Rectangle {
                 UMenuItem { objectName: "moreMenu:import"; text: "Import Meld session…"
                             tip: "Make a new project file from the Meld session, check it against the host, then load it."
                             onTriggered: bar.windows.importer.show() }
+                UMenuItem { objectName: "moreMenu:scenebuilder"; text: "New scene from a reference…"; visible: moreMenu.f["scene-builder"] === true; height: visible ? implicitHeight : 0
+                            tip: "Build a new H + V scene from a picture or video in your stream assets folder. Your other scenes stay as they are."
+                            onTriggered: bar.windows.sceneBuilder.show() }
                 UMenuItem { objectName: "moreMenu:feedback"; text: "Feedback notes…"
                             tip: "Add a note to each feedback moment (feedback hotkey while streaming)."
                             onTriggered: bar.windows.feedback.show() }
@@ -154,6 +151,16 @@ Rectangle {
                             tip: "Opens a prefilled GitHub issue in your browser; you review it before submitting."
                             onTriggered: bar.windows.report.show() }
             }
+        }
+        // Help (the widget's ? button): how clips are made, how posting works, and the welcome tour.
+        UButton {
+            objectName: "helpBtn"
+            text: "?"
+            implicitWidth: 34
+            leftPadding: 0
+            rightPadding: 0
+            tip: "Help: how clips are made, how posting works, and the welcome tour."
+            onClicked: if (bar.guide) bar.guide.toggleHelp()
         }
         UButton {
             objectName: "settingsBtn"

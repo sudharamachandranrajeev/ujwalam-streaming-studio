@@ -3,11 +3,12 @@
 // studio-qt-d327.test.mjs (easing per canvas saved into the project, Force complete calls the host), plus the page's own
 // rules: the portrait canvas mirrors the main one, nothing changes while live (Force complete still works), the flags,
 // Save / Cancel / the unsaved question, no sideways scrolling and plain words. Same probe actions as the widget (settings-open,
-// settings-page:Transitions, tr-type, tr-ease, tr-ms, tr-mirror, tr-force). Headless probe (UJWALAM_HEADLESS=1, offscreen,
+// settings-page:Transitions, tr-type, tr-ease, tr-ms, tr-mirror, tr-force). The main window's Transitions box (stinger, trbox-*)
+// is tested at the end. Headless probe (UJWALAM_HEADLESS=1, offscreen,
 // never on a screen) against a real UI server and the fake host. Skipped when the shell is not built.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -42,11 +43,13 @@ function runShell(env) {
 describe('QML studio Settings > Transitions (headless probe)', { skip }, () => {
   const dirs = [];
   after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
-  async function probe({ actions = [], ms = Math.max(9000, 4000 + actions.length * 700), flagsOn = ['stream-settings', 'transitions'], live = false } = {}) {
+  async function probe({ actions = [], ms = Math.max(9000, 4000 + actions.length * 700), flagsOn = ['stream-settings', 'transitions'], live = false, videos = [] } = {}) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-tr-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
     for (const id of flagsOn) flags.set(id, true);
     const file = path.join(dataDir, 'p.project.json');
+    const assetsDir = path.join(dataDir, 'assets'); mkdirSync(assetsDir);
+    for (const v of videos) writeFileSync(path.join(assetsDir, v), '');
     saveProject(file, createProject({ name: 'T', fps: 30 }));
     const fake = createFakeHost({ outputsReady: true });
     if (live) await fake.call('stream.start', {});
@@ -54,7 +57,7 @@ describe('QML studio Settings > Transitions (headless probe)', { skip }, () => {
     const host = { describe: () => fake.describe(), call: (m, p) => { if (!['host.status', 'outputs.status'].includes(m)) calls.push([m, p]); return fake.call(m, p); } };
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
     const key = 't'.repeat(40);
-    const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: key, dataDir, flags, bots: createFakeBots(), projectSync: createProjectSync({ file }),
+    const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: key, dataDir, flags, bots: createFakeBots(), projectSync: createProjectSync({ file }), assetsDir,
       limits: { statusPollMs: 50 }, tcpAnswers: async () => false, botConfig: () => ({}) });
     const { port } = await srv.listen();
     try {
@@ -200,5 +203,37 @@ describe('QML studio Settings > Transitions (headless probe)', { skip }, () => {
     assert.deepEqual([k.s.settings.unsavedOpen, k.s.settings.dirty], [true, true]);
     const sv = await probe({ actions: [...open, ...WAIT, 'tr-type:h:fade', ...WAIT, 'settings-cancel', 'settings-unsaved:save'], ms: 12000 });
     assert.equal(canvasOf(sv.doc(), 'h').type, 'fade', 'Save changes writes it');
+  });
+
+  // ---- the main window's Transitions box (the widget's TRANSITIONS box; a stinger is set only here) ----
+  const BOX = 'trbox-canvas:h'; // a quiet first action: the box has read the project by then
+  test('box: a stinger on the main canvas (video, switch point, no sound) is saved into the project; the box shows it again', async () => {
+    const r = await probe({ videos: ['sting.webm'], actions: [BOX, 'trbox-type:stinger', 'trbox-file:sting.webm', 'trbox-point:400', 'trbox-audio:off', 'trbox-apply', BOX], ms: 12000 });
+    assert.deepEqual(r.p.actions.map((a) => a.done), [true, true, true, true, true, true, true], JSON.stringify(r.p.actions));
+    assert.deepEqual(canvasOf(r.doc(), 'h'), { type: 'stinger', durationMs: 0, file: { base: 'media', rel: 'sting.webm' }, pointMs: 400, audio: false });
+    assert.equal(canvasOf(r.doc(), 'v').type, 'cut', 'the other canvas untouched');
+    const b = r.s.transitionsBox;
+    assert.deepEqual([b.shown, b.type, b.file, b.point, b.audio, b.stingerOn, b.msOn, b.videos], [true, 'stinger', 'sting.webm', 400, false, true, false, 1]);
+    assert.equal(r.s.note, 'Transition saved; the host follows within a few seconds.');
+  });
+
+  test('box: a fade on the portrait canvas with its length; Duration is off for a cut; a stinger with no video says why', async () => {
+    const r = await probe({ actions: [BOX, 'trbox-ms:300', 'trbox-canvas:v', 'trbox-type:fade', 'trbox-ms:600', 'trbox-apply', BOX], ms: 12000 });
+    assert.deepEqual(r.p.actions.map((a) => a.done), [true, false, true, true, true, true, true], 'Duration refused while the type is cut');
+    assert.deepEqual(canvasOf(r.doc(), 'v'), { type: 'fade', durationMs: 600 });
+    assert.equal(canvasOf(r.doc(), 'h').type, 'cut');
+    const s = await probe({ actions: [BOX, 'trbox-type:stinger', 'trbox-apply'] });
+    assert.equal(s.s.note, 'A stinger needs a video from the stream assets folder.');
+    assert.equal(canvasOf(s.doc(), 'h').type, 'cut', 'nothing written');
+  });
+
+  test('box: flag transitions off: not shown, every action refused; live: shown but nothing can be changed', async () => {
+    const off = await probe({ flagsOn: ['stream-settings'], actions: [BOX, 'trbox-type:fade', 'trbox-apply'] });
+    assert.equal(off.s.transitionsBox.shown, false);
+    assert.deepEqual(off.p.actions.map((a) => a.done), [false, false, false]);
+    const live = await probe({ live: true, actions: [BOX, 'trbox-type:fade', 'trbox-apply'] });
+    assert.deepEqual([live.s.transitionsBox.shown, live.s.transitionsBox.enabled], [true, false]);
+    assert.deepEqual(live.p.actions.map((a) => a.done), [false, false, false]);
+    assert.equal(canvasOf(live.doc(), 'h').type, 'cut', 'nothing written');
   });
 });

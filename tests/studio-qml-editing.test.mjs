@@ -6,7 +6,9 @@
 // select-layer:<id>, layer-menu:show|blank|<item>, layer-key:<keys>, layer-drag:<fromRow>:<toRow> (rows top first),
 // select-scene:<id>, scene-menu:show|blank|<item>, scene-key:<keys>, key:<keys>[:<times>] (window keys: Ctrl+Z, Ctrl+Y,
 // Ctrl+Shift+Z, arrows with or without Shift), inspector-set:<box>:<text>, inspector-apply, inspector-undo (the widget's
-// INSPECTOR box: X, Y, width, height, rotation, crop; Apply sends only what changed). Skipped when the shell is not built (npm run build:studio).
+// INSPECTOR box: X, Y, width, height, rotation, crop; Apply sends only what changed), look:<type>:<on|off>,
+// look-set:<type>:<key>:<value>, look-apply (the Look panel, D290), volume-type:<strip>:<dB>, wheel:<notches>:<focus|nofocus>:<objectName>.
+// Skipped when the shell is not built (npm run build:studio).
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -74,7 +76,10 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     const calls = [];
     const host = { describe: () => fake.describe(), call: async (m, p) => {
       calls.push([m, p]);
+      if (opts.hostStatus && m === 'host.status') return { ...(await fake.call(m, p)), ...opts.hostStatus() };
       if (opts.editing && m === 'host.status') return { ...(await fake.call(m, p)), previewEditing: true, previewSelection: { seq: 0, H: null, V: null } };
+      const own = opts.hostCall?.(m, p); // a test's own answer (or a throw: the host refused); undefined = the fake's
+      if (own !== undefined) return own;
       return fake.call(m, p);
     } };
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
@@ -214,6 +219,118 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     assert.equal(u.calls.filter(([m]) => m === 'layers.setPlacement').length, 0);
     const o = await probe(['select-layer:cam', 'inspector-set:width:99999', 'inspector-apply']);
     assert.deepEqual(o.calls.filter(([m]) => m === 'layers.setPlacement').map(([, x]) => x.placement), [{ width: 16384 }]);
+  });
+
+  // ---------------------------------------------------------------- Look panel (D290)
+  test('Look panel: shown for a selected layer with no flag; built from the shared effect table; a switch and a typed value reach layers.setEffects', async () => {
+    const r = await probe(['select-layer:cam', 'look:rounded:on', 'look-set:rounded:radius:40']);
+    assert.deepEqual(r.done, [true, true, true]);
+    assert.equal(r.s.look.shown, true);
+    assert.deepEqual(r.s.look.groups, ['shape', 'filter', 'camera', 'compositing', 'light'], 'the table groups, in the usual order');
+    assert.equal(r.s.look.cards[0].type, 'rounded', 'rounded corners come first in Shape');
+    assert.ok(r.s.look.cards.length >= 9, 'one card per effect type in the table');
+    const sets = r.calls.filter(([m]) => m === 'layers.setEffects');
+    assert.ok(sets.length >= 1, 'layers.setEffects reached the host');
+    assert.deepEqual(sets.at(-1)[1], { scene: 'scene-1', layer: 'cam', effects: [{ type: 'rounded', radius: 40 }] });
+    assert.equal((await r.layersOf()).find((l) => l.id === 'cam').effects[0].radius, 40);
+    assert.equal(r.s.look.cards.find((c) => c.type === 'rounded').on, true);
+    assert.equal(r.s.edit.canUndo, true, 'a Look change is an undoable edit');
+  });
+
+  test('Look panel: switching off removes the effect; a value is held to its range; no Look without a selected layer', async () => {
+    const r = await probe(['select-layer:cam', 'look:blur:on', 'look:rounded:on', 'look:blur:off', 'look-set:rounded:radius:9999']);
+    assert.deepEqual(r.done, [true, true, true, true, true]);
+    const sets = r.calls.filter(([m]) => m === 'layers.setEffects');
+    assert.deepEqual(sets.at(-1)[1].effects, [{ type: 'rounded', radius: 500 }], 'blur on then off: only rounded corners, radius held to 500');
+    const none = await probe(['look:rounded:on']);
+    assert.deepEqual([none.s.look.shown, none.done[0]], [false, false]);
+  });
+
+  test('Look panel: at most 6 effects (a 7th says why and is not added); live waits for Apply', async () => {
+    const seven = ['blur', 'rounded', 'sharpen', 'vignette', 'grain', 'pixelate', 'posterize'].map((x) => `look:${x}:on`);
+    const r = await probe(['select-layer:cam', ...seven]);
+    assert.equal(r.s.look.effects.length, 6);
+    assert.ok(!r.s.look.effects.some((e) => e.type === 'posterize'));
+    assert.equal(r.s.note, 'A layer has at most 6 effects. Switch one off first.');
+    const live = await probe(['select-layer:cam', 'look:rounded:on'], { live: true });
+    assert.deepEqual([live.s.look.live, live.s.look.applyEnabled], [true, true]);
+    assert.equal(live.calls.filter(([m]) => m === 'layers.setEffects').length, 0, 'live: nothing sent before Apply');
+  });
+
+  // ---------------------------------------------------------------- Advanced effects (D260, flag effect-editor)
+  test('Advanced effects: hidden without the flag; with it the list in order, Add, Down, a typed value and Remove change only the working list; Apply effects sends it whole', async () => {
+    const off = await probe(['select-layer:cam', 'adv-add:blur']);
+    assert.deepEqual([off.s.look.advancedShown, off.done[1]], [false, false], 'flag off: no list, the action is refused');
+    assert.equal(node(off.p, 'lookAdvanced').visible, false);
+    const r = await probe(['select-layer:cam', 'adv-add:rounded', 'adv-add:blur', 'adv-row:0', 'adv-down', 'adv-row:1', 'adv-set:radius:30', 'adv-add:vignette', 'adv-remove', 'adv-apply'],
+      { flags: ['effect-editor'] });
+    assert.deepEqual(r.done, Array(10).fill(true), JSON.stringify(r.p.actions));
+    assert.equal(r.s.look.advancedShown, true);
+    const sets = r.calls.filter(([m]) => m === 'layers.setEffects');
+    assert.equal(sets.length, 1, 'only Apply effects sent: no automatic send from the list');
+    assert.deepEqual(sets[0][1].effects.map((e) => e.type), ['blur', 'rounded'], 'rounded moved down below blur; vignette added then removed');
+    assert.equal(sets[0][1].effects[1].radius, 30, 'the typed value');
+    assert.equal(r.s.note, 'Effects applied.');
+    assert.equal(r.s.look.advanced.rows.length, 2);
+    assert.match(r.s.look.advanced.rows[1], /^Rounded corners {2}30/);
+  });
+
+  test('Advanced effects: Revert drops unsent changes; a 7th Add says why', async () => {
+    const r = await probe(['select-layer:cam', 'adv-add:blur', 'adv-revert'], { flags: ['effect-editor'] });
+    assert.deepEqual(r.done, [true, true, true]);
+    assert.deepEqual([r.s.look.effects, r.s.look.dirty], [[], false]);
+    assert.equal(r.calls.filter(([m]) => m === 'layers.setEffects').length, 0);
+    const seven = ['blur', 'rounded', 'sharpen', 'vignette', 'grain', 'pixelate', 'posterize'].map((x) => `adv-add:${x}`);
+    const full = await probe(['select-layer:cam', ...seven], { flags: ['effect-editor'] });
+    assert.deepEqual(full.done.slice(1), [true, true, true, true, true, true, false]);
+    assert.equal(full.s.look.effects.length, 6);
+    assert.equal(full.s.note, 'A layer has at most 6 effects.');
+  });
+
+  // ---------------------------------------------------------------- preview selection retry (D335 F8)
+  // host.status previewSelection as the host sends it (seq per canvas, dragging per canvas); twins of studio-qt-shell.
+  const sel = (sh, sv, H, V, drag = {}) => ({ seq: sh + sv, seqs: { H: sh, V: sv }, dragging: { H: !!drag.H, V: !!drag.V }, H, V });
+  const selects = (calls, layer) => calls.filter(([m, x]) => m === 'preview.select' && x.layer === layer);
+  test('preview selection: a selection refused mid-drag is sent again once the drag ends', async () => {
+    const DRAG_MS = 2500;
+    const at = [];
+    let dragSeen = false;
+    const r = await probe(['select-layer:cam'], { ms: 10000,
+      hostStatus: () => {
+        const dragging = at.length === 1 && Date.now() - at[0] < DRAG_MS;
+        if (dragging) dragSeen = true;
+        return { previewEditing: true, previewSelection: sel(0, 0, { scene: 'scene-1', layer: 'game' }, null, { H: dragging }) };
+      },
+      hostCall: (m, x) => {
+        if (m !== 'preview.select' || x.layer !== 'cam') return undefined;
+        at.push(Date.now());
+        if (at.length === 1) throw Object.assign(new Error('a drag is running on that preview'), { code: -32009 });
+        return { layer: 'cam' };
+      },
+    });
+    assert.equal(at.length, 2, 'refused once, sent again once');
+    assert.ok(dragSeen, 'the drag was in the status');
+    assert.ok(at[1] - at[0] >= DRAG_MS, `the retry waited for the drag to end (${at[1] - at[0]} ms)`);
+    assert.equal(r.s.selected, 'cam', 'the list keeps the selection the preview now has');
+  });
+  test('preview selection: a refused retry puts the list back to the host\'s selection, not sent back', async () => {
+    const r = await probe(['select-layer:cam'], { ms: 9000,
+      hostStatus: () => ({ previewEditing: true, previewSelection: sel(0, 0, { scene: 'scene-1', layer: 'game' }, null) }),
+      hostCall: (m, x) => { if (m === 'preview.select' && x.layer === 'cam') throw Object.assign(new Error('busy: try again'), { code: -32009 }); return undefined; },
+    });
+    assert.equal(selects(r.calls, 'cam').length, 2, 'one retry, no more');
+    assert.equal(r.s.selected, 'game', 'the list shows the layer the preview edits');
+    assert.equal(selects(r.calls, 'game').length, 0, 'the restored selection is not sent back');
+  });
+
+  // ---------------------------------------------------------------- volume (D330)
+  test('volume: a typed dB + Enter sends mixer.setVolume once; the wheel does nothing without focus and steps one dB a notch with it', async () => {
+    const r = await probe(['volume-type:scene-1/game:-6', 'wheel:3:nofocus:vol:scene-1/game:slider', 'wheel:-2:focus:vol:scene-1/game:slider']);
+    assert.deepEqual(r.done, [true, true, true]);
+    const sent = r.calls.filter(([m, x]) => m === 'mixer.setVolume' && x.id === 'scene-1/game').map(([, x]) => x.db);
+    assert.equal(sent[0], -6, 'typed -6');
+    assert.equal(sent.at(-1), -8, 'two notches down from -6 with focus: ' + sent);
+    assert.equal(sent.length, 2, 'the unfocused wheel sent nothing: ' + sent);
   });
 
   // ---------------------------------------------------------------- layer menu

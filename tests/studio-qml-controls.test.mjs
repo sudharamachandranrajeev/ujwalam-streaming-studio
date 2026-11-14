@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -43,10 +44,11 @@ describe('QML studio: Save clip, Mark moment and the alert strip (headless probe
   const dirs = [];
   after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
   // o.alerts: the live-test-kit setup of the widget test (flag on or off, a recovery event, an audio warning, live).
-  async function probe({ actions = [], ms = Math.max(5000, 3000 + actions.length * 700), alerts = null } = {}) {
+  async function probe({ actions = [], ms = Math.max(5000, 3000 + actions.length * 700), alerts = null, live = false } = {}) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qmlctl-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
     const fake = createFakeHost({ outputsReady: true });
+    if (live) await fake.call('stream.start', {});
     const calls = [];
     let host = { describe: () => fake.describe(), call: (m, p) => { calls.push([m, p]); return fake.call(m, p); } };
     if (alerts) {
@@ -103,6 +105,23 @@ describe('QML studio: Save clip, Mark moment and the alert strip (headless probe
     assert.equal(clip.rect[1], rec.rect[1], 'one row in the on-air bar');
   });
 
+  test('preview Own window / To front (D280): preview.open and preview.focus with only the canvas; the buttons sit under each preview, never over it', async () => {
+    const { p, calls } = await probe({ actions: ['click:previewOpen:h', 'click:previewFront:v'] });
+    assert.deepEqual(done(p), [['click:previewOpen:h', true], ['click:previewFront:v', true]]);
+    assert.ok(calls.some(([m, q]) => m === 'preview.open' && JSON.stringify(q) === '{"canvas":"h"}'), 'preview.open {canvas:h}');
+    assert.ok(calls.some(([m, q]) => m === 'preview.focus' && JSON.stringify(q) === '{"canvas":"v"}'), 'preview.focus {canvas:v}');
+    assert.equal(p.state.note, 'Preview opened.', 'To front says nothing when it works (as the widget)');
+    for (const c of ['h', 'v']) {
+      const frame = node(p, c === 'h' ? 'previewH' : 'previewV').rect;
+      for (const b of [`previewOpen:${c}`, `previewFront:${c}`]) {
+        const r = node(p, b).rect;
+        assert.ok(r[1] >= frame[1] + frame[3], `${b} below its preview`);
+        assert.ok(r[0] >= frame[0] && r[0] + r[2] <= frame[0] + frame[2] + 1, `${b} within its preview's width`);
+      }
+      assert.deepEqual([node(p, `previewOpen:${c}`).text, node(p, `previewFront:${c}`).text], ['Own window', 'To front']);
+    }
+  });
+
   test('palette: "Save clip" and "Mark moment" run the same host calls as the buttons', async () => {
     const { p, calls } = await probe({ actions: ['palette-open', `palette-type:${encodeURIComponent('replay')}`, 'palette-run', 'palette-open', `palette-type:${encodeURIComponent('mark moment')}`, 'palette-run'] });
     assert.deepEqual(done(p).map(([, d]) => d), [true, true, true, true, true, true]);
@@ -127,5 +146,39 @@ describe('QML studio: Save clip, Mark moment and the alert strip (headless probe
     assert.equal(lines.length, 3);
     const bar = node(p, 'alertBar'), scenes = node(p, 'scenesPanel');
     assert.ok(bar.rect[1] + bar.rect[3] <= scenes.rect[1], 'the strip sits above the panels, never over them');
+  });
+
+  test('stats cards (D287): a sample per status poll; "Not live" off air; a running clock and "On air" while live; between the side column and the mixer', async () => {
+    const off = await probe();
+    assert.ok(off.s.stats.samples >= 2, 'a history sample per status poll');
+    assert.deepEqual([off.s.stats.session, off.s.stats.note], ['Not live', 'Session time']);
+    assert.match(off.s.stats.fps, /^\d+\.\d fps, \d+ dropped$/);
+    assert.match(off.s.stats.gpu, /^\d+%$/);
+    assert.match(off.s.stats.cpu, /^\d+%$/);
+    const cards = node(off.p, 'statsPanel').rect, side = node(off.p, 'sideColumn').rect, mixer = node(off.p, 'mixerPanel').rect;
+    assert.ok(side[1] + side[3] <= cards[1] && cards[1] + cards[3] <= mixer[1], 'side column, then the cards, then the mixer');
+    assert.equal(node(off.p, 'chipStats'), undefined, 'no stats chip in the top bar any more (the cards show it)');
+    const on = await probe({ live: true, ms: 6000 });
+    assert.match(on.s.stats.session, /^00:00:0[1-9]$/, 'the clock runs while live');
+    assert.equal(on.s.stats.note, 'On air');
+  });
+
+  test('status line: a UI server that does not answer is said as such, not as a host that stopped', async () => {
+    // A server that lets the studio log in, then drops every other request: the UI server went away after the start.
+    const srv = http.createServer((req, res) => {
+      if (req.url.startsWith('/login')) { res.writeHead(302, { Location: '/', 'Set-Cookie': 'ujw=s; HttpOnly' }); return res.end(); }
+      if (req.url.startsWith('/ui/api/session')) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{"csrf":"x"}'); }
+      req.socket.destroy();
+    });
+    const port = await new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)));
+    let r;
+    try { r = await runShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: 'c'.repeat(40), UJWALAM_STUDIO_PROBE_MS: '5000' }); }
+    finally { srv.close(); }
+    assert.equal(r.code, 0, r.err);
+    const m = /^studio probe: (.+)$/m.exec(r.out);
+    assert.ok(m, `no probe line: ${r.out} ${r.err}`);
+    const p = JSON.parse(m[1]);
+    assert.match(node(p, 'health').text, /^UI server: not reachable/);
+    assert.doesNotMatch(node(p, 'health').text, /Host: not running/);
   });
 });

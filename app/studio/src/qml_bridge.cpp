@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "qml_bridge.h"
 #include "api_client.h"
+#include "fx_types.h"
 #include "icons.h"
 #include "motion.h"
 #include "theme.h"
 
 #include <QClipboard>
+#include <QColorDialog>
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QJSEngine>
 #include <QJsonDocument>
 #include <QPainter>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QUrl>
 #include <algorithm>
@@ -84,11 +87,66 @@ QString QmlApi::openLink(const QString &url) const
 	return QDesktopServices::openUrl(u) ? QStringLiteral("opened") : QStringLiteral("failed");
 }
 
+QString QmlApi::chooseColour(const QString &start) const
+{
+	if (qEnvironmentVariable("UJWALAM_HEADLESS") == QStringLiteral("1"))
+		return QString();
+	const QColor c = QColorDialog::getColor(QColor(start), nullptr, QStringLiteral("Pick a colour"));
+	return c.isValid() ? c.name() : QString();
+}
+
+namespace {
+void namedRects(const QQuickItem *it, const QStringList &names, QRectF clip, QRectF &out)
+{
+	if (!it->isVisible() || it->opacity() <= 0)
+		return;
+	const QRectF r = it->mapRectToScene(it->boundingRect());
+	if (it->clip())
+		clip = clip.intersected(r);
+	if (names.contains(it->objectName())) {
+		const QRectF shown = r.intersected(clip);
+		if (shown.width() >= 6 && shown.height() >= 6)
+			out = out.united(shown);
+	}
+	for (const QQuickItem *c : it->childItems())
+		namedRects(c, names, clip, out);
+}
+} // namespace
+
+QRectF QmlApi::itemRect(QQuickItem *root, const QStringList &names) const
+{
+	if (!root)
+		return {};
+	QRectF out;
+	const QRectF all = root->mapRectToScene(root->boundingRect());
+	namedRects(root, names, all, out);
+	return out.toAlignedRect();
+}
+
+int QmlApi::guideHintMs() const { return qEnvironmentVariableIntValue("UJWALAM_GUIDE_HINT_MS"); }
+
+QVariantList QmlApi::fxTypes() const
+{
+	QVariantList out;
+	for (const FxType &t : ::fxTypes()) {
+		QVariantList params;
+		for (const FxParam &p : t.params)
+			params.append(QVariantMap{{QStringLiteral("key"), QLatin1String(p.key)}, {QStringLiteral("label"), QLatin1String(p.label)},
+						  {QStringLiteral("colour"), p.colour}, {QStringLiteral("lo"), p.lo}, {QStringLiteral("hi"), p.hi},
+						  {QStringLiteral("def"), p.def}, {QStringLiteral("step"), p.step > 0 ? p.step : 1.0}, {QStringLiteral("dec"), p.dec},
+						  {QStringLiteral("cdef"), QLatin1String(p.cdef)}});
+		out.append(QVariantMap{{QStringLiteral("type"), QLatin1String(t.type)}, {QStringLiteral("label"), QLatin1String(t.label)},
+				       {QStringLiteral("group"), QLatin1String(t.group)}, {QStringLiteral("params"), params}});
+	}
+	return out;
+}
+
 // ---- Theme ----
 
 QmlTheme::QmlTheme(QObject *parent) : QObject(parent)
 {
 	connect(theme::notifier(), &theme::Notifier::changed, this, &QmlTheme::changed);
+	connect(theme::notifier(), &theme::Notifier::rejected, this, &QmlTheme::rejected);
 }
 
 QString QmlTheme::id() const { return theme::currentId(); }

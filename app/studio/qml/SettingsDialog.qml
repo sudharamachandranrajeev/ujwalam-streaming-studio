@@ -329,8 +329,21 @@ Dialog {
             if (then) then();
         });
     }
-    function setTips(on) { guideSave({ tips: on }, () => { guide = Object.assign({}, guide, { tips: on }) }) }
-    function resetTips() { guideSave({ dismissed: [], tourDone: false }, () => { guide = Object.assign({}, guide, { dismissed: 0, tourDone: false }) }) }
+    function setTips(on) { guideSave({ tips: on }, () => { guide = Object.assign({}, guide, { tips: on }); guideSaved({ tips: on }) }) }
+    function resetTips() { guideSave({ dismissed: [], tourDone: false }, () => { guide = Object.assign({}, guide, { dismissed: 0, tourDone: false }); guideSaved({ dismissed: [], tourDone: false }) }) }
+    signal guideSaved(var part)  // the main window's tips follow at once
+    signal replayTour()          // Replay the welcome tour: Settings closes (nothing saved), then the tour starts
+    // The main window changed its tips (a "Don't show again", a finished tour): the page shows it.
+    function guideFrom(g) { guide = { tips: g.tips, dismissed: g.dismissed.length, tourDone: g.tourDone } }
+    function replayGuide() { discard(); replayTour() }
+    // Probe (tests): guide-settings:<tips-on|tips-off|reset|replay>, on the real controls of Settings > Help & tips.
+    function guideProbe(x) {
+        if (!opened) return false;
+        if (x === "tips-on" || x === "tips-off") { guideTipsSwitch.checked = x === "tips-on"; guideTipsSwitch.toggled(); return true }
+        if (x === "reset") { guideResetBtn.clicked(); return true }
+        if (x === "replay") { guideReplayBtn.clicked(); return true }
+        return false;
+    }
 
     Shortcut {
         sequence: "Escape"
@@ -476,6 +489,7 @@ Dialog {
                 UCard {
                     title: "TIPS FOR NEW USERS"
                     USwitch {
+                        id: guideTipsSwitch
                         objectName: "guideTips"
                         width: parent.width
                         text: "Show tips for new users"
@@ -485,7 +499,7 @@ Dialog {
                     Text {
                         width: parent.width
                         wrapMode: Text.Wrap
-                        text: "Tips are small cards that explain what Ujwalam is doing, in front of and behind the scenes. These buttons act at once."
+                        text: "Tips are small cards that explain what Ujwalam is doing, in front of and behind the scenes. These buttons act at once. The ? button in the top bar always opens Help."
                         color: Theme.c.muted
                         font.family: Theme.family
                         font.pixelSize: 13
@@ -500,10 +514,20 @@ Dialog {
                         font.family: Theme.family
                         font.pixelSize: 13
                     }
-                    UButton {
-                        objectName: "guideReset"
-                        text: "Reset all \"Don't show again\""
-                        onClicked: dlg.resetTips()
+                    Row {
+                        spacing: 8
+                        UButton {
+                            id: guideResetBtn
+                            objectName: "guideReset"
+                            text: "Reset all \"Don't show again\""
+                            onClicked: dlg.resetTips()
+                        }
+                        UButton {
+                            id: guideReplayBtn
+                            objectName: "guideReplay"
+                            text: "Replay the welcome tour"
+                            onClicked: dlg.replayGuide()
+                        }
                     }
                 }
             }

@@ -15,6 +15,7 @@
 
 class ApiClient;
 class QJSEngine;
+class QQuickItem;
 
 // Api: get / post / host with a JS callback (ok, body, err). Bodies cross as plain JS objects.
 class QmlApi : public QObject {
@@ -33,6 +34,18 @@ public:
 	// Report a problem: opens an https://github.com/ link in the browser (the widget report()'s check); anything else is
 	// refused. "opened", "refused", "failed", or "headless" (test mode: checked, never opened).
 	Q_INVOKABLE QString openLink(const QString &url) const;
+	// The Look panel (D290): the effect types from fx_types.h, as {type, label, group, params: [{key, label, colour, lo, hi,
+	// def, step, dec, cdef}]}. The same table the widget studio builds its Look cards from.
+	Q_INVOKABLE QVariantList fxTypes() const;
+	// A Look colour swatch: the system colour picker (the widget's QColorDialog). "#rrggbb", or "" when cancelled or in
+	// test mode (UJWALAM_HEADLESS=1: no dialog ever opens).
+	Q_INVOKABLE QString chooseColour(const QString &start) const;
+	// Tips and tours (guide, D294): where the named parts of the window are on screen, in window coordinates. Every
+	// visible item under root with one of these object names, at least 6 px each way, cut to what a clipping parent (a
+	// scrolling column) shows; their union. An empty rect when none is on screen (a tour step then is skipped).
+	Q_INVOKABLE QRectF itemRect(QQuickItem *root, const QStringList &names) const;
+	// UJWALAM_GUIDE_HINT_MS (tests): how long a hint stays, in ms; 0 when not set (a hint then uses its own time).
+	Q_INVOKABLE int guideHintMs() const;
 	// Requests sent and not answered yet (the headless probe waits for 0 before its next action and before it reads).
 	int inFlight() const { return inFlight_; }
 
@@ -80,6 +93,8 @@ public:
 	Q_INVOKABLE QString motionMode() const;
 signals:
 	void changed();
+	// A pack file that changed on disk and was refused (LU2): the last good look stays; the window says why (a toast).
+	void rejected(const QString &title, const QString &why);
 };
 
 class IconProvider : public QQuickImageProvider {

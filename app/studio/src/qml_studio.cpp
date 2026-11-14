@@ -20,6 +20,7 @@
 #include <QQuickWindow>
 #include <QSet>
 #include <QSGRendererInterface>
+#include <QWheelEvent>
 #include <cstdio>
 
 QmlStudio::QmlStudio(ApiClient *api, QObject *parent) : QObject(parent), api_(api) {}
@@ -194,6 +195,21 @@ bool QmlStudio::probeAction(const QString &action)
 		const qsizetype eq = action.indexOf(QLatin1Char('='));
 		QObject *t = eq > 5 ? findNamed(win_, action.mid(5, eq - 5)) : nullptr;
 		return t && t->property("enabled").toBool() && t->setProperty("text", action.mid(eq + 1));
+	}
+	if (action.startsWith(QStringLiteral("wheel:"))) { // wheel:<notches>:<focus|nofocus>:<objectName>: mouse wheel over its centre
+		const QStringList p = action.split(QLatin1Char(':'));
+		auto *item = p.size() >= 4 ? qobject_cast<QQuickItem *>(findNamed(win_, p.mid(3).join(QLatin1Char(':')))) : nullptr;
+		if (!item || !item->isVisible() || !item->isEnabled())
+			return false;
+		if (p[2] == QStringLiteral("focus")) { // as a click on it would: the window active, the item with focus
+			win_->requestActivate();
+			QCoreApplication::processEvents();
+			item->forceActiveFocus();
+		}
+		const QPointF at = item->mapToScene(QPointF(item->width() / 2, item->height() / 2));
+		QWheelEvent ev(at, win_->mapToGlobal(at), QPoint(), QPoint(0, 120 * p[1].toInt()), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+		QCoreApplication::sendEvent(win_, &ev);
+		return true;
 	}
 	if (!action.startsWith(QStringLiteral("click:"))) {
 		// settings-* and other window actions live in Main.qml (probeAction), named as on the widget studio.

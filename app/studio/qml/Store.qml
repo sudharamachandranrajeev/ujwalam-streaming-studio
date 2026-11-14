@@ -21,6 +21,7 @@ QtObject {
     property bool live: false
     property bool recording: false
     property bool hostUp: false
+    property bool uiUp: true          // the last status read reached the UI server (the status line tells the two apart)
     property bool coreUp: false
     property bool fake: false
     property int dropped: 0
@@ -34,6 +35,7 @@ QtObject {
     property real statusAt: 0        // the status snapshot's own clock ("at"): task times and toasts use it
     property var alerts: []          // status "alerts" (flag live-test-kit): the alert strip
     property bool previewEditing: false
+    property bool effectEditing: false // status host.effectEditing (flag effect-editor): the Advanced effects list
     property var flags: ({})         // flag id -> on (ui/api/flags), read after each status poll as the widget does
     property var flagList: []        // the same answer in full: {id, label, summary, page, on} for Settings
     readonly property bool routing: flags["mixer-routing"] === true && tracks.length > 0
@@ -60,6 +62,7 @@ QtObject {
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
     signal clipsAsk(var ask)           // "Make clips?" after a recording or stream (setting: Ask me each time)
     signal flagsRead()                 // after each flag read (every status poll)
+    signal statusRead(var s)           // each status that came back (the guide's hints follow what changed)
 
     // ---- private ----
     property real pHostUptime: -1
@@ -67,6 +70,9 @@ QtObject {
     property int pDevicesSeq: -1
     property var pSelSeqs: ({})
     property string pSelSent: ""
+    property var pSelWant: null        // a refused preview.select, sent once more when that preview is not dragging
+    property int pSelGen: 0            // only the newest preview.select's answer counts
+    property var pSelLast: ({})        // the host's last previewSelection {H, V, seqs, dragging}
     property bool pMeterBusy: false
     property int pFlagReads: 0
     property var pAsked: ({})          // question ids already put to the user
@@ -249,7 +255,9 @@ QtObject {
     }
 
     // D335 F8: the layer selected in the list is the one the mouse edits on that canvas's preview (a hidden layer, or
-    // one without a placement, selects none). Sent once per change; a refusal (live, mid-drag) is left to the next change.
+    // one without a placement, selects none). Sent once per change. The host refuses while live or mid-drag: the selection
+    // is kept and sent again from pollStatus once that preview is not dragging (a newer selection replaces it; a refused
+    // retry puts the list back to the host's), as the widget does.
     function syncPreviewSelection() {
         if (!previewEditing || !activeScene) return;
         const l = selectedLayer;
@@ -259,10 +267,23 @@ QtObject {
         pSelSent = key;
         const p = { canvas: canvas };
         if (layer) p.layer = layer;
-        Api.host("preview.select", p, () => {});
+        sendPreviewSelection(p, false);
+    }
+    function sendPreviewSelection(p, retry) {
+        pSelWant = null; // this one replaces any selection still waiting for a retry
+        const gen = ++pSelGen;
+        Api.host("preview.select", p, (ok) => {
+            if (gen !== pSelGen || ok) return; // a newer selection went out meanwhile, or it worked
+            if (!retry) { pSelWant = p; return; } // refused (a drag on that preview, live): again from pollStatus
+            followPreview(pSelLast, p.canvas); // refused again: the list shows what the preview edits
+        });
     }
 
-    function followPreview(sel) {
+    // The list follows the preview's selection (sel: the host's previewSelection; only: that canvas's own answer).
+    function followPreview(sel, only) {
+        pSelWant = null;
+        pSelGen++; // an answer still on its way no longer counts
+        if (only && only !== canvas) return; // the list shows another canvas now; it sends its own selection
         const cur = sel ? sel[canvas.toUpperCase()] : null;
         if (!cur || cur.scene !== activeScene) return;
         const layer = cur.layer || "";
@@ -297,6 +318,13 @@ QtObject {
         });
     }
 
+    // The preview's own host window (D280): open it, or bring it to the front (the widget's Own window / To front).
+    function previewWindow(canvas, front) {
+        Api.host(front ? "preview.focus" : "preview.open", { canvas: canvas }, (ok, b, err) => {
+            if (!ok) say("Preview failed: " + err);
+            else if (!front) say("Preview opened.");
+        });
+    }
     function setVolume(id, db) {
         Api.host("mixer.setVolume", { id: id, db: Math.round(db) }, (ok, b, err) => {
             if (!ok) { say("Volume failed: " + err); loadMixer(); }
@@ -382,7 +410,8 @@ QtObject {
         Api.get("ui/api/status", (ok, s, err) => {
             if (then) then();
             // No status: no stream or record click on a state that may be stale.
-            if (!ok) { hostUp = false; canStream = false; canRecord = false; return say("Status: " + err); }
+            if (!ok) { uiUp = false; hostUp = false; canStream = false; canRecord = false; return say("Status: " + err); }
+            uiUp = true;
             const h = s.host || {}, c = s.core || {};
             live = h.live === true;
             recording = h.recording === true;
@@ -415,6 +444,11 @@ QtObject {
             const nextSeqs = {};
             for (const k of ["H", "V"]) if (typeof seqs[k] === "number") nextSeqs[k] = seqs[k];
             pSelSeqs = nextSeqs;
+            pSelLast = ps;
+            // A refused selection waits until that preview is not dragging (and not live), then goes out once more.
+            if (pSelWant && previewEditing && !live && !(ps.dragging || {})[String(pSelWant.canvas).toUpperCase()])
+                sendPreviewSelection(pSelWant, true);
+            effectEditing = h.effectEditing === true;
             // A layer moved or resized with the mouse on the preview (D230): select it and reload the layers.
             const ed = h.previewEdit;
             if (ed && typeof ed.seq === "number") {
@@ -429,6 +463,7 @@ QtObject {
             }
             loadFlags();
             edit.loadEdits();
+            statusRead(s);
         });
     }
 

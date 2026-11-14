@@ -15,6 +15,17 @@ UPanel {
     readonly property var strips: store.mixer.filter(m => (store.routing && typeof m.audioSource === "string") || m.mixers === undefined || m.mixers !== 0)
     readonly property var offMix: store.mixer.filter(m => !strips.includes(m)).map(m => m.name)
 
+    // ---- probe (tests): volume-type:<strip id>:<dB> (typed into the real box, then Enter) ----
+    function probeAction(a) {
+        if (!a.startsWith("volume-type:")) return false;
+        const i = a.lastIndexOf(":"), sid = a.slice(12, i);
+        for (let k = 0; k < list.count; k++) {
+            const it = list.itemAtIndex(k);
+            if (it && it.sid === sid) return it.volBox.typeValue(a.slice(i + 1));
+        }
+        return false;
+    }
+
     function level(db) { return typeof db === "number" ? Math.max(0, Math.min(1, (db + 60) / 60)) : 0 }
 
     ListView {
@@ -33,6 +44,7 @@ UPanel {
             id: strip
             required property var modelData
             readonly property string sid: modelData.id
+            property alias volBox: vol
             readonly property bool routable: panel.store.routing && typeof modelData.audioSource === "string"
             objectName: "strip:" + sid
             width: 280
@@ -106,27 +118,20 @@ UPanel {
                     }
                 }
             }
-            USlider {
+            // The shared slider (D330): click, drag, typed dB + Enter, the wheel only with focus; one send per change.
+            UValueSlider {
                 id: vol
                 objectName: "vol:" + strip.sid
-                anchors { left: parent.left; right: dbText.left; bottom: parent.bottom; margins: 10; rightMargin: 8 }
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 10 }
                 from: -60
                 to: 0
                 stepSize: 1
+                decimals: 0
+                unit: "dB"
                 value: Math.max(-60, Math.min(0, typeof strip.modelData.volumeDb === "number" ? strip.modelData.volumeDb : 0))
                 meter: panel.level(panel.store.peaks[strip.sid])
-                Accessible.name: "Volume of " + strip.modelData.name
+                label: "Volume of " + strip.modelData.name
                 onCommitted: (v) => panel.store.setVolume(strip.sid, v)
-            }
-            Text {
-                id: dbText
-                anchors { right: parent.right; rightMargin: 10; verticalCenter: vol.verticalCenter }
-                width: 54
-                horizontalAlignment: Text.AlignRight
-                text: Math.round(vol.value) + " dB"
-                color: Theme.c.muted
-                font.family: "Barlow"
-                font.pixelSize: 13
             }
         }
     }

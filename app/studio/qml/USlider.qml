@@ -12,6 +12,7 @@ Slider {
     implicitHeight: 24
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
+    wheelEnabled: activeFocus // the wheel only with focus (D330): scrolling the page never moves a slider
     onPressedChanged: if (!pressed) s.committed(s.value)
     onMoved: if (!pressed) keyTimer.restart()
     Timer { id: keyTimer; interval: 300; onTriggered: s.committed(s.value) }

@@ -43,6 +43,7 @@ add_executable(ujwalam-studio WIN32
 	src/icons.h
 	src/layer_list.cpp
 	src/layer_list.h
+	src/fx_types.cpp
 	src/look_panel.cpp
 	src/look_panel.h
 	src/main_window.cpp
@@ -136,6 +137,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/FeedbackWindow.qml
 		qml/ReportDialog.qml
 		qml/ImportWindow.qml
+		qml/SceneBuilderWindow.qml
 		qml/PostsWindow.qml
 		qml/ClipsAsk.qml
 		qml/EditOps.qml
@@ -146,7 +148,15 @@ qt_add_qml_module(ujwalam-studio
 		qml/NameDialog.qml
 		qml/InspectorPanel.qml
 		qml/OutputsPanel.qml
-		qml/BotsPanel.qml)
+		qml/BotsPanel.qml
+		qml/TransitionsPanel.qml
+		qml/Guide.qml
+		qml/GuideBubble.qml
+		qml/GuideClose.qml
+		qml/HelpPanel.qml
+		qml/LookPanel.qml
+		qml/StatsPanel.qml
+		qml/UValueSlider.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()

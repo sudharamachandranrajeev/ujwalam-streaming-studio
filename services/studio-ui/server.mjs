@@ -68,6 +68,7 @@ import { loadBotConfig, tcpAnswers } from '../bots/index.mjs';
 import { CONNECT_FLAG, ERROR_TEXT as CONNECT_ERROR_TEXT, PROBLEM_TEXT as CONNECT_PROBLEM_TEXT, createConnect, outputsFromPlan } from '../platform-connect/index.mjs';
 import { connectRow as instagramRow, createUseWatcher as createInstagramWatcher, freshnessText as instagramText, INSTAGRAM_FLAG, keyFreshness as instagramFreshness, loadAddon as instagramAddon, noteKeyStarted as instagramStarted } from '../outputs/instagram.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG, createSettingsRoutes } from './settings-routes.mjs';
+import { createSceneBuilderRoutes } from './scene-builder-routes.mjs';
 import { connectTargets, readSetup } from './stream-setup.mjs';
 import { integrationsInEffect } from './integrations.mjs';
 
@@ -1186,6 +1187,17 @@ export function createStudioServer(opts) {
       }
     },
   };
+  // Q4 G: the scene builder in the studio (scene-builder-routes.mjs, flag scene-builder). A scene it adds is a structure
+  // edit: the undo history is cleared and the lists reload, as after "Duplicate scene".
+  const sceneBuilderRoutes = createSceneBuilderRoutes({
+    flags, host, json, projectSync, assetsDir, tasks,
+    ...(opts.sceneBuilder ?? {}), // test seams: read, build
+    afterEdit: (scene) => {
+      history.clear();
+      broadcast('edits', history.state());
+      broadcast('layers', { source: 'structure', edit: { op: 'scene.build', scene, layer: null } });
+    },
+  });
   // D327: Stream settings, Outputs panel, Integrations, Force complete transition (settings-routes.mjs).
   const settingsRoutes = createSettingsRoutes({
     dataDir: opts.dataDir, flags, host, json, log,
@@ -1354,6 +1366,7 @@ export function createStudioServer(opts) {
       try { const st = await youtubeAuth().status(); return json(res, 200, { signedIn: st.signedIn === true, hasClient: st.hasClient === true }); } catch { return json(res, 502, { error: 'youtube-status-failed' }); }
     }
     if (req.method === 'GET' && await settingsRoutes.handle('GET', route, null, res)) return undefined; // D327 pages
+    if (req.method === 'GET' && await sceneBuilderRoutes.handle('GET', route, null, res)) return undefined; // Q4 G
     if (req.method !== 'POST') return text(res, 405, 'method-not-allowed');
     // Mutating: Origin == our origin, CSRF header (timing-safe), JSON body.
     if (req.headers.origin !== origin) return text(res, 403, 'bad-origin');
@@ -1362,6 +1375,7 @@ export function createStudioServer(opts) {
     const body = await readBody(req, res);
     if (body === null) return undefined;
     if (await settingsRoutes.handle('POST', route, body, res)) return undefined;
+    if (await sceneBuilderRoutes.handle('POST', route, body, res)) return undefined;
 
     if (route === '/ui/api/edits/undo' || route === '/ui/api/edits/redo') {
       // Not while live (D238): undo there is the inspector's job. Fresh host.status, fail closed.

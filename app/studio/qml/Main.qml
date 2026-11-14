@@ -20,7 +20,7 @@ ApplicationWindow {
 
     property bool closeConfirmed: false
 
-    function start() { studioStore.start() }
+    function start() { studioStore.start(); guide.start() }
     function probeState() {
         const s = studioStore.probeState();
         s.settings = settingsDlg.ready ? settingsDlg.probe() : null;
@@ -41,6 +41,7 @@ ApplicationWindow {
         s.report = reportDlg.probe();
         s["import"] = importDlg.probe();
         s.posts = postsDlg.probe();
+        s.sceneBuilder = sceneBuilderDlg.probe();
         s.more = bar.moreProbe();
         s.clips = { text: studioStore.clipsText, tip: studioStore.clipsTip, asks: (studioStore.clips.asks || []).length, ask: clipsAskDlg.probe(),
                     reviewShown: studioStore.flags["learning-review"] === true && studioStore.reviewCount > 0, reviewCount: studioStore.reviewCount };
@@ -53,8 +54,12 @@ ApplicationWindow {
         s.scenePanel = scenes.probe();
         s.windowKeys = studioStore.edit.windowKeys;
         s.inspector = inspector.probe();
+        s.look = lookPanel.probe();
         s.outputsPanel = outputsPanel.probe();
         s.botsPanel = botsPanel.probe();
+        s.transitionsBox = transitionsPanel.probe();
+        s.guide = guide.probe();
+        s.stats = stats.probe();
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
@@ -67,9 +72,15 @@ ApplicationWindow {
         if (String(action).startsWith("report-")) return reportDlg.probeAction(String(action));
         if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
         if (String(action).startsWith("posts-")) return postsDlg.probeAction(String(action));
+        if (String(action).startsWith("sb-")) return sceneBuilderDlg.probeAction(String(action));
+        if (String(action).startsWith("volume-type:")) return mixer.probeAction(String(action));
         if (String(action).startsWith("inspector-")) return inspector.probeAction(String(action));
+        if (String(action).startsWith("look:") || String(action).startsWith("look-") || String(action).startsWith("adv-")) return lookPanel.probeAction(String(action));
         if (String(action).startsWith("outputs-")) return outputsPanel.probeAction(String(action));
         if (String(action).startsWith("bots-")) return botsPanel.probeAction(String(action));
+        if (String(action).startsWith("trbox-")) return transitionsPanel.probeAction(String(action));
+        if (String(action).startsWith("guide-settings:")) return settingsDlg.guideProbe(String(action).slice(15));
+        if (String(action).startsWith("guide-")) return guide.probeAction(String(action));
         if (action === "clips-folder") { studioStore.openClipsFolder(); return true } // the My clips button
         if (action === "clips-review") { if (!bar.reviewShown) return false; reviewDlg.show(); return true } // Review reads (N) beside My clips
         if (String(action).startsWith("clips-")) return clipsAskDlg.probeAction(String(action));
@@ -132,7 +143,8 @@ ApplicationWindow {
         objectName: "onAirBar"
         store: studioStore
         taskCenter: taskCenter
-        windows: ({ growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg })
+        guide: guide
+        windows: ({ growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg, sceneBuilder: sceneBuilderDlg })
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
         height: 56
     }
@@ -160,14 +172,14 @@ ApplicationWindow {
         width: 300
     }
 
-    // Under the layers (the widget's right column): the inspector, Outputs (flag outputs-panel) and Bots (flag
+    // Under the layers (the widget's right column): the inspector, Look, Outputs (flag outputs-panel) and Bots (flag
     // bot-manager). It scrolls past 60% of the column, so the layer list always keeps room.
     Flickable {
         id: side
         objectName: "sideColumn"
-        anchors { right: parent.right; bottom: mixer.top; rightMargin: win.pad; bottomMargin: win.pad }
+        anchors { right: parent.right; bottom: stats.top; rightMargin: win.pad; bottomMargin: win.pad }
         width: 300
-        height: Math.min(sideCol.implicitHeight, Math.max(0, (mixer.y - alerts.y - alerts.height) * 0.6))
+        height: Math.min(sideCol.implicitHeight, Math.max(0, (stats.y - alerts.y - alerts.height) * 0.6))
         contentHeight: sideCol.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
@@ -177,9 +189,20 @@ ApplicationWindow {
             width: side.width
             spacing: win.pad
             InspectorPanel { id: inspector; store: studioStore; width: parent.width; height: implicitHeight }
+            LookPanel { id: lookPanel; store: studioStore; width: parent.width; height: implicitHeight }
             OutputsPanel { id: outputsPanel; store: studioStore; width: parent.width; height: implicitHeight }
+            TransitionsPanel { id: transitionsPanel; store: studioStore; width: parent.width; height: implicitHeight }
             BotsPanel { id: botsPanel; store: studioStore; width: parent.width; height: implicitHeight }
         }
+    }
+
+    // Stream stats (the widget's StatsCards, D287): session clock, FPS, GPU and CPU with their last 3 minutes; always in view.
+    StatsPanel {
+        id: stats
+        store: studioStore
+        anchors { right: parent.right; bottom: mixer.top; rightMargin: win.pad; bottomMargin: win.pad }
+        width: 300
+        height: implicitHeight
     }
 
     PreviewArea {
@@ -217,10 +240,12 @@ ApplicationWindow {
             id: health
             objectName: "health"
             anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-            text: (studioStore.fake ? "Host: test stand-in" : studioStore.hostUp ? "Host: running" : "Host: not running") +
+            // The UI server not answering is said as such, not as a host that stopped (the host may still be streaming).
+            text: !studioStore.uiUp ? "UI server: not reachable (the host and your outputs may still be running)" :
+                  (studioStore.fake ? "Host: test stand-in" : studioStore.hostUp ? "Host: running" : "Host: not running") +
                   "   ·   " + (studioStore.coreUp ? "Event core: running" : "Event core: not running") +
                   (studioStore.activeTasks > 0 ? "   ·   " + studioStore.activeTasks + (studioStore.activeTasks === 1 ? " task running" : " tasks running") : "")
-            color: studioStore.hostUp ? Theme.c.muted : Theme.c.danger
+            color: studioStore.uiUp && studioStore.hostUp ? Theme.c.muted : Theme.c.danger
             font.family: Theme.family
             font.pixelSize: 13
         }
@@ -230,13 +255,19 @@ ApplicationWindow {
     AddLayerDialog { id: addLayerDlg; store: studioStore }
     AddSceneDialog { id: addSceneDlg; store: studioStore }
     NameDialog { id: renameDlg; store: studioStore }
-    SettingsDialog { id: settingsDlg; store: studioStore }
+    SettingsDialog {
+        id: settingsDlg
+        store: studioStore
+        onGuideSaved: (part) => guide.takeChoices(part)
+        onReplayTour: Qt.callLater(guide.replayWelcome) // the tour points at the main window: Settings closes first
+    }
     CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg; windows: ({ growth: growthDlg, review: reviewDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg }) }
     GrowthWindow { id: growthDlg; store: studioStore }
     ReviewWindow { id: reviewDlg; store: studioStore }
     FeedbackWindow { id: feedbackDlg; store: studioStore }
     ReportDialog { id: reportDlg; store: studioStore }
     ImportWindow { id: importDlg; store: studioStore }
+    SceneBuilderWindow { id: sceneBuilderDlg; store: studioStore }
     PostsWindow { id: postsDlg; store: studioStore }
     ClipsAsk { id: clipsAskDlg; store: studioStore }
     Connections {
@@ -266,6 +297,11 @@ ApplicationWindow {
         topY: bar.y + bar.height + 6
         windowHeight: win.height
     }
+    // A theme pack that changed on disk and was refused (LU2): the last good look stays, a notification says why.
+    Connections {
+        target: Theme
+        function onRejected(title, why) { taskCenter.notice(title, why, true) }
+    }
     TrayFlow { id: trayFlow; store: studioStore; window: win }
     // Undo, redo and the arrow-key nudge (plan Q4; one table in EditOps). A text box keeps its own Ctrl+Z and arrows.
     readonly property bool typing: !!win.activeFocusItem && win.activeFocusItem.cursorPosition !== undefined
@@ -283,6 +319,17 @@ ApplicationWindow {
             enabled: modelData.indexOf("Ctrl+") === 0 ? !win.typing : win.arrowsFree
             onActivated: studioStore.edit.windowKey(modelData)
         }
+    }
+
+    // Tips, tours and help (D294): over everything in the window, under the popups; the dimming lets clicks through.
+    Guide {
+        id: guide
+        store: studioStore
+        root: win.contentItem
+        unseen: studioUnseen
+        anchors.fill: parent
+        z: 50
+        onSettingsChanged: settingsDlg.guideFrom(guide)
     }
 
     CloseDialog {
