@@ -59,6 +59,7 @@ QtObject {
     signal addSceneReady(var canvases)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
     signal clipsAsk(var ask)           // "Make clips?" after a recording or stream (setting: Ask me each time)
+    signal flagsRead()                 // after each flag read (every status poll)
 
     // ---- private ----
     property real pHostUptime: -1
@@ -494,6 +495,7 @@ QtObject {
     function loadFlags() {
         Api.get("ui/api/flags", (ok, b) => {
             if (ok && Array.isArray(b.flags)) takeFlags(b.flags);
+            flagsRead(); // the Outputs panel reads on each flag read, the Bots box on every 5th (the widget's rule)
             // LL3 (D340): the Review reads queue, read every 5th flag read (the widget's rule) while its flag is on
             if (flags["learning-review"] !== true) { reviewCount = 0; return; }
             if (pFlagReads++ % 5 !== 0) return;

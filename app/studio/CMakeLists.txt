@@ -143,7 +143,10 @@ qt_add_qml_module(ujwalam-studio
 		qml/UMenuItem.qml
 		qml/LayerMenu.qml
 		qml/SceneMenu.qml
-		qml/NameDialog.qml)
+		qml/NameDialog.qml
+		qml/InspectorPanel.qml
+		qml/OutputsPanel.qml
+		qml/BotsPanel.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()

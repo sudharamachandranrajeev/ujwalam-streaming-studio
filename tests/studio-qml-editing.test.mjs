@@ -5,7 +5,8 @@
 // on a screen) against a real UI server and the fake host. Probe actions: click:<objectName>, type:<objectName>=<text>,
 // select-layer:<id>, layer-menu:show|blank|<item>, layer-key:<keys>, layer-drag:<fromRow>:<toRow> (rows top first),
 // select-scene:<id>, scene-menu:show|blank|<item>, scene-key:<keys>, key:<keys>[:<times>] (window keys: Ctrl+Z, Ctrl+Y,
-// Ctrl+Shift+Z, arrows with or without Shift). Skipped when the shell is not built (npm run build:studio).
+// Ctrl+Shift+Z, arrows with or without Shift), inspector-set:<box>:<text>, inspector-apply, inspector-undo (the widget's
+// INSPECTOR box: X, Y, width, height, rotation, crop; Apply sends only what changed). Skipped when the shell is not built (npm run build:studio).
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -181,6 +182,38 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     assert.deepEqual(live.done, [true, true]);
     assert.match(live.s.note, /^Live: arrow keys are off\. Use the inspector\./);
     assert.equal(live.calls.filter(([m]) => m === 'layers.setPlacement').length, 0);
+  });
+
+  // ---------------------------------------------------------------- inspector
+  test('inspector: no layer selected says so; the selected layer shows its values and canvas', async () => {
+    const e = await probe();
+    assert.equal(e.s.inspector.editable, false);
+    assert.equal(e.s.inspector.empty, 'Select a layer to edit its position, size and crop.');
+    const r = await probe(['select-layer:cam']);
+    assert.equal(r.s.inspector.editable, true);
+    assert.equal(r.s.inspector.title, 'Camera');
+    assert.match(r.s.inspector.sub, /^H canvas/);
+    assert.deepEqual([r.s.inspector.values.width, r.s.inspector.values.height, r.s.inspector.values.rotation, r.s.inspector.values.left], ['440', '248', '0.0', '0']);
+  });
+
+  test('inspector: Apply sends only what changed (rotation to one decimal, crop by side); the boxes follow the new values', async () => {
+    const r = await probe(['select-layer:cam', 'inspector-set:x:100', 'inspector-set:rotation:12.34', 'inspector-set:left:10', 'inspector-apply']);
+    assert.deepEqual(r.done, [true, true, true, true, true]);
+    const sent = r.calls.filter(([m]) => m === 'layers.setPlacement').map(([, x]) => [x.layer, x.placement]);
+    assert.deepEqual(sent, [['cam', { x: 100, rotation: 12.3, crop: { left: 10 } }]]);
+    assert.match(r.s.note, /^Applied\./);
+    assert.deepEqual([r.s.inspector.values.x, r.s.inspector.values.rotation, r.s.inspector.values.left], ['100', '12.3', '10']);
+  });
+
+  test('inspector: nothing changed sends nothing; Undo changes shows the layer again; a value out of range is held to it', async () => {
+    const n = await probe(['select-layer:cam', 'inspector-apply']);
+    assert.match(n.s.note, /^Nothing changed\./);
+    assert.equal(n.calls.filter(([m]) => m === 'layers.setPlacement').length, 0);
+    const u = await probe(['select-layer:cam', 'inspector-set:width:5', 'inspector-undo', 'inspector-apply']);
+    assert.equal(u.s.inspector.values.width, '440');
+    assert.equal(u.calls.filter(([m]) => m === 'layers.setPlacement').length, 0);
+    const o = await probe(['select-layer:cam', 'inspector-set:width:99999', 'inspector-apply']);
+    assert.deepEqual(o.calls.filter(([m]) => m === 'layers.setPlacement').map(([, x]) => x.placement), [{ width: 16384 }]);
   });
 
   // ---------------------------------------------------------------- layer menu

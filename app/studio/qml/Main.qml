@@ -52,6 +52,9 @@ ApplicationWindow {
         s.layerPanel = layers.probe();
         s.scenePanel = scenes.probe();
         s.windowKeys = studioStore.edit.windowKeys;
+        s.inspector = inspector.probe();
+        s.outputsPanel = outputsPanel.probe();
+        s.botsPanel = botsPanel.probe();
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
@@ -64,6 +67,9 @@ ApplicationWindow {
         if (String(action).startsWith("report-")) return reportDlg.probeAction(String(action));
         if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
         if (String(action).startsWith("posts-")) return postsDlg.probeAction(String(action));
+        if (String(action).startsWith("inspector-")) return inspector.probeAction(String(action));
+        if (String(action).startsWith("outputs-")) return outputsPanel.probeAction(String(action));
+        if (String(action).startsWith("bots-")) return botsPanel.probeAction(String(action));
         if (action === "clips-folder") { studioStore.openClipsFolder(); return true } // the My clips button
         if (action === "clips-review") { if (!bar.reviewShown) return false; reviewDlg.show(); return true } // Review reads (N) beside My clips
         if (String(action).startsWith("clips-")) return clipsAskDlg.probeAction(String(action));
@@ -150,8 +156,30 @@ ApplicationWindow {
         id: layers
         objectName: "layersPanel"
         store: studioStore
-        anchors { right: parent.right; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
+        anchors { right: parent.right; top: alerts.bottom; bottom: side.top; margins: win.pad }
         width: 300
+    }
+
+    // Under the layers (the widget's right column): the inspector, Outputs (flag outputs-panel) and Bots (flag
+    // bot-manager). It scrolls past 60% of the column, so the layer list always keeps room.
+    Flickable {
+        id: side
+        objectName: "sideColumn"
+        anchors { right: parent.right; bottom: mixer.top; rightMargin: win.pad; bottomMargin: win.pad }
+        width: 300
+        height: Math.min(sideCol.implicitHeight, Math.max(0, (mixer.y - alerts.y - alerts.height) * 0.6))
+        contentHeight: sideCol.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        Column {
+            id: sideCol
+            width: side.width
+            spacing: win.pad
+            InspectorPanel { id: inspector; store: studioStore; width: parent.width; height: implicitHeight }
+            OutputsPanel { id: outputsPanel; store: studioStore; width: parent.width; height: implicitHeight }
+            BotsPanel { id: botsPanel; store: studioStore; width: parent.width; height: implicitHeight }
+        }
     }
 
     PreviewArea {

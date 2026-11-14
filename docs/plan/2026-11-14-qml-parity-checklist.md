@@ -21,7 +21,8 @@ the 2026-11-14 handover session.
 - [x] Layer menu and keys: Rename (F2), Duplicate (Ctrl+D), move up/down/top/bottom, Copy / Paste look
 - [x] Layer reorder by drag (press-and-drag; no press-and-hold pick-up, see evidence)
 - [x] Scene menu and keys: Rename (F2), Duplicate, Make realism scene (flag `realism-look`), Delete; menu on empty space
-- [ ] Inspector: X, Y, width, height, rotation, crop, Apply, Undo changes (host `layers.setPlacement`)
+- [x] Inspector: X, Y, width, height, rotation, crop, Apply, Undo changes (host `layers.setPlacement`)
+      (`InspectorPanel.qml` under the layers; `tests/studio-qml-editing.test.mjs` inspector tests 3/3, file 29/29)
 - [ ] Look panel (shape, filters, camera, blend, shadow and glow; host `layers.setEffects`)
 - [ ] Advanced effects list (flag `effect-editor`, max 6)
 - [ ] Preview selection: retry a refused selection after a drag ends
@@ -45,8 +46,9 @@ the 2026-11-14 handover session.
       (`tests/studio-qml-more-windows.test.mjs`; 7/7 for the three windows)
 
 ## D. Panels shown by flags
-- [ ] Outputs panel in the main window (flag `outputs-panel`)
-- [ ] Bots box (flag `bot-manager`)
+- [x] Outputs panel in the main window (flag `outputs-panel`) (`OutputsPanel.qml`; `tests/studio-qml-outputs-bots.test.mjs`:
+      offline switch saves, live switch stops only that output on the click, + opens Settings > Stream)
+- [x] Bots box (flag `bot-manager`) (`BotsPanel.qml`; same test file, 5/5 with the Outputs tests)
 - [ ] Transitions box in the main window (flag `transitions`) — or dropped: Settings > Transitions covers it
 - [x] Edit scenes and layers box (flag `scene-edit`): dropped in Q2, one Add/Delete place
 
