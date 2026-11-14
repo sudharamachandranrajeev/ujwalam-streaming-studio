@@ -124,7 +124,13 @@ qt_add_qml_module(ujwalam-studio
 		qml/SettingsConnections.qml
 		qml/OutputDialog.qml
 		qml/SettingsDialog.qml
-		qml/CommandPalette.qml)
+		qml/CommandPalette.qml
+		qml/EditOps.qml
+		qml/UMenu.qml
+		qml/UMenuItem.qml
+		qml/LayerMenu.qml
+		qml/SceneMenu.qml
+		qml/NameDialog.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()

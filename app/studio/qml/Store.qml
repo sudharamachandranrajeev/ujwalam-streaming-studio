@@ -36,6 +36,8 @@ QtObject {
     property var flagList: []        // the same answer in full: {id, label, summary, page, on} for Settings
     readonly property bool routing: flags["mixer-routing"] === true && tracks.length > 0
     readonly property bool sceneEdit: flags["scene-edit"] === true // deleting scenes needs it (D240); adding does not
+    readonly property bool realism: flags["realism-look"] === true // "Make realism scene" in the scene menu (D381)
+    property EditOps edit: EditOps { store: store } // undo, nudge, layer and scene menu operations (plan Q4, EditOps.qml)
     property var structure: ({})     // ui/api/project/structure: what a new layer can be made from (devices, overlays, assets)
     property bool addOpen: false     // an add window is open: a device plugged in or out refreshes its lists (D329)
     property string note: ""
@@ -153,6 +155,7 @@ QtObject {
         Api.host("layers.setVisible", layerArgs({ layer: id, visible: visible }), (ok, b, err) => {
             if (!ok) say("Show/hide failed: " + err);
             loadLayers();
+            edit.loadEdits(); // it is an undoable edit: Undo is ready at once, not at the next status poll
         });
     }
 
@@ -171,7 +174,10 @@ QtObject {
             "no-project-file": "No project file is open, so nothing can be saved.",
             "too-many-layers": "This scene has the most layers it can hold.",
             "too-many-scenes": "The project has the most scenes it can hold.",
-            "host-unavailable": "The studio host is not reachable."
+            "host-unavailable": "The studio host is not reachable.",
+            "realism-look-off": "Turn on Realism scene in Settings > Editing first.",
+            "no-game-capture": "This scene shows no game capture, so there is nothing to grade.",
+            "too-many-effects": "A game layer already has too many effects for the realism grade (6 at most)."
         };
         return words[code] || code;
     }
@@ -218,14 +224,16 @@ QtObject {
                 const detail = b && b.detail ? String(b.detail) : "";
                 // The host's refusals are full sentences (D329): show them alone, not behind an HTTP code.
                 if (b && b.error === "host-error" && detail) say("Not done: " + detail);
-                else say("Not done: " + plainStructureError(err) + (detail ? " (" + detail + ")" : ""));
+                else say("Not done: " + plainStructureError(b && b.error ? String(b.error) : err) + (detail ? " (" + detail + ")" : ""));
             } else {
                 if ((b.op === "layer.add" || b.op === "layer.duplicate") && b.layer && b.layer.id) selected = b.layer.id; // the new layer
                 const waiting = b.waiting ? String(b.waiting) : ""; // a capture layer added without its device
-                say((waiting ? "Layer added. " + waiting : "Done: " + b.op) +
+                const done = b.op === "scene.realism" ? "Realism scene made: " + (b.scene ? b.scene.name : "") + " (" + (b.graded || 0) + " game layer(s) graded)" : "Done: " + b.op;
+                say((waiting ? "Layer added. " + waiting : done) +
                     (b.saved ? "" : ". Not saved to the project file: the change is live only."));
             }
             loadScenes();
+            edit.loadEdits(); // a structure edit clears the undo history
         });
     }
 
@@ -391,6 +399,7 @@ QtObject {
                 pDevicesSeq = dv.seq;
             }
             loadFlags();
+            edit.loadEdits();
         });
     }
 
@@ -448,7 +457,7 @@ QtObject {
     function probeState() {
         return {
             scenes: scenes.map(s => s.name), activeScene: activeScene, canvas: canvas,
-            layers: layers.map(l => ({ id: l.id, visible: !!l.visible })), selected: selected,
+            layers: layers.map(l => ({ id: l.id, name: l.name, visible: !!l.visible })), selected: selected,
             mixer: mixer.map(m => ({ id: m.id, name: m.name, volumeDb: m.volumeDb, muted: !!m.muted, cue: !!m.cue })),
             live: live, recording: recording, canStream: canStream, canRecord: canRecord, hostUp: hostUp, note: note
         };

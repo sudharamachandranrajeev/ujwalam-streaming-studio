@@ -5,6 +5,7 @@
 // qml_studio.cpp calls start() once the window is placed, and probeState() for the tests' probe.
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQml.Models
 import Ujwalam.Core
 
 ApplicationWindow {
@@ -29,12 +30,25 @@ ApplicationWindow {
         s.motion = Theme.motion;
         s.effects = Theme.effects();
         s.palette = cmdPalette.probe();
+        s.edit = studioStore.edit.probe();
+        s.layerPanel = layers.probe();
+        s.scenePanel = scenes.probe();
+        s.windowKeys = studioStore.edit.windowKeys;
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
     function probeAction(action) {
         if (String(action).startsWith("settings-") || String(action).startsWith("stream-") || String(action).startsWith("tr-") || String(action).startsWith("ap-") || String(action).startsWith("int-") || String(action).startsWith("conn-")) return settingsDlg.probeAction(String(action));
         if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
+        // Editing (plan Q4): the layer and scene menus, their keys, reorder and the window keys (undo, redo, arrows).
+        if (String(action).startsWith("select-layer:") || String(action).startsWith("layer-")) return layers.probeAction(String(action));
+        if (String(action).startsWith("select-scene:") || String(action).startsWith("scene-")) return scenes.probeAction(String(action));
+        if (String(action).startsWith("key:")) { // key:<keys>[:<times>]: presses made at once (they add up, as held arrow keys do)
+            const p = String(action).slice(4).split(":");
+            let done = false;
+            for (let i = 0; i < (Number(p[1]) || 1); i++) done = studioStore.edit.windowKey(p[0]);
+            return done;
+        }
         return false;
     }
 
@@ -45,6 +59,10 @@ ApplicationWindow {
         onAddLayerReady: (sceneId, sceneName) => addLayerDlg.ask(sceneId, sceneName)
         onAddSceneReady: (canvases) => addSceneDlg.ask(canvases)
         onSettingsWanted: (page) => settingsDlg.openAt(page)
+    }
+    Connections {
+        target: studioStore.edit
+        function onRenameWanted(kind, id, current) { renameDlg.ask(kind, id, current) }
     }
 
     // Tasks still running and not live: ask first (the widget closeEvent). Live: the window closes as before.
@@ -130,11 +148,23 @@ ApplicationWindow {
     ConfirmDialog { id: confirm; store: studioStore }
     AddLayerDialog { id: addLayerDlg; store: studioStore }
     AddSceneDialog { id: addSceneDlg; store: studioStore }
+    NameDialog { id: renameDlg; store: studioStore }
     SettingsDialog { id: settingsDlg; store: studioStore }
     CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg }
     Shortcut {
         sequence: "Ctrl+K"
         onActivated: cmdPalette.show()
+    }
+    // Undo, redo and the arrow-key nudge (plan Q4; one table in EditOps). A text box keeps its own Ctrl+Z and arrows.
+    readonly property bool typing: !!win.activeFocusItem && win.activeFocusItem.cursorPosition !== undefined
+    Instantiator {
+        model: studioStore.edit.windowKeys
+        delegate: Shortcut {
+            required property string modelData
+            sequence: modelData
+            enabled: !win.typing
+            onActivated: studioStore.edit.windowKey(modelData)
+        }
     }
 
     CloseDialog {
