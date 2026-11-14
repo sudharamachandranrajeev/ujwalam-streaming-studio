@@ -5,7 +5,8 @@
 // real UI server and the fake host; the settings land in the test's own data folder. Skipped when the shell is not built.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -39,14 +40,18 @@ function runShell(env) {
 describe('QML studio Settings (headless probe)', { skip }, () => {
   const dirs = [];
   after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
-  async function probe(actions = [], ms = 6000, env = {}) {
+  // refuse(method, url, body) → true: a server in front answers 400 bad-settings (an older server), else passes it on.
+  async function probe(actions = [], ms = 6000, env = {}, prepare = null, refuse = null) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-set-')); dirs.push(dataDir);
+    if (prepare) prepare(dataDir);
     const flags = createFlags({ dataDir });
     const fake = createFakeHost({ outputsReady: true });
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
     const key = 's'.repeat(40);
     const srv = createStudioServer({ uiRoot: UI, core, host: fake, launchKey: key, dataDir, flags, authority: null, limits: { statusPollMs: 50 }, log: () => {} });
-    const { port } = await srv.listen();
+    let { port } = await srv.listen();
+    const front = refuse ? await frontOf(port, refuse) : null;
+    if (front) port = front.address().port;
     try {
       const r = await runShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: String(ms),
         UJWALAM_STUDIO_PROBE_ACTIONS: actions.join(','), ...env });
@@ -57,7 +62,28 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
       const p = JSON.parse(m[1]);
       const file = path.join(dataDir, 'settings.json');
       return { p, s: p.state, flags, dataDir, saved: existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null, out: r.out };
-    } finally { srv.close(); }
+    } finally { front?.close(); srv.close(); }
+  }
+  function frontOf(port, refuse) {
+    const s = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const body = Buffer.concat(chunks);
+        if (refuse(req.method, req.url, body.toString('utf8'))) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end('{"error":"bad-settings"}');
+        }
+        const up = http.request({ host: '127.0.0.1', port, method: req.method, path: req.url, headers: { ...req.headers, host: `127.0.0.1:${port}`, // the server checks both
+          ...(req.headers.origin ? { origin: `http://127.0.0.1:${port}` } : {}) } }, (u) => {
+          res.writeHead(u.statusCode, u.headers);
+          u.pipe(res);
+        });
+        up.on('error', () => res.destroy());
+        up.end(body);
+      });
+    });
+    return new Promise((resolve) => s.listen(0, '127.0.0.1', () => resolve(s)));
   }
   const node = (p, name) => p.tree.find((n) => n.name === name);
   const done = (p) => p.actions.map((a) => [a.action, a.done]);
@@ -229,5 +255,46 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     for (const k of ['reelLengths', 'reelHooks', 'reelTransition']) assert.equal(p.saved.clips[k], undefined, k);
     assert.deepEqual([typeof p.saved.clips.recording, typeof p.saved.clips.live], ['string', 'string'], 'both modes, always');
     assert.deepEqual(p.saved.ui, { snap: true });
+  });
+
+  // ---- twins of studio-qt-shell's Settings tests (preview snap, motion, match filter) ----
+  test('Settings > Preview: snap is off by default with its words; on is a draft (nothing written) until Save; off again saves false', async () => {
+    const d = await probe(['settings-open', 'settings-page:Preview', 'settings-snap:on']);
+    const sw = node(d.p, 'settingsSnap');
+    assert.equal(sw.text, 'Snap to preview edges and other layers');
+    assert.deepEqual([d.s.settings.snap, d.s.settings.dirty], [true, true], 'a draft until Save');
+    assert.equal(d.saved, null, 'nothing written before Save');
+    const def = await probe(['settings-open', 'settings-page:Preview']);
+    assert.deepEqual([def.s.settings.snap, def.s.settings.dirty, node(def.p, 'settingsSnap').checked], [false, false, false], 'off unless the user turns it on');
+    const back = await probe(['settings-open', 'settings-snap:off', 'settings-save'], 8000, {}, (dir) => writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ ui: { snap: true } })));
+    assert.equal(back.saved.ui.snap, false, 'and off again');
+  });
+
+  test('motion: settings.json ui.motion is read at start; UJWALAM_REDUCE_MOTION still overrides it', async () => {
+    const prep = (d) => writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ ui: { motion: 'off' } }));
+    const off = await probe([], 4500, {}, prep);
+    assert.deepEqual([off.s.motionMode, off.s.motion], ['off', false]);
+    const env = await probe([], 4500, { UJWALAM_REDUCE_MOTION: '0' }, prep);
+    assert.deepEqual([env.s.motionMode, env.s.motion], ['off', true], 'the environment wins');
+    const on = await probe([], 4500, { UJWALAM_REDUCE_MOTION: '' }, (d) => writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ ui: { motion: 'on' } })));
+    assert.deepEqual([on.s.motionMode, on.s.motion], ['on', true]);
+  });
+
+  test('Settings > Clips: the match filter is saved through the settings route, with a plain note', async () => {
+    const p = await probe(['settings-open', 'settings-page:Clips', 'click:settingsTop3', 'click:settingsKillsOn', 'settings-save'], 9000);
+    assert.ok(p.p.actions.every((a) => a.done), JSON.stringify(p.p.actions));
+    const gate = p.saved.clips.matchGate;
+    assert.equal(gate.top3, false, 'top 3 switched off');
+    assert.equal(typeof gate.minKills, 'number', 'the kills box is on');
+    assert.match(p.s.note, /^Settings saved\.$/);
+    assert.doesNotMatch(p.s.note, /HTTP 400|bad-settings/);
+  });
+  test('Settings > Clips: an older server that refuses the match filter gives plain words; the other settings are saved again without it', async () => {
+    const old = (m, url, body) => m === 'POST' && url.startsWith('/ui/api/settings') && body.includes('"matchGate"');
+    const both = await probe(['settings-open', 'settings-page:Preview', 'settings-snap:on', 'settings-page:Clips', 'click:settingsTop3', 'settings-save'], 10000, {}, null, old);
+    assert.ok(both.p.actions.every((a) => a.done), JSON.stringify(both.p.actions));
+    assert.equal(both.s.note, 'Settings saved, except the match filter: this version of Ujwalam does not support it yet.');
+    assert.equal(both.saved.ui.snap, true, 'the snap switch was saved');
+    assert.notEqual(both.saved.clips?.matchGate?.top3, false, 'the refused match filter change did not land');
   });
 });

@@ -92,6 +92,51 @@ describe('QML studio window (headless probe)', { skip }, () => {
     assert.ok(statSync(shot).size > 10_000, 'a picture of the window');
   });
 
+  // ---- twins of studio-qt-shell's login and default-state tests ----
+  test('the launch key is single use (a second window is refused, exit 77); only a 127.0.0.1 server URL is accepted (exit 64)', async () => {
+    const fake = createFakeHost({});
+    const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-key-')); dirs.push(dataDir);
+    const key = 'k'.repeat(40);
+    const srv = createStudioServer({ uiRoot: UI, core, host: fake, launchKey: key, dataDir, authority: null, limits: { statusPollMs: 50 }, log: () => {} });
+    const { port } = await srv.listen();
+    try {
+      const first = await runShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: '3000' });
+      assert.equal(first.code, 0, first.err);
+      const second = await runShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: '3000' });
+      assert.equal(second.code, 77);
+      assert.match(second.err, /login failed/);
+    } finally { srv.close(); }
+    const far = await runShell({ UJWALAM_UI_URL: 'http://example.com:80/', UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: '3000' });
+    assert.equal(far.code, 64);
+  });
+
+  test('defaults: every flag listed and off but preview-edit and reel-thumbnail; flag-gated boxes hidden; clips ready, clip choices "ask"', async () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-def-')); dirs.push(dataDir);
+    const flags = createFlags({ dataDir });
+    const fake = createFakeHost({});
+    const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
+    const key = 'd'.repeat(40);
+    const srv = createStudioServer({ uiRoot: UI, core, host: fake, launchKey: key, dataDir, flags, authority: null, limits: { statusPollMs: 50 }, log: () => {} });
+    const { port } = await srv.listen();
+    let p;
+    try {
+      const r = await runShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: '4500', UJWALAM_STUDIO_PROBE_ACTIONS: 'settings-open,settings-page:Clips' });
+      assert.equal(r.code, 0, r.err);
+      p = JSON.parse(/^studio probe: (.+)$/m.exec(r.out)[1]);
+    } finally { srv.close(); }
+    const ids = JSON.parse(readFileSync(path.join(UI, '..', 'data', 'flags.json'), 'utf8')).flags.map((f) => f.id);
+    assert.deepEqual(p.state.flags.map((f) => f.id), ids);
+    assert.ok(p.state.flags.every((f) => f.on === (f.id === 'preview-edit' || f.id === 'reel-thumbnail')), 'all off but preview-edit (D330) and reel-thumbnail (D368)');
+    for (const n of ['outputsPanel', 'botsPanel', 'transitionsPanel', 'lookAdvanced', 'alertBar', 'reviewBtn'])
+      assert.notEqual(node(p, n)?.visible, true, `${n} hidden with its flag off`);
+    assert.ok(!p.tree.some((n) => n.name.startsWith('track:')), 'no track routing buttons while mixer-routing is off');
+    assert.equal(p.state.clips.text, 'Clips: ready', 'no clip runs yet, the default choice is "ask me"');
+    assert.equal(node(p, 'settingsTop3').checked, true, 'match filter default: top 3 on');
+    assert.equal(node(p, 'settingsKillsOn').checked, false, 'no kills minimum');
+    assert.equal(node(p, 'settingsRecordLive').checked, true);
+  });
+
   test('clicks go through the same routes: show a layer, mute, record, switch scene', async () => {
     const { p, fake } = await probe({ actions: ['click:eye:chat', 'click:mute:scene-1/cam', 'click:recordBtn', 'click:scene:scene-2'], ms: 7000 });
     assert.deepEqual(p.actions.map((a) => a.done), [true, true, true, true], JSON.stringify(p.actions));

@@ -322,6 +322,7 @@ UPanel {
                                 Text { text: prm.modelData.label; color: Theme.c.muted; font.family: Theme.family; font.pixelSize: 12 }
                                 UValueSlider {
                                     id: vsl
+                                    objectName: "lookSlider:" + reg
                                     visible: !prm.modelData.colour
                                     width: prm.width
                                     from: prm.modelData.lo

@@ -93,15 +93,21 @@ pack loads with its colours; component variants are widget-only).
 
 `studio-qt-shell` (73 tests), mapped test by test 2026-11-14: most are covered by the QML files (some partly),
 3 are widget-only (QDialog/native-handle lifecycle). Still missing or partial in QML:
-- [ ] launch key single use (exit 77) and 127.0.0.1-only URL (exit 64)
-- [ ] default state: flag ids equal `data/flags.json`, defaults off, panels shown/hidden by flag, clip settings defaults
-- [ ] Settings: match filter saved through the settings route (plain words on refusal); `ui.motion` read at start and
-      `UJWALAM_REDUCE_MOTION` override; snap off by default, a draft until Save, off again; Editing page hint
-- [ ] flag switch acts at once with no text window; an unknown flag refused (D332)
-- [ ] preview selection: list pick sends `preview.select`; a preview click selects in the list with no echo; a V click
-      leaves the H list
-- [ ] sliders: click jumps and keys step; volume sent once on release; press-hold-drag commits once; held spin box
-      commits once after the pause
-- [ ] Add layer: camera layer with scene editing off; colour needs #RRGGBB (window stays open, nothing sent); Add scene
-      says which canvases
-- [ ] trash button greyed while live with its reason
+- [x] launch key single use (exit 77) and 127.0.0.1-only URL (exit 64) (`studio-qml-shell`)
+- [x] default state: flag ids equal `data/flags.json`, defaults off, panels shown/hidden by flag, clip settings defaults
+      (`studio-qml-shell`)
+- [x] Settings: match filter saved through the settings route (plain words on refusal, the rest saved again without
+      it); `ui.motion` read at start and `UJWALAM_REDUCE_MOTION` override; snap off by default, a draft until Save, off
+      again; Editing page hint (Layer effects on the Editing page with its summary, no own page) (`studio-qml-settings`)
+- [x] flag switch: design difference, not a gap. In QML a flag is a Settings draft applied at Save, one click and no
+      text window (`studio-qml-settings` "a real click on a flag switch changes the draft only"); the unknown-flag
+      refusal is the flags service's (`flags.test.mjs` "unknown id and non-boolean are refused")
+- [x] preview selection: list pick sends `preview.select` once; a hidden layer selects none; host editing off sends
+      nothing; a preview click selects in the list with no echo; a V click leaves the H list (`studio-qml-editing`)
+- [x] sliders: click jumps and a key steps (Look radius); volume sent once on release; press-hold-drag commits once
+      (`studio-qml-editing`, real mouse and key events through the new `drag:` and `key:` probe actions). The held
+      spin box has no twin: the QML number box is a typed field (Enter commits), it has no step arrows
+- [x] Add layer: text and camera layer with scene editing off; colour needs #RRGGBB (window stays open, nothing sent);
+      Add scene says which canvases (`studio-qml-editing`)
+- [x] trash button greyed while live with its reason (the reason shows on hover over the greyed button)
+      (`studio-qml-editing`)

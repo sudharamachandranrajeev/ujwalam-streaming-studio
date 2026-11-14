@@ -37,7 +37,7 @@ UPanel {
         return false;
     }
     function probe() {
-        return { menu: { open: menu.opened, blank: menu.blank, items: menu.items() }, keys: keyNames, undoTip: undoBtn.tip, redoTip: redoBtn.tip };
+        return { menu: { open: menu.opened, blank: menu.blank, items: menu.items() }, keys: keyNames, undoTip: undoBtn.tip, redoTip: redoBtn.tip, deleteTip: deleteBtn.tip };
     }
 
     LayerMenu { id: menu; store: panel.store }
@@ -136,13 +136,22 @@ UPanel {
             tip: panel.store.live ? "Add layer (not while live)" : "Add layer"
             onClicked: panel.store.addLayer("")
         },
-        UIconButton {
-            objectName: "deleteLayer"
-            iconName: "trash"
-            iconToken: "danger"
-            enabled: panel.store.selectedLayer !== null
-            tip: panel.store.live ? "Delete layer (not while live)" : "Delete the selected layer (Del)"
-            onClicked: panel.store.deleteLayer()
+        Item { // greyed while live, as the widget's trash button (D330); the box shows why (a disabled button gets no hover)
+            width: deleteBtn.implicitWidth
+            height: deleteBtn.implicitHeight
+            HoverHandler { id: deleteHover }
+            ToolTip.visible: !deleteBtn.enabled && deleteHover.hovered && panel.store.live
+            ToolTip.text: deleteBtn.tip
+            ToolTip.delay: 500
+            UIconButton {
+                id: deleteBtn
+                objectName: "deleteLayer"
+                iconName: "trash"
+                iconToken: "danger"
+                enabled: panel.store.selectedLayer !== null && !panel.store.live
+                tip: panel.store.live ? "Not while live" : "Delete the selected layer (Del)"
+                onClicked: panel.store.deleteLayer()
+            }
         }
     ]
 

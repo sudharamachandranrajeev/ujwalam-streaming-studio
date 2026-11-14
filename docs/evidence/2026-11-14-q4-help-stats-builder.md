@@ -53,6 +53,30 @@ build and apply; dry run writes nothing and sends nothing; a host refusal (502) 
 apply sends `scenes.create` H then V then `layers.addFromProject` per layer for the new id; the file gains exactly one
 scene; `stateHash(withoutAdded(saved))` equals the hash before; the project validates; the build is used up.
 
+## Row H: test twins of `studio-qt-shell` (same day, later)
+
+Built for them: the trash button is greyed while live with "Not while live" (shown on hover over a wrapper, since a
+disabled Qt Quick button gets no hover); new probe actions `drag:<from>[~<to>]:<objectName>` (a real mouse press, an
+optional held drag in 8 moves, the release) and `key:<Key>:<objectName>` (focus, then a real key) in `qml_studio.cpp`;
+the Look sliders are named `lookSlider:<type>/<key>`.
+
+```
+node --test --test-concurrency=1 tests/studio-qml-shell.test.mjs     -> tests 5, pass 5 (launch key once, URL, defaults)
+node --test --test-concurrency=1 tests/studio-qml-settings.test.mjs  -> 18 of 19 in the batch; the new refusal test
+     failed on the test's own front server (Host and Origin not passed on, then a wrong expectation), then 2/2 after
+     the fix (match filter saved; an older server's refusal: "Settings saved, except the match filter: ...")
+node --test --test-concurrency=1 tests/studio-qml-editing.test.mjs   -> 43 of 44 in the batch; then the changed and
+     new tests 4/4 (preview click without echo, trash while live, slider click/type/key, volume click and hold-drag)
+```
+
+Test fix: "a click on the preview selects it in the list" counted host.status calls, but the UI server polls the host
+itself every 50 ms, so the click was in the status before the window started. The click now comes 1 s after the
+window's first `preview.select`.
+
+Slider results: Look radius click at 0.9 jumps past 13, typed 12 is sent, Right sends 13; volume click at a quarter of
+-60..0 sends -45 once; press at a quarter, hold and drag to three quarters sends only -15 on release. Not twinned: the
+widget's held spin-box arrows (the QML number box is a typed field, no arrows).
+
 ## Not covered
 
 - The real-screen look (Q5).

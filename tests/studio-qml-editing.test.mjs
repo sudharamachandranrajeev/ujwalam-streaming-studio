@@ -322,6 +322,78 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     assert.equal(r.s.selected, 'game', 'the list shows the layer the preview edits');
     assert.equal(selects(r.calls, 'game').length, 0, 'the restored selection is not sent back');
   });
+  test('preview selection: the layer picked in the list is sent once; a hidden layer selects none; host editing off sends nothing', async () => {
+    const st = () => ({ previewEditing: true, previewSelection: sel(0, 0, null, null) });
+    const r = await probe(['select-layer:cam'], { ms: 7000, hostStatus: st });
+    const sent = r.calls.filter(([m]) => m === 'preview.select').map(([, x]) => x);
+    assert.deepEqual(sent.at(-1), { canvas: 'h', layer: 'cam' }, JSON.stringify(sent));
+    assert.equal(selects(r.calls, 'cam').length, 1, 'sent once, not on every status poll');
+    const h = await probe(['select-layer:chat'], { ms: 7000, hostStatus: st });
+    assert.deepEqual(h.calls.filter(([m]) => m === 'preview.select').map(([, x]) => x).at(-1), { canvas: 'h' }, 'a hidden layer: the preview selects none');
+    const off = await probe(['select-layer:cam'], { ms: 6000 });
+    assert.equal(off.calls.filter(([m]) => m === 'preview.select').length, 0);
+  });
+  test('preview selection: a click on the preview that picks another layer selects it in the list, without an echo', async () => {
+    // The server polls host.status itself (every 50 ms), so a count of polls says nothing about the window: the click
+    // comes 1 s after the window's first preview.select (it sends one once it sees preview editing on), and the window
+    // must read the status after it.
+    let firstSent = 0, n = 0;
+    const clicked = () => firstSent > 0 && Date.now() - firstSent > 1000;
+    const r = await probe([], { ms: 8000,
+      hostCall: (m) => { if (m === 'preview.select' && !firstSent) firstSent = Date.now(); return undefined; },
+      hostStatus: () => {
+        if (clicked()) n++;
+        return { previewEditing: true, previewSelection: clicked() ? sel(1, 0, { scene: 'scene-1', layer: 'game' }, null) : sel(0, 0, null, null) };
+      } });
+    assert.ok(firstSent > 0 && n >= 2, `the window read the status after the click (${n})`);
+    assert.equal(r.s.selected, 'game', 'the list follows the preview');
+    assert.equal(selects(r.calls, 'game').length, 0, 'not sent back to the host');
+  });
+  test('preview selection: a click on the V preview does not change the H list', async () => {
+    let sentAt = 0;
+    const vClicked = () => sentAt > 0 && Date.now() - sentAt > 1500;
+    let pollsAfterV = 0;
+    const r = await probe(['select-layer:cam'], { ms: 9000,
+      hostCall: (m, x) => { if (m === 'preview.select' && x.layer === 'cam') sentAt = Date.now(); return undefined; },
+      hostStatus: () => { if (vClicked()) pollsAfterV++; return { previewEditing: true, previewSelection: vClicked() ? sel(0, 1, null, { scene: 'scene-1', layer: 'game' }) : sel(0, 0, null, null) }; },
+    });
+    assert.ok(pollsAfterV >= 2, `the window read the status after the V click (${pollsAfterV})`);
+    assert.equal(r.s.selected, 'cam', 'the H list keeps its selection');
+  });
+
+  // ---------------------------------------------------------------- add windows and the trash button (twins of studio-qt-shell)
+  test('Add layer: a text layer and a camera layer are added with scene editing off; saved, sent to the host, the new one selected', async () => {
+    const r = await probe(['click:addLayer', 'click:kind:text', 'type:addText=Be right back', 'click:addLayerOk',
+      'click:addLayer', 'click:kind:capture', 'click:choice:0', 'click:addLayerOk'], { ms: 12000 });
+    assert.ok(r.done.every(Boolean), JSON.stringify(r.p.actions));
+    const doc = r.doc();
+    assert.deepEqual(doc.scenes[0].layers.slice(3).map((l) => [l.type, l.name]), [['text', 'Be right back'], ['capture', 'Face camera']]);
+    assert.equal(validateProject(doc).ok, true);
+    assert.equal(r.calls.filter(([m]) => m === 'layers.addFromProject').length, 2);
+    assert.equal(r.s.selected, doc.scenes[0].layers[4].id, 'the camera layer is selected');
+    assert.notEqual(node(r.p, 'addLayerBox')?.opened, true, 'the window closed after Add');
+  });
+  test('Add layer: a colour needs #RRGGBB; a wrong entry keeps the window open with the reason and sends nothing', async () => {
+    const r = await probe(['click:addLayer', 'click:kind:color', 'click:addLayerOk', 'type:addText=red', 'click:addLayerOk']);
+    assert.ok(r.done.every(Boolean), JSON.stringify(r.p.actions));
+    assert.equal(node(r.p, 'addLayerBox').opened, true, 'still open after "red"');
+    assert.equal(node(r.p, 'addAbout').text, 'Colour must look like #RRGGBB.');
+    assert.equal(r.calls.filter(([m]) => m === 'layers.addFromProject').length, 0, 'nothing was added');
+    assert.equal(r.doc().scenes[0].layers.length, 3);
+  });
+  test('Add scene: the + opens a name box that says which canvases it is made on; Add stays off until a name is typed', async () => {
+    const r = await probe(['click:addScene']);
+    assert.equal(node(r.p, 'addSceneWhere').text, 'The scene is made on every canvas of the project: H + V.');
+    assert.equal(node(r.p, 'addSceneOk').enabled, false);
+  });
+  test('layer list: while live the trash button is greyed and says why; a click deletes nothing', async () => {
+    const r = await probe(['select-layer:chat', 'click:deleteLayer'], { live: true });
+    const del = node(r.p, 'deleteLayer');
+    assert.equal(del.enabled, false);
+    assert.equal(r.d['click:deleteLayer'], false, 'a greyed button takes no click');
+    assert.equal(r.s.layerPanel.deleteTip, 'Not while live');
+    assert.equal(r.calls.filter(([m]) => m === 'layers.remove').length, 0);
+  });
 
   // ---------------------------------------------------------------- volume (D330)
   test('volume: a typed dB + Enter sends mixer.setVolume once; the wheel does nothing without focus and steps one dB a notch with it', async () => {
@@ -331,6 +403,23 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     assert.equal(sent[0], -6, 'typed -6');
     assert.equal(sent.at(-1), -8, 'two notches down from -6 with focus: ' + sent);
     assert.equal(sent.length, 2, 'the unfocused wheel sent nothing: ' + sent);
+  });
+  // Twins of studio-qt-shell's shared-slider tests (D330), with real mouse and key events (drag:, key:).
+  test('shared slider: a click jumps to the value, a typed value + Enter sets it, a key steps; each reaches the host', async () => {
+    const S = 'lookSlider:rounded/radius:slider';
+    const r = await probe(['select-layer:cam', 'look:rounded:on', `drag:0.9:${S}`, 'look-set:rounded:radius:12', `key:Right:${S}`], { ms: 9000 });
+    assert.ok(r.done.every(Boolean), JSON.stringify(r.p.actions));
+    const radii = r.calls.filter(([m]) => m === 'layers.setEffects').map(([, x]) => x.effects.find((e) => e.type === 'rounded')?.radius);
+    assert.ok(radii.some((v) => v > 12 + 1), `the click jumped far along the track: ${radii}`);
+    assert.ok(radii.includes(12), `typed 12: ${radii}`);
+    assert.equal(radii.at(-1), 13, `Right stepped one up from 12: ${radii}`);
+  });
+  test('shared slider: a volume click sends mixer.setVolume once on release; press, hold and drag commits once on release', async () => {
+    const S = 'vol:scene-1/game:slider';
+    const r = await probe([`drag:0.25:${S}`, `drag:0.25~0.75:${S}`], { ms: 7000 });
+    assert.ok(r.done.every(Boolean), JSON.stringify(r.p.actions));
+    const sent = r.calls.filter(([m, x]) => m === 'mixer.setVolume' && x.id === 'scene-1/game').map(([, x]) => x.db);
+    assert.deepEqual(sent, [-45, -15], `a quarter of -60..0 dB, then only the released value: ${sent}`);
   });
 
   // ---------------------------------------------------------------- layer menu

@@ -9,6 +9,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QGuiApplication>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMetaMethod>
@@ -19,6 +20,8 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSet>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QSGRendererInterface>
 #include <QWheelEvent>
 #include <cstdio>
@@ -211,8 +214,57 @@ bool QmlStudio::probeAction(const QString &action)
 		QCoreApplication::sendEvent(win_, &ev);
 		return true;
 	}
+	if (action.startsWith(QStringLiteral("drag:"))) {
+		// drag:<from>[~<to>]:<objectName>: a real left press at a fraction of the item's track, an optional hold and drag to
+		// the second fraction, then the release (the shared slider's click jump and its one change on release, D330).
+		const QStringList p = action.split(QLatin1Char(':'));
+		auto *item = p.size() >= 3 ? qobject_cast<QQuickItem *>(findNamed(win_, p.mid(2).join(QLatin1Char(':')))) : nullptr;
+		if (!item || !item->isVisible() || !item->isEnabled())
+			return false;
+		const QStringList f = p[1].split(QLatin1Char('~'));
+		auto at = [item](double frac) { // on a Slider the handle's centre at that position; else the width
+			double x = frac * item->width();
+			const auto *h = item->property("handle").value<QQuickItem *>();
+			const QVariant avail = item->property("availableWidth");
+			if (h && avail.isValid())
+				x = item->property("leftPadding").toDouble() + h->width() / 2 + frac * (avail.toDouble() - h->width());
+			return item->mapToScene(QPointF(x, item->height() / 2));
+		};
+		auto send = [this](QEvent::Type t, QPointF pos, Qt::MouseButton b, Qt::MouseButtons bs) {
+			QMouseEvent ev(t, pos, pos, win_->mapToGlobal(pos), b, bs, Qt::NoModifier);
+			QCoreApplication::sendEvent(win_, &ev);
+			QCoreApplication::processEvents();
+		};
+		QPointF pos = at(f[0].toDouble());
+		send(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton);
+		if (f.size() > 1) {
+			const QPointF end = at(f[1].toDouble());
+			for (int i = 1; i <= 8; i++) // held: several moves, as a hand drags
+				send(QEvent::MouseMove, pos + (end - pos) * (i / 8.0), Qt::NoButton, Qt::LeftButton);
+			pos = end;
+		}
+		send(QEvent::MouseButtonRelease, pos, Qt::LeftButton, Qt::NoButton);
+		return true;
+	}
+	if (action.startsWith(QStringLiteral("key:"))) { // key:<Right|Left|Up|Down|PageUp|PageDown>:<objectName>: focus, then the key
+		const QStringList p = action.split(QLatin1Char(':'));
+		static const QHash<QString, int> keys{{QStringLiteral("Right"), Qt::Key_Right}, {QStringLiteral("Left"), Qt::Key_Left},
+			{QStringLiteral("Up"), Qt::Key_Up}, {QStringLiteral("Down"), Qt::Key_Down}, {QStringLiteral("PageUp"), Qt::Key_PageUp},
+			{QStringLiteral("PageDown"), Qt::Key_PageDown}};
+		auto *item = p.size() >= 3 ? qobject_cast<QQuickItem *>(findNamed(win_, p.mid(2).join(QLatin1Char(':')))) : nullptr;
+		if (!item || !item->isVisible() || !item->isEnabled() || !keys.contains(p[1]))
+			return false;
+		win_->requestActivate();
+		QCoreApplication::processEvents();
+		item->forceActiveFocus();
+		for (QEvent::Type t : {QEvent::KeyPress, QEvent::KeyRelease}) {
+			QKeyEvent ev(t, keys.value(p[1]), Qt::NoModifier);
+			QCoreApplication::sendEvent(win_, &ev);
+		}
+		return true;
+	}
 	if (!action.startsWith(QStringLiteral("click:"))) {
-		// settings-* and other window actions live in Main.qml (probeAction), named as on the widget studio.
+		// settings-*and other window actions live in Main.qml (probeAction), named as on the widget studio.
 		QVariant done;
 		return win_ && QMetaObject::invokeMethod(win_, "probeAction", Q_RETURN_ARG(QVariant, done), Q_ARG(QVariant, action)) && done.toBool();
 	}
