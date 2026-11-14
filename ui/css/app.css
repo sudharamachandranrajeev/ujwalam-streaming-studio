@@ -2,9 +2,9 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--color-bg); color: var(--color-text); font: var(--text-md) var(--font-ui); }
-h2 { margin: 0 0 var(--space-2); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-dim); font-weight: 600; }
+h2 { margin: 0 0 var(--space-2); font-size: var(--text-md); color: var(--color-text); font-weight: 600; }
 .muted { color: var(--color-text-dim); font-size: var(--text-sm); }
-code { font-family: var(--font-mono); background: var(--color-surface-2); padding: 1px var(--space-1); border-radius: 3px; }
+code { font-family: var(--font-mono); background: var(--color-surface-2); padding: 1px var(--space-1); border-radius: var(--radius); }
 .spacer { flex: 1; }
 
 .banner { background: var(--color-blocked); color: var(--color-live-text); padding: var(--space-1) var(--space-3); font-size: var(--text-sm); font-weight: 600; text-align: center; }
@@ -18,7 +18,7 @@ code { font-family: var(--font-mono); background: var(--color-surface-2); paddin
 }
 body:has(.banner:not([hidden])) .shell { height: calc(100% - 24px); }
 .topbar { grid-area: top; display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-3); background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
-.brand { font-weight: 700; letter-spacing: 0.04em; }
+.brand { font-weight: 700; }
 .left { grid-area: left; border-right: 1px solid var(--color-border); }
 .right { grid-area: right; border-left: 1px solid var(--color-border); }
 .left, .right { background: var(--color-surface); display: flex; flex-direction: column; min-height: 0; }
@@ -33,18 +33,18 @@ body:has(.banner:not([hidden])) .shell { height: calc(100% - 24px); }
 .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row.hidden-layer .name { opacity: 0.45; }
 .icon-btn { background: transparent; border: 0; color: inherit; cursor: pointer; padding: var(--space-1); border-radius: 4px; font: inherit; min-width: 28px; }
-.icon-btn:hover:not(:disabled) { background: var(--color-border); }
+.icon-btn:hover:not(:disabled) { background: var(--color-surface-2); }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .icon-btn.cue { border: 1px solid var(--color-border); font-size: var(--text-sm); font-weight: 600; }
 .icon-btn.cue.on { background: var(--color-accent); color: var(--color-accent-text); border-color: var(--color-accent); }
 
 .btn { background: var(--color-surface-2); color: var(--color-text); border: 1px solid var(--color-border); padding: var(--space-1) var(--space-3); border-radius: var(--radius); font: inherit; cursor: pointer; transition: background var(--anim-in); }
 .btn:hover:not(:disabled) { background: var(--color-border); }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:disabled { color: var(--color-disabled, var(--color-text-dim)); opacity: 0.6; cursor: not-allowed; }
 .btn-live { background: var(--color-live); color: var(--color-live-text); border-color: transparent; }
 .btn-live:hover:not(:disabled) { background: var(--color-live); filter: brightness(1.1); }
 .btn-quiet { background: transparent; }
-.btn:focus-visible, .icon-btn:focus-visible, input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.btn:focus-visible, .icon-btn:focus-visible, input:focus-visible { outline: 2px solid var(--color-accent-hi, var(--color-accent)); outline-offset: 1px; }
 
 .preview-card { max-width: 720px; margin: 0 auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: var(--space-4); }
 .preview-row { display: flex; gap: var(--space-4); margin: var(--space-3) 0; flex-wrap: wrap; }
@@ -53,7 +53,7 @@ body:has(.banner:not([hidden])) .shell { height: calc(100% - 24px); }
 
 .mixer { display: flex; flex-direction: column; gap: var(--space-3); }
 .chan { background: var(--color-surface-2); border-radius: var(--radius); padding: var(--space-2) var(--space-3); display: grid; grid-template-columns: 1fr auto; gap: var(--space-1) var(--space-2); }
-.chan .meter { grid-column: 1 / -1; height: 6px; background: var(--color-meter-bg); border-radius: 3px; overflow: hidden; }
+.chan .meter { grid-column: 1 / -1; height: 6px; background: var(--color-meter-bg); border-radius: var(--radius); overflow: hidden; }
 .chan .meter > i { display: block; height: 100%; width: 0; background: var(--color-ok); }
 .chan input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: var(--color-accent); }
 .chan .db { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-dim); }

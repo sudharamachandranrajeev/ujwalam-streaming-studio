@@ -53,6 +53,7 @@ import { listAssets } from './assets.mjs';
 import { loadProject, saveProject } from '../project/store.mjs';
 import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
+import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
 import { clipsFolder, guideOnly, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, settingsProblems, writeSettings } from './user-settings.mjs';
 import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
@@ -1806,6 +1807,17 @@ export function createStudioServer(opts) {
     let rel;
     try { rel = decodeURIComponent(url.pathname); } catch { return text(res, 400, 'bad-path'); }
     if (rel === '/') rel = '/index.html';
+    // Web theme (Q5, flag web-theme): the page's tokens follow the studio theme the user chose, read on every request so a
+    // switch shows on the next load. A missing, unknown or broken theme leaves the static file below in place.
+    if (rel === '/css/tokens.css' && flags && flags.isOn(WEB_THEME_FLAG)) {
+      let css = null;
+      try { css = tokensCssFor(typeof opts.dataDir === 'string' ? readSettings(opts.dataDir).ui?.theme : undefined, opts.themeDirs); } catch { css = null; }
+      if (css !== null) {
+        sec(res);
+        res.writeHead(200, { 'Content-Type': MIME['.css'], 'Content-Length': Buffer.byteLength(css), 'Cache-Control': 'no-store' });
+        return res.end(css);
+      }
+    }
     if (/[\0\\]/.test(rel) || rel.includes('//') || !rel.startsWith('/')) return text(res, 400, 'bad-path');
     const parts = rel.slice(1).split('/');
     if (parts.some((p) => p === '' || p === '.' || p === '..' || p.startsWith('.'))) return text(res, 404, 'not-found');
