@@ -35,6 +35,7 @@ ApplicationWindow {
         s.themeFont = { family: Theme.family, installed: Qt.fontFamilies().indexOf(Theme.family) >= 0 };
         s.palette = cmdPalette.probe();
         s.growth = growthDlg.probe();
+        s.review = reviewDlg.probe();
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
@@ -42,6 +43,7 @@ ApplicationWindow {
         if (String(action).startsWith("settings-") || String(action).startsWith("stream-") || String(action).startsWith("tr-") || String(action).startsWith("ap-") || String(action).startsWith("int-") || String(action).startsWith("conn-")) return settingsDlg.probeAction(String(action));
         if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
         if (String(action).startsWith("growth-")) return growthDlg.probeAction(String(action));
+        if (String(action).startsWith("review-")) return reviewDlg.probeAction(String(action));
         if (String(action).startsWith("scene-key:")) return sceneKey(parseInt(String(action).slice(10), 10));
         return false;
     }
@@ -147,8 +149,9 @@ ApplicationWindow {
     AddLayerDialog { id: addLayerDlg; store: studioStore }
     AddSceneDialog { id: addSceneDlg; store: studioStore }
     SettingsDialog { id: settingsDlg; store: studioStore }
-    CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg; windows: ({ growth: growthDlg }) }
+    CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg; windows: ({ growth: growthDlg, review: reviewDlg }) }
     GrowthWindow { id: growthDlg; store: studioStore }
+    ReviewWindow { id: reviewDlg; store: studioStore }
     Shortcut {
         sequence: "Ctrl+K"
         onActivated: cmdPalette.show()

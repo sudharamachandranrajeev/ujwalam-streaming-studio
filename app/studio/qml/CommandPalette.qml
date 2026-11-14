@@ -41,6 +41,8 @@ Popup {
             list.push({ text: "Add a layer to this scene", words: "new layer add source image video text browser", run: () => s.addLayer(s.activeScene) });
         if (s.flags["growth"] === true && windows.growth)
             list.push({ text: "Growth numbers", words: "growth youtube numbers views likes statistics analytics", run: () => windows.growth.show() });
+        if (s.flags["learning-review"] === true && windows.review)
+            list.push({ text: "Review reads", words: "review reads confirm correct unsure ocr banner mode learning", run: () => windows.review.show() });
         for (const g of settings.groups)
             for (const p of g.pages)
                 list.push({ text: "Settings: " + p, words: "settings options preferences " + p + " " + (settings.pageWords[p] || ""),

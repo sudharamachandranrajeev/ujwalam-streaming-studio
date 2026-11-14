@@ -125,7 +125,8 @@ qt_add_qml_module(ujwalam-studio
 		qml/OutputDialog.qml
 		qml/SettingsDialog.qml
 		qml/CommandPalette.qml
-		qml/GrowthWindow.qml)
+		qml/GrowthWindow.qml
+		qml/ReviewWindow.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()
