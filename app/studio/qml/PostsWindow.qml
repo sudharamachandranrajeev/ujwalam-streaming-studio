@@ -46,7 +46,8 @@ Dialog {
         queueInfo = "";
         posts = [];
         selected = "";
-        busy = false;
+        // `busy` is not reset here: it belongs to the one request still on its way (Codex review), which may outlive a
+        // close and reopen; only its own answer clears it, so no second action (or a second upload) starts meanwhile.
         open();
         const g = gen;
         reload();
@@ -66,9 +67,12 @@ Dialog {
     onClosed: gen++
 
     // `said`: the outcome of the action that asked for the reload; it stays on the info line (render would replace it).
-    function reload(said) {
+    // `release`: the upload or check keeps `busy` until the package's new status is read (else Upload is enabled again
+    // on the old "approved" status for a moment).
+    function reload(said, release) {
         const g = gen;
         Api.get("ui/api/posts", (ok, r, err) => {
+            if (release) busy = false;
             if (g !== gen) return;
             if (!ok) { info = "Posts unavailable: " + err; return; }
             const q = r.queue;
@@ -162,11 +166,10 @@ Dialog {
         busy = true;
         info = upload ? "Uploading... this can take a while. Keep this window open." : "Checking...";
         Api.post(upload ? "ui/api/posts/youtube/upload" : "ui/api/posts/youtube/check", { id: selected }, (ok, r, err) => {
-            busy = false;
-            if (g !== gen) return;
-            reload(!ok ? "Not done: " + err
+            // Always re-read (it clears busy); the outcome only shows in the window that asked.
+            reload(g !== gen ? "" : !ok ? "Not done: " + err
                  : upload ? "Uploaded as private video " + r.videoId + "."
-                 : "Video " + r.videoId + ": " + (r.found === true ? "upload " + (r.uploadStatus || "?") + ", processing " + (r.processingStatus || "?") + ", privacy " + (r.privacyStatus || "?") : "not found"));
+                 : "Video " + r.videoId + ": " + (r.found === true ? "upload " + (r.uploadStatus || "?") + ", processing " + (r.processingStatus || "?") + ", privacy " + (r.privacyStatus || "?") : "not found"), true);
         });
         return true;
     }

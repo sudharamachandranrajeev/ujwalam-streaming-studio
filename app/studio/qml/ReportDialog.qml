@@ -24,7 +24,11 @@ Dialog {
     property bool busy: false
     property string outcome: ""             // the last result, for the probe and the status line
 
+    property int gen: 0
+    onClosed: gen++     // Cancel while a link is being built: its answer neither closes a new report nor opens a link
+
     function show() {
+        gen++;
         titleField.text = "";
         noteText.text = "";
         busy = false;
@@ -37,7 +41,9 @@ Dialog {
         if (busy) return false;
         busy = true;
         const q = "title=" + encodeURIComponent(titleField.text.slice(0, maxTitle)) + "&note=" + encodeURIComponent(noteText.text.slice(0, maxNote));
+        const g = gen;
         Api.get("ui/api/report-url?" + q, (ok, r, err) => {
+            if (g !== gen) return;
             busy = false;
             close();
             if (!ok) return done("Report failed: " + err);

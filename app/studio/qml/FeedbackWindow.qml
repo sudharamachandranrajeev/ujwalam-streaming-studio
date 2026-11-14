@@ -35,7 +35,7 @@ Dialog {
         info = "Loading...";
         moments = [];
         selected = "";
-        busy = false;
+        // `busy` stays: a save still on its way after a close and reopen clears it with its own answer (Codex review).
         open();
         const g = gen;
         Api.get("ui/api/feedback", (ok, r, err) => {
