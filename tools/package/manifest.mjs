@@ -29,6 +29,7 @@ export const REPO_DIRS = Object.freeze([
   'app/host/lib', 'app/host/overlay',
   'services/analytics', // studio-ui's Growth API imports it (AN1b, D372)
   'services/bots', 'services/common', 'services/event-core', 'services/flags', 'services/learning', 'services/outputs', 'services/overlay-server', 'services/platform-connect', 'services/posting', 'services/project', 'services/studio-ui',
+  'services/scene-builder', // studio-ui's scene builder routes import read.mjs and build.mjs (flag scene-builder)
   'services/supervisor', // launch.mjs imports the LU3 swap fronts and slots (D337)
   'ui', 'registry', 'tools/diag',
 ]);
@@ -86,6 +87,7 @@ export const REPO_FILES = Object.freeze([
   // missing from the package until alpha.28 (the data check did not see paths built from import.meta.url): the host
   // watchdog (D374), the audience counters (F7) and the reel length, hook and transition limits (Settings > Clips)
   'data/live/host-watch.json', 'data/counters.json', 'data/clip/reel-length.json', 'data/clip/reel-hook.json', 'data/clip/transitions.json',
+  'data/scene-builder/build-rules.json', // the scene builder's placement rules (services/scene-builder/build.mjs)
 ]);
 // data/luts: the app's own .cube LUTs, base "luts" of the alpha load (D381; services/studio-ui/alpha.mjs LUTS_DIR)
 export const REPO_GLOB_DIRS = Object.freeze([['data/platforms', /\.json$/], ['data/outputs/presets', /\.json$/], ['data/luts', /\.cube$/]]);
