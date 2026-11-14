@@ -35,7 +35,16 @@ ApplicationWindow {
     function probeAction(action) {
         if (String(action).startsWith("settings-") || String(action).startsWith("stream-") || String(action).startsWith("tr-") || String(action).startsWith("ap-") || String(action).startsWith("int-") || String(action).startsWith("conn-")) return settingsDlg.probeAction(String(action));
         if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
+        if (String(action).startsWith("scene-key:")) return sceneKey(parseInt(String(action).slice(10), 10));
         return false;
+    }
+
+    // Scene keys (D382, flag scene-hotkeys): Ctrl+1..9 = the 1st..9th scene of the list, the same as a click on it.
+    readonly property bool sceneKeysOn: studioStore.flags["scene-hotkeys"] === true
+    function sceneKey(n) {
+        if (!sceneKeysOn || !(n >= 1 && n <= 9) || n > studioStore.scenes.length) return false;
+        studioStore.activateScene(studioStore.scenes[n - 1].id);
+        return true;
     }
 
     Store {
@@ -135,6 +144,15 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+K"
         onActivated: cmdPalette.show()
+    }
+    Instantiator {
+        model: 9
+        delegate: Shortcut {
+            required property int index
+            sequence: "Ctrl+" + (index + 1)
+            enabled: win.sceneKeysOn
+            onActivated: win.sceneKey(index + 1)
+        }
     }
 
     CloseDialog {

@@ -29,9 +29,10 @@ Popup {
     function build() {
         const list = [];
         const s = store;
-        for (const sc of (s.scenes || []))
-            list.push({ text: "Switch to scene: " + sc.name + (sc.id === s.activeScene ? " (on now)" : ""), words: "scene switch go to " + sc.name,
-                        run: () => s.activateScene(sc.id) });
+        const keys = s.flags["scene-hotkeys"] === true; // D382: Ctrl+1..9 for the first nine scenes
+        (s.scenes || []).forEach((sc, i) =>
+            list.push({ text: "Switch to scene: " + sc.name + (sc.id === s.activeScene ? " (on now)" : "") + (keys && i < 9 ? "   Ctrl+" + (i + 1) : ""),
+                        words: "scene switch go to " + sc.name, run: () => s.activateScene(sc.id) }));
         list.push({ text: s.live ? "End the stream" : "Go live", words: "stream live start stop end broadcast", run: () => s.toggleStream() });
         list.push({ text: s.recording ? "Stop recording" : "Start recording", words: "record recording start stop", run: () => s.toggleRecord() });
         list.push({ text: "Add a scene", words: "new scene add create", run: () => s.addScene() });

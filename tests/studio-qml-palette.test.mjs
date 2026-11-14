@@ -38,9 +38,10 @@ function runShell(env) {
 describe('QML studio command palette (headless probe)', { skip }, () => {
   const dirs = [];
   after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
-  async function probe({ actions = [], ms = Math.max(6000, 3000 + actions.length * 700) } = {}) {
+  async function probe({ actions = [], ms = Math.max(6000, 3000 + actions.length * 700), flagIds = [] } = {}) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qmlpal-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
+    for (const id of flagIds) flags.set(id, true);
     const fake = createFakeHost({ outputsReady: true });
     const calls = [];
     const host = { describe: () => fake.describe(), call: (m, p) => { calls.push(m); return fake.call(m, p); } };
@@ -106,6 +107,19 @@ describe('QML studio command palette (headless probe)', { skip }, () => {
     assert.deepEqual(r.pal.items, []);
     assert.match(node(r.p, 'paletteEmpty').text, /^No command matches "zzz nothing"\.$/);
     assert.equal(node(r.p, 'paletteEmpty').visible, true);
+  });
+
+  test('scene keys (D382): off by default; on, Ctrl+N switches to the Nth scene and the palette shows each key', async () => {
+    let r = await probe({ actions: ['scene-key:2'] });
+    assert.equal(done(r.p)['scene-key:2'], false, 'flag off: the key does nothing');
+    assert.equal(r.s.activeScene, 'scene-1');
+    r = await probe({ actions: ['scene-key:2', 'scene-key:9', 'palette-open'], flagIds: ['scene-hotkeys'] });
+    const d = done(r.p);
+    assert.equal(d['scene-key:2'], true);
+    assert.equal(d['scene-key:9'], false, 'no 9th scene: nothing happens');
+    assert.equal(r.s.activeScene, 'scene-2');
+    assert.ok(r.pal.items.includes('Switch to scene: Gameplay   Ctrl+1'), r.pal.items.join(' | '));
+    assert.ok(r.pal.items.includes('Switch to scene: Starting soon (on now)   Ctrl+2'));
   });
 
   test('palette actions are refused while it is closed; Escape-close leaves the studio as it was', async () => {

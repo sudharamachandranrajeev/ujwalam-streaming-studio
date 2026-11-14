@@ -57,7 +57,7 @@ the 2026-11-14 handover session.
 ## G. New in QML (plan Q4)
 - [x] Command palette, Ctrl+K (`cdd4f11`, `tests/studio-qml-palette.test.mjs` 6/6)
 - [ ] Palette: layer commands, Save clip, Mark moment, Undo, the More menu windows
-- [ ] Scene hotkeys (nothing exists in either UI; needs a design: studio window keys vs host global hotkeys)
+- [x] Scene hotkeys step 1: Ctrl+1..9 in the studio window, flag scene-hotkeys (D382). Step 2 (global in-game keys, host, clash check) deferred
 - [ ] Scene builder in the studio (today CLI only, `services/scene-builder/cli.mjs`, flag `scene-builder`; no UI server route)
 
 ## H. Test twins still missing

@@ -1921,3 +1921,9 @@ Growth plan ED2. Decided:
 - **One click.** Scene right-click menu > Make realism scene (route op `scene.realism`): duplicates the scene as "<name> Realism" (id `<id>-realism`) and appends the three effects to every layer of the copy that shows the game capture (the role-bound game device, else the only capture card; the blurred backdrop copies included). The original scene is never changed. Refused while live, when the scene shows no game capture, or when a game layer would pass 6 effects. In the alpha project H and V share one scene, so one copy covers both canvases.
 - **Unverified.** GPU cost next to the three encodes and the look on real footage: to be measured by the lead (host and fx tests were not run while the installed app was running).
 - **Evidence.** `docs/evidence/2026-11-13-realism-look.md`.
+
+## D382 — Scene hotkeys: studio-window keys first, global in-game keys later (2026-11-14, lead decision, plan Q4)
+
+- **Ask.** Plan Q4 lists scene hotkeys; nothing exists in either studio window or the host (the host only has the global panic, feedback and marker keys).
+- **Decision.** Step 1: Ctrl+1 to Ctrl+9 switch to the 1st to 9th scene of the scene list (its order on screen) while the studio window has focus, through the same route and rules as a click on the scene. Behind flag `scene-hotkeys` (Settings > Editing, default off; read live). The command palette shows each scene's key. Step 2 (deferred): global keys that work while the game has focus belong in the host hotkey table next to panic/feedback/marker, with a clash check against the Streamer.bot and Speaker.bot bindings and the game (AGENTS.md: no clashing hotkeys); that is host work on the live path and waits for the user's actual bindings.
+- **Why.** Window keys cost nothing on the live path and help at the desk; in-game switching needs the clash check first.
