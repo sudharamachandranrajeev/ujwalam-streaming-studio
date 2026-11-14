@@ -29,8 +29,10 @@ the 2026-11-14 handover session.
 - [ ] Preview "Own window" and "To front" buttons
 
 ## C. Clips and posts
-- [ ] Clips chip with plain-words state; "Make clips?" question after a recording or stream; first-run Settings
-- [ ] My clips folder button (`ui/api/clips/open`)
+- [x] Clips chip with plain-words state; "Make clips?" question after a recording or stream; first-run Settings
+      (`tests/studio-qml-clips.test.mjs` 5/5; the question and first-run Settings open only on a window the user sees,
+      as in the widget; the probe puts the question with clips-ask). Review reads (N) beside My clips (`studio-qml-review` 5/5)
+- [x] My clips folder button (`ui/api/clips/open`) (`tests/studio-qml-clips.test.mjs`)
 - [x] More menu (flag-gated items): Import, Feedback, Posts, Growth numbers, Report, in the widget order with its tips
       (`tests/studio-qml-more-windows.test.mjs` 9/9). Review reads goes beside My clips, as in the widget (row below)
 - [x] Posts window (flag `posting`): review, Approve, Reject, Save, Open folder, Upload as private, Check status, Retry

@@ -42,6 +42,8 @@ ApplicationWindow {
         s["import"] = importDlg.probe();
         s.posts = postsDlg.probe();
         s.more = bar.moreProbe();
+        s.clips = { text: studioStore.clipsText, tip: studioStore.clipsTip, asks: (studioStore.clips.asks || []).length, ask: clipsAskDlg.probe(),
+                    reviewShown: studioStore.flags["learning-review"] === true && studioStore.reviewCount > 0, reviewCount: studioStore.reviewCount };
         s.alerts = alerts.probe();
         s.tasks = taskCenter.probe();
         s.tray = Object.assign(Tray.probe(), { closeAsked: closeDlg.asked, closeChoice: closeDlg.choice, stay: trayFlow.stay });
@@ -62,6 +64,9 @@ ApplicationWindow {
         if (String(action).startsWith("report-")) return reportDlg.probeAction(String(action));
         if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
         if (String(action).startsWith("posts-")) return postsDlg.probeAction(String(action));
+        if (action === "clips-folder") { studioStore.openClipsFolder(); return true } // the My clips button
+        if (action === "clips-review") { if (!bar.reviewShown) return false; reviewDlg.show(); return true } // Review reads (N) beside My clips
+        if (String(action).startsWith("clips-")) return clipsAskDlg.probeAction(String(action));
         if (action === "more-open" || String(action).startsWith("more:")) return bar.moreAction(String(action));
         if (String(action).startsWith("scene-hotkey:")) return sceneKey(parseInt(String(action).slice(13), 10)); // Ctrl+N (D382); scene-key: is the scene list's F2 / Del
         // Live controls (Q4 A), the widget probe's names: close, close-choice:<tray|stop|cancel>, tray:<click|open|stop>, tasks:*.
@@ -121,7 +126,7 @@ ApplicationWindow {
         objectName: "onAirBar"
         store: studioStore
         taskCenter: taskCenter
-        windows: ({ growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg })
+        windows: ({ growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg })
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
         height: 56
     }
@@ -205,6 +210,11 @@ ApplicationWindow {
     ReportDialog { id: reportDlg; store: studioStore }
     ImportWindow { id: importDlg; store: studioStore }
     PostsWindow { id: postsDlg; store: studioStore }
+    ClipsAsk { id: clipsAskDlg; store: studioStore }
+    Connections {
+        target: studioStore
+        function onClipsAsk(ask) { clipsAskDlg.put(ask) }
+    }
     Shortcut {
         sequence: "Ctrl+K"
         onActivated: cmdPalette.show()

@@ -137,6 +137,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/ReportDialog.qml
 		qml/ImportWindow.qml
 		qml/PostsWindow.qml
+		qml/ClipsAsk.qml
 		qml/EditOps.qml
 		qml/UMenu.qml
 		qml/UMenuItem.qml

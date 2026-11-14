@@ -36,6 +36,7 @@ Rectangle {
         return false;
     }
 
+    readonly property bool reviewShown: store.flags["learning-review"] === true && store.reviewCount > 0
     readonly property var oa: store.onAir || {}
     readonly property string mbps: typeof oa.kbps === "number" && oa.kbps > 0 ? (oa.kbps / 1000).toFixed(1) + " Mbps" : ""
     readonly property string sinkTip: Array.isArray(oa.sinks) ? oa.sinks.map(s => (s.platform || s.id) + ": " + s.state +
@@ -87,6 +88,30 @@ Rectangle {
             objectName: "chipRec"
             on: bar.store.recording
             text: bar.store.recording ? "REC  " + bar.clock(bar.oa.recordForMs) : "Not recording"
+        }
+        // Clips from finished recordings and streams (D283, D284), in plain words; the tip has the modes, folder and why.
+        UChip {
+            objectName: "chipClips"
+            text: bar.store.clipsText
+            tip: bar.store.clipsTip
+            on: (bar.store.clips.asks || []).length > 0
+            token: "accent"
+        }
+        UButton {
+            objectName: "clipsFolderBtn"
+            text: "My clips"
+            iconName: "folder"
+            tip: "Open the folder with your finished clips."
+            onClicked: bar.store.openClipsFolder()
+        }
+        // LL3 (D340, flag learning-review): beside My clips, only with the flag on and something to review. Optional.
+        UButton {
+            objectName: "reviewBtn"
+            visible: bar.reviewShown
+            text: "Review reads (" + bar.store.reviewCount + ")"
+            iconName: "clip"
+            tip: "Optional: confirm or correct what the clip maker was not sure of. Nothing waits for it."
+            onClicked: if (bar.windows.review) bar.windows.review.show()
         }
         UChip {
             objectName: "chipStats"

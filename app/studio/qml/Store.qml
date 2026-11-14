@@ -43,6 +43,10 @@ QtObject {
     property var structure: ({})     // ui/api/project/structure: what a new layer can be made from (devices, overlays, assets)
     property bool addOpen: false     // an add window is open: a device plugged in or out refreshes its lists (D329)
     property string note: ""
+    property var clips: ({})         // status "clips" (D283, D284): settings, the clip job's state, questions, the last run
+    property int reviewCount: 0      // Review reads waiting (flag learning-review, D340)
+    readonly property string clipsText: clipsWords(clips)
+    readonly property string clipsTip: clipsTipWords(clips)
 
     readonly property var activeSceneObj: scenes.find(s => s.id === activeScene) || null
     readonly property bool bothCanvases: !!activeSceneObj && activeSceneObj.canvases.length > 1
@@ -54,6 +58,7 @@ QtObject {
     signal addLayerReady(string sceneId, string sceneName)
     signal addSceneReady(var canvases)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
+    signal clipsAsk(var ask)           // "Make clips?" after a recording or stream (setting: Ask me each time)
 
     // ---- private ----
     property real pHostUptime: -1
@@ -62,6 +67,9 @@ QtObject {
     property var pSelSeqs: ({})
     property string pSelSent: ""
     property bool pMeterBusy: false
+    property int pFlagReads: 0
+    property var pAsked: ({})          // question ids already put to the user
+    property bool pFirstRunAsked: false
 
     function say(text) { note = text; Api.log("studio note: " + text) }
 
@@ -391,6 +399,7 @@ QtObject {
             statusAt = typeof s.at === "number" ? s.at : Date.now();
             alerts = Array.isArray(s.alerts) ? s.alerts : [];
             tasks = Array.isArray(s.tasks) ? s.tasks : [];
+            takeClips(s.clips || {});
             // A restarted host (crash supervisor) lost the previews it drew in our windows: embed them again (D280).
             const up = typeof h.uptimeMs === "number" ? h.uptimeMs : -1;
             if (up >= 0 && pHostUptime >= 0 && up < pHostUptime) hostRestarted();
@@ -422,9 +431,73 @@ QtObject {
         });
     }
 
+    // ---- clips (D283, D284; the widget's updateClips, askClips, answerClips) ----
+    readonly property var clipModes: ({
+        ask: ["Ask me each time I stop recording", "Ask me each time a stream ends"],
+        after: ["Make clips automatically when I stop recording", "Make clips automatically when the stream ends"],
+        "while": ["Find the best moments while I record, then edit them into clips", "Find the best moments while I'm live, then edit them into clips"],
+        off: ["Don't make clips", "Don't make clips"]
+    })
+    function modeWords(id, live) { const m = clipModes[id]; return m ? m[live ? 1 : 0] : String(id === undefined ? "" : id) }
+    function clipsWords(cl) {
+        if (!cl || Object.keys(cl).length === 0) return "Clips: -";
+        const set = cl.settings || {}, last = cl.last || {};
+        if (cl.running) return "Making clips...";
+        if ((cl.asks || []).length) return "Make clips? (" + cl.asks.length + ")";
+        const q = Array.isArray(cl.queued) ? cl.queued.length : (cl.queued || 0); // a count from the server, a list from the job's file
+        if (q > 0) return "Clips waiting: " + q;
+        if (set.recording === "off" && set.live === "off") return "Clips: off";
+        if (cl.available === false) return cl.missing === "python" ? "Clips: Python not found" : "Clips: not set up";
+        if (last.result === "done") return (last.clips || 0) + " new clip(s)";
+        if (last.result === "failed") return "Clips: last try failed";
+        return "Clips: ready";
+    }
+    function clipsTipWords(cl) {
+        if (!cl || Object.keys(cl).length === 0) return "";
+        const set = cl.settings || {}, last = cl.last || {};
+        let tip = "Recording: " + modeWords(set.recording, false) + "\nLive: " + modeWords(set.live, true) + "\nClips folder: " + (cl.folder || "");
+        if (cl.reason) tip += "\n" + cl.reason;
+        if (cl.fix) tip += "\n" + cl.fix;
+        if (last.reason) tip += "\nLast time: " + last.reason;
+        return tip;
+    }
+    // Questions open only on a window the user sees (the widget's rule); the tests ask with clips-ask instead.
+    function takeClips(cl) {
+        if (JSON.stringify(cl) !== JSON.stringify(clips)) clips = cl;
+        if (studioUnseen) return;
+        if (!pFirstRunAsked && cl.settingsSaved === false) { pFirstRunAsked = true; settingsWanted(""); return; }
+        nextClipsAsk();
+    }
+    property bool clipsAsking: false   // a question is open (ClipsAsk.qml): the next waits for its answer
+    function nextClipsAsk() {
+        if (clipsAsking) return false;
+        for (const a of (clips.asks || [])) {
+            if (pAsked[a.id]) continue;
+            const m = Object.assign({}, pAsked);
+            m[a.id] = true;
+            pAsked = m;
+            clipsAsk(a);
+            return true;
+        }
+        return false;
+    }
+    function answerClips(id, make, remember) {
+        Api.post("ui/api/clips/answer", { id: id, make: make, remember: remember }, (ok, r, err) => {
+            say(!ok ? "Answer not saved: " + err
+                : make ? "Making clips. You can keep working; the Clips label shows when they are ready." : "No clips made.");
+        });
+    }
+    function openClipsFolder() {
+        Api.post("ui/api/clips/open", {}, (ok, r, err) => { if (!ok) say("Could not open the clips folder: " + err) });
+    }
+
     function loadFlags() {
         Api.get("ui/api/flags", (ok, b) => {
             if (ok && Array.isArray(b.flags)) takeFlags(b.flags);
+            // LL3 (D340): the Review reads queue, read every 5th flag read (the widget's rule) while its flag is on
+            if (flags["learning-review"] !== true) { reviewCount = 0; return; }
+            if (pFlagReads++ % 5 !== 0) return;
+            Api.get("ui/api/learning/review", (ok2, r) => { reviewCount = ok2 && typeof r.total === "number" ? r.total : 0 });
         });
     }
     function takeFlags(list) {

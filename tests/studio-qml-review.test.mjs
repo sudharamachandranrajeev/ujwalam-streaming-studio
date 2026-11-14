@@ -94,6 +94,16 @@ describe('QML studio: Review reads (headless probe)', { skip }, () => {
     assert.deepEqual(labels, []);
   });
 
+  test('"Review reads (N)" beside My clips: shown only with the flag on and items waiting; it opens the window', async () => {
+    let r = await probe({ flagOn: false, actions: ['clips-review'] });
+    assert.equal(r.s.clips.reviewShown, false);
+    assert.equal(r.p.actions[0].done, false);
+    r = await probe({ flagOn: true, actions: ['clips-review'] });
+    assert.deepEqual([r.s.clips.reviewShown, r.s.clips.reviewCount], [true, 3]);
+    assert.equal(r.p.actions[0].done, true);
+    assert.equal(r.rv.open, true);
+  });
+
   test('flag on: palette entry, every item with its question; Confirm writes one confirmed label and the next item shows', async () => {
     const { p, rv, labels } = await probe({ flagOn: true, actions: ['palette-open', 'palette-type:review', 'palette-run', 'review-confirm:1'] });
     assert.deepEqual(done(p), [true, true, true, true]);
