@@ -75,6 +75,7 @@ Rectangle {
         }
         UChip {
             objectName: "chipStats"
+            visible: bar.width >= 1360 // a narrow window keeps the controls readable; the status line still shows the host
             text: "Dropped " + bar.store.dropped + "  ·  " + bar.store.fps.toFixed(0) + " fps  ·  CPU " + bar.store.cpu.toFixed(0) + "%  ·  GPU " + bar.store.gpu.toFixed(0) + "%"
             on: bar.store.dropped > 0 && bar.store.live
             token: "danger"
@@ -91,6 +92,21 @@ Rectangle {
             text: "Settings"
             iconName: "gear"
             onClicked: bar.store.settingsWanted("")
+        }
+        // Clipping (D281): save the replay buffer now; mark a moment for the post-stream clipper. One click each (D332).
+        UButton {
+            objectName: "clipBtn"
+            text: "Save clip"
+            iconName: "clip"
+            tip: "Save the last 60 seconds of H and V as clip files (replay buffer)."
+            onClicked: bar.store.saveClip()
+        }
+        UButton {
+            objectName: "markBtn"
+            text: "Mark moment"
+            iconName: "flag"
+            tip: "Mark this moment for the clipper (same as the marker hotkey, Ctrl+Alt+Shift+M by default)."
+            onClicked: bar.store.markMoment()
         }
         UButton {
             objectName: "recordBtn"

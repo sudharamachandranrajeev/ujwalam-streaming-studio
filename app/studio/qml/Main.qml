@@ -29,6 +29,7 @@ ApplicationWindow {
         s.motion = Theme.motion;
         s.effects = Theme.effects();
         s.palette = cmdPalette.probe();
+        s.alerts = alerts.probe();
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
@@ -67,11 +68,18 @@ ApplicationWindow {
         height: 56
     }
 
+    AlertStrip {
+        id: alerts
+        objectName: "alertBar"
+        store: studioStore
+        anchors { left: parent.left; right: parent.right; top: bar.bottom; leftMargin: win.pad; rightMargin: win.pad; topMargin: visible ? win.pad : 0 }
+    }
+
     ScenesPanel {
         id: scenes
         objectName: "scenesPanel"
         store: studioStore
-        anchors { left: parent.left; top: bar.bottom; bottom: mixer.top; margins: win.pad }
+        anchors { left: parent.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
         width: 240
     }
 
@@ -79,7 +87,7 @@ ApplicationWindow {
         id: layers
         objectName: "layersPanel"
         store: studioStore
-        anchors { right: parent.right; top: bar.bottom; bottom: mixer.top; margins: win.pad }
+        anchors { right: parent.right; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
         width: 300
     }
 
@@ -87,7 +95,7 @@ ApplicationWindow {
         id: previews
         objectName: "previewArea"
         store: studioStore
-        anchors { left: scenes.right; right: layers.left; top: bar.bottom; bottom: mixer.top; margins: win.pad; topMargin: win.pad + 4 }
+        anchors { left: scenes.right; right: layers.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad; topMargin: win.pad + 4 }
     }
 
     MixerPanel {

@@ -34,6 +34,8 @@ Popup {
                         run: () => s.activateScene(sc.id) });
         list.push({ text: s.live ? "End the stream" : "Go live", words: "stream live start stop end broadcast", run: () => s.toggleStream() });
         list.push({ text: s.recording ? "Stop recording" : "Start recording", words: "record recording start stop", run: () => s.toggleRecord() });
+        list.push({ text: "Save clip", words: "clip replay buffer save last 60 seconds keep", run: () => s.saveClip() });
+        list.push({ text: "Mark moment", words: "mark marker moment flag clipper highlight", run: () => s.markMoment() });
         list.push({ text: "Add a scene", words: "new scene add create", run: () => s.addScene() });
         if (s.activeScene !== "")
             list.push({ text: "Add a layer to this scene", words: "new layer add source image video text browser", run: () => s.addLayer(s.activeScene) });
