@@ -28,11 +28,13 @@ ApplicationWindow {
         s.motionMode = Theme.motionMode();
         s.motion = Theme.motion;
         s.effects = Theme.effects();
+        s.palette = cmdPalette.probe();
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
     function probeAction(action) {
         if (String(action).startsWith("settings-") || String(action).startsWith("stream-") || String(action).startsWith("tr-") || String(action).startsWith("ap-") || String(action).startsWith("int-") || String(action).startsWith("conn-")) return settingsDlg.probeAction(String(action));
+        if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
         return false;
     }
 
@@ -129,6 +131,11 @@ ApplicationWindow {
     AddLayerDialog { id: addLayerDlg; store: studioStore }
     AddSceneDialog { id: addSceneDlg; store: studioStore }
     SettingsDialog { id: settingsDlg; store: studioStore }
+    CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg }
+    Shortcut {
+        sequence: "Ctrl+K"
+        onActivated: cmdPalette.show()
+    }
 
     CloseDialog {
         id: closeDlg

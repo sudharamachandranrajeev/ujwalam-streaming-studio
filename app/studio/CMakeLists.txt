@@ -123,7 +123,8 @@ qt_add_qml_module(ujwalam-studio
 		qml/SettingsChat.qml
 		qml/SettingsConnections.qml
 		qml/OutputDialog.qml
-		qml/SettingsDialog.qml)
+		qml/SettingsDialog.qml
+		qml/CommandPalette.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()
