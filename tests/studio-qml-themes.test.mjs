@@ -150,19 +150,25 @@ describe('QML studio themes (headless probe)', { skip }, () => {
     const file = path.join(themes, 'lu-reload.json');
     const write = (accent) => { const p = pack('violet-night'); p.id = 'lu-reload'; p.name = 'Reload test'; p.colors.accent = accent; writeViaRename(file, `${JSON.stringify(p, null, 2)}\n`); };
     write('#112233');
+    // Each step waits until the studio's log says it has seen the one before (fixed sleeps lost the race under full-CI
+    // load twice on 2026-11-14: the broken file was replaced before the busy window read it). The log is flushed per line.
+    const logs = tmp('ujw-qmlth-log-');
+    const logText = () => readdirSync(logs).filter((f) => f.startsWith('studio-')).map((f) => readFileSync(path.join(logs, f), 'utf8')).join('');
+    const count = (re) => (logText().match(re) ?? []).length;
+    const until = async (cond, ms, what) => { const end = Date.now() + ms; while (!cond()) { if (Date.now() > end) throw new Error(`studio log: no ${what}:\n${logText()}`); await sleep(100); } };
+    const applied = /lu-reload\.json changed on disk; applied/g;
     const { p, s } = await probe({
-      ms: 12000,
-      env: { UJWALAM_THEMES_DIR: themes, UJWALAM_THEME: 'lu-reload' },
+      ms: 22000,
+      env: { UJWALAM_THEMES_DIR: themes, UJWALAM_THEME: 'lu-reload', UJWALAM_STUDIO_LOG_DIR: logs },
       during: async () => {
         await sleep(3000);
         write('#445566');
-        await sleep(1500);
+        await until(() => count(applied) >= 1, 6000, 'reload of the first change');
         const good = readFileSync(file, 'utf8');
         writeViaRename(file, good.slice(0, Math.floor(good.length / 2)));
-        // The broken version must be on disk long enough to be read: a busy software-rendered window can take more than
-        // 1.5 s to get to its file event, and then it only ever sees the fixed version (seen under load, 2026-11-14).
-        await sleep(3500);
+        await until(() => count(/lu-reload\.json not applied/g) >= 1, 6000, 'refusal of the broken file');
         write('#778899');
+        await until(() => count(applied) >= 2, 6000, 'reload of the fix');
       },
     });
     assert.equal(p.theme, 'lu-reload');

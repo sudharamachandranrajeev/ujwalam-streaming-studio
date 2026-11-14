@@ -132,10 +132,13 @@ describe('Qt studio themes (headless probe)', { skip }, () => {
     assert.equal(perf.theme.hoverOverlays, 0);
   });
   test('High performance switches live and back (hover overlays return), any theme', async () => {
-    const p = await probe({ ms: 7000, actions: 'theme:teal-grid,effects:performance,theme:sand-teal', env: { UJWALAM_STUDIO_PROBE_SHOW: '1' } });
-    assert.ok(p.actions.every((a) => a.done), JSON.stringify(p.actions));
+    // The probe reads the window at a fixed time: under full-CI load a restyle of the shown window takes seconds, so the
+    // last switch had not run by 7 s (2 of 3 actions listed, every() still true). Count them, and give it the time.
+    const p = await probe({ ms: 14000, actions: 'theme:teal-grid,effects:performance,theme:sand-teal', env: { UJWALAM_STUDIO_PROBE_SHOW: '1' } });
+    assert.deepEqual(p.actions.map((a) => [a.action, a.done]), [['theme:teal-grid', true], ['effects:performance', true], ['theme:sand-teal', true]]);
     assert.deepEqual([p.theme.id, p.theme.effects, p.theme.gradientsInStyle, p.theme.hoverOverlays], ['sand-teal', 'performance', false, 0], 'a theme switch keeps the flat mode');
-    const back = await probe({ ms: 7000, actions: 'effects:performance,effects:full', env: { UJWALAM_STUDIO_PROBE_SHOW: '1' } });
+    const back = await probe({ ms: 12000, actions: 'effects:performance,effects:full', env: { UJWALAM_STUDIO_PROBE_SHOW: '1' } });
+    assert.deepEqual(back.actions.map((a) => [a.action, a.done]), [['effects:performance', true], ['effects:full', true]]);
     assert.equal(back.theme.effects, 'full');
     assert.ok(back.theme.hoverOverlays > 0 && back.theme.depthWidgets > 0, JSON.stringify(back.theme));
   });
