@@ -136,7 +136,13 @@ qt_add_qml_module(ujwalam-studio
 		qml/FeedbackWindow.qml
 		qml/ReportDialog.qml
 		qml/ImportWindow.qml
-		qml/PostsWindow.qml)
+		qml/PostsWindow.qml
+		qml/EditOps.qml
+		qml/UMenu.qml
+		qml/UMenuItem.qml
+		qml/LayerMenu.qml
+		qml/SceneMenu.qml
+		qml/NameDialog.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()

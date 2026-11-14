@@ -5,6 +5,7 @@
 // qml_studio.cpp calls start() once the window is placed, and probeState() for the tests' probe.
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQml.Models
 import Ujwalam.Core
 
 ApplicationWindow {
@@ -44,6 +45,10 @@ ApplicationWindow {
         s.tasks = taskCenter.probe();
         s.tray = Object.assign(Tray.probe(), { closeAsked: closeDlg.asked, closeChoice: closeDlg.choice, stay: trayFlow.stay });
         s.windowShown = win.visible;
+        s.edit = studioStore.edit.probe();
+        s.layerPanel = layers.probe();
+        s.scenePanel = scenes.probe();
+        s.windowKeys = studioStore.edit.windowKeys;
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
@@ -56,12 +61,21 @@ ApplicationWindow {
         if (String(action).startsWith("report-")) return reportDlg.probeAction(String(action));
         if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
         if (String(action).startsWith("posts-")) return postsDlg.probeAction(String(action));
-        if (String(action).startsWith("scene-key:")) return sceneKey(parseInt(String(action).slice(10), 10));
+        if (String(action).startsWith("scene-hotkey:")) return sceneKey(parseInt(String(action).slice(13), 10)); // Ctrl+N (D382); scene-key: is the scene list's F2 / Del
         // Live controls (Q4 A), the widget probe's names: close, close-choice:<tray|stop|cancel>, tray:<click|open|stop>, tasks:*.
         if (action === "close") { Qt.callLater(win.close); return true } // as the window's X; the question opens on the next turn
         if (String(action).startsWith("close-choice:")) return closeDlg.choose(String(action).slice(13));
         if (String(action).startsWith("tray:")) return trayFlow.probeAction(String(action));
         if (String(action).startsWith("tasks:")) return taskCenter.probeAction(String(action));
+        // Editing (plan Q4): the layer and scene menus, their keys, reorder and the window keys (undo, redo, arrows).
+        if (String(action).startsWith("select-layer:") || String(action).startsWith("layer-")) return layers.probeAction(String(action));
+        if (String(action).startsWith("select-scene:") || String(action).startsWith("scene-")) return scenes.probeAction(String(action));
+        if (String(action).startsWith("key:")) { // key:<keys>[:<times>]: presses made at once (they add up, as held arrow keys do)
+            const p = String(action).slice(4).split(":");
+            let done = false;
+            for (let i = 0; i < (Number(p[1]) || 1); i++) done = studioStore.edit.windowKey(p[0]);
+            return done;
+        }
         return false;
     }
 
@@ -80,6 +94,10 @@ ApplicationWindow {
         onAddLayerReady: (sceneId, sceneName) => addLayerDlg.ask(sceneId, sceneName)
         onAddSceneReady: (canvases) => addSceneDlg.ask(canvases)
         onSettingsWanted: (page) => settingsDlg.openAt(page)
+    }
+    Connections {
+        target: studioStore.edit
+        function onRenameWanted(kind, id, current) { renameDlg.ask(kind, id, current) }
     }
 
     // Tasks still running and not live: ask first (the widget closeEvent): keep them in the tray, stop them, or keep the
@@ -175,6 +193,7 @@ ApplicationWindow {
     ConfirmDialog { id: confirm; store: studioStore }
     AddLayerDialog { id: addLayerDlg; store: studioStore }
     AddSceneDialog { id: addSceneDlg; store: studioStore }
+    NameDialog { id: renameDlg; store: studioStore }
     SettingsDialog { id: settingsDlg; store: studioStore }
     CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg; windows: ({ growth: growthDlg, review: reviewDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg }) }
     GrowthWindow { id: growthDlg; store: studioStore }
@@ -207,6 +226,23 @@ ApplicationWindow {
         windowHeight: win.height
     }
     TrayFlow { id: trayFlow; store: studioStore; window: win }
+    // Undo, redo and the arrow-key nudge (plan Q4; one table in EditOps). A text box keeps its own Ctrl+Z and arrows.
+    readonly property bool typing: !!win.activeFocusItem && win.activeFocusItem.cursorPosition !== undefined
+    // Arrows (review of track B): a window Shortcut would take them from every slider, list and combo box. They nudge only
+    // while preview editing is on and the focused item does not use arrows itself (a text box, slider, list or combo).
+    readonly property bool arrowsFree: {
+        const f = win.activeFocusItem;
+        return studioStore.previewEditing === true && (!f || (f.cursorPosition === undefined && f.stepSize === undefined && f.currentIndex === undefined));
+    }
+    Instantiator {
+        model: studioStore.edit.windowKeys
+        delegate: Shortcut {
+            required property string modelData
+            sequence: modelData
+            enabled: modelData.indexOf("Ctrl+") === 0 ? !win.typing : win.arrowsFree
+            onActivated: studioStore.edit.windowKey(modelData)
+        }
+    }
 
     CloseDialog {
         id: closeDlg

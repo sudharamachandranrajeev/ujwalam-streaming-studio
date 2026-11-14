@@ -16,11 +16,11 @@ the 2026-11-14 handover session.
       `tests/studio-qml-tasks.test.mjs` 7/7)
 
 ## B. Editing
-- [ ] Undo / Redo buttons and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z (`ui/api/edits*`)
-- [ ] Arrow-key nudge (1 px, Shift 10 px; off while live)
-- [ ] Layer menu and keys: Rename (F2), Duplicate (Ctrl+D), move up/down/top/bottom, Copy / Paste look
-- [ ] Layer reorder by drag
-- [ ] Scene menu and keys: Rename (F2), Duplicate, Make realism scene (flag `realism-look`), Delete; menu on empty space
+- [x] Undo / Redo buttons and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z (`ui/api/edits*`)
+- [x] Arrow-key nudge (1 px, Shift 10 px; off while live); the held "confirm" answer cancel is not probed (the key is off while live, so the server never holds one)
+- [x] Layer menu and keys: Rename (F2), Duplicate (Ctrl+D), move up/down/top/bottom, Copy / Paste look
+- [x] Layer reorder by drag (press-and-drag; no press-and-hold pick-up, see evidence)
+- [x] Scene menu and keys: Rename (F2), Duplicate, Make realism scene (flag `realism-look`), Delete; menu on empty space
 - [ ] Inspector: X, Y, width, height, rotation, crop, Apply, Undo changes (host `layers.setPlacement`)
 - [ ] Look panel (shape, filters, camera, blend, shadow and glow; host `layers.setEffects`)
 - [ ] Advanced effects list (flag `effect-editor`, max 6)
@@ -63,8 +63,9 @@ the 2026-11-14 handover session.
 
 ## G. New in QML (plan Q4)
 - [x] Command palette, Ctrl+K (`cdd4f11`, `tests/studio-qml-palette.test.mjs` 6/6)
-- [ ] Palette: layer commands, Undo (track B). Done: Save clip, Mark moment (Q4 A) and every More menu window
-      (Growth numbers, Review reads, Import Meld session, Feedback notes, Posts, Report a problem; each behind its flag)
+- [x] Palette: Save clip, Mark moment (Q4 A); Undo, Redo, rename and duplicate of the selected layer and of this scene (Q4 B);
+      every More menu window (Growth numbers, Review reads, Import Meld session, Feedback notes, Posts, Report a problem;
+      each behind its flag)
 - [x] Scene hotkeys step 1: Ctrl+1..9 in the studio window, flag scene-hotkeys (D382). Step 2 (global in-game keys, host, clash check) deferred
 - [ ] Scene builder in the studio (today CLI only, `services/scene-builder/cli.mjs`, flag `scene-builder`; no UI server route)
 

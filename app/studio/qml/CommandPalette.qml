@@ -53,6 +53,17 @@ Popup {
             list.push({ text: "Posts", words: "posts clips packages upload youtube shorts approve reject queue auto-post", run: () => windows.posts.show() });
         if (s.flags["report-button"] === true && windows.report)
             list.push({ text: "Report a problem", words: "report problem bug issue github", run: () => windows.report.show() });
+        // Editing (plan Q4): the same functions as the menus and keys; each refuses while live the way its button does.
+        list.push({ text: "Undo", words: "undo edit revert", run: () => s.edit.undoRedo(true) });
+        list.push({ text: "Redo", words: "redo edit again", run: () => s.edit.undoRedo(false) });
+        if (s.selectedLayer) {
+            list.push({ text: "Rename the selected layer", words: "layer rename name", run: () => s.edit.renameLayerWanted() });
+            list.push({ text: "Duplicate the selected layer", words: "layer duplicate copy", run: () => s.edit.duplicateLayer() });
+        }
+        if (s.activeScene !== "") {
+            list.push({ text: "Rename this scene", words: "scene rename name", run: () => s.edit.renameSceneWanted(s.activeScene) });
+            list.push({ text: "Duplicate this scene", words: "scene duplicate copy", run: () => s.edit.duplicateScene(s.activeScene) });
+        }
         for (const g of settings.groups)
             for (const p of g.pages)
                 list.push({ text: "Settings: " + p, words: "settings options preferences " + p + " " + (settings.pageWords[p] || ""),

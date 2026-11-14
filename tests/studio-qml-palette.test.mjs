@@ -110,13 +110,13 @@ describe('QML studio command palette (headless probe)', { skip }, () => {
   });
 
   test('scene keys (D382): off by default; on, Ctrl+N switches to the Nth scene and the palette shows each key', async () => {
-    let r = await probe({ actions: ['scene-key:2'] });
-    assert.equal(done(r.p)['scene-key:2'], false, 'flag off: the key does nothing');
+    let r = await probe({ actions: ['scene-hotkey:2'] });
+    assert.equal(done(r.p)['scene-hotkey:2'], false, 'flag off: the key does nothing');
     assert.equal(r.s.activeScene, 'scene-1');
-    r = await probe({ actions: ['scene-key:2', 'scene-key:9', 'palette-open'], flagIds: ['scene-hotkeys'] });
+    r = await probe({ actions: ['scene-hotkey:2', 'scene-hotkey:9', 'palette-open'], flagIds: ['scene-hotkeys'] });
     const d = done(r.p);
-    assert.equal(d['scene-key:2'], true);
-    assert.equal(d['scene-key:9'], false, 'no 9th scene: nothing happens');
+    assert.equal(d['scene-hotkey:2'], true);
+    assert.equal(d['scene-hotkey:9'], false, 'no 9th scene: nothing happens');
     assert.equal(r.s.activeScene, 'scene-2');
     assert.ok(r.pal.items.includes('Switch to scene: Gameplay   Ctrl+1'), r.pal.items.join(' | '));
     assert.ok(r.pal.items.includes('Switch to scene: Starting soon (on now)   Ctrl+2'));
