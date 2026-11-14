@@ -31,6 +31,8 @@ QtObject {
     property bool canRecord: false
     property var onAir: ({})         // status host.onAir: liveForMs, recordForMs, kbps, sinks
     property var tasks: []
+    property real statusAt: 0        // the status snapshot's own clock ("at"): task times and toasts use it
+    property var alerts: []          // status "alerts" (flag live-test-kit): the alert strip
     property bool previewEditing: false
     property var flags: ({})         // flag id -> on (ui/api/flags), read after each status poll as the widget does
     property var flagList: []        // the same answer in full: {id, label, summary, page, on} for Settings
@@ -325,6 +327,21 @@ QtObject {
         });
     }
 
+    // ---- clipping (D281; the widget's Save clip and Mark moment): one click each, no confirm ----
+    // Save clip: the replay buffer's last 60 s of H and V as clip files. Mark moment: a marker for the clipper (source
+    // api, as the widget button; the hotkey sends its own).
+    function saveClip() {
+        Api.host("replay.save", {}, (ok, b, err) => {
+            if (!ok) return say("Clip not saved: " + err);
+            const r = b ? b.result : null;
+            const n = r && Array.isArray(r.saved) ? r.saved.length : 0;
+            say(n ? "Clip saved: " + n + " file(s) in the replay folder." : "Clip not saved: the replay buffer is not running.");
+        });
+    }
+    function markMoment() {
+        Api.host("marker.add", { source: "api" }, (ok, b, err) => say(ok ? "Moment marked." : "Moment not marked: " + err));
+    }
+
     function answer(pendingId, allow) {
         if (!allow) {
             Api.post("ui/api/cancel", { pendingId: pendingId }, () => {});
@@ -363,6 +380,8 @@ QtObject {
             canStream = ready.stream === true;
             canRecord = ready.record === true;
             onAir = h.onAir || {};
+            statusAt = typeof s.at === "number" ? s.at : Date.now();
+            alerts = Array.isArray(s.alerts) ? s.alerts : [];
             tasks = Array.isArray(s.tasks) ? s.tasks : [];
             // A restarted host (crash supervisor) lost the previews it drew in our windows: embed them again (D280).
             const up = typeof h.uptimeMs === "number" ? h.uptimeMs : -1;

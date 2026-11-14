@@ -64,7 +64,7 @@ void TrayKeeper::begin(const QJsonArray &tasks)
 	finishing_ = false;
 	if (!menu_)
 		menu_ = new QMenu();
-	if (QSystemTrayIcon::isSystemTrayAvailable() && !tray_) {
+	if (!unseen_ && QSystemTrayIcon::isSystemTrayAvailable() && !tray_) {
 		tray_ = new QSystemTrayIcon(icon_, this);
 		tray_->setContextMenu(menu_);
 		// Only a click opens the list (never by itself); a right click shows the menu (Qt does that).
@@ -88,6 +88,7 @@ void TrayKeeper::end()
 	active_ = false;
 	finishing_ = false;
 	finishGen_++; // a pending "all finished" countdown ends with the tray
+	unseenListOpen_ = false;
 	if (list_)
 		list_->hide();
 	if (tray_)
@@ -183,6 +184,12 @@ void TrayKeeper::rebuild()
 
 void TrayKeeper::showList()
 {
+	if (unseen_) { // nothing on a screen: the list opens and closes as a flag (a second click closes it)
+		unseenListOpen_ = !unseenListOpen_;
+		if (unseenListOpen_)
+			listShows_++;
+		return;
+	}
 	if (!list_) {
 		// A small popup-style tool window shown without activation, so opening it from the tray leaves the game or other
 		// app in front. D316 dropped the hard no-focus rule; this stays as the simpler choice for a quick task list.
@@ -238,7 +245,7 @@ QJsonObject TrayKeeper::probe() const
 	o.insert(QStringLiteral("running"), activeCount(tasks_));
 	o.insert(QStringLiteral("finishing"), finishing_);
 	o.insert(QStringLiteral("cancels"), cancels_);
-	o.insert(QStringLiteral("listShown"), list_ && list_->isVisible());
+	o.insert(QStringLiteral("listShown"), unseen_ ? unseenListOpen_ : list_ && list_->isVisible());
 	o.insert(QStringLiteral("listShows"), listShows_);
 	o.insert(QStringLiteral("messages"), messages_);
 	o.insert(QStringLiteral("lastMessage"), lastMessage_);

@@ -36,6 +36,10 @@ ApplicationWindow {
         s.palette = cmdPalette.probe();
         s.growth = growthDlg.probe();
         s.review = reviewDlg.probe();
+        s.alerts = alerts.probe();
+        s.tasks = taskCenter.probe();
+        s.tray = Object.assign(Tray.probe(), { closeAsked: closeDlg.asked, closeChoice: closeDlg.choice, stay: trayFlow.stay });
+        s.windowShown = win.visible;
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
@@ -45,6 +49,11 @@ ApplicationWindow {
         if (String(action).startsWith("growth-")) return growthDlg.probeAction(String(action));
         if (String(action).startsWith("review-")) return reviewDlg.probeAction(String(action));
         if (String(action).startsWith("scene-key:")) return sceneKey(parseInt(String(action).slice(10), 10));
+        // Live controls (Q4 A), the widget probe's names: close, close-choice:<tray|stop|cancel>, tray:<click|open|stop>, tasks:*.
+        if (action === "close") { Qt.callLater(win.close); return true } // as the window's X; the question opens on the next turn
+        if (String(action).startsWith("close-choice:")) return closeDlg.choose(String(action).slice(13));
+        if (String(action).startsWith("tray:")) return trayFlow.probeAction(String(action));
+        if (String(action).startsWith("tasks:")) return taskCenter.probeAction(String(action));
         return false;
     }
 
@@ -65,13 +74,15 @@ ApplicationWindow {
         onSettingsWanted: (page) => settingsDlg.openAt(page)
     }
 
-    // Tasks still running and not live: ask first (the widget closeEvent). Live: the window closes as before.
+    // Tasks still running and not live: ask first (the widget closeEvent): keep them in the tray, stop them, or keep the
+    // window. Live: the window closes as before.
     onClosing: (close) => {
         if (!closeConfirmed && studioStore.activeTasks > 0 && !studioStore.live) {
             close.accepted = false;
             closeDlg.open();
             return;
         }
+        if (Tray.active) Tray.end();
         Qt.callLater(Qt.quit); // a hidden test window is no "last visible window": quit explicitly (exit 0)
     }
 
@@ -81,15 +92,23 @@ ApplicationWindow {
         id: bar
         objectName: "onAirBar"
         store: studioStore
+        taskCenter: taskCenter
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
         height: 56
+    }
+
+    AlertStrip {
+        id: alerts
+        objectName: "alertBar"
+        store: studioStore
+        anchors { left: parent.left; right: parent.right; top: bar.bottom; leftMargin: win.pad; rightMargin: win.pad; topMargin: visible ? win.pad : 0 }
     }
 
     ScenesPanel {
         id: scenes
         objectName: "scenesPanel"
         store: studioStore
-        anchors { left: parent.left; top: bar.bottom; bottom: mixer.top; margins: win.pad }
+        anchors { left: parent.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
         width: 240
     }
 
@@ -97,7 +116,7 @@ ApplicationWindow {
         id: layers
         objectName: "layersPanel"
         store: studioStore
-        anchors { right: parent.right; top: bar.bottom; bottom: mixer.top; margins: win.pad }
+        anchors { right: parent.right; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
         width: 300
     }
 
@@ -105,7 +124,7 @@ ApplicationWindow {
         id: previews
         objectName: "previewArea"
         store: studioStore
-        anchors { left: scenes.right; right: layers.left; top: bar.bottom; bottom: mixer.top; margins: win.pad; topMargin: win.pad + 4 }
+        anchors { left: scenes.right; right: layers.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad; topMargin: win.pad + 4 }
     }
 
     MixerPanel {
@@ -166,9 +185,21 @@ ApplicationWindow {
         }
     }
 
+    // Task panel and notifications (under the on-air bar, at the right) and the tray (Q4 A).
+    TaskCenter {
+        id: taskCenter
+        objectName: "taskCenter"
+        store: studioStore
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        topY: bar.y + bar.height + 6
+        windowHeight: win.height
+    }
+    TrayFlow { id: trayFlow; store: studioStore; window: win }
+
     CloseDialog {
         id: closeDlg
         store: studioStore
+        onKeepInTray: Qt.callLater(trayFlow.enter)
         onStopAndClose: {
             Api.log("studio close: stop tasks (" + studioStore.activeTasks + ")");
             win.closeConfirmed = true;

@@ -3,6 +3,7 @@
 #include "api_client.h"
 #include "main_window.h"
 #include "qml_bridge.h"
+#include "qml_tasks.h"
 #include "theme.h"
 
 #include <QCoreApplication>
@@ -45,8 +46,15 @@ bool QmlStudio::begin(Mode mode)
 	qmlRegisterSingletonInstance("Ujwalam.Core", 1, 0, "Api", qapi_);
 	qmlRegisterSingletonInstance("Ujwalam.Core", 1, 0, "Theme", theme_);
 	qmlRegisterType<PreviewView>("Ujwalam.Core", 1, 0, "PreviewView");
+	// The task panel's words and the tray come from the widget studio's C++ (taskbar.h, tray.h). Only a normal window
+	// may put a tray icon or a notification on the screen; hidden and probe modes run the same tray unseen.
+	qmlRegisterSingletonInstance("Ujwalam.Core", 1, 0, "TaskText", new QmlTaskText(this));
+	qmlRegisterSingletonInstance("Ujwalam.Core", 1, 0, "Tray", new QmlTray(mode != Mode::Normal, this));
 	engine_->addImageProvider(QStringLiteral("icon"), new IconProvider()); // the engine owns it
 	engine_->rootContext()->setContextProperty(QStringLiteral("studioHidden"), mode == Mode::Hidden);
+	// Never on a screen (hidden or probe): popups that sit at the window's edges (the task panel and notifications) are
+	// drawn inside the window, since an offscreen screen is smaller than the window and would push a popup window inward.
+	engine_->rootContext()->setContextProperty(QStringLiteral("studioUnseen"), mode != Mode::Normal);
 	engine_->loadFromModule("Ujwalam.Studio", "Main");
 	const QList<QObject *> roots = engine_->rootObjects();
 	win_ = roots.isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(roots.first());
