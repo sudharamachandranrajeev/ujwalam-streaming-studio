@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { splitFiles, summaryOf, testFiles } from '../tools/run-tests.mjs';
+import { otherAtOnce, splitFiles, summaryOf, testFiles } from '../tools/run-tests.mjs';
 
 test('every test file is in exactly one group; the studio files are the ones that start the studio exe', () => {
   const files = testFiles();
@@ -32,6 +32,12 @@ test('the split reads each file: a stub tree splits by the import of the studio 
     assert.deepEqual(files, ['tests/a.test.mjs', 'tests/b.test.mjs', 'tests/outputs/c.test.mjs']);
     assert.deepEqual(splitFiles(files, root), { studio: ['tests/a.test.mjs'], other: ['tests/b.test.mjs', 'tests/outputs/c.test.mjs'] });
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('both groups together stay at node\'s default total: the other files get the cores the studio group leaves', () => {
+  assert.equal(otherAtOnce(16), 11);
+  assert.equal(otherAtOnce(4), 1);
+  assert.equal(otherAtOnce(1), 1);
 });
 
 test('the summary repeats the counts and the failing tests\' names', () => {

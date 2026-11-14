@@ -3,12 +3,15 @@
 //  - Files that start the studio exe (they import app/studio/tools/build.mjs) run at most STUDIO_AT_ONCE at a time:
 //    each one starts software-drawn Qt windows, and with node's default (one file per core) up to 15 of them starved
 //    each other until fixed probe deadlines passed (a QML probe test failed in five full CI runs in a row, 2026-11-14).
-//  - Every other file runs at node's default concurrency.
+//  - Every other file runs beside them with the cores left over (availableParallelism - 1 - STUDIO_AT_ONCE), so both
+//    groups together stay at node's default total (with the default for the other group as well, 19 files ran at once
+//    and file and launcher tests timed out in full CI run 6, 2026-11-14).
 // Each group's output is printed whole when it ends, then a short summary with the failing tests' names, so the
 // CI's tail of the output always names them. Extra arguments go to both `node --test` runs.
 // Usage: node tools/run-tests.mjs [node --test options]
 import { spawn } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,6 +22,11 @@ const STUDIO_MARK = /app\/studio\/tools\/build\.mjs/;
 export function testFiles(root = ROOT) {
   const list = (dir) => readdirSync(path.join(root, dir)).filter((f) => f.endsWith('.test.mjs')).sort().map((f) => `${dir}/${f}`);
   return [...list('tests'), ...list('tests/outputs')];
+}
+
+/** How many of the other files run at once: node's default total (cores - 1) minus the studio group, at least 1. */
+export function otherAtOnce(cores = os.availableParallelism()) {
+  return Math.max(1, cores - 1 - STUDIO_AT_ONCE);
 }
 
 /** Splits the files into { studio, other } by whether they start the studio exe. */
@@ -53,7 +61,7 @@ async function main() {
   const { studio, other } = splitFiles(testFiles());
   const base = ['--test', '--test-timeout=300000', ...extra];
   const [o, s] = await Promise.all([
-    run([...base, ...other]),
+    run([...base, `--test-concurrency=${otherAtOnce()}`, ...other]),
     studio.length ? run([...base, `--test-concurrency=${STUDIO_AT_ONCE}`, ...studio]) : Promise.resolve({ code: 0, out: '' }),
   ]);
   process.stdout.write(o.out);
