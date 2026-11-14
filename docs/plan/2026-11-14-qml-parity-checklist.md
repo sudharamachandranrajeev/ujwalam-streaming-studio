@@ -54,7 +54,9 @@ the 2026-11-14 handover session.
 - [ ] Status bar in plain words: "UI server not reachable" distinct from "Host not running"; theme-reload error toast
 - [ ] Theme tests twinned (`studio-qt-themes`, soft, components, reference themes, reload). Done: `studio-qml-themes`
       (16 tests: every pack's shot and colours, saved/unknown theme at start, live switch, performance, custom folder,
-      file reload). Left: the rejected-reload toast (needs the QML toasts), soft / components / reference-theme twins
+      file reload, each pack's font really loaded). Left: the rejected-reload toast (needs the QML toasts). Not twinned:
+      soft painters, component variants and the specimen page are widget-stylesheet features the QML style does not
+      have; they come back as a QML design item if the QML studio needs them (the widget tests keep guarding the widgets)
 
 ## G. New in QML (plan Q4)
 - [x] Command palette, Ctrl+K (`cdd4f11`, `tests/studio-qml-palette.test.mjs` 6/6)

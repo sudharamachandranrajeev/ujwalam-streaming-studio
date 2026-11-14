@@ -31,7 +31,9 @@ const pngSize = (f) => { const b = readFileSync(f); return [b.readUInt32BE(16), 
 function startShell(env) {
   const child = spawn(SHELL_EXE, [], {
     windowsHide: true,
-    env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', UJWALAM_STUDIO_QML: '1', ...env },
+    env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', UJWALAM_STUDIO_QML: '1',
+      // The offscreen platform sees system fonts (Soft's Segoe UI) only through the Windows font folder, as on a desktop.
+      QT_QPA_FONTDIR: path.join(process.env.WINDIR ?? 'C:\\Windows', 'Fonts'), ...env },
   });
   let out = '', err = '';
   child.stdout.on('data', (d) => { out += d; });
@@ -83,6 +85,8 @@ describe('QML studio themes (headless probe)', { skip }, () => {
       for (const t of ['bg', 'panel', 'text', 'accent', 'danger'])
         assert.equal(s.themeColors[t].toLowerCase(), want.colors[t].toLowerCase(), `${id} ${t}`);
       assert.equal(s.themeDark, want.dark !== false);
+      assert.ok(s.themeFont.family, 'a font family');
+      assert.equal(s.themeFont.installed, true, `${s.themeFont.family} is a family Qt really has (bundled or system)`);
     });
   }
 

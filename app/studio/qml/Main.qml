@@ -32,6 +32,7 @@ ApplicationWindow {
         for (const k in Theme.c) cols[k] = String(Theme.c[k]);
         s.themeColors = cols;
         s.themeDark = Theme.dark;
+        s.themeFont = { family: Theme.family, installed: Qt.fontFamilies().indexOf(Theme.family) >= 0 };
         s.palette = cmdPalette.probe();
         return s;
     }
