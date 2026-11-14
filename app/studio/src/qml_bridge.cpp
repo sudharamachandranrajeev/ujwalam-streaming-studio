@@ -6,12 +6,14 @@
 #include "theme.h"
 
 #include <QClipboard>
+#include <QDesktopServices>
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QJSEngine>
 #include <QJsonDocument>
 #include <QPainter>
 #include <QQuickWindow>
+#include <QUrl>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -70,6 +72,16 @@ QString QmlApi::chooseFolder(const QString &title, const QString &start) const
 void QmlApi::copyText(const QString &text) const
 {
 	QGuiApplication::clipboard()->setText(text);
+}
+
+QString QmlApi::openLink(const QString &url) const
+{
+	const QUrl u(url, QUrl::StrictMode);
+	if (!u.isValid() || u.scheme() != QStringLiteral("https") || u.host() != QStringLiteral("github.com"))
+		return QStringLiteral("refused");
+	if (qEnvironmentVariable("UJWALAM_HEADLESS") == QStringLiteral("1")) // tests: no browser ever opens
+		return QStringLiteral("headless");
+	return QDesktopServices::openUrl(u) ? QStringLiteral("opened") : QStringLiteral("failed");
 }
 
 // ---- Theme ----

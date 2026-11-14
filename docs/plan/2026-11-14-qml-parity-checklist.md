@@ -32,12 +32,14 @@ the 2026-11-14 handover session.
 - [ ] Clips chip with plain-words state; "Make clips?" question after a recording or stream; first-run Settings
 - [ ] My clips folder button (`ui/api/clips/open`)
 - [ ] More menu (flag-gated items)
-- [ ] Posts window (flag `posting`): review, Approve, Reject, Save, Open folder, Upload as private, Check status, Retry
-- [ ] Growth numbers window (flag `growth`)
-- [ ] Review reads window (flag `learning-review`)
-- [ ] Import Meld session window
-- [ ] Feedback notes window
-- [ ] Report a problem window (flag `report-button`)
+- [x] Posts window (flag `posting`): review, Approve, Reject, Save, Open folder, Upload as private, Check status, Retry
+      (`tests/studio-qml-posts.test.mjs` 4/4; Upload is read as enabled/disabled only, never pressed in a test)
+- [x] Growth numbers window (flag `growth`) (`65f6e08`, `tests/studio-qml-growth.test.mjs` 5/5)
+- [x] Review reads window (flag `learning-review`) (`03cc9ff`, `tests/studio-qml-review.test.mjs` 4/4)
+- [x] Import Meld session window (`tests/studio-qml-more-windows.test.mjs`)
+- [x] Feedback notes window (`tests/studio-qml-more-windows.test.mjs`)
+- [x] Report a problem window (flag `report-button`; only an https://github.com/ link opens, `Api.openLink`)
+      (`tests/studio-qml-more-windows.test.mjs`; 7/7 for the three windows)
 
 ## D. Panels shown by flags
 - [ ] Outputs panel in the main window (flag `outputs-panel`)
@@ -61,7 +63,8 @@ the 2026-11-14 handover session.
 
 ## G. New in QML (plan Q4)
 - [x] Command palette, Ctrl+K (`cdd4f11`, `tests/studio-qml-palette.test.mjs` 6/6)
-- [ ] Palette: layer commands, Undo, the rest of the More menu windows (Save clip and Mark moment: done in Q4 A; Growth numbers and Review reads: done)
+- [ ] Palette: layer commands, Undo (track B). Done: Save clip, Mark moment (Q4 A) and every More menu window
+      (Growth numbers, Review reads, Import Meld session, Feedback notes, Posts, Report a problem; each behind its flag)
 - [x] Scene hotkeys step 1: Ctrl+1..9 in the studio window, flag scene-hotkeys (D382). Step 2 (global in-game keys, host, clash check) deferred
 - [ ] Scene builder in the studio (today CLI only, `services/scene-builder/cli.mjs`, flag `scene-builder`; no UI server route)
 

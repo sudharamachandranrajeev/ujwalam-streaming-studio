@@ -132,7 +132,11 @@ qt_add_qml_module(ujwalam-studio
 		qml/AlertStrip.qml
 		qml/TaskCenter.qml
 		qml/TaskChip.qml
-		qml/TrayFlow.qml)
+		qml/TrayFlow.qml
+		qml/FeedbackWindow.qml
+		qml/ReportDialog.qml
+		qml/ImportWindow.qml
+		qml/PostsWindow.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()

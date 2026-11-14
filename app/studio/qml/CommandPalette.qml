@@ -45,6 +45,14 @@ Popup {
             list.push({ text: "Growth numbers", words: "growth youtube numbers views likes statistics analytics", run: () => windows.growth.show() });
         if (s.flags["learning-review"] === true && windows.review)
             list.push({ text: "Review reads", words: "review reads confirm correct unsure ocr banner mode learning", run: () => windows.review.show() });
+        if (windows.importer)
+            list.push({ text: "Import Meld session", words: "import meld session project scenes load", run: () => windows.importer.show() });
+        if (windows.feedback)
+            list.push({ text: "Feedback notes", words: "feedback notes moments hotkey tag severity", run: () => windows.feedback.show() });
+        if (s.flags["posting"] === true && windows.posts)
+            list.push({ text: "Posts", words: "posts clips packages upload youtube shorts approve reject queue auto-post", run: () => windows.posts.show() });
+        if (s.flags["report-button"] === true && windows.report)
+            list.push({ text: "Report a problem", words: "report problem bug issue github", run: () => windows.report.show() });
         for (const g of settings.groups)
             for (const p of g.pages)
                 list.push({ text: "Settings: " + p, words: "settings options preferences " + p + " " + (settings.pageWords[p] || ""),

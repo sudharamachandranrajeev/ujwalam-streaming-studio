@@ -30,6 +30,9 @@ public:
 	Q_INVOKABLE QString chooseFolder(const QString &title, const QString &start) const;
 	// Settings > Chat & bots "Copy pairing code": puts the text on the system clipboard (the widget's QClipboard call).
 	Q_INVOKABLE void copyText(const QString &text) const;
+	// Report a problem: opens an https://github.com/ link in the browser (the widget report()'s check); anything else is
+	// refused. "opened", "refused", "failed", or "headless" (test mode: checked, never opened).
+	Q_INVOKABLE QString openLink(const QString &url) const;
 	// Requests sent and not answered yet (the headless probe waits for 0 before its next action and before it reads).
 	int inFlight() const { return inFlight_; }
 

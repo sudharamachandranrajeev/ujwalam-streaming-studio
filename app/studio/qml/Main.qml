@@ -36,6 +36,10 @@ ApplicationWindow {
         s.palette = cmdPalette.probe();
         s.growth = growthDlg.probe();
         s.review = reviewDlg.probe();
+        s.feedback = feedbackDlg.probe();
+        s.report = reportDlg.probe();
+        s["import"] = importDlg.probe();
+        s.posts = postsDlg.probe();
         s.alerts = alerts.probe();
         s.tasks = taskCenter.probe();
         s.tray = Object.assign(Tray.probe(), { closeAsked: closeDlg.asked, closeChoice: closeDlg.choice, stay: trayFlow.stay });
@@ -48,6 +52,10 @@ ApplicationWindow {
         if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
         if (String(action).startsWith("growth-")) return growthDlg.probeAction(String(action));
         if (String(action).startsWith("review-")) return reviewDlg.probeAction(String(action));
+        if (String(action).startsWith("feedback-")) return feedbackDlg.probeAction(String(action));
+        if (String(action).startsWith("report-")) return reportDlg.probeAction(String(action));
+        if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
+        if (String(action).startsWith("posts-")) return postsDlg.probeAction(String(action));
         if (String(action).startsWith("scene-key:")) return sceneKey(parseInt(String(action).slice(10), 10));
         // Live controls (Q4 A), the widget probe's names: close, close-choice:<tray|stop|cancel>, tray:<click|open|stop>, tasks:*.
         if (action === "close") { Qt.callLater(win.close); return true } // as the window's X; the question opens on the next turn
@@ -168,9 +176,13 @@ ApplicationWindow {
     AddLayerDialog { id: addLayerDlg; store: studioStore }
     AddSceneDialog { id: addSceneDlg; store: studioStore }
     SettingsDialog { id: settingsDlg; store: studioStore }
-    CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg; windows: ({ growth: growthDlg, review: reviewDlg }) }
+    CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg; windows: ({ growth: growthDlg, review: reviewDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg }) }
     GrowthWindow { id: growthDlg; store: studioStore }
     ReviewWindow { id: reviewDlg; store: studioStore }
+    FeedbackWindow { id: feedbackDlg; store: studioStore }
+    ReportDialog { id: reportDlg; store: studioStore }
+    ImportWindow { id: importDlg; store: studioStore }
+    PostsWindow { id: postsDlg; store: studioStore }
     Shortcut {
         sequence: "Ctrl+K"
         onActivated: cmdPalette.show()
