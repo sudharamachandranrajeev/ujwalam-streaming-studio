@@ -9,6 +9,7 @@ import Ujwalam.Core
 Rectangle {
     id: bar
     required property var store
+    property var taskCenter: null // TaskCenter.qml: the task chip opens its panel
     color: Theme.c.panel
     border.width: 1
     border.color: Theme.c.border
@@ -56,6 +57,11 @@ Rectangle {
         id: chips
         anchors { right: controls.left; rightMargin: 16; verticalCenter: parent.verticalCenter }
         spacing: 8
+        TaskChip {
+            objectName: "taskChip"
+            visible: bar.taskCenter !== null && bar.taskCenter.listed > 0
+            center: bar.taskCenter
+        }
         UChip {
             objectName: "chipLive"
             on: bar.store.live

@@ -8,11 +8,12 @@ the 2026-11-14 handover session.
 ## A. Live controls and safety
 - [x] Go live / Record buttons, LIVE and Recording chips, bitrate chip (Q2)
 - [x] Confirm window for held actions (Q2)
-- [ ] Save clip (host `replay.save`) and Mark moment (host `marker.add`) buttons
-- [ ] Alert strip (flag `live-test-kit`, status `alerts`, at most 8 lines)
-- [ ] Close with tasks running: add "Keep running in the tray" and the per-task time text; tray icon, task list, Stop all
-      and quit, quit lock while live (`ui/api/quit/*`, `ui/api/tasks/stop`)
-- [ ] Task chip and task panel (stage, percent, time left, stuck warning, Stop, Clear finished) and toasts
+- [x] Save clip (host `replay.save`) and Mark moment (host `marker.add`) buttons (Q4 A, `tests/studio-qml-controls.test.mjs`)
+- [x] Alert strip (flag `live-test-kit`, status `alerts`, at most 8 lines) (Q4 A, `tests/studio-qml-controls.test.mjs`)
+- [x] Close with tasks running: add "Keep running in the tray" and the per-task time text; tray icon, task list, Stop all
+      and quit, quit lock while live (`ui/api/quit/*`, `ui/api/tasks/stop`) (Q4 A, `tests/studio-qml-tray.test.mjs` 14/14)
+- [x] Task chip and task panel (stage, percent, time left, stuck warning, Stop, Clear finished) and toasts (Q4 A,
+      `tests/studio-qml-tasks.test.mjs` 7/7)
 
 ## B. Editing
 - [ ] Undo / Redo buttons and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z (`ui/api/edits*`)
@@ -56,10 +57,10 @@ the 2026-11-14 handover session.
 
 ## G. New in QML (plan Q4)
 - [x] Command palette, Ctrl+K (`cdd4f11`, `tests/studio-qml-palette.test.mjs` 6/6)
-- [ ] Palette: layer commands, Save clip, Mark moment, Undo, the More menu windows
+- [ ] Palette: layer commands, Undo, the More menu windows (Save clip and Mark moment: done in Q4 A)
 - [ ] Scene hotkeys (nothing exists in either UI; needs a design: studio window keys vs host global hotkeys)
 - [ ] Scene builder in the studio (today CLI only, `services/scene-builder/cli.mjs`, flag `scene-builder`; no UI server route)
 
 ## H. Test twins still missing
-`studio-qt-shell` (73 tests; QML twin has 3), `studio-tray`, `studio-qt-alerts`, `studio-qt-growth`,
+`studio-qt-shell` (73 tests; QML twin has 3, plus the clip/mark and task parts in Q4 A), `studio-qt-growth`,
 `studio-qt-learning-review`, the outputs-panel part of `studio-qt-d327`, the theme tests, `scene-builder-theme`.

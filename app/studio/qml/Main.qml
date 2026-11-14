@@ -30,12 +30,20 @@ ApplicationWindow {
         s.effects = Theme.effects();
         s.palette = cmdPalette.probe();
         s.alerts = alerts.probe();
+        s.tasks = taskCenter.probe();
+        s.tray = Object.assign(Tray.probe(), { closeAsked: closeDlg.asked, closeChoice: closeDlg.choice, stay: trayFlow.stay });
+        s.windowShown = win.visible;
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
     function probeAction(action) {
         if (String(action).startsWith("settings-") || String(action).startsWith("stream-") || String(action).startsWith("tr-") || String(action).startsWith("ap-") || String(action).startsWith("int-") || String(action).startsWith("conn-")) return settingsDlg.probeAction(String(action));
         if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
+        // Live controls (Q4 A), the widget probe's names: close, close-choice:<tray|stop|cancel>, tray:<click|open|stop>, tasks:*.
+        if (action === "close") { Qt.callLater(win.close); return true } // as the window's X; the question opens on the next turn
+        if (String(action).startsWith("close-choice:")) return closeDlg.choose(String(action).slice(13));
+        if (String(action).startsWith("tray:")) return trayFlow.probeAction(String(action));
+        if (String(action).startsWith("tasks:")) return taskCenter.probeAction(String(action));
         return false;
     }
 
@@ -48,13 +56,15 @@ ApplicationWindow {
         onSettingsWanted: (page) => settingsDlg.openAt(page)
     }
 
-    // Tasks still running and not live: ask first (the widget closeEvent). Live: the window closes as before.
+    // Tasks still running and not live: ask first (the widget closeEvent): keep them in the tray, stop them, or keep the
+    // window. Live: the window closes as before.
     onClosing: (close) => {
         if (!closeConfirmed && studioStore.activeTasks > 0 && !studioStore.live) {
             close.accepted = false;
             closeDlg.open();
             return;
         }
+        if (Tray.active) Tray.end();
         Qt.callLater(Qt.quit); // a hidden test window is no "last visible window": quit explicitly (exit 0)
     }
 
@@ -64,6 +74,7 @@ ApplicationWindow {
         id: bar
         objectName: "onAirBar"
         store: studioStore
+        taskCenter: taskCenter
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
         height: 56
     }
@@ -145,9 +156,21 @@ ApplicationWindow {
         onActivated: cmdPalette.show()
     }
 
+    // Task panel and notifications (under the on-air bar, at the right) and the tray (Q4 A).
+    TaskCenter {
+        id: taskCenter
+        objectName: "taskCenter"
+        store: studioStore
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        topY: bar.y + bar.height + 6
+        windowHeight: win.height
+    }
+    TrayFlow { id: trayFlow; store: studioStore; window: win }
+
     CloseDialog {
         id: closeDlg
         store: studioStore
+        onKeepInTray: Qt.callLater(trayFlow.enter)
         onStopAndClose: {
             Api.log("studio close: stop tasks (" + studioStore.activeTasks + ")");
             win.closeConfirmed = true;
