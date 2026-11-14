@@ -51,6 +51,8 @@ add_executable(ujwalam-studio WIN32
 	src/qml_bridge.h
 	src/qml_studio.cpp
 	src/qml_studio.h
+	src/qml_tasks.cpp
+	src/qml_tasks.h
 	src/motion.cpp
 	src/motion.h
 	src/soft.cpp
@@ -125,7 +127,10 @@ qt_add_qml_module(ujwalam-studio
 		qml/OutputDialog.qml
 		qml/SettingsDialog.qml
 		qml/CommandPalette.qml
-		qml/AlertStrip.qml)
+		qml/AlertStrip.qml
+		qml/TaskCenter.qml
+		qml/TaskChip.qml
+		qml/TrayFlow.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()

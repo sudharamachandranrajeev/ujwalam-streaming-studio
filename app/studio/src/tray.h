@@ -23,6 +23,9 @@ class TrayKeeper : public QObject {
 	Q_OBJECT
 public:
 	explicit TrayKeeper(const QIcon &icon, QObject *parent = nullptr);
+	// Unseen (the QML studio's hidden and probe modes): no tray icon, no notification and no list window ever reach a
+	// screen; the same model runs and the probe reads it (the list is "open" as a flag only).
+	void setUnseen(bool unseen) { unseen_ = unseen; }
 	~TrayKeeper() override;
 	void begin(const QJsonArray &tasks); // the window was closed into the tray
 	void end();                          // the window is back (Open Ujwalam)
@@ -51,6 +54,7 @@ private:
 	QJsonArray tasks_;
 	QString tip_;
 	bool active_ = false, finishing_ = false;
+	bool unseen_ = false, unseenListOpen_ = false;
 	int finishGen_ = 0;   // each "all finished" countdown; a new active task cancels it (the old timer then does nothing)
 	int finishMs_ = -1;   // countdown length: 3 s with a tray, 0.3 s without; UJWALAM_TRAY_FINISH_MS overrides (tests)
 	int listShows_ = 0, messages_ = 0, cancels_ = 0;
