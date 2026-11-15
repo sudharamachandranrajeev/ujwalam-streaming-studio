@@ -91,7 +91,7 @@ Column {
     function render(b) {
         accounts = b.accounts || ({});
         const out = [];
-        for (const o of (b.outputs || [])) if (only === "" || o.id === only) out.push(o);
+        for (const o of (b.outputs || [])) if (only === "" || o.id === only || o.sinkId === only) out.push(o); // an output's quality keys carry its id as sinkId (D385)
         rows = out;
         if (pasteId !== "" && !out.some(o => o.id === pasteId)) closePaste();
         loaded = true;

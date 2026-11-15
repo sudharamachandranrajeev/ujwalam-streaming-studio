@@ -47,6 +47,7 @@ describe('QML studio: Outputs panel and Bots box (headless probe)', { skip }, ()
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qmlob-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
     for (const id of on) flags.set(id, true);
+    if (!on.includes('outputs-panel')) flags.set('outputs-panel', false); // on by default since D389: "flags off" means the user switched it off
     const file = path.join(dataDir, 'p.project.json');
     saveProject(file, createProject({ name: 'T', fps: 30 }));
     const fake = createFakeHost({ outputsReady: true });

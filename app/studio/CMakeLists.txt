@@ -141,6 +141,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/PostsWindow.qml
 		qml/ClipsAsk.qml
 		qml/YoutubeWindow.qml
+		qml/GoLiveDialog.qml
 		qml/EditOps.qml
 		qml/UMenu.qml
 		qml/UMenuItem.qml

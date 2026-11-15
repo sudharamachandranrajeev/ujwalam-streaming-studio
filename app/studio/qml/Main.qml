@@ -49,6 +49,7 @@ ApplicationWindow {
         s.sceneBuilder = sceneBuilderDlg.probe();
         s.more = bar.moreProbe();
         s.youtube = ytWin.probe();
+        s.goLive = goLiveDlg.probe();
         s.clips = { text: studioStore.clipsText, tip: studioStore.clipsTip, asks: (studioStore.clips.asks || []).length, ask: clipsAskDlg.probe(),
                     reviewShown: studioStore.flags["learning-review"] === true && studioStore.reviewCount > 0, reviewCount: studioStore.reviewCount };
         s.alerts = alerts.probe();
@@ -73,6 +74,7 @@ ApplicationWindow {
         if (String(action).startsWith("settings-") || String(action).startsWith("stream-") || String(action).startsWith("tr-") || String(action).startsWith("ap-") || String(action).startsWith("int-") || String(action).startsWith("conn-")) return settingsDlg.probeAction(String(action));
         if (action === "yt-golive") { studioStore.toggleStream(); return true } // Go live as the button does (the button needs the LIVE start)
         if (String(action).startsWith("yt-")) return ytWin.probeAction(String(action));
+        if (String(action).startsWith("gl-")) return goLiveDlg.probeAction(String(action));
         if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
         if (String(action).startsWith("growth-")) return growthDlg.probeAction(String(action));
         if (String(action).startsWith("review-")) return reviewDlg.probeAction(String(action));
@@ -127,6 +129,8 @@ ApplicationWindow {
         onAddSceneReady: (canvases) => addSceneDlg.ask(canvases)
         onSettingsWanted: (page) => settingsDlg.openAt(page)
         onYoutubeEventsWanted: ytWin.show("presets")
+        onGoLiveWanted: (options) => goLiveDlg.ask(options)
+        onConnectionsWanted: (output) => settingsDlg.openConnections(output)
     }
     Connections {
         target: studioStore.edit
@@ -278,6 +282,7 @@ ApplicationWindow {
     ImportWindow { id: importDlg; store: studioStore }
     SceneBuilderWindow { id: sceneBuilderDlg; store: studioStore }
     YoutubeWindow { id: ytWin; store: studioStore }
+    GoLiveDialog { id: goLiveDlg; store: studioStore }
     PostsWindow { id: postsDlg; store: studioStore }
     ClipsAsk { id: clipsAskDlg; store: studioStore }
     Connections {
