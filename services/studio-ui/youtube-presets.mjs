@@ -14,14 +14,13 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { loadPlatforms } from '../outputs/validate.mjs';
-import { PLATFORMS_DIR } from '../../app/host/lib/outputs-plan.mjs';
-import { ID_RE, cleanTitle, readChoices, writeChoices } from '../platform-connect/youtube-events.mjs';
-import { portraitOf, qualityKeyOf, readOptions, recommendedKbps } from './stream-setup.mjs';
+import { ID_RE, cleanTitle, readChoices, withoutTemplate, writeChoices } from '../platform-connect/youtube-events.mjs';
+import { OUTPUT_IDS, createYoutubeQuality } from './youtube-quality.mjs';
+
+export { OUTPUT_IDS, limitsFor, sizeLists } from './youtube-quality.mjs';
 
 export const PRESETS_FILE = 'youtube-presets.json';
 export const MAX_PRESETS = 12;
-export const OUTPUT_IDS = Object.freeze(['youtube-h', 'youtube-v']);
 const PRESET_ID_RE = /^p-[0-9a-f]{8}$/;
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
 const onlyKeys = (o, keys) => Object.keys(o).every((k) => keys.includes(k));
@@ -43,32 +42,6 @@ export function cleanName(v) {
   const t = v.trim();
   if (!t || t.length > 40 || /[<>]/.test(t) || /[\x00-\x1f\x7f]/.test(t)) return null;
   return t;
-}
-
-/** The size lists per output from the setup module's options: { 'youtube-h': [{ id, w, h }], 'youtube-v': [...] }.
- *  Sizes are 1080p / 1440p / 2160p by the short side; V maps to the portrait list (1080x1920 ...). */
-export function sizeLists(options) {
-  const h = options.resolutions.filter((r) => Math.min(r.w, r.h) >= 1080).map((r) => ({ id: r.id, w: r.w, h: r.h }));
-  const v = (options.portraitResolutions ?? []).filter((r) => Math.min(r.w, r.h) >= 1080).map((r) => ({ id: `${Math.min(r.w, r.h)}p`, setupId: r.id, w: r.w, h: r.h }));
-  return { 'youtube-h': h.map((r) => ({ ...r, setupId: r.id })), 'youtube-v': v };
-}
-
-/** Bitrate limits per output and size, from data/platforms (never hardcoded): { min, max, default }. */
-export function limitsFor(options, platforms) {
-  const vb = platforms?.youtube?.videoBitrateKbps ?? {};
-  const max = Number.isInteger(vb.max?.value) ? vb.max.value : options.videoBitrateKbps.max;
-  const min = Number.isInteger(vb.min?.value) ? vb.min.value : options.videoBitrateKbps.min;
-  const rec = recommendedKbps(platforms);
-  const fps = 60;
-  const out = {};
-  for (const [output, list] of Object.entries(sizeLists(options))) {
-    out[output] = {};
-    for (const s of list) {
-      const def = rec[`${s.id}${fps}`] ?? Math.min(max, Math.max(min, 17000));
-      out[output][s.id] = { min, max, default: Math.min(max, Math.max(min, def)) };
-    }
-  }
-  return out;
 }
 
 function cleanOutput(o, output, sizes, limits) {
@@ -110,16 +83,16 @@ export function cleanPreset(p, { sizes, limits, requireId = false }) {
 /**
  * opts: { dataDir, json, settings: createSettingsRoutes(...) result (saveSetup, streamSettingsOn, ...),
  *         readSetup: (dataDir) => { exists, setup }, keyPresence: async () => Map<rowId, boolean> (Connections status rows),
- *         events: async () => the GET /ui/api/youtube/events body, log?, options?, platforms? }
+ *         events: async () => the GET /ui/api/youtube/events body, log?, options?, platforms?,
+ *         quality?: a shared createYoutubeQuality(...) (built from these opts when absent) }
  * Returns { handle(method, route, body, res) -> boolean (handled) }.
  */
 export function createYoutubePresets(opts) {
   const { dataDir, json } = opts;
   const log = opts.log ?? (() => {});
-  const options = opts.options ?? readOptions();
-  const platforms = opts.platforms ?? loadPlatforms(PLATFORMS_DIR);
-  const sizes = sizeLists(options);
-  const limits = limitsFor(options, platforms);
+  // The shared quality path (youtube-quality.mjs): sizes, limits, key presence, shared-rung refusal, saveSetup.
+  const q = opts.quality ?? createYoutubeQuality(opts);
+  const { sizes, limits } = q;
   // No data folder (a server built without one): the routes answer no-data-dir (handle), so no path is made.
   const file = dataDir ? path.join(dataDir, PRESETS_FILE) : null;
   const fail = (res, status, code, extra = {}) => json(res, status, { error: code, message: MESSAGES[code] ?? 'Not done.', ...extra });
@@ -138,70 +111,11 @@ export function createYoutubePresets(opts) {
   function writeStore(store) {
     mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify({ version: 1, presets: store.presets, activeId: store.activeId }, null, 2)}\n`);
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, presets: store.presets, activeId: store.activeId }, null, 2)}
+`);
     renameSync(tmp, file);
   }
-
-  // The setup output a logical YouTube output (youtube-h / youtube-v) stands for: the one with that id, else the first
-  // YouTube output on that canvas.
-  function targetOf(setup, logical) {
-    const canvas = logical === 'youtube-v' ? 'V' : 'H';
-    const list = setup.outputs.filter((o) => o.platform === 'youtube' && o.canvas === canvas);
-    return list.find((o) => o.id === logical) ?? list[0] ?? null;
-  }
-  const loadSetup = () => { try { return opts.readSetup(dataDir); } catch { return null; } };
-
-  // Credential Manager row of an output at a size (D385): <id> up to 1080p, <id>-1440p / <id>-2160p above (short side).
-  function rowIdOf(outputId, size) {
-    const q = qualityKeyOf(options, size.w, size.h);
-    return q ? `${outputId}-${q.id}` : outputId;
-  }
-  async function presence() {
-    try { const m = await opts.keyPresence?.(); return m instanceof Map ? m : new Map(); } catch { return new Map(); }
-  }
-  function keysView(setup, rows) {
-    const out = {};
-    for (const logical of OUTPUT_IDS) {
-      const t = setup ? targetOf(setup, logical) : null;
-      const id = t?.id ?? logical;
-      out[logical] = Object.fromEntries(sizes[logical].map((s) => [s.id, rows.get(rowIdOf(id, s)) === true]));
-    }
-    return out;
-  }
-
-  /** The setup with the preset's YouTube H/V size, bitrate and enabled; everything else untouched (not even a copy of it
-   *  differs). A YouTube H output with its own rung keeps it (output.video); without one it follows the main rung. */
-  function applyToSetup(setup, preset) {
-    const next = structuredClone(setup);
-    for (const logical of OUTPUT_IDS) {
-      const want = preset.outputs[logical];
-      const t = targetOf(next, logical);
-      if (!t) return { error: 'youtube-output-missing' };
-      const s = sizes[logical].find((x) => x.id === want.size);
-      t.enabled = want.enabled;
-      // The rung this change would move: another stream output on it (Twitch, Kick, ...) would change too, also one that
-      // is switched off now (it would stream with the changed values once switched on again; Codex review of D388).
-      const portrait = logical === 'youtube-v';
-      const own = !portrait && t.video;
-      if (!own) {
-        const cur = portrait ? portraitOf(options, setup.video) : sizes['youtube-h'].find((x) => x.setupId === setup.video.output);
-        const curKbps = portrait ? setup.video.portraitBitrateKbps : setup.video.bitrateKbps;
-        const changes = !cur || cur.w !== s.w || cur.h !== s.h || curKbps !== want.bitrateKbps;
-        const sharer = changes ? next.outputs.find((o) => o !== t && o.platform !== 'youtube' && o.canvas === (portrait ? 'V' : 'H') && (portrait || !o.video)) : null;
-        if (sharer) return { error: 'shared-rung', name: sharer.name };
-      }
-      if (logical === 'youtube-v') {
-        next.video.portraitOutput = s.setupId;
-        next.video.portraitBitrateKbps = want.bitrateKbps;
-      } else if (t.video) {
-        t.video = { ...t.video, output: s.setupId, bitrateKbps: want.bitrateKbps };
-      } else {
-        next.video.output = s.setupId;
-        next.video.bitrateKbps = want.bitrateKbps;
-      }
-    }
-    return { setup: next };
-  }
+  const { targetOf, loadSetup, presence, keysView } = q;
 
   async function handle(method, route, body, res) {
     if (!route.startsWith('/ui/api/youtube/preset')) return false;
@@ -258,7 +172,7 @@ export function createYoutubePresets(opts) {
     if (inUse) {
       const r = loadSetup();
       if (!r) return fail(res, 409, 'setup-unreadable'), true;
-      const a = applyToSetup(r.setup, preset);
+      const a = q.applyToSetup(r.setup, preset.outputs);
       if (a.error === 'shared-rung') return json(res, 409, { error: 'shared-rung', message: `${a.name} streams from the same encoder as YouTube, so a preset would change it too. Give ${a.name} its own size in Settings > Stream (Edit output), then use the preset.` }), true;
       if (a.error) return fail(res, 409, a.error), true;
       setup = a.setup;
@@ -271,12 +185,16 @@ export function createYoutubePresets(opts) {
     // The template choices (merged: other outputs kept). A preset without a template leaves that output's choice alone.
     const view0 = loadSetup();
     const choices = readChoices(dataDir);
+    let templates = 0;
     for (const logical of OUTPUT_IDS) {
       const want = preset.outputs[logical];
       const t = (saved?.setup ?? view0?.setup) ? targetOf(saved?.setup ?? view0.setup, logical) : null;
-      if (want.templateId !== null) choices[t?.id ?? logical] = { templateId: want.templateId, templateTitle: want.templateTitle ?? '', title: want.title };
+      const id = t?.id ?? logical;
+      // D389: the Go live chooser's parts of the choice (size, event, new-event fields) are kept.
+      if (want.templateId !== null) { choices[id] = { ...(withoutTemplate(choices[id]) ?? {}), templateId: want.templateId, templateTitle: want.templateTitle ?? '', title: want.title }; templates += 1; }
     }
-    writeChoices(dataDir, choices);
+    // A preset with a template picks "copy a past stream" as the Go live mode (D389); one without leaves the mode alone.
+    writeChoices(dataDir, choices, templates ? { mode: 'copy' } : {});
     store.activeId = preset.id;
     writeStore(store);
     // Missing keys: sizes with no stored key (presence only).
@@ -286,9 +204,7 @@ export function createYoutubePresets(opts) {
     for (const logical of OUTPUT_IDS) {
       const want = preset.outputs[logical];
       if (!want.enabled) continue;
-      const t = base ? targetOf(base, logical) : null;
-      const s = sizes[logical].find((x) => x.id === want.size);
-      if (rows.get(rowIdOf(t?.id ?? logical, s)) !== true) missingKeys.push(`${logical} ${want.size}`);
+      if (!q.hasKey(rows, base, logical, want.size)) missingKeys.push(`${logical} ${want.size}`);
     }
     let events = null;
     try { events = await opts.events?.(); } catch { events = null; }

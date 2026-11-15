@@ -799,6 +799,11 @@ export const ERROR_TEXT = Object.freeze({
   'unknown-broadcast': 'That YouTube event is not on your channel any more.',
   'bad-params': 'That request was not valid.',
   'unknown-template': 'That broadcast is not in the list; refresh the list and pick again.',
+  // D389 Go live chooser
+  'youtube-event-gone': 'The chosen YouTube event is not on your channel any more. Pick another one in the Go live window.',
+  'youtube-event-ended': 'The chosen YouTube event has already ended. Pick another one in the Go live window.',
+  'youtube-event-bound-other': 'The chosen YouTube event is already live on a different stream key, and YouTube cannot move a live event to another key. End it in YouTube Studio or pick another event in the Go live window.',
+  'youtube-no-past-stream': 'Your channel has no finished stream to copy yet. Pick "Set up a new stream" in the Go live window.',
 });
 
 /** D385: the format of a new YouTube stream key: a per-resolution row's own size and frame rate (both fixed, as YouTube
