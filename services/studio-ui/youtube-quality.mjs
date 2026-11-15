@@ -86,6 +86,14 @@ export function createYoutubeQuality(opts) {
     return sizes['youtube-h'].find((x) => x.setupId === id)?.id ?? null;
   }
 
+  /** The bitrate (kbps) an output streams at in the setup (its own rung, the portrait rung or the main rung), or null. */
+  function currentKbps(setup, logical) {
+    if (!setup?.video) return null;
+    const t = logical === 'youtube-v' ? null : targetOf(setup, logical);
+    const v = logical === 'youtube-v' ? setup.video.portraitBitrateKbps : t?.video ? t.video.bitrateKbps : setup.video.bitrateKbps;
+    return Number.isInteger(v) ? v : null;
+  }
+
   /**
    * The setup with the wanted YouTube size, bitrate and (when given) enabled per listed output; everything else untouched
    * (not even a copy of it differs). wants: { 'youtube-h'?: { size, bitrateKbps, enabled? }, 'youtube-v'?: {...} }.
@@ -140,5 +148,5 @@ export function createYoutubeQuality(opts) {
     return { used: true, saved };
   }
 
-  return { options, sizes, limits, targetOf, loadSetup, inUse, rowIdOf, sizeOf, presence, hasKey, keysView, currentSize, applyToSetup, apply };
+  return { options, sizes, limits, targetOf, loadSetup, inUse, rowIdOf, sizeOf, presence, hasKey, keysView, currentSize, currentKbps, applyToSetup, apply };
 }

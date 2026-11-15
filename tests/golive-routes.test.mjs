@@ -81,7 +81,10 @@ function fakeYoutube(over = {}) {
       if (s) {
         const life = (b) => b.status.lifeCycleStatus;
         const list = s === 'all' ? st.broadcasts : s === 'completed' ? st.broadcasts.filter((b) => life(b) === 'complete') : s === 'active' ? st.broadcasts.filter((b) => ACTIVE.has(life(b))) : st.broadcasts.filter((b) => ['created', 'ready'].includes(life(b)));
-        return reply(200, { items: list });
+        if (!st.pageSize) return reply(200, { items: list });
+        const at = Number(u.searchParams.get('pageToken')?.slice(1) ?? 0);
+        const next = at + st.pageSize < list.length ? `p${at + st.pageSize}` : undefined;
+        return reply(200, { items: list.slice(at, at + st.pageSize), ...(next ? { nextPageToken: next } : {}) });
       }
       const ids = (u.searchParams.get('id') ?? '').split(',');
       return reply(200, { items: st.broadcasts.filter((b) => ids.includes(b.id)) });
@@ -138,7 +141,7 @@ function unit({ flagOn = true, keys = ALL_KEYS(), yt = fakeYoutube(), signedIn =
     aiFetch: async (url, init) => { ai.calls.push({ url, init, body: JSON.parse(init.body) }); return (aiFetch ?? (async () => { throw new Error('no model'); }))(url, init); },
   });
   const call = async (method, route, body, query = '') => { const res = {}; const handled = await routes.handle(method, route, body, res, new URL(`http://x${route}${query}`)); return { handled, status: res.status, body: res.body }; };
-  return { dataDir, host, yt, call, logs, ai, settings, setupNow: () => readSetupFile(dataDir) };
+  return { dataDir, host, yt, call, logs, ai, settings, events, routes, setupNow: () => readSetupFile(dataDir) };
 }
 const OPT = '/ui/api/youtube/golive/options';
 const PREP = '/ui/api/youtube/golive/prepare';
@@ -622,5 +625,91 @@ describe('Go live hook: copy, last, new', () => {
     assert.equal(readChoices(c.dataDir)['youtube-h'].broadcastId, 'upc00001');
     await post(c, '/ui/api/youtube/event/set', { output: 'youtube-h', templateId: null });
     assert.deepEqual(readChoices(c.dataDir)['youtube-h'], { broadcastId: 'upc00001', broadcastTitle: '' });
+  });
+});
+
+// ---- Codex review of c585d66 (four P2) ----
+describe('Codex review of D389 track A', () => {
+  test('P2-1: a start between the YouTube read and the model call: the model is never asked (smart fill)', async () => {
+    const c = unit({ aiFetch: modelReply('{"title":"From the model"}') });
+    const orig = c.events.chooserLists;
+    c.events.chooserLists = async () => { c.host.states['youtube-h'] = 'live'; return orig(); }; // the start lands during the read
+    const r = await c.call('POST', SUG, { output: 'youtube-h' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.source, 'smart-fill');
+    assert.equal(c.ai.calls.length, 0, 'no model call');
+  });
+  test('P2-1: abortSuggest stops a slow model answer on its way (smart fill); nothing on its way: 0', async () => {
+    const seen = { aborted: false };
+    const c = unit({ aiFetch: (url, init) => new Promise((_, rej) => init.signal.addEventListener('abort', () => { seen.aborted = true; rej(init.signal.reason); })) });
+    assert.equal(c.routes.abortSuggest(), 0);
+    const pending = c.call('POST', SUG, {});
+    await waitFor(() => c.ai.calls.length === 1);
+    assert.equal(c.routes.abortSuggest(), 1);
+    const r = await pending;
+    assert.deepEqual([r.body.source, seen.aborted], ['smart-fill', true]);
+  });
+  test('P2-1: a stream.start or record.start click aborts the model call on its way (server)', async () => {
+    for (const method of ['stream.start', 'record.start']) {
+      const seen = { calls: 0, aborted: false };
+      const slow = (url, init) => { seen.calls += 1; return new Promise((_, rej) => init.signal.addEventListener('abort', () => { seen.aborted = true; rej(init.signal.reason); })); };
+      const c = await boot({ extra: { golive: { aiFetch: slow } } });
+      const pending = post(c, SUG, {});
+      await waitFor(() => seen.calls === 1);
+      assert.equal(seen.calls, 1, method);
+      await post(c, '/ui/api/host', { method, params: {} });
+      const r = (await pending).json();
+      assert.deepEqual([r.source, seen.aborted], ['smart-fill', true], method);
+    }
+  });
+  test('P2-2: the completed list follows nextPageToken (fixed cap of 4 pages): an output\'s newest finished stream behind 50 others is found', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => bc(`zfill${String(i).padStart(3, '0')}`, 'complete', { snippet: { title: `Other ${i}`, actualStartTime: `2026-11-14T${String(10 + (i % 10)).padStart(2, '0')}:00:00Z` }, contentDetails: { boundStreamId: 'streamGone' } }));
+    const yt = fakeYoutube({ pageSize: 50, broadcasts: [...many, ...BROADCASTS()] });
+    const c = unit({ yt });
+    const b = (await c.call('GET', OPT, null)).body;
+    assert.equal(b.last['youtube-h'].id, 'past0002', 'found on page 2');
+    assert.equal(b.last['youtube-v'].id, 'past0001');
+    assert.equal(b.past.length, 15, 'the chooser still shows 15');
+    const ev = createYoutubeEvents({ fetchImpl: yt.fetch, accessToken: async () => ACCESS, readKey: async () => KEY_H });
+    assert.equal(await ev.resolveLast({ keyRef: 'Ujwalam/stream/youtube-h' }), 'past0002');
+    const capped = fakeYoutube({ pageSize: 1, broadcasts: [...many, ...BROADCASTS()] });
+    const ev2 = createYoutubeEvents({ fetchImpl: capped.fetch, accessToken: async () => ACCESS, readKey: async () => KEY_H });
+    await ev2.resolveLast({ keyRef: 'Ujwalam/stream/youtube-h' });
+    assert.equal(capped.st.calls.filter((x) => /broadcastStatus=completed/.test(x.url)).length, 4, 'never more than 4 pages');
+  });
+  test('P2-3: key presence uses the output id in effect: the saved setup\'s with Settings > Stream on, the live plan\'s with it off', async () => {
+    const keys = new Map([['youtube-h', true], ['youtube-v', true], ['yt-main-1440p', true]]);
+    for (const flagOn of [true, false]) {
+      const c = unit({ flagOn, keys });
+      const s = c.setupNow(); s.outputs.find((o) => o.id === 'youtube-h').id = 'yt-main';
+      assert.ok(writeSetup(c.dataDir, s, { upscale: true }).ok);
+      const h = (await c.call('GET', OPT, null)).body.outputs.find((o) => o.orientation === 'landscape');
+      const keyOf = (size) => h.sizes.find((x) => x.size === size).key;
+      if (flagOn) {
+        assert.deepEqual([h.id, keyOf('1080p'), keyOf('1440p')], ['yt-main', false, true]);
+        const r = await c.call('POST', PREP, { mode: 'last', outputs: { 'yt-main': {} } });
+        assert.deepEqual([r.body.missingKeys, r.body.ready], [['yt-main 1080p'], false]);
+      } else {
+        assert.deepEqual([h.id, keyOf('1080p'), keyOf('1440p')], ['youtube-h', true, false]);
+        const r = await c.call('POST', PREP, { mode: 'last', outputs: { 'youtube-h': {} } });
+        assert.deepEqual([r.body.missingKeys, r.body.ready], [[], true]);
+      }
+    }
+  });
+  test('P2-4: options shows the bitrate that will be used: the current size\'s own, another size\'s default; none with Settings > Stream off', async () => {
+    const c = unit();
+    const s = c.setupNow(); s.outputs.find((o) => o.id === 'youtube-h').video = { output: '1080p', bitrateKbps: 12345 }; s.video.portraitBitrateKbps = 6789;
+    s.video.bitrateKbps = 6000; delete s.outputs.find((o) => o.id === 'kick').video;
+    assert.ok(writeSetup(c.dataDir, s, { upscale: true }).ok);
+    const b = (await c.call('GET', OPT, null)).body;
+    const [h, v] = b.outputs;
+    const def = createYoutubeQuality({ dataDir: c.dataDir, settings: {}, readSetup: () => null }).limits;
+    assert.deepEqual(h.sizes.map((x) => [x.size, x.bitrateKbps]), [['1080p', 12345], ['1440p', def['youtube-h']['1440p'].default], ['2160p', def['youtube-h']['2160p'].default]]);
+    assert.equal(v.sizes.find((x) => x.size === v.size).bitrateKbps, 6789);
+    // the same size again: the user's own bitrate stays
+    await c.call('POST', PREP, { mode: 'last', outputs: { 'youtube-h': { size: '1080p' } } });
+    assert.equal(c.setupNow().outputs.find((o) => o.id === 'youtube-h').video.bitrateKbps, 12345);
+    const off = unit({ flagOn: false });
+    for (const o of (await off.call('GET', OPT, null)).body.outputs) assert.ok(o.sizes.every((x) => x.bitrateKbps === null));
   });
 });

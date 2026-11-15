@@ -1592,6 +1592,9 @@ export function createStudioServer(opts) {
       if (bad) return json(res, 400, { error: bad });
       if (spec.flag && !(flags && flags.isOn(spec.flag))) return json(res, 404, { error: `${spec.flag}-off` });
       if (START_METHODS.has(body.method) && isClosing()) return json(res, 409, CLOSING_REFUSAL);
+      // D389: a "Help me write it" model call on its way is stopped at once (the model must not load while live; the
+      // suggestion falls back to the smart fill).
+      if (START_METHODS.has(body.method)) goLive.abortSuggest();
       if (spec.confirm || (live && spec.liveConfirm)) {
         // Stream and recording changes, and layout changes while live: the click is the decision (D332), so they run
         // now through the same path as before (closing lock, stop-wins generation, autosave).
@@ -1840,6 +1843,7 @@ export function createStudioServer(opts) {
         const starting = START_METHODS.has(p.method);
         if (starting && isClosing()) return json(res, 409, CLOSING_REFUSAL);
         if (starting && credWrites > 0) return json(res, 409, { error: 'credentials-updating', detail: 'A stream key is being changed; start again in a moment' });
+        if (starting) goLive.abortSuggest();
         if (starting) startsInFlight += 1;
         // D386: YouTube events made for this start; deleted again (finally) unless the start is accepted.
         let ytMade = []; let ytKept = false; let ytSent = false;

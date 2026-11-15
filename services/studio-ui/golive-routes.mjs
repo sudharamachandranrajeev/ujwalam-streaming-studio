@@ -7,6 +7,7 @@
 //             choice: { mode, outputs } | null, setupInUse, autoEvent }
 //   POST /ui/api/youtube/golive/prepare { mode, outputs: { <output>: { size?, broadcastId?, templateId?, fields? } } }
 //        -> { ok, appliesAt: 'now'|'next-go-live'|'next-start'|'not-used'|'unchanged', missingKeys: ['<output> <size>'], ready, detail? }
+//        (bitrateKbps: the current size's own bitrate, another size's platform default; null with Settings > Stream off)
 //   POST /ui/api/youtube/golive/suggest { output?, hint? } -> { title, description, tags, source: 'local-model'|'smart-fill' }
 // Errors: { error: <code>, message: <plain sentence> }.
 //
@@ -17,7 +18,8 @@
 //
 // "Help me write it": a local model only, through an OpenAI-compatible server on 127.0.0.1 / localhost / ::1 (LM Studio's
 // local server by default; <dataDir>/ai-writer.json { url, model } may change the address or model, never to another
-// host). Refused while anything is live or recording (6 GB VRAM, D1). The request carries only: the game name from the
+// host). Refused while anything is live or recording (6 GB VRAM, D1); checked again right before the model call, and a
+// stream or recording start aborts a call on its way (abortSuggest, called by server.mjs). The request carries only: the game name from the
 // profile, the user's last 5 stream titles, the date and the user's hint. Never chat text, viewer names or memory.
 // UNVERIFIED: that every LM Studio version honours `ttl` (unload the model soon after); that it serves the loaded model
 // when no model name is given.
@@ -123,6 +125,9 @@ export function createGoLiveRoutes(deps) {
   const log = deps.log ?? (() => {});
   const now = deps.now ?? Date.now;
   let cache = null; // { at, value: { existing, past, last } }
+  const inflight = new Set(); // AbortControllers of the model calls on their way (abortSuggest stops them)
+  // Key presence by the output id in effect (the saved setup's when Settings > Stream is on, else the live plan's) and size.
+  const keyOk = (rows, o, sizeId) => { const s = q.sizeOf(o.logical, sizeId); return !!s && rows.get(q.rowIdOf(o.id, s)) === true; };
 
   const fail = (res, status, code, extra = {}) => json(res, status, { error: code, message: TEXT[code] ?? ERROR_TEXT[code] ?? 'Not done.', ...extra });
   const failYt = (res, e) => {
@@ -162,7 +167,7 @@ export function createGoLiveRoutes(deps) {
     const all = [];
     for (const o of outs) {
       for (const s of q.sizes[o.logical]) {
-        if (!q.hasKey(rows, o.setup, o.logical, s.id)) continue;
+        if (!keyOk(rows, o, s.id)) continue;
         const ref = keyRefOf(q.rowIdOf(o.id, s));
         all.push(ref);
         if (s.id === o.size) refs.set(o.id, ref);
@@ -196,7 +201,13 @@ export function createGoLiveRoutes(deps) {
     const rows = await q.presence();
     const outputs = list.map((o) => ({
       id: o.id, label: o.logical === 'youtube-v' ? 'YouTube portrait' : 'YouTube landscape', orientation: o.logical === 'youtube-v' ? 'portrait' : 'landscape', on: o.on,
-      sizes: q.sizes[o.logical].map((s) => ({ size: s.id, key: q.hasKey(rows, setup, o.logical, s.id), bitrateKbps: q.limits[o.logical][s.id].default })),
+      // The bitrate shown is the one that will be used: the current size keeps the user's own bitrate (prepare does not
+      // re-apply an unchanged size), another size gets the platform default. Settings > Stream off: the saved setup is not
+      // the one in effect and no size change is applied, so no bitrate is claimed (null).
+      sizes: q.sizes[o.logical].map((s) => ({
+        size: s.id, key: keyOk(rows, o, s.id),
+        bitrateKbps: !inUse ? null : s.id === o.size ? (q.currentKbps(setup, o.logical) ?? q.limits[o.logical][s.id].default) : q.limits[o.logical][s.id].default,
+      })),
       size: o.size,
     }));
     const isIn = await signedIn();
@@ -275,12 +286,11 @@ export function createGoLiveRoutes(deps) {
 
     // Keys: the size each switched-on output will stream at (the picked one when applied, else the current one).
     const rows = await q.presence();
-    const base = used ? (q.loadSetup()?.setup ?? setup) : setup;
     const missingKeys = [];
     for (const p of picked) {
       if (!p.o.on) continue;
       const size = used && wants[p.o.logical] ? p.w.size : (p.o.size ?? p.w.size);
-      if (size && !q.hasKey(rows, base, p.o.logical, size)) missingKeys.push(`${p.o.id} ${size}`);
+      if (size && !keyOk(rows, p.o, size)) missingKeys.push(`${p.o.id} ${size}`);
     }
     log(`[studio-ui] golive: prepared (${body.mode}, ${picked.length} output(s), ${appliesAt}, ${missingKeys.length} key(s) missing)`);
     return json(res, 200, { ok: true, appliesAt, missingKeys, ready: missingKeys.length === 0, ...(detail ? { detail } : {}) });
@@ -330,8 +340,14 @@ export function createGoLiveRoutes(deps) {
     try { const g = deps.gameName?.(); game = typeof g === 'string' && g.trim() ? g.trim().slice(0, 80) : null; } catch { game = null; }
     const p = await pastNow();
 
+    // Codex review of D389: a stream or recording may have started during the reads above. The controller is registered
+    // before the second check, so a start from here on aborts the call (abortSuggest); the model is then never asked.
     let out = null;
+    const ctrl = new AbortController();
+    inflight.add(ctrl);
     try {
+      if (await busyNow()) throw new Error('busy');
+      if (ctrl.signal.aborted) throw new Error('aborted');
       const user = [
         game ? `Game: ${game}` : null,
         p.titles.length ? `My last stream titles (newest first):\n${p.titles.map((t) => `- ${t}`).join('\n')}` : null,
@@ -348,14 +364,14 @@ export function createGoLiveRoutes(deps) {
         ttl: AI_TTL_S, // LM Studio: unload the model soon after (UNVERIFIED for every version)
       };
       const r = await (deps.aiFetch ?? globalThis.fetch)(cfg.url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody), redirect: 'error', signal: AbortSignal.timeout(deps.aiTimeoutMs ?? AI_TIMEOUT_MS),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody), redirect: 'error', signal: AbortSignal.any([ctrl.signal, AbortSignal.timeout(deps.aiTimeoutMs ?? AI_TIMEOUT_MS)]),
       });
       if (r.status === 200) {
         const j = jsonIn((await r.json())?.choices?.[0]?.message?.content);
         const title = plainTitle(j?.title);
         if (title) out = { title, description: plainDescription(j.description), tags: plainTags(j.tags), source: 'local-model' };
       } else { try { await r.text(); } catch { /* body not used */ } }
-    } catch { out = null; }
+    } catch { out = null; } finally { inflight.delete(ctrl); }
 
     if (!out) {
       let last = null;
@@ -366,6 +382,9 @@ export function createGoLiveRoutes(deps) {
     log(`[studio-ui] golive: suggestion (${out.source}, ${out.tags.length} tag(s))`);
     return json(res, 200, out);
   }
+
+  /** Stops every model call on its way (a stream or recording start); -> how many were stopped. */
+  function abortSuggest() { const n = inflight.size; for (const c of inflight) c.abort(); inflight.clear(); return n; }
 
   /** -> true when the route is one of GOLIVE_ROUTES (answered), else false. */
   async function handle(method, route, body, res, url) {
@@ -381,5 +400,5 @@ export function createGoLiveRoutes(deps) {
     return true;
   }
 
-  return { handle, _clearCache: () => { cache = null; } };
+  return { handle, abortSuggest, _clearCache: () => { cache = null; } };
 }

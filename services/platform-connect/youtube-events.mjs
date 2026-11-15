@@ -21,7 +21,8 @@
 //     (newest finished stream on this output's key, else the newest overall) then createEvent; new = createFromFields.
 //
 // D389 quota: the chooser's lists (upcoming, active, completed) cost 3 units per refresh (cached 60 s by the caller) plus
-// 1 for liveStreams.list. bindExisting: 1 (broadcast) + 1 (liveStreams.list), plus 50 for the contentDetails update when
+// 1 for liveStreams.list; the completed list follows nextPageToken up to COMPLETED_PAGES (4) pages of 50, so up to 3
+// units more on a channel with over 50 finished streams (also for resolveLast at a "last" Go live). bindExisting: 1 (broadcast) + 1 (liveStreams.list), plus 50 for the contentDetails update when
 // auto-start is off and 50 for the bind when not bound to that stream yet. createFromFields: about 1 + 50 + 50 (+50
 // thumbnail) + 50 bind.
 //
@@ -94,6 +95,8 @@ export const cleanPrivacy = (v) => (typeof v === 'string' && PRIVACY.has(v) ? v 
 
 /** Go live chooser modes (D389): use an event on the channel, copy a past one, like the last one, or a new one. */
 export const MODES = Object.freeze(['existing', 'copy', 'last', 'new']);
+/** Pages of 50 the completed-broadcasts list follows (1 unit each): the newest finished stream per key behind 50 others. */
+export const COMPLETED_PAGES = 4;
 export const SIZE_RE = /^(1080|1440|2160)p$/;
 const FIELD_KEYS = ['title', 'description', 'privacy', 'categoryId', 'tags', 'thumbnail'];
 // A picked thumbnail file: a drive-letter path only (never a UNC share or a device path; the D388 thumbnail rule). The
@@ -291,9 +294,17 @@ export function createYoutubeEvents(opts = {}) {
   const LIVE_NOW = new Set(['live', 'liveStarting', 'testing', 'testStarting']);
   const lifeOf = (b) => (typeof b?.status?.lifeCycleStatus === 'string' && /^[A-Za-z]{1,32}$/.test(b.status.lifeCycleStatus) ? b.status.lifeCycleStatus : null);
   const whenOf = (b) => isoOrNull(b?.snippet?.actualStartTime) ?? isoOrNull(b?.snippet?.scheduledStartTime) ?? isoOrNull(b?.snippet?.publishedAt);
-  async function listByStatus(status) {
-    const data = await call(`${ep.youtubeApi}/liveBroadcasts?part=id,snippet,status,contentDetails&broadcastStatus=${status}&broadcastType=all&maxResults=50`);
-    const items = (Array.isArray(data?.items) ? data.items : []).filter((b) => typeof b?.id === 'string' && ID_RE.test(b.id));
+  /** One list of the channel's broadcasts by status, newest first. pages > 1 follows nextPageToken (1 unit a page, 50 a
+   *  page) up to that fixed cap: the completed list, so an output's newest finished stream is not missed behind 50 others. */
+  async function listByStatus(status, pages = 1) {
+    const items = [];
+    let token = null;
+    for (let i = 0; i < pages; i++) {
+      const data = await call(`${ep.youtubeApi}/liveBroadcasts?part=id,snippet,status,contentDetails&broadcastStatus=${status}&broadcastType=all&maxResults=50${token ? `&pageToken=${encodeURIComponent(token)}` : ''}`);
+      for (const b of Array.isArray(data?.items) ? data.items : []) if (typeof b?.id === 'string' && ID_RE.test(b.id)) items.push(b);
+      token = typeof data?.nextPageToken === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(data.nextPageToken) ? data.nextPageToken : null;
+      if (!token) break;
+    }
     return items.map((b) => ({
       id: b.id, title: plainText(b.snippet?.title, 100), when: whenOf(b), lifeCycle: lifeOf(b),
       boundStreamId: typeof b.contentDetails?.boundStreamId === 'string' && ID_RE.test(b.contentDetails.boundStreamId) ? b.contentDetails.boundStreamId : null,
@@ -304,7 +315,7 @@ export function createYoutubeEvents(opts = {}) {
    * past: [{ id, title, when, boundStreamId }] }, newest first. existing = upcoming + active, not complete/revoked.
    */
   async function chooserLists() {
-    const [up, act, done] = await Promise.all([listByStatus('upcoming'), listByStatus('active'), listByStatus('completed')]);
+    const [up, act, done] = await Promise.all([listByStatus('upcoming'), listByStatus('active'), listByStatus('completed', COMPLETED_PAGES)]);
     const seen = new Set();
     const existing = [...act, ...up].filter((b) => !seen.has(b.id) && seen.add(b.id) && b.lifeCycle !== 'complete' && b.lifeCycle !== 'revoked');
     existing.sort((a, b) => (b.when ?? '').localeCompare(a.when ?? ''));
@@ -327,7 +338,7 @@ export function createYoutubeEvents(opts = {}) {
    * one overall. -> template id; throws youtube-no-past-stream when the channel has none.
    */
   async function resolveLast({ keyRef } = {}) {
-    const done = await listByStatus('completed');
+    const done = await listByStatus('completed', COMPLETED_PAGES);
     if (!done.length) throw new ConnectError('youtube-no-past-stream');
     let streamId = null;
     try { streamId = await findStreamId(keyRef); } catch (e) { if (e?.code === 'youtube-unauthorized' || e?.code === 'youtube-quota') throw e; streamId = null; }
