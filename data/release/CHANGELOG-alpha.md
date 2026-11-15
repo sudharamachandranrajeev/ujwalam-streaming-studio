@@ -2,6 +2,16 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.31 — 2026-11-15
+
+- YouTube window: press "YouTube" next to Go live in the new studio window (switch "New studio window"). It is always on; there is no switch for it. Five tabs:
+  - Presets: named YouTube setups. Each holds the size, bitrate and on/off of the landscape and portrait YouTube outputs, and their event templates. Pick one before a stream; during a stream it is used at the next Go live. A preset is refused while Twitch or Kick stream from the same encoder as YouTube, so they never change with it. Frame rate is not part of a preset.
+  - Event: the template for each YouTube output, and its title, description, privacy, tags, category and thumbnail. While live, changes go to the running event. The toggle "New YouTube event at every Go live" (on) is here; it replaces the "YouTube events" switch of alpha.30.
+  - Live: health, viewers and likes of the running YouTube events.
+  - Chat: the live chat of each YouTube output, read every 15 seconds, and a box to send a message. Chat is only shown; it is never saved or logged.
+  - Streams: your past and upcoming YouTube events, with End and Delete. An event that may be on air cannot be ended or deleted here; end the stream instead.
+- If the YouTube sign-in cannot be read at Go live, nothing goes live and the reason is shown, instead of going live without the new event.
+
 ## 0.1.0-alpha.30 — 2026-11-15
 
 - YouTube event for every stream, from a template (switch "YouTube events", off by default, Settings > Connections). Sign in with YouTube under Settings > Connections, then press "YouTube event" next to Go live and pick one of your earlier streams as the template for the landscape output and one for the portrait output. At each Go live, Ujwalam makes a new YouTube event for each YouTube output, copied from its template: title, description, privacy, category, tags, made-for-kids setting, latency, DVR and thumbnail, and links it to that output's stream key. If an event cannot be made, nothing goes live and the reason is shown. If the start fails, the new events are deleted again, unless an output may already be sending. Twitch and Kick are not changed.
