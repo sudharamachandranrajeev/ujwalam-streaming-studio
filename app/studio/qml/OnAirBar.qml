@@ -192,6 +192,15 @@ Rectangle {
             tip: enabled ? (bar.store.recording ? "Stop recording." : "Start recording to a file.") : "No recording output is set up in this start."
             onClicked: bar.store.toggleRecord()
         }
+        // D386 (flag youtube-events): pick the YouTube event (template and title) per YouTube output before Go live.
+        UButton {
+            objectName: "youtubeEventsBtn"
+            visible: bar.store.flags["youtube-events"] === true && !bar.store.live
+            text: "YouTube event"
+            iconName: "play"
+            tip: "Pick a previous YouTube broadcast to copy, and the title, for each YouTube output before you go live."
+            onClicked: if (bar.windows.youtubeEvents) bar.windows.youtubeEvents.show()
+        }
         UButton {
             objectName: "streamBtn"
             text: bar.store.live ? "End stream" : "Go live"

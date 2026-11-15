@@ -130,7 +130,7 @@ describe('QML studio Settings > Stream (headless probe)', { skip }, () => {
     const r = await probe({ actions: [...open, 'stream-kbps:12000', 'settings-save'] });
     assert.equal(r.setup.video.bitrateKbps, 12000);
     assert.equal(r.s.flagsInSettings, false, 'Settings closed');
-    assert.match(r.s.note, /Settings saved\.|Stream settings saved\. Close and open Ujwalam to stream with them\./);
+    assert.match(r.s.note, /Settings saved\.|Stream settings saved(\. | and in use now\.)/);
   });
 
   test('D385: 2K and 4K need no switch; the bitrate follows the size; the YouTube key line names the key that size uses; Set key opens Connections', async () => {

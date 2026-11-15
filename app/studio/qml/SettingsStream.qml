@@ -211,7 +211,9 @@ Column {
     function save() {
         if (!loaded || !dirty) return;
         Api.post("ui/api/stream/setup", { setup: setup }, (ok, b, err) => {
-            if (ok) return box.store.say("Stream settings saved. Close and open Ujwalam to stream with them.");
+            // D387: applied at once while nothing is live; else the answer says when (detail: plain words from the server).
+            if (ok) return box.store.say(b && b.appliesAt === "now" ? "Stream settings saved and in use now."
+                : "Stream settings saved. " + (b && b.detail ? b.detail : "Close and open Ujwalam to stream with them."));
             const why = problemsText(b ? b.problems : []);
             box.store.say("Stream settings not saved: " + (why !== "" ? why : err));
         });
@@ -577,7 +579,7 @@ Column {
         font.family: Theme.family
         font.pixelSize: 13
     }
-    Quiet { text: "Saved changes apply the next time Ujwalam starts. Values over a platform's limit are refused with the limit shown." }
+    Quiet { text: "Saved changes are used at once while nothing is live; during a stream or recording, at the next Go live. Values over a platform's limit are refused with the limit shown." }
 
     // ---- probe (tests): the same names and values as the widget page's probe ----
     function probe() {

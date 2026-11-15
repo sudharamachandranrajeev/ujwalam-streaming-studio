@@ -53,6 +53,7 @@ export const DEFAULT_ENDPOINTS = Object.freeze({
   googleAuth: 'https://accounts.google.com/o/oauth2/v2/auth',
   googleToken: 'https://oauth2.googleapis.com/token',
   youtubeApi: 'https://www.googleapis.com/youtube/v3',
+  youtubeUpload: 'https://www.googleapis.com/upload/youtube/v3', // thumbnails.set (D386 youtube-events)
   twitchDevice: 'https://id.twitch.tv/oauth2/device',
   twitchToken: 'https://id.twitch.tv/oauth2/token',
   twitchValidate: 'https://id.twitch.tv/oauth2/validate',
@@ -171,7 +172,7 @@ function writeMeta(file, meta) {
 // ---- HTTP (fetch, timeout, codes only) ----
 
 // signal: a sign-in job's abort signal (cancel, time-out, superseded): the request stops and 'cancelled' is thrown.
-async function httpJson(fetchImpl, url, { method = 'GET', headers = {}, form, json, signal } = {}) {
+export async function httpJson(fetchImpl, url, { method = 'GET', headers = {}, form, json, signal } = {}) {
   const h = { Accept: 'application/json', ...headers };
   let body;
   if (form) { h['Content-Type'] = 'application/x-www-form-urlencoded'; body = new URLSearchParams(form).toString(); }
@@ -737,7 +738,17 @@ export function createConnect(opts = {}) {
     } catch { return []; }
   }
 
-  return { outputs: () => outputsNow().map((o) => ({ ...o })), status, checkPaste, paste, disconnect, setTwitchClientId, startSignIn, cancelJob, choose, currentJob, checkTokens, readinessWarnings, _job: () => job };
+  // D386 (youtube-events.mjs): the same Google sign-in for the live-event calls, server side only. readKey returns a
+  // stream key for an in-memory comparison there; nothing here is ever put in a response.
+  const youtube = Object.freeze({
+    accessToken: () => ytAuth.accessToken(),
+    signedIn: async () => (await facts(TARGETS.youtubeRefresh)).present,
+    readKey: async (ref) => (typeof ref === 'string' && STREAM_REF_RE.test(ref) ? store(ref).get() : null),
+    onUnauthorized: () => { try { noteToken('youtube', 'expired'); } catch { /* bookkeeping only */ } invalidate(); },
+    fetchImpl, endpoints: ep, now,
+  });
+
+  return { outputs: () => outputsNow().map((o) => ({ ...o })), status, youtube, checkPaste, paste, disconnect, setTwitchClientId, startSignIn, cancelJob, choose, currentJob, checkTokens, readinessWarnings, _job: () => job };
 }
 
 export const ERROR_TEXT = Object.freeze({
@@ -769,6 +780,16 @@ export const ERROR_TEXT = Object.freeze({
   'oauth-cancelled': 'The sign-in was cancelled.',
   'browser-open-failed': 'No browser could be opened.',
   timeout: 'Sign-in took too long; try again.',
+  // D386 youtube-events
+  'youtube-key-not-found': 'The stream key this output uses is not one of the stream keys on your YouTube channel. Sign in under Settings > Connections and pick or create the key there: a pasted key that is not on this channel cannot be linked to a live event.',
+  'youtube-key-missing': 'This output has no stream key stored. Sign in under Settings > Connections and pick or create its key.',
+  'youtube-quota': 'The daily YouTube request allowance of this app is used up; try again tomorrow, or switch the youtube-events flag off to go live without a new event.',
+  'youtube-forbidden': 'YouTube refused the request (no permission for this channel or event).',
+  'youtube-template-missing': 'The template broadcast is no longer on your channel; pick another one.',
+  'youtube-bad-title': 'A YouTube title is 1 to 100 characters, without < or >.',
+  'youtube-events-off': 'YouTube events are switched off (flags youtube-events and platform-connect).',
+  'youtube-not-signed-in': 'Sign in with YouTube under Settings > Connections first.',
+  'unknown-template': 'That broadcast is not in the list; refresh the list and pick again.',
 });
 
 /** D385: the format of a new YouTube stream key: a per-resolution row's own size and frame rate (both fixed, as YouTube

@@ -5,7 +5,9 @@
 // <flag>-off while its flag is off.
 //
 //   GET  /ui/api/stream/setup             { setup, exists, options, canvases, recommendedKbps, summaries, problems }
-//   POST /ui/api/stream/setup  {setup}    saved (used from the next start of Ujwalam) | 422 { problems } (platform limit shown)
+//   POST /ui/api/stream/setup  {setup}    saved, then applied at once when every output is idle (D387): { appliesAt: 'now' |
+//                                         'next-go-live' (pending: applied at Start stream while idle) | 'next-start',
+//                                         applied, reason?, detail? } | 422 { problems } (platform limit shown)
 //   POST /ui/api/stream/check  {setup}    { problems } (nothing saved)
 //   GET  /ui/api/outputs/panel            { outputs: [{ id, name, platform, canvas, enabled, summary, state }], live, virtualCamera }
 //   POST /ui/api/outputs/toggle {id, on}  offline: saves enabled (what Start stream starts); live: on the click (D332)
@@ -21,6 +23,7 @@ import path from 'node:path';
 import { BOTS, BOT_LABELS, tcpAnswers as realTcpAnswers } from '../bots/index.mjs';
 import { lanAddresses } from '../common/lan-remote.mjs';
 import { BOT_ADDRESS, readIntegrations, writeIntegrations } from './integrations.mjs';
+import { createStreamApply } from './stream-apply.mjs';
 import { outputSummary, readOptions, readSetup, recommendedKbps, setupProblems, toPlan, writeSetup } from './stream-setup.mjs';
 
 export const STREAM_SETTINGS_FLAG = 'stream-settings';
@@ -34,7 +37,9 @@ const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) 
 /**
  * opts: { dataDir, flags, host, json, canvases?: () => ({ H, V } | undefined),
  *         botConfig?: () => object, tcpAnswers?, remoteToken?: string, log?,
- *         startGuard?: { closing(), credentialsUpdating?(), enter() -> release(), begin() -> token, still(token), pause(), stopAgain(sinks) } }
+ *         startGuard?: { closing(), credentialsUpdating?(), starting?() -> bool, enter() -> release(), begin() -> token, still(token), pause(), stopAgain(sinks) },
+ *         schemesOf? (tests: stored server-address schemes, stream-apply.mjs) }
+ * Returns { handle, confirm, startSinks, applyPendingBeforeStart, planFileInEffect, pendingSetup }.
  */
 export function createSettingsRoutes(opts) {
   const { flags, host, json } = opts;
@@ -49,6 +54,11 @@ export function createSettingsRoutes(opts) {
   const planOpts = () => ({ options: opt(), canvases: canvases(), upscale: true });
   let recommended = null;
   const rec = () => (recommended ??= recommendedKbps());
+  // D387: a saved setup applies without a restart (stream-apply.mjs): at once while every output is idle, else pending
+  // until Start stream (applyPendingBeforeStart). Never stops a stream or recording.
+  const streamApply = dataDir ? createStreamApply({ dataDir, host, log: opts.log,
+    starting: () => { try { return opts.startGuard?.starting?.() === true; } catch { return true; } },
+    ...(opts.schemesOf ? { schemesOf: opts.schemesOf } : {}) }) : null;
 
   async function sinkStates() {
     try {
@@ -90,7 +100,11 @@ export function createSettingsRoutes(opts) {
       if (route === '/ui/api/stream/check') return json(res, 200, { problems: setupProblems(body.setup, planOpts()) }), true;
       const w = writeSetup(dataDir, body.setup, planOpts());
       if (!w.ok) return json(res, 422, { error: 'refused', problems: w.problems }), true;
-      return json(res, 200, { ok: true, setup: w.setup, appliesAt: 'next-start',
+      let a;
+      try { a = await streamApply.apply(); } catch { a = { applied: false, error: 'host-refused', pending: false }; }
+      const appliesAt = a.applied ? 'now' : a.pending ? 'next-go-live' : 'next-start';
+      return json(res, 200, { ok: true, setup: w.setup, appliesAt, applied: a.applied === true,
+        ...(a.applied ? { outputs: a.sinks } : { reason: a.error, detail: a.detail }),
         summaries: Object.fromEntries(w.setup.outputs.map((o) => [o.id, outputSummary(w.setup, o, opt())])) }), true;
     }
 
@@ -220,5 +234,17 @@ export function createSettingsRoutes(opts) {
     return json(res, 200, { verdict: 'allow', id: p.outputId, on: p.on });
   }
 
-  return { handle, confirm, startSinks };
+  /** D387, called by Start stream just before stream.start: a pending saved setup is applied while every output is idle.
+   *  { applied: bool, error?: code, detail?: text } (applied false with no error = nothing pending). */
+  async function applyPendingBeforeStart() {
+    if (!streamApply || !on(STREAM_SETTINGS_FLAG)) return { applied: false };
+    let a;
+    try { a = await streamApply.applyPending(); } catch { return { applied: false, error: 'host-refused', detail: 'The new stream setup could not be applied.' }; }
+    return a.applied ? { applied: true } : a.error ? { applied: false, error: a.error, detail: a.detail } : { applied: false };
+  }
+
+  return { handle, confirm, startSinks, applyPendingBeforeStart,
+    /** The live plan file the host runs after a runtime apply (or the launcher's), null without a --live start. */
+    planFileInEffect: () => streamApply?.planFileInEffect() ?? null,
+    pendingSetup: () => streamApply?.pending() === true };
 }

@@ -64,6 +64,7 @@ QtObject {
     signal addLayerReady(string sceneId, string sceneName)
     signal addSceneReady(var canvases)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
+    signal youtubeEventsWanted()       // open the YouTube event picker (a Go live was refused for a missing event, D386)
     signal clipsAsk(var ask)           // "Make clips?" after a recording or stream (setting: Ask me each time)
     signal flagsRead()                 // after each flag read (every status poll)
     signal statusRead(var s)           // each status that came back (the guide's hints follow what changed)
@@ -371,9 +372,25 @@ QtObject {
         Api.host(method, {}, (ok, b, err) => {
             if (!ok) { actionBusy = false; return say("Not done: " + err); }
             if (b.verdict === "confirm" || b.verdict === "readiness-failed") { actionBusy = false; return confirmNeeded(b.pending); }
+            if (startRefused(b)) { actionBusy = false; return; }
             if (b.warning) say(b.warning);
+            startWarnings(b);
             pollStatus(() => { actionBusy = false; });
         });
+    }
+    // D386: a refused start says why (detail, as the server wrote it); a missing or failed YouTube event also opens the picker.
+    function startRefused(b) {
+        if (!b || b.verdict !== "refuse") return false;
+        say(typeof b.detail === "string" && b.detail !== "" ? b.detail : "Not started: " + (b.reason || "refused"));
+        if (b.reason === "youtube-event-missing" || b.reason === "youtube-event-failed") youtubeEventsWanted();
+        return true;
+    }
+    // D386: warnings of the YouTube events a start made, shown the way a start warning is (the note line).
+    function startWarnings(b) {
+        const w = [];
+        for (const e of (b && Array.isArray(b.youtubeEvents) ? b.youtubeEvents : []))
+            for (const t of (Array.isArray(e.warnings) ? e.warnings : [])) w.push(String(t));
+        if (w.length) say(w.join("  "));
     }
 
     // ---- clipping (D281; the widget's Save clip and Mark moment): one click each, no confirm ----
@@ -401,8 +418,10 @@ QtObject {
         Api.post("ui/api/confirm", { pendingId: pendingId }, (ok, r, err) => {
             if (!ok) { actionBusy = false; return say("Not done: " + err); }
             if (r.verdict === "confirm" || r.verdict === "readiness-failed") { actionBusy = false; return confirmNeeded(r.pending); }
+            if (startRefused(r)) { actionBusy = false; return; }
             say(r.verdict === "allow" ? "Done." : "Result: " + r.verdict);
             if (r.warning) say(r.warning);
+            startWarnings(r);
             pollStatus(() => { actionBusy = false; });
             loadScenes();
         });

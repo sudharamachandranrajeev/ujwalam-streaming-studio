@@ -406,7 +406,8 @@ export async function runReadiness(deps) {
     ...deps, now, host, hostKind, hostStatus, outputs, hostInfo, coreStatus,
     streamSinks: sinks.filter((s) => s && s.kind === 'stream'),
     recordingsDir: typeof hostInfo?.recordingsDir === 'string' && hostInfo.recordingsDir ? hostInfo.recordingsDir : null,
-    planTargets: deps.planTargets ?? [],
+    // an array, or a function read on every run (the plan in effect changes when Settings > Stream applies, D387)
+    planTargets: (typeof deps.planTargets === 'function' ? deps.planTargets() : deps.planTargets) ?? [],
     botPorts: deps.botPorts ?? {},
     findTool: deps.findTool ?? ((n) => findOnPath(n)),
     // true / false, or null when no clip root is known (not checked)

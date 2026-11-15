@@ -109,10 +109,10 @@ import { refuseReason, SERVICES } from '../supervisor/swap.mjs';
 import { acceptHost, createStartGate, createUpdates, hostArgsFor, hostEntryProblem, outputsBusy, partFor, readRelease, rejectHost, serveUpdates, serviceRootProblem, takeStartupHost } from '../supervisor/updates.mjs';
 import { EXE as STUDIO_EXE, qtDir as studioQtDir } from '../../app/studio/tools/build.mjs';
 import { appendRecoveryEvent, createLiveAuthority, labelsOf, loadRecoveryConfig, recoveryPolicy, RECOVERY_FLAG, serveAuthority, SESSION_ENV, waitStreamsUp, writeAuthorityMirror } from './stream-recovery.mjs';
-import { readSetup, setupProblems, writePlanFile } from './stream-setup.mjs';
+import { ALPHA_LIVE_PLAN, LIVE_START_FILE, livePlanFile, planLive, writeLiveStart } from './stream-apply.mjs';
 import { createHostWatch, driverResets, driverResetText, HOST_WATCH_FLAG, incidentTask, loadHostWatchConfig, staleText } from './host-watch.mjs';
 import { writeTaskFile } from './tasks.mjs';
-import { INSTAGRAM_FLAG, loadAddon as instagramAddon, writeInstagramPlan } from '../outputs/instagram.mjs';
+import { INSTAGRAM_FLAG, loadAddon as instagramAddon } from '../outputs/instagram.mjs';
 import { botUrl, integrationsInEffect } from './integrations.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG } from './settings-routes.mjs';
 import { GUARD_ABORT_EXIT, LIVE_TEST_BUDGET, loadBudget, MAX_TEST_MINUTES, parseMinutes, parseSinkMinutes, runGuard } from './live-guard.mjs';
@@ -123,18 +123,9 @@ export const SERVICE_SWAP_FLAG = 'service-swap';
 const hex = (n) => randomBytes(n).toString('hex');
 export const HOST_LOGS_KEPT = 10;
 export const HOST_CONFIG_FILE = 'host-config.json';
-export const ALPHA_LIVE_PLAN = path.join(REPO, 'data', 'outputs', 'alpha-live.json');
-
-/** The --live plan file (D327 OS1/OS2). With the `stream-settings` flag on and a saved Settings > Stream setup, the plan
- *  generated from it (<dataDir>/outputs/stream-setup-plan.json, recording "alpha.mkv" on the main H rung like
- *  alpha-live.json); otherwise alpha-live.json. A setup with problems throws (the start stops; the user fixes Settings). */
-export function livePlanFile({ dataDir, streamSettingsOn, instagramOn = false, upscale = true }) {
-  const base = baseLivePlanFile({ dataDir, streamSettingsOn, upscale });
-  // IG1 (D351, flag instagram-live): the plan in effect plus the instagram sink on the V canvas, written to
-  // <dataDir>/outputs/live-plan-instagram.json (target names only). A plan that cannot take it stops the start.
-  if (!instagramOn) return base;
-  try { return writeInstagramPlan(dataDir, base).file; } catch (e) { throw new Error(`Instagram Live (flag ${INSTAGRAM_FLAG}) cannot be added to the live plan: ${e.message}`); }
-}
+// The --live plan (livePlanFile, ALPHA_LIVE_PLAN) lives in stream-apply.mjs since D387: the UI server's runtime apply of a
+// saved Settings > Stream setup plans exactly as this start does.
+export { ALPHA_LIVE_PLAN, livePlanFile };
 /**
  * The plan for this start, so that a refused live plan never keeps the studio from opening (2026-11-13: flag
  * instagram-live on with no Instagram server address stored stopped every start, exit 1, no window). planOnce({
@@ -161,14 +152,6 @@ export async function planForStart({ live, instagramOn, planOnce, recordPlan, lo
   }
 }
 
-function baseLivePlanFile({ dataDir, streamSettingsOn, upscale }) {
-  if (!streamSettingsOn) return ALPHA_LIVE_PLAN;
-  const { exists, setup } = readSetup(dataDir);
-  if (!exists) return ALPHA_LIVE_PLAN;
-  const problems = setupProblems(setup, { upscale });
-  if (problems.length) throw new Error(`Settings > Stream has problems: ${problems.map((p) => p.message).join('; ')}`);
-  return writePlanFile(dataDir, setup, { recordName: 'alpha.mkv', upscale });
-}
 // The folder that holds services/clip and the Python venv (.venv-gpu or .venv): this tree, or for an installed run the
 // clipRoot from ujwalam.json (UJWALAM_CLIP_ROOT; the zip ships no Python, D283).
 export const CLIP_ROOT = process.env.UJWALAM_CLIP_ROOT || REPO;
@@ -1173,6 +1156,8 @@ export async function main(argv = process.argv.slice(2)) {
   let hostDiscoveryFile = null;
   let livePlan = null; // the --live plan file, for the UI server's readiness check (D327)
   let instagramLive = false; // IG1 (D351): the configured --live plan has the instagram sink (flag latched at start)
+  let hostParamsFile = null; // D387: the host's --outputs params file (a runtime Settings > Stream apply rewrites it)
+  let liveSchemes = false; // D387: a real host with --live reads the stored server addresses' schemes when planning
   let alphaClient = null;
   let stopping = false;
   let recordClips = null;
@@ -1343,20 +1328,20 @@ export async function main(argv = process.argv.slice(2)) {
       } catch (e) { console.log(`[studio] host config could not be written owner-only (${e.message}); stopping`); await stopAll(); return 1; }
     }
     let outputsParamsFile = null; // the planned graph for --outputs (below, once the event core's port is known)
-    const { planFile, readServerSchemes } = await import('../../app/host/lib/outputs-plan.mjs');
+    const { planFile } = await import('../../app/host/lib/outputs-plan.mjs');
     // One plan attempt: the plan file and its planned graph. Real host + --live: the stored server addresses' schemes
     // (only the scheme, the value is dropped at once) choose "auto" transports (Twitch: rtmp or rtmps) and check named
     // ones. A stand-in (script) host reaches no platform, so nothing is read for it and "auto" stays unresolved.
+    // The live plan is planned by stream-apply.mjs (D387), the same code the UI server's runtime apply uses.
+    liveSchemes = args.live === true && !/\.m?js$/i.test(hostExe);
     const planOnce = async ({ instagramOn }) => {
-      const file = args.live === true ? (() => { const fl = createFlags({ dataDir }); return livePlanFile({ dataDir, streamSettingsOn: fl.isOn(STREAM_SETTINGS_FLAG), instagramOn }); })()
-        : typeof args.outputs === 'string' ? path.resolve(args.outputs) : alpha ? ALPHA_RECORD_PLAN : null;
-      if (!file) return { file: null, planned: null };
-      let schemes;
-      if (args.live === true && !/\.m?js$/i.test(hostExe)) {
-        const [{ createCredentialStore }, { credentialFacts }] = await Promise.all([import('../event-core/streamerbot/credential.mjs'), import('./readiness.mjs')]);
-        schemes = await readServerSchemes(file, (ref) => credentialFacts(createCredentialStore(ref), { scheme: true }), lt.select ? { select: lt.select } : {});
+      if (args.live === true) {
+        const file = livePlanFile({ dataDir, streamSettingsOn: createFlags({ dataDir }).isOn(STREAM_SETTINGS_FLAG), instagramOn });
+        return { file, planned: await planLive(file, { select: lt.select, readSchemes: liveSchemes }) };
       }
-      return { file, planned: planFile(file, { allowLive: args.live === true, ...(lt.select ? { select: lt.select } : {}), ...(schemes ? { schemes } : {}) }) };
+      const file = typeof args.outputs === 'string' ? path.resolve(args.outputs) : alpha ? ALPHA_RECORD_PLAN : null;
+      if (!file) return { file: null, planned: null };
+      return { file, planned: planFile(file, { allowLive: false }) };
     };
     let planPath = null, planned = null;
     try {
@@ -1382,6 +1367,7 @@ export async function main(argv = process.argv.slice(2)) {
       mkdirSync(hostCfg.dataDir, { recursive: true });
       writeFileSync(f, JSON.stringify(params, null, 2));
       outputsParamsFile = f;
+      hostParamsFile = f;
     }
     const spec = hostLaunchSpec({ hostCfg, hostDiscovery, args, alpha, corePort, coreApiToken: coreTokens.api, hostConfigFile, coreSystemToken: coreTokens.system, embedded: !!shellPaths });
     for (const n of spec.notes) console.log(`[studio] WARNING: ${n}`);
@@ -1634,6 +1620,17 @@ export async function main(argv = process.argv.slice(2)) {
     pollMs: Math.max(100, Number(process.env.UJWALAM_UPDATE_POLL_MS ?? 2000) || 2000),
   });
   updates.mirror();
+
+  // D387: the facts a runtime Settings > Stream apply needs (paths and flags only); also clears a pending setup, as this
+  // start planned from the saved setup. A --live start with a real host configured (even when its live plan was refused
+  // and the record plan runs: a fixed setup then applies on Save).
+  try {
+    writeLiveStart(dataDir, { live: args.live === true && hostParamsFile !== null, planFile: livePlan, paramsFile: hostParamsFile, instagram: instagramLive,
+      select: lt.select ?? null, bandwidthTest: lt.bandwidthTest, readSchemes: liveSchemes });
+  } catch (e) {
+    try { rmSync(path.join(dataDir, LIVE_START_FILE), { force: true }); } catch { /* an old file then still names an older start */ }
+    console.log(`[studio] WARNING: live-start facts not written (${String(e?.code ?? 'error').slice(0, 40)}): a Settings > Stream save applies at the next start`);
+  }
 
   // 3. UI server
   const uiArgs = [path.join(REPO, 'services', 'studio-ui', 'cli.mjs'), 'serve', '--data-dir', dataDir, '--feedback-dir', feedbackDir];

@@ -65,7 +65,8 @@ import { readUpdatesStatus, updatesClient } from '../supervisor/updates.mjs';
 import { TEST_KIT_FLAG, createFeedbackAutoCollect, liveAlerts, loadTestKitConfig } from './live-test-kit.mjs';
 import { createCredentialStore } from '../event-core/streamerbot/credential.mjs';
 import { loadBotConfig, tcpAnswers } from '../bots/index.mjs';
-import { CONNECT_FLAG, ERROR_TEXT as CONNECT_ERROR_TEXT, PROBLEM_TEXT as CONNECT_PROBLEM_TEXT, createConnect, outputsFromPlan } from '../platform-connect/index.mjs';
+import { CONNECT_FLAG, ERROR_TEXT as CONNECT_ERROR_TEXT, PROBLEM_TEXT as CONNECT_PROBLEM_TEXT, STREAM_REF_RE, createConnect, outputsFromPlan } from '../platform-connect/index.mjs';
+import { EVENTS_FLAG as YT_EVENTS_FLAG, ID_RE as YT_ID_RE, cleanTitle as ytCleanTitle, createYoutubeEvents, readChoices as readYtChoices, writeChoices as writeYtChoices } from '../platform-connect/youtube-events.mjs';
 import { connectRow as instagramRow, createUseWatcher as createInstagramWatcher, freshnessText as instagramText, INSTAGRAM_FLAG, keyFreshness as instagramFreshness, loadAddon as instagramAddon, noteKeyStarted as instagramStarted } from '../outputs/instagram.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG, createSettingsRoutes } from './settings-routes.mjs';
 import { createSceneBuilderRoutes } from './scene-builder-routes.mjs';
@@ -448,7 +449,7 @@ export function createStudioServer(opts) {
       botPorts: flags?.isOn(INTEGRATIONS_FLAG) && typeof opts.dataDir === 'string'
         ? (({ bots }) => ({ streamerbot: bots.streamerbot.port, speakerbot: bots.speakerbot.port }))(integrationsInEffect(opts.dataDir, bc, true))
         : { streamerbot: bc.streamerbot?.port ?? null, speakerbot: bc.speakerbot?.port ?? null },
-      ciPass: () => lastCiPass(REPO_ROOT), clipTools: () => clipTools({ clipRoot }), planTargets: planTargets(opts.livePlanFile),
+      ciPass: () => lastCiPass(REPO_ROOT), clipTools: () => clipTools({ clipRoot }), planTargets: () => planTargets(planInEffect()),
       // LC1: is live clipping wanted (flag or Settings > Clips "while live"), and the launcher's live clipper state.
       clipRoot,
       liveClips: () => {
@@ -521,7 +522,7 @@ export function createStudioServer(opts) {
     // IG1 (D351): with instagram-live on (or in the running plan), the Instagram output is listed even before a --live
     // start (the URL and key are pasted before each broadcast); a plan row with that id is replaced by it.
     const ig = instagramOn() || instagramFlag() ? (() => { try { return instagramRow(); } catch { return null; } })() : null;
-    const rows = planTargets(opts.livePlanFile).filter((r) => !ig || r.id !== ig.id).concat(ig ? [ig] : []);
+    const rows = planTargets(planInEffect()).filter((r) => !ig || r.id !== ig.id).concat(ig ? [ig] : []);
     // D385: also before the first Save (the setup is then the seed from the live plan, same output ids), so the 2K and 4K
     // YouTube key rows can be filled before the setup that uses them is saved.
     if (flags && flags.isOn(STREAM_SETTINGS_FLAG) && typeof opts.dataDir === 'string') {
@@ -548,6 +549,78 @@ export function createStudioServer(opts) {
     const status = CONNECT_STATUS[code] ?? (Object.hasOwn(CONNECT_PROBLEM_TEXT, code) ? 400 : 502);
     return json(res, status, { error: code, message: CONNECT_ERROR_TEXT[code] ?? CONNECT_PROBLEM_TEXT[code] ?? 'Not done.' });
   };
+  // YouTube live events per go-live (D386, flag youtube-events, needs platform-connect; services/platform-connect/
+  // youtube-events.mjs). Uses the platform sign-in's Google client (connect().youtube); built on first use. Choices per
+  // YouTube output live in <dataDir>/youtube-events.json. Logs counts and codes only: never a title, key or token.
+  const ytEventsOn = () => connectOn() && flags.isOn(YT_EVENTS_FLAG);
+  let ytEventsSvc = null;
+  function ytEvents() {
+    if (ytEventsSvc) return ytEventsSvc;
+    const y = connect().youtube;
+    if (!y) throw Object.assign(new Error('youtube-events-off'), { code: 'youtube-events-off' });
+    ytEventsSvc = createYoutubeEvents({ fetchImpl: y.fetchImpl, accessToken: y.accessToken, readKey: y.readKey, endpoints: y.endpoints, now: y.now, onUnauthorized: y.onUnauthorized });
+    return ytEventsSvc;
+  }
+  // The live plan file the host streams with: after a Settings > Stream apply without a restart (D387) the regenerated
+  // one, else the one the launcher passed. settingsRoutes is built further down; a call before that reads the launcher's.
+  function planInEffect() {
+    try { return settingsRoutes.planFileInEffect?.() ?? opts.livePlanFile; } catch { return opts.livePlanFile; }
+  }
+  // The YouTube rows of the live plan (the sinks the host streams with; keyRef = the key it really uses, D385).
+  function ytOutputs() {
+    return planTargets(planInEffect()).filter((r) => /^youtube(-|$)/.test(r.id) && /^[a-z0-9-]{1,32}$/.test(r.id) && typeof r.keyRef === 'string' && STREAM_REF_RE.test(r.keyRef)).map((r) => {
+      const canvas = /-v$/.test(r.id) ? 'V' : 'H';
+      const quality = /-2160p$/.test(r.keyRef) ? '2160p' : /-1440p$/.test(r.keyRef) ? '1440p' : '1080p';
+      return { id: r.id, label: `YouTube ${canvas}`, canvas, quality, keyRef: r.keyRef };
+    });
+  }
+  async function ytEventsView() {
+    let signedIn = false;
+    try { signedIn = (await connect().youtube?.signedIn?.()) === true; } catch { signedIn = false; }
+    const choices = readYtChoices(opts.dataDir);
+    return { signedIn, outputs: ytOutputs().map((o) => ({ id: o.id, label: o.label, canvas: o.canvas, quality: o.quality, choice: choices[o.id] ?? null })) };
+  }
+  const YT_EVENTS_STATUS = { 'youtube-unauthorized': 401, 'oauth-reauth-needed': 401, 'youtube-not-signed-in': 401, 'oauth-no-client': 409, 'youtube-live-not-enabled': 409, 'youtube-events-off': 404, 'youtube-quota': 429, 'unknown-output': 404, 'unknown-template': 404, 'youtube-bad-title': 400, 'bad-params': 400 };
+  const ytEventsFail = (res, e) => {
+    const code = typeof e?.code === 'string' ? e.code : 'youtube-api-failed';
+    return json(res, YT_EVENTS_STATUS[code] ?? 502, { error: code, message: CONNECT_ERROR_TEXT[code] ?? 'Not done.' });
+  };
+  async function ytEventsRoute(req, res, route, body) {
+    if (!ytEventsOn()) return json(res, 404, { error: 'youtube-events-off' });
+    try {
+      if (route === '/ui/api/youtube/events') {
+        if (req.method !== 'GET') return text(res, 405, 'method-not-allowed');
+        return json(res, 200, await ytEventsView());
+      }
+      if (req.method !== 'POST') return text(res, 405, 'method-not-allowed');
+      const only = (keys) => Object.keys(body).every((k) => keys.includes(k));
+      if (route === '/ui/api/youtube/templates') {
+        if (!only(['refresh']) || (body.refresh !== undefined && typeof body.refresh !== 'boolean')) return json(res, 400, { error: 'bad-params' });
+        if ((await connect().youtube?.signedIn?.()) !== true) return ytEventsFail(res, { code: 'youtube-not-signed-in' });
+        return json(res, 200, { templates: await ytEvents().listTemplates({ refresh: body.refresh === true }) });
+      }
+      if (route === '/ui/api/youtube/event/set') {
+        if (!only(['output', 'templateId', 'title']) || typeof body.output !== 'string' || body.output.length > 32
+          || !(body.templateId === null || (typeof body.templateId === 'string' && YT_ID_RE.test(body.templateId)))
+          || !(body.title === undefined || body.title === null || (typeof body.title === 'string' && body.title.length <= 400))) return json(res, 400, { error: 'bad-params' });
+        if (!ytOutputs().some((o) => o.id === body.output)) return ytEventsFail(res, { code: 'unknown-output' });
+        const choices = readYtChoices(opts.dataDir);
+        if (body.templateId === null) delete choices[body.output];
+        else {
+          const wantsTitle = typeof body.title === 'string' && body.title.trim() !== '';
+          const title = wantsTitle ? ytCleanTitle(body.title) : null;
+          if (wantsTitle && !title) return ytEventsFail(res, { code: 'youtube-bad-title' });
+          const t = await ytEvents().knownTemplate(body.templateId); // re-listed once when it is not in the last list
+          if (!t) return ytEventsFail(res, { code: 'unknown-template' });
+          choices[body.output] = { templateId: t.id, templateTitle: t.title, title };
+        }
+        writeYtChoices(opts.dataDir, choices);
+        const view = await ytEventsView();
+        return json(res, 200, { ok: true, outputs: view.outputs });
+      }
+      return text(res, 404, 'not-found');
+    } catch (e) { return ytEventsFail(res, e); }
+  }
   // Public form of a readiness result for the page (the Qt shell reads the summary text of the confirm window).
   const publicReadiness = (r) => ({ at: r.at, ok: r.ok, counts: r.counts, items: r.items.map((i) => ({ id: i.id, title: i.title, status: i.status, message: i.message, ...(i.fix ? { fix: i.fix } : {}), ...(i.unknown ? { unknown: true } : {}) })) });
   // End all streams (D299): the host's stream.stop with no sinks stops every stream sink (both YouTube, Twitch, Kick) and
@@ -1175,6 +1248,7 @@ export function createStudioServer(opts) {
     closing: isClosing,
     credentialsUpdating: () => credWrites > 0, // the sign-in start gate (connectGate) holds a key write
     enter() { startsInFlight += 1; return () => { startsInFlight -= 1; lastStartAt = now(); }; },
+    starting: () => startsInFlight > 0, // D387: a Save does not apply while a start is on its way to the host
     async begin() { return { epoch: stopEpoch, gen: authority ? await authority.begin() : null }; },
     async still(t) {
       if (t.epoch !== stopEpoch) return false;
@@ -1280,6 +1354,7 @@ export function createStudioServer(opts) {
       // Presence, scheme and last 4 characters only; never a key, token, address or account name.
       try { const c = connect(); return json(res, 200, { ...(await c.status({ fresh: url.searchParams.get('fresh') === '1' })), job: c.currentJob() }); } catch (e) { return connectFail(res, e); }
     }
+    if (req.method === 'GET' && route === '/ui/api/youtube/events') return ytEventsRoute(req, res, route, null); // D386
     if (route.startsWith('/ui/api/growth') && !growthOn()) return json(res, 404, { error: 'growth-off' });
     if (route.startsWith('/ui/api/posts') && !postingOn()) return json(res, 404, { error: 'posting-off' });
     if (route.startsWith('/ui/api/bots') && !botsOn()) return json(res, 404, { error: 'bot-manager-off' });
@@ -1520,6 +1595,7 @@ export function createStudioServer(opts) {
       return json(res, 200, { verdict: 'allow', flags: applyFlag(body.id, true) }); // ON: the click is the decision (D332)
     }
     if (route.startsWith('/ui/api/connect/')) return connectRoute(res, route, body);
+    if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set') return ytEventsRoute(req, res, route, body); // D386
     if (route === '/ui/api/learning/confirm') {
       if (Object.keys(body).some((k) => !['session', 'id', 'value'].includes(k)) || typeof body.session !== 'string' || typeof body.id !== 'string' || typeof body.value !== 'string') return json(res, 400, { error: 'bad-params' });
       const r = await createReview({ dataDir: opts.dataDir }).confirm(body);
@@ -1692,12 +1768,28 @@ export function createStudioServer(opts) {
         if (starting && isClosing()) return json(res, 409, CLOSING_REFUSAL);
         if (starting && credWrites > 0) return json(res, 409, { error: 'credentials-updating', detail: 'A stream key is being changed; start again in a moment' });
         if (starting) startsInFlight += 1;
+        // D386: YouTube events made for this start; deleted again (finally) unless the start is accepted.
+        let ytMade = []; let ytKept = false; let ytSent = false;
         try {
         const fl = HOST_CALLS[p.method]?.flag; // switched off meanwhile: refuse
         if (fl && !(flags && flags.isOn(fl))) return json(res, 404, { error: `${fl}-off` });
         // D327 OS3 (flag outputs-panel): Start stream starts the outputs switched on in the panel only.
         let callParams = p.params;
         if (p.method === 'stream.start') {
+          // D387: a Settings > Stream save that could not be applied then (something was live) is applied now, before
+          // the sinks and the YouTube events (D386) are read, so both follow the setup the host streams with. A pending
+          // setup that cannot be applied stops the start (Codex review: never go live on the old setup unasked); it stays
+          // pending, so the next Go live tries again.
+          const ap = await settingsRoutes.applyPendingBeforeStart();
+          if (ap.error) {
+            const why = {
+              busy: 'A recording or stream is running, and new stream settings can only be put in use while nothing runs. Stop it, then Go live.',
+              unreadable: 'The output state could not be read. Try Go live again.',
+              'host-refused': 'The video engine did not take them. Try Go live again; if it repeats, open Settings > Stream and Save again.',
+              'plan-refused': 'They could not be built into outputs. Open Settings > Stream and fix them.',
+            }[ap.error] ?? (ap.detail ?? '');
+            return json(res, 200, { verdict: 'refuse', reason: 'stream-setup-not-applied', detail: `The saved stream settings could not be put in use, so nothing went live. ${why}`.trim() });
+          }
           const sinks = await settingsRoutes.startSinks();
           if (Array.isArray(sinks)) {
             if (!sinks.length) return json(res, 200, { verdict: 'refuse', reason: 'no-outputs-enabled', detail: 'No output is switched on. Switch one on in the Outputs panel or Settings > Stream.' });
@@ -1715,6 +1807,35 @@ export function createStudioServer(opts) {
         const startGen = p.method === 'stream.start' && authority
           ? (Number.isInteger(p.startGen) ? p.startGen : await authority.begin()) : null;
         const before = await readBefore(p.method, p.params);
+        // D386 (flag youtube-events): a fresh YouTube live event per YouTube output of this start, before the stop-wins
+        // checks below (a Stop during the creation still wins; the events are then deleted again). Twitch and Kick are
+        // never touched; a start without a YouTube output makes no YouTube call.
+        if (p.method === 'stream.start' && ytEventsOn()) {
+          const all = ytOutputs();
+          const want = Array.isArray(callParams?.sinks) ? all.filter((o) => callParams.sinks.includes(o.id)) : all;
+          if (want.length) {
+            const choices = readYtChoices(opts.dataDir);
+            const missing = want.filter((o) => !choices[o.id]);
+            if (missing.length) return json(res, 200, { verdict: 'refuse', reason: 'youtube-event-missing', detail: `Pick a YouTube event template for ${missing.map((o) => o.label).join(' and ')} (Studio: YouTube event), or switch the youtube-events flag off.` });
+            const yt = tasks.start({ title: 'Creating the YouTube events', kind: 'youtube' });
+            let svc = null;
+            try { svc = ytEvents(); } catch { svc = null; }
+            const made = svc
+              ? await Promise.allSettled(want.map((o) => svc.createEvent({ templateId: choices[o.id].templateId, title: choices[o.id].title ?? undefined, keyRef: o.keyRef })))
+              : want.map(() => ({ status: 'rejected', reason: { code: 'youtube-events-off' } }));
+            made.forEach((r, i) => { if (r.status === 'fulfilled') ytMade.push({ output: want[i].id, ...r.value }); });
+            const failed = made.map((r, i) => (r.status === 'rejected' ? { o: want[i], code: typeof r.reason?.code === 'string' ? r.reason.code : 'youtube-api-failed' } : null)).filter(Boolean);
+            if (failed.length) {
+              yt.fail('Not made');
+              const undo = ytMade; ytMade = [];
+              await Promise.all(undo.map((e) => svc.deleteEvent(e.broadcastId)));
+              log(`[studio-ui] youtube-events: start refused, ${failed.length} event(s) failed (${failed.map((f) => f.code).join(', ').slice(0, 120)}), ${undo.length} deleted again`);
+              return json(res, 200, { verdict: 'refuse', reason: 'youtube-event-failed', detail: failed.map((f) => `${f.o.label}: the YouTube event could not be made. ${CONNECT_ERROR_TEXT[f.code] ?? 'YouTube did not answer as expected; try again later.'}`).join(' ') });
+            }
+            yt.done();
+            log(`[studio-ui] youtube-events: ${ytMade.length} event(s) made, ${ytMade.reduce((n, e) => n + e.warnings.length, 0)} warning(s)`);
+          }
+        }
         if (Number.isInteger(startGen) || startEpoch !== null) {
           if (startPauseMs) await new Promise((r) => setTimeout(r, startPauseMs));
           // A Stop / End all confirmed since this start began wins: the start is not sent.
@@ -1731,6 +1852,7 @@ export function createStudioServer(opts) {
           try { instagramStarted(opts.dataDir, { now }); } catch (e) { log('[studio-ui] WARNING: the Instagram key state could not be written (' + String(e?.code ?? 'error').slice(0, 40) + ')'); }
         }
         let out;
+        ytSent = ytMade.length > 0; // from here the host may be sending, even when its answer never comes (D386 cleanup)
         try { out = await callHost(p.method, callParams); } catch (e) { ht?.fail('Did not finish'); throw e; }
         ht?.done();
         if ((startEpoch !== null && startEpoch !== stopEpoch) || (Number.isInteger(startGen) && !(await authority.arm(startGen)))) {
@@ -1761,8 +1883,29 @@ export function createStudioServer(opts) {
         const warning = [p.warning, recordWarning].filter(Boolean).join(' ') || null;
         // A layout change confirmed while live autosaves like an instant one (P5b).
         const saved = HOST_CALLS[p.method]?.liveConfirm && projectSync && host.describe().kind === 'host' ? projectSync.record(p.method, syncParams(p.method, p.params, out)) : false;
-        return json(res, 200, { verdict: 'allow', result: p.countsOnly ? countsOnly(out) : (out ?? null), ...(saved ? { saved: 'pending' } : {}), ...(warning ? { warning } : {}), ...(p.readinessOverride ? { override: true, overrideLogged: overrideLogged === true } : {}) });
-        } finally { if (starting) { startsInFlight -= 1; lastStartAt = now(); } }
+        ytKept = true;
+        return json(res, 200, { verdict: 'allow', result: p.countsOnly ? countsOnly(out) : (out ?? null), ...(saved ? { saved: 'pending' } : {}), ...(warning ? { warning } : {}), ...(p.readinessOverride ? { override: true, overrideLogged: overrideLogged === true } : {}),
+          ...(ytMade.length ? { youtubeEvents: ytMade.map((e) => ({ output: e.output, title: e.title, warnings: e.warnings })) } : {}) });
+        } finally {
+          // D386: a start refused, stopped meanwhile or failed at the host: its new YouTube events go again (best effort).
+          // Once the start was sent to the host (Codex review of D386), an event is deleted only when a fresh status shows
+          // its output idle: a lost answer can hide a stream that went live, and deleting its event would cut it off. An
+          // unreadable state keeps the event (a spare upcoming event is harmless; YouTube Studio lists it).
+          if (ytMade.length && !ytKept) {
+            const all = ytMade; ytMade = [];
+            // Strict (Codex re-review): the output must be listed with a known stopped state; missing, malformed or
+            // unknown keeps the event.
+            let sinks = null;
+            if (ytSent) { try { const st = await ytOutputsStatus(); sinks = Array.isArray(st?.sinks) ? st.sinks : null; } catch { sinks = null; } }
+            const surelyIdle = (id) => !!sinks && sinks.some((s) => s && s.id === id && s.active !== true && ['idle', 'stopped', 'failed'].includes(s.state))
+              && !sinks.some((s) => s && s.id === id && (s.active === true || !['idle', 'stopped', 'failed'].includes(s.state)));
+            const idle = all.map((e) => !ytSent || surelyIdle(e.output));
+            const undo = all.filter((_, i) => idle[i]);
+            try { const svc = ytEvents(); await Promise.all(undo.map((e) => svc.deleteEvent(e.broadcastId))); } catch { /* best effort */ }
+            log(`[studio-ui] youtube-events: start not accepted, ${undo.length} event(s) deleted again, ${all.length - undo.length} kept (output not shown idle)`);
+          }
+          if (starting) { startsInFlight -= 1; lastStartAt = now(); }
+        }
       }
       if (p.kind === 'end-all') {
         stopEpoch += 1;

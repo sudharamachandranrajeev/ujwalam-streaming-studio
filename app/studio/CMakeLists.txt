@@ -140,6 +140,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/SceneBuilderWindow.qml
 		qml/PostsWindow.qml
 		qml/ClipsAsk.qml
+		qml/YoutubeEventsDialog.qml
 		qml/EditOps.qml
 		qml/UMenu.qml
 		qml/UMenuItem.qml

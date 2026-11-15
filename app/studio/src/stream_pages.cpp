@@ -335,7 +335,7 @@ StreamPage::StreamPage(ApiClient *api, QWidget *parent) : QWidget(parent), api_(
 	problems_->setWordWrap(true);
 	problems_->setStyleSheet(QStringLiteral("color:%1;").arg(theme::color(QStringLiteral("danger")).name()));
 	v->addWidget(problems_);
-	v->addWidget(muted(QStringLiteral("Saved changes apply the next time Ujwalam starts. Values over a platform's limit are refused with the limit shown."), this));
+	v->addWidget(muted(QStringLiteral("Saved changes are used at once while nothing is live; during a stream or recording, at the next Go live. Values over a platform's limit are refused with the limit shown."), this));
 
 	checkTimer_ = new QTimer(this);
 	checkTimer_->setSingleShot(true);
@@ -493,8 +493,12 @@ void StreamPage::save(const Note &note)
 		return;
 	const QJsonObject next = current();
 	api_->post(QStringLiteral("ui/api/stream/setup"), QJsonObject{{QStringLiteral("setup"), next}}, [note](bool ok, const QJsonObject &b, const QString &err) {
-		if (ok)
-			return note(QStringLiteral("Stream settings saved. Close and open Ujwalam to stream with them."));
+		if (ok) { // D387: applied at once while nothing is live; else the answer's detail says when
+			if (b.value(QStringLiteral("appliesAt")).toString() == QStringLiteral("now"))
+				return note(QStringLiteral("Stream settings saved and in use now."));
+			const QString when = b.value(QStringLiteral("detail")).toString();
+			return note(QStringLiteral("Stream settings saved. ") + (when.isEmpty() ? QStringLiteral("Close and open Ujwalam to stream with them.") : when));
+		}
 		const QString why = problemsText(b.value(QStringLiteral("problems")).toArray());
 		note(QStringLiteral("Stream settings not saved: ") + (why.isEmpty() ? err : why));
 	});
