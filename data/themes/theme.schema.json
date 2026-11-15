@@ -169,7 +169,7 @@
             "caps": { "type": "boolean", "description": "button labels in capitals" }
           }
         },
-        "tabs": { "enum": ["pill", "underline", "segmented", "boxed", "slide", "avatar", "dock"], "description": "slide, avatar and dock (RareUI slice 0, D384): accepted, drawn by later slices" },
+        "tabs": { "enum": ["pill", "underline", "segmented", "boxed", "slide", "avatar", "dock"], "description": "slide, avatar and dock (RareUI, D384): drawn by the Qt Quick studio in slice 2 (Settings page list, theme picker, top bar dock)" },
         "input": { "enum": ["outline", "filled", "inset", "underline", "soft"], "description": "soft (D376): a sunken well in the surface block's well colours" },
         "focus": { "enum": ["border", "ring", "glow"] },
         "switch": { "enum": ["plain", "labelled", "bezel", "knob"], "description": "the painted on/off switch; labelled (ON / OFF in the track) is the base look; knob (D376): a raised round knob in a sunken track that glows warm when on" },

@@ -4,6 +4,9 @@
 // draft: Save applies it (flags included, on and off alike; the click is the decision, no phrase, D332). Cancel or Escape
 // with changes asks Save changes / Discard / Cancel. A theme or effects level is tried live; Cancel puts the old one back.
 // Same routes and the same rules for what is sent as the widget window, so both write the same settings.json.
+// RareUI slice 2 (D384; design after RareUI, MIT, Swapnil Kalambe, Animated Tab): with the pack's components.tabs = "slide" the
+// page list gets one pill that slides to the chosen page (a spring in "full", a jump in "calm") and a faint pill under the
+// pointer; "plain" (on air, High performance) and the flag off keep today's list.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -110,6 +113,8 @@ Dialog {
         const text = pageText(t);
         return q.split(/\s+/).every(w => text.includes(w));
     }
+    readonly property string tabLook: Theme.rareui && Theme.fx !== "plain" && Theme.tabsStyle === "slide" ? "slide" : ""
+    readonly property bool tabFull: Theme.fx === "full" && Theme.motion
     readonly property var shownPages: {
         const out = [];
         for (const g of groups) for (const t of g.pages) if (matches(t)) out.push(t);
@@ -369,6 +374,8 @@ Dialog {
             radius: Theme.radiusMedium
             border.width: 1
             border.color: Theme.c.border
+            property Item current: null // the button of the chosen page (slide look)
+            property Item hoverBtn: null
             UField {
                 id: search
                 objectName: "settingsSearch"
@@ -383,6 +390,35 @@ Dialog {
                 contentHeight: navCol.height
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
+                Item { // read by the probe (tab look, no loop)
+                    objectName: "tabLook:settings"
+                    readonly property string look: dlg.tabLook
+                    readonly property bool loop: false
+                }
+                Loader { // the sliding pill and the hover pill sit behind the page buttons (a Flickable child, not in the column)
+                    active: dlg.tabLook === "slide"
+                    sourceComponent: Item {
+                        NavPill {
+                            id: slidePill
+                            host: navCol
+                            target: navBox.current
+                            animate: dlg.tabFull
+                            fill: Theme.c.field
+                            radius: Theme.radiusSmall
+                            stiffness: 320
+                            damping: 32
+                            mass: 0.9
+                        }
+                        NavPill {
+                            host: navCol
+                            target: navBox.hoverBtn !== navBox.current ? navBox.hoverBtn : null
+                            animate: false // the plan's hover fade: 150 ms, no slide
+                            fill: Theme.c.text
+                            fillOpacity: 0.06
+                            radius: Theme.radiusSmall
+                        }
+                    }
+                }
                 Column {
                     id: navCol
                     width: parent.width
@@ -424,11 +460,18 @@ Dialog {
                                     focusPolicy: Qt.StrongFocus
                                     Accessible.name: modelData
                                     readonly property bool current: dlg.page === modelData
+                                    readonly property bool slide: dlg.tabLook === "slide"
                                     onClicked: dlg.page = modelData
+                                    onCurrentChanged: if (current) navBox.current = navBtn
+                                    Component.onCompleted: if (current) navBox.current = navBtn
+                                    Component.onDestruction: { if (navBox.current === navBtn) navBox.current = null; if (navBox.hoverBtn === navBtn) navBox.hoverBtn = null }
+                                    onHoveredChanged: if (hovered) navBox.hoverBtn = navBtn; else if (navBox.hoverBtn === navBtn) navBox.hoverBtn = null
+                                    scale: slide && dlg.tabFull && down ? 0.95 : 1
+                                    Behavior on scale { enabled: navBtn.slide && dlg.tabFull; NumberAnimation { duration: 120 } }
                                     contentItem: Text {
                                         leftPadding: 4
                                         text: navBtn.text
-                                        color: navBtn.current ? Theme.c.text : Theme.c.muted
+                                        color: navBtn.current || (navBtn.slide && navBtn.hovered) ? Theme.c.text : Theme.c.muted
                                         font.family: Theme.family
                                         font.pixelSize: 14
                                         font.weight: navBtn.current ? Font.DemiBold : Font.Normal
@@ -437,11 +480,11 @@ Dialog {
                                     }
                                     background: Rectangle {
                                         radius: Theme.radiusSmall
-                                        color: navBtn.current ? Theme.c.field : navBtn.hovered ? Qt.lighter(Theme.c.panel, 1.15) : "transparent"
+                                        color: navBtn.slide ? "transparent" : navBtn.current ? Theme.c.field : navBtn.hovered ? Qt.lighter(Theme.c.panel, 1.15) : "transparent"
                                         border.width: navBtn.visualFocus ? 1 : 0
                                         border.color: Theme.c.accentHi
                                         Rectangle {
-                                            visible: navBtn.current
+                                            visible: navBtn.current && !navBtn.slide
                                             width: 3
                                             height: parent.height - 12
                                             anchors.verticalCenter: parent.verticalCenter

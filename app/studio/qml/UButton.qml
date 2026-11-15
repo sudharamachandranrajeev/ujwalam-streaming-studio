@@ -21,9 +21,11 @@ Button {
     property string kind: "normal"
     property string iconName: ""
     property string tip: ""
+    // True inside a RareUI dock (OnAirBar): the dock and its hover disc are the button's face, so it paints no fill or edge of its own.
+    property bool bare: false
     // The style drawn now ("" = the plain look).
     readonly property string look: {
-        if (!Theme.rareui || Theme.fx === "plain") return "";
+        if (bare || !Theme.rareui || Theme.fx === "plain") return "";
         const s = Theme.buttonStyle;
         if (s === "soft" || s === "neumorph" || s === "glass") return s;
         if (s === "premium") return kind === "danger" ? "" : s;
@@ -140,8 +142,8 @@ Button {
         Rectangle {
             anchors.fill: parent
             radius: b.rad
-            color: b.look !== "" ? "transparent" : !b.enabled ? Theme.c.field : b.down ? Qt.darker(b.fill, 1.15) : b.hovered ? Qt.lighter(b.fill, 1.12) : b.fill
-            border.width: b.look !== "" ? (b.visualFocus ? 1 : 0) : (b.kind === "normal" || b.visualFocus ? 1 : 0)
+            color: b.look !== "" || b.bare ? "transparent" : !b.enabled ? Theme.c.field : b.down ? Qt.darker(b.fill, 1.15) : b.hovered ? Qt.lighter(b.fill, 1.12) : b.fill
+            border.width: b.look !== "" || b.bare ? (b.visualFocus ? 1 : 0) : (b.kind === "normal" || b.visualFocus ? 1 : 0)
             border.color: b.visualFocus ? Theme.c.accentHi : Theme.c.border
             Behavior on color { enabled: Theme.motion; ColorAnimation { duration: b.colorMs } }
         }

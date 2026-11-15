@@ -82,6 +82,8 @@ class QmlTheme : public QObject {
 	Q_PROPERTY(bool rareui READ rareui WRITE setRareui NOTIFY lookChanged)
 	Q_PROPERTY(QString buttonStyle READ buttonStyle NOTIFY lookChanged)
 	Q_PROPERTY(QString spinnerStyle READ spinnerStyle NOTIFY lookChanged)
+	// RareUI slice 2 (D384): the pack's tab style (components.tabs; the studio draws slide, dock and avatar), same gating as buttonStyle.
+	Q_PROPERTY(QString tabsStyle READ tabsStyle NOTIFY lookChanged)
 public:
 	explicit QmlTheme(QObject *parent = nullptr);
 	QString id() const;
@@ -102,6 +104,7 @@ public:
 	void setRareui(bool on);
 	QString buttonStyle() const;
 	QString spinnerStyle() const;
+	QString tabsStyle() const;
 	// Reads the pack's components block (theme::setComponents); the Store calls it with theme-components and rareui-look both on.
 	Q_INVOKABLE void setComponentsOn(bool on);
 	// "image://icon/<name>/<rrggbb>/<px>" for an icon in a token colour.
