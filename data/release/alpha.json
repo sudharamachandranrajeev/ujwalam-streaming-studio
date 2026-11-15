@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 29,
+  "current": 30,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -40,6 +40,7 @@
     { "n": 26, "date": "2026-11-11", "title": "Mixer volume, mute and CUE kept after a restart" },
     { "n": 27, "date": "2026-11-13", "title": "Scheduled auto-post, Battle Royale shorts fix, reel cover frame, host watchdog" },
     { "n": 28, "date": "2026-11-13", "title": "Studio opens again when an output has no address; host watchdog and counters ship" },
-    { "n": 29, "date": "2026-11-13", "title": "2K YouTube H and V, faster opening, realism scene" }
+    { "n": 29, "date": "2026-11-13", "title": "2K YouTube H and V, faster opening, realism scene" },
+    { "n": 30, "date": "2026-11-15", "title": "YouTube event per stream from a template, stream settings without a restart, 2K/4K fix" }
   ]
 }

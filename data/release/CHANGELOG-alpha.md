@@ -2,6 +2,13 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.30 — 2026-11-15
+
+- YouTube event for every stream, from a template (switch "YouTube events", off by default, Settings > Connections). Sign in with YouTube under Settings > Connections, then press "YouTube event" next to Go live and pick one of your earlier streams as the template for the landscape output and one for the portrait output. At each Go live, Ujwalam makes a new YouTube event for each YouTube output, copied from its template: title, description, privacy, category, tags, made-for-kids setting, latency, DVR and thumbnail, and links it to that output's stream key. If an event cannot be made, nothing goes live and the reason is shown. If the start fails, the new events are deleted again, unless an output may already be sending. Twitch and Kick are not changed.
+- Stream settings without a restart: Save in Settings > Stream puts the new setup in use at once when nothing is live or recording. During a stream or recording they are used at the next Go live, and nothing running is stopped. If they cannot be put in use, Go live is refused with the reason instead of going live on the old setup.
+- 2K and 4K YouTube without a separate switch: the bitrate follows the chosen size, and each quality keeps its own YouTube stream key.
+- New studio window, switch "RareUI look" (Settings > Appearance, off by default): tabs and navigation in the new look.
+
 ## 0.1.0-alpha.29 — 2026-11-13
 
 - YouTube in 2K: both YouTube outputs can now stream at 2560x1440 (landscape) and 1440x2560 (portrait) from the 1080p canvases, scaled up on the graphics card. Switch on "Stream above the canvas size" (Settings > Stream, FEATURES), then pick the sizes in Settings > Stream ("Output resolution", "Portrait output resolution"). Tested on this laptop at 24000 kbps each with Twitch and Kick at 1080p: no dropped or skipped frames. 4K portrait is in the list but too much for this laptop's video encoder together with the other outputs.
