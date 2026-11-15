@@ -246,13 +246,18 @@ bool QmlStudio::probeAction(const QString &action)
 		send(QEvent::MouseButtonRelease, pos, Qt::LeftButton, Qt::NoButton);
 		return true;
 	}
-	if (action.startsWith(QStringLiteral("key:"))) { // key:<Right|Left|Up|Down|PageUp|PageDown>:<objectName>: focus, then the key
-		const QStringList p = action.split(QLatin1Char(':'));
+	// key:<Right|Left|Up|Down|PageUp|PageDown>:<objectName>: focus that item, then the key. Only when the last part names
+	// an item: the window keys (key:Ctrl+Z, key:Right, key:Right:3) stay with Main.qml probeAction below.
+	const QStringList kp = action.split(QLatin1Char(':'));
+	QQuickItem *keyItem = action.startsWith(QStringLiteral("key:")) && kp.size() >= 3
+		? qobject_cast<QQuickItem *>(findNamed(win_, kp.mid(2).join(QLatin1Char(':')))) : nullptr;
+	if (keyItem) {
+		const QStringList &p = kp;
+		auto *item = keyItem;
 		static const QHash<QString, int> keys{{QStringLiteral("Right"), Qt::Key_Right}, {QStringLiteral("Left"), Qt::Key_Left},
 			{QStringLiteral("Up"), Qt::Key_Up}, {QStringLiteral("Down"), Qt::Key_Down}, {QStringLiteral("PageUp"), Qt::Key_PageUp},
 			{QStringLiteral("PageDown"), Qt::Key_PageDown}};
-		auto *item = p.size() >= 3 ? qobject_cast<QQuickItem *>(findNamed(win_, p.mid(2).join(QLatin1Char(':')))) : nullptr;
-		if (!item || !item->isVisible() || !item->isEnabled() || !keys.contains(p[1]))
+		if (!item->isVisible() || !item->isEnabled() || !keys.contains(p[1]))
 			return false;
 		win_->requestActivate();
 		QCoreApplication::processEvents();
