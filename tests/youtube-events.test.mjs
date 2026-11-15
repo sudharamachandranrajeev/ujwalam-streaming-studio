@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// YouTube live events per go-live (D386, flag `youtube-events`): services/platform-connect/youtube-events.mjs and the
+// YouTube live events per go-live (D386; D388: no feature flag, the toggle autoEvent decides): services/platform-connect/youtube-events.mjs and the
 // studio-ui routes + go-live hook. A fake fetch stands in for Google and YouTube, an in-memory credential store for
 // Windows Credential Manager: nothing reaches a real platform. Leak checks: the stream keys never appear in a result,
 // an HTTP response, a log line or a file under the data folder.
@@ -10,10 +10,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, afterEach, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createFlags } from '../services/flags/index.mjs';
 import { CLIENT_ID_TARGET, CLIENT_SECRET_TARGET } from '../services/posting/oauth.mjs';
 import { ERROR_TEXT, TARGETS, createMemoryStores } from '../services/platform-connect/index.mjs';
-import { CHOICES_FILE, cleanTitle, createYoutubeEvents, readChoices, writeChoices } from '../services/platform-connect/youtube-events.mjs';
+import { CHOICES_FILE, cleanTitle, createYoutubeEvents, readAutoEvent, readChoices, writeChoices } from '../services/platform-connect/youtube-events.mjs';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 
@@ -265,12 +264,10 @@ const post = (c, route, body) => raw(c.port, {
 });
 function allFiles(dir) { return readdirSync(dir).flatMap((n) => { const p = path.join(dir, n); return statSync(p).isDirectory() ? allFiles(p) : [p]; }); }
 
-async function boot({ connectOn = true, eventsOn = true, choices = null, yt = fakeYoutube(), keys = { 'Ujwalam/stream/youtube-h': KEY_H, 'Ujwalam/stream/youtube-v': KEY_V }, planFile, hostWrap, hostAfter } = {}) {
+async function boot({ signedIn = true, choices = null, yt = fakeYoutube(), keys = { 'Ujwalam/stream/youtube-h': KEY_H, 'Ujwalam/stream/youtube-v': KEY_V }, planFile, hostWrap, hostAfter } = {}) {
   const dataDir = mk();
-  if (connectOn) createFlags({ dataDir }).set('platform-connect', true);
-  if (eventsOn) createFlags({ dataDir }).set('youtube-events', true);
   if (choices) writeChoices(dataDir, choices);
-  const mem = createMemoryStores({ [CLIENT_ID_TARGET]: 'mock-google-client.apps.example', [CLIENT_SECRET_TARGET]: 'mock-secret-zz9', [TARGETS.youtubeRefresh]: REFRESH, ...keys });
+  const mem = createMemoryStores({ [CLIENT_ID_TARGET]: 'mock-google-client.apps.example', [CLIENT_SECRET_TARGET]: 'mock-secret-zz9', ...(signedIn ? { [TARGETS.youtubeRefresh]: REFRESH } : {}), ...keys });
   const fake = createFakeHost({ outputsReady: true });
   const hostCalls = [];
   const host = {
@@ -296,25 +293,44 @@ function leakCheck(c) {
 }
 
 describe('studio-ui routes (D386)', () => {
-  test('flag off (either flag): every route 404 and a start is unchanged (no YouTube call)', async () => {
+  test('no flag at all: the flag is gone from data/flags.json and the routes work with no flag on', async () => {
     const defs = JSON.parse(readFileSync(path.join(REPO, 'data', 'flags.json'), 'utf8')).flags;
-    assert.equal(defs.find((f) => f.id === 'youtube-events').default, false);
-    for (const opt of [{ eventsOn: false }, { connectOn: false }]) {
-      const c = await boot(opt);
-      assert.equal((await get(c, '/ui/api/youtube/events')).status, 404);
-      assert.equal((await post(c, '/ui/api/youtube/templates', {})).json().error, 'youtube-events-off');
-      assert.equal((await post(c, '/ui/api/youtube/event/set', { output: 'youtube-h', templateId: 'tplH0001' })).status, 404);
-      const s = (await post(c, '/ui/api/host', { method: 'stream.start', params: {} })).json();
-      assert.equal(s.verdict, 'allow');
-      assert.equal(s.youtubeEvents, undefined);
-      assert.ok(c.hostCalls.includes('stream.start'));
-      assert.deepEqual(c.yt.st.calls, []);
-    }
+    assert.equal(defs.find((f) => f.id === 'youtube-events'), undefined);
+    const c = await boot();
+    assert.equal((await get(c, '/ui/api/youtube/events')).status, 200);
+    assert.equal((await post(c, '/ui/api/youtube/templates', {})).status, 200);
+    assert.equal((await post(c, '/ui/api/youtube/event/set', { output: 'youtube-h', templateId: 'tplH0001' })).status, 200);
+  });
+  test('not signed in to YouTube: a start streams exactly as before (no YouTube call, no refusal)', async () => {
+    const c = await boot({ signedIn: false });
+    const s = (await post(c, '/ui/api/host', { method: 'stream.start', params: {} })).json();
+    assert.equal(s.verdict, 'allow');
+    assert.equal(s.youtubeEvents, undefined);
+    assert.ok(c.hostCalls.includes('stream.start'));
+    assert.deepEqual(c.yt.st.calls, []);
+    assert.equal((await post(c, '/ui/api/youtube/templates', {})).json().error, 'youtube-not-signed-in');
+  });
+  test('autoEvent off: a start makes no event and calls YouTube not at all; on by default; the choices stay', async () => {
+    const c = await boot({ choices: BOTH });
+    assert.equal((await get(c, '/ui/api/youtube/events')).json().autoEvent, true);
+    assert.equal((await post(c, '/ui/api/youtube/event/auto', { on: false })).json().autoEvent, false);
+    assert.equal((await post(c, '/ui/api/youtube/event/auto', { on: 'no' })).status, 400);
+    assert.equal((await post(c, '/ui/api/youtube/event/auto', { on: false, x: 1 })).status, 400);
+    const v = (await get(c, '/ui/api/youtube/events')).json();
+    assert.equal(v.autoEvent, false);
+    assert.equal(v.outputs[0].choice.templateId, 'tplH0001', 'the choices are kept');
+    const s = (await post(c, '/ui/api/host', { method: 'stream.start', params: {} })).json();
+    assert.equal(s.verdict, 'allow');
+    assert.equal(s.youtubeEvents, undefined);
+    assert.deepEqual(c.yt.st.calls, []);
+    assert.equal((await post(c, '/ui/api/youtube/event/auto', { on: true })).json().autoEvent, true);
+    assert.equal(readAutoEvent(c.dataDir), true);
   });
   test('GET events lists the YouTube outputs of the plan only; templates; set and clear a choice', async () => {
     const c = await boot();
     const v = (await get(c, '/ui/api/youtube/events')).json();
     assert.equal(v.signedIn, true);
+    assert.equal(v.autoEvent, true);
     assert.deepEqual(v.outputs, [
       { id: 'youtube-h', label: 'YouTube H', canvas: 'H', quality: '1080p', choice: null },
       { id: 'youtube-v', label: 'YouTube V', canvas: 'V', quality: '1080p', choice: null },
@@ -350,7 +366,7 @@ describe('go-live hook (D386)', () => {
     const r = (await post(c, '/ui/api/host', { method: 'stream.start', params: {} })).json();
     assert.equal(r.verdict, 'refuse');
     assert.equal(r.reason, 'youtube-event-missing');
-    assert.equal(r.detail, 'Pick a YouTube event template for YouTube V (Studio: YouTube event), or switch the youtube-events flag off.');
+    assert.equal(r.detail, "Pick a YouTube event template for YouTube V. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.");
     assert.deepEqual(ytApiCalls(c), []);
     assert.ok(!c.hostCalls.includes('stream.start'));
   });

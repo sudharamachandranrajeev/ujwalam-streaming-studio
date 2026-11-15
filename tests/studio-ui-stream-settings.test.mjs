@@ -10,6 +10,7 @@ import path from 'node:path';
 import { after, afterEach, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../services/flags/index.mjs';
+import { createMemoryStores } from '../services/platform-connect/index.mjs';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 
@@ -60,6 +61,7 @@ async function boot({ flagsOn = ['stream-settings', 'outputs-panel', 'integratio
   const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
   const tcpCalls = [];
   const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 30 }, authority, startPauseMs,
+    connect: { storeFor: createMemoryStores({}).storeFor }, // no real Credential Manager read at go-live
     tcpAnswers: async (port) => { tcpCalls.push(port); return tcp ? tcp(port) : false; }, botConfig: () => ({}) });
   servers.push(srv);
   const { port } = await srv.listen();

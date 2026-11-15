@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// YouTube live events per go-live (D386, flag `youtube-events`, needs `platform-connect`). Node stdlib only.
+// YouTube live events per go-live (D386; D388: no feature flag, the in-window toggle `autoEvent` decides). Node stdlib only.
 //
 // What it does:
 //   - Every Go live makes a fresh YouTube live event (liveBroadcast) for each YouTube output that starts. The event is
@@ -11,7 +11,9 @@
 //   - The stream is found by comparing each stream's key on the channel (liveStreams.list) with the key stored in
 //     Windows Credential Manager, in memory and in constant time (sameSecret). The key is never returned, logged or kept.
 //   - The template choice per output (<dataDir>/youtube-events.json) is not a secret: template id, its title and the
-//     user's title override. Written atomically.
+//     user's overrides (title, description, privacy, tags, category; D388: an override replaces the template's value).
+//     The file also holds `autoEvent` (default true): false = Go live makes no event and calls YouTube not at all.
+//     Written atomically.
 //
 // Quota (YouTube Data API, 10 000 units a day by default): listing templates costs 1 unit. One output's go-live costs
 // about 203 units: reads 3 x 1 (template broadcast, template video, liveStreams.list), liveBroadcasts.insert 50,
@@ -31,7 +33,6 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConnectError, DEFAULT_ENDPOINTS, ERROR_TEXT, STREAM_REF_RE, httpJson, sameSecret } from './index.mjs';
 
-export const EVENTS_FLAG = 'youtube-events';
 export const CHOICES_FILE = 'youtube-events.json';
 export const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OUTPUT_RE = /^[a-z0-9-]{1,32}$/;
@@ -55,11 +56,38 @@ export function cleanTitle(v) {
 const plainText = (v, max) => (typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '');
 const isoOrNull = (v) => { if (typeof v !== 'string') return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
 
+/** A description YouTube takes: <= 5000 characters, no '<' or '>', no control characters except line breaks and tabs. '' = none. */
+export function cleanDescription(v) {
+  if (typeof v !== 'string' || !v || v.length > 5000 || /[<>]/.test(v) || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(v)) return null;
+  return v;
+}
+/** Tags YouTube takes: an array of 1..30 plain strings of 1..100 characters (no '<' or '>'), 500 characters in all. [] = none. */
+export function cleanTags(v) {
+  if (!Array.isArray(v) || !v.length || v.length > 30) return null;
+  const out = [];
+  let total = 0;
+  for (const t of v) {
+    if (typeof t !== 'string') return null;
+    const x = t.trim();
+    if (!x || x.length > 100 || /[<>]/.test(x) || /[\x00-\x1f\x7f]/.test(x)) return null;
+    total += x.length;
+    out.push(x);
+  }
+  return total > 500 ? null : out;
+}
+export const cleanCategoryId = (v) => (typeof v === 'string' && /^[0-9]{1,4}$/.test(v) ? v : null);
+export const cleanPrivacy = (v) => (typeof v === 'string' && PRIVACY.has(v) ? v : null);
+
 // ---- the choice store (not a secret) ----
 
 function cleanChoice(v) {
   if (!v || typeof v !== 'object' || typeof v.templateId !== 'string' || !ID_RE.test(v.templateId)) return null;
-  return { templateId: v.templateId, templateTitle: plainText(v.templateTitle, 100), title: cleanTitle(v.title) };
+  const c = { templateId: v.templateId, templateTitle: plainText(v.templateTitle, 100), title: cleanTitle(v.title) };
+  const description = cleanDescription(v.description); if (description) c.description = description;
+  const privacy = cleanPrivacy(v.privacy); if (privacy) c.privacy = privacy;
+  const tags = cleanTags(v.tags); if (tags) c.tags = tags;
+  const categoryId = cleanCategoryId(v.categoryId); if (categoryId) c.categoryId = categoryId;
+  return c;
 }
 function cleanChoices(outputs) {
   const out = {};
@@ -70,20 +98,25 @@ function cleanChoices(outputs) {
   }
   return out;
 }
-/** { "<sinkId>": { templateId, templateTitle, title|null } } from <dataDir>/youtube-events.json; unreadable = none. */
-export function readChoices(dataDir) {
-  try { return cleanChoices(JSON.parse(readFileSync(path.join(dataDir, CHOICES_FILE), 'utf8'))?.outputs); } catch { return {}; }
-}
-/** Writes the whole choice map (tmp + rename). Returns what was written. */
-export function writeChoices(dataDir, outputs) {
+function readChoiceFile(dataDir) { try { const j = JSON.parse(readFileSync(path.join(dataDir, CHOICES_FILE), 'utf8')); return j && typeof j === 'object' ? j : {}; } catch { return {}; } }
+/** { "<sinkId>": { templateId, templateTitle, title|null, description?, privacy?, tags?, categoryId? } } from <dataDir>/youtube-events.json; unreadable = none. */
+export function readChoices(dataDir) { return cleanChoices(readChoiceFile(dataDir).outputs); }
+/** The toggle "New YouTube event at every Go live" (D388): true unless the file says false. Unreadable = true. */
+export function readAutoEvent(dataDir) { return readChoiceFile(dataDir).autoEvent !== false; }
+function writeFileAtomic(dataDir, outputs, autoEvent) {
   const clean = cleanChoices(outputs);
   const file = path.join(dataDir, CHOICES_FILE);
   mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify({ version: 1, outputs: clean }, null, 2)}\n`);
+  writeFileSync(tmp, `${JSON.stringify({ version: 1, autoEvent, outputs: clean }, null, 2)}
+`);
   renameSync(tmp, file);
   return clean;
 }
+/** Writes the whole choice map (tmp + rename), keeping the autoEvent setting. Returns what was written. */
+export function writeChoices(dataDir, outputs) { return writeFileAtomic(dataDir, outputs, readAutoEvent(dataDir)); }
+/** Sets the autoEvent toggle, keeping the choices. Returns the new value. */
+export function writeAutoEvent(dataDir, on) { writeFileAtomic(dataDir, readChoices(dataDir), on === true); return on === true; }
 
 // ---- the API client ----
 
@@ -209,9 +242,15 @@ export function createYoutubeEvents(opts = {}) {
    * A new live event copied from templateId, bound to the stream whose key is stored under keyRef.
    * Returns { broadcastId, title, warnings[] }. Throws ConnectError (codes only); a half-made event is deleted.
    */
-  async function createEvent({ templateId, title, keyRef } = {}) {
+  async function createEvent({ templateId, title, keyRef, description: ovDescription, privacy: ovPrivacy, tags: ovTags, categoryId: ovCategoryId } = {}) {
     if (typeof templateId !== 'string' || !ID_RE.test(templateId)) throw new ConnectError('youtube-template-missing');
     if (title !== undefined && title !== null && !cleanTitle(title)) throw new ConnectError('youtube-bad-title');
+    // D388 overrides: a value the user set replaces the template's; a bad one stops the start before anything is made.
+    const ov = {};
+    if (ovDescription !== undefined && ovDescription !== null) { ov.description = cleanDescription(ovDescription); if (!ov.description) throw new ConnectError('youtube-bad-choice'); }
+    if (ovPrivacy !== undefined && ovPrivacy !== null) { ov.privacy = cleanPrivacy(ovPrivacy); if (!ov.privacy) throw new ConnectError('youtube-bad-choice'); }
+    if (ovTags !== undefined && ovTags !== null) { ov.tags = cleanTags(ovTags); if (!ov.tags) throw new ConnectError('youtube-bad-choice'); }
+    if (ovCategoryId !== undefined && ovCategoryId !== null) { ov.categoryId = cleanCategoryId(ovCategoryId); if (!ov.categoryId) throw new ConnectError('youtube-bad-choice'); }
     const warnings = [];
     const tData = await call(`${ep.youtubeApi}/liveBroadcasts?part=snippet,status,contentDetails&id=${encodeURIComponent(templateId)}`);
     const tpl = Array.isArray(tData?.items) ? tData.items.find((b) => b?.id === templateId) : null;
@@ -232,22 +271,24 @@ export function createYoutubeEvents(opts = {}) {
     for (const k of ['enableDvr', 'enableEmbed', 'recordFromStart']) if (typeof tcd[k] === 'boolean') contentDetails[k] = tcd[k];
     if (LATENCY.has(tcd.latencyPreference)) contentDetails.latencyPreference = tcd.latencyPreference;
     if (CAPTIONS.has(tcd.closedCaptionsType)) contentDetails.closedCaptionsType = tcd.closedCaptionsType;
-    const description = typeof tpl.snippet?.description === 'string' ? tpl.snippet.description.slice(0, 5000) : (typeof video?.snippet?.description === 'string' ? video.snippet.description.slice(0, 5000) : '');
+    const description = ov.description ?? (typeof tpl.snippet?.description === 'string' ? tpl.snippet.description.slice(0, 5000) : (typeof video?.snippet?.description === 'string' ? video.snippet.description.slice(0, 5000) : ''));
     const kids = typeof tpl.status?.selfDeclaredMadeForKids === 'boolean' ? tpl.status.selfDeclaredMadeForKids
       : (typeof video?.status?.selfDeclaredMadeForKids === 'boolean' ? video.status.selfDeclaredMadeForKids : (typeof video?.status?.madeForKids === 'boolean' ? video.status.madeForKids : undefined));
-    const status = { privacyStatus: PRIVACY.has(tpl.status?.privacyStatus) ? tpl.status.privacyStatus : 'private', ...(kids !== undefined ? { selfDeclaredMadeForKids: kids } : {}) };
+    const status = { privacyStatus: ov.privacy ?? (PRIVACY.has(tpl.status?.privacyStatus) ? tpl.status.privacyStatus : 'private'), ...(kids !== undefined ? { selfDeclaredMadeForKids: kids } : {}) };
     const ins = await call(`${ep.youtubeApi}/liveBroadcasts?part=snippet,status,contentDetails`, {
       method: 'POST', json: { snippet: { title: name, description, scheduledStartTime: new Date(now()).toISOString() }, status, contentDetails },
     });
     const broadcastId = typeof ins?.id === 'string' && ID_RE.test(ins.id) ? ins.id : null;
     if (!broadcastId) throw new ConnectError('youtube-api-failed');
     try {
-      // videos.update: only fields the template has; category is required by YouTube for a snippet update.
-      const vs = video?.snippet ?? null;
+      // videos.update: only fields the template (or an override) has; category is required by YouTube for a snippet update.
+      const vs = video?.snippet ?? (ov.categoryId ? {} : null);
       if (vs) {
-        if (typeof vs.categoryId === 'string' && /^[0-9]{1,4}$/.test(vs.categoryId)) {
-          const snippet = { title: name, categoryId: vs.categoryId, description };
-          if (Array.isArray(vs.tags)) { const tags = vs.tags.filter((t) => typeof t === 'string' && t.length <= 100 && !/[<>]/.test(t)).slice(0, 100); if (tags.length) snippet.tags = tags; }
+        const cat = ov.categoryId ?? (typeof vs.categoryId === 'string' && /^[0-9]{1,4}$/.test(vs.categoryId) ? vs.categoryId : null);
+        if (cat) {
+          const snippet = { title: name, categoryId: cat, description };
+          const tagList = ov.tags ?? (Array.isArray(vs.tags) ? vs.tags.filter((t) => typeof t === 'string' && t.length <= 100 && !/[<>]/.test(t)).slice(0, 100) : []);
+          if (tagList.length) snippet.tags = tagList;
           if (typeof vs.defaultLanguage === 'string' && LANG_RE.test(vs.defaultLanguage)) snippet.defaultLanguage = vs.defaultLanguage;
           if (typeof vs.defaultAudioLanguage === 'string' && LANG_RE.test(vs.defaultAudioLanguage)) snippet.defaultAudioLanguage = vs.defaultAudioLanguage;
           try { await call(`${ep.youtubeApi}/videos?part=snippet`, { method: 'PUT', json: { id: broadcastId, snippet } }); } catch (e) {
