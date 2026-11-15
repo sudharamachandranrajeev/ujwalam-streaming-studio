@@ -29,6 +29,9 @@ public:
 	Q_INVOKABLE void log(const QString &line);
 	// Settings > Folders "Choose...": the Windows folder picker (no Qt Quick Dialogs module to ship). "" when cancelled.
 	Q_INVOKABLE QString chooseFolder(const QString &title, const QString &start) const;
+	// YouTube window (D388) "Choose thumbnail": the Windows file picker for a PNG or JPEG. "" when cancelled or in test mode
+	// (UJWALAM_HEADLESS=1: no dialog ever opens).
+	Q_INVOKABLE QString chooseImage(const QString &title) const;
 	// Settings > Chat & bots "Copy pairing code": puts the text on the system clipboard (the widget's QClipboard call).
 	Q_INVOKABLE void copyText(const QString &text) const;
 	// Report a problem: opens an https://github.com/ link in the browser (the widget report()'s check); anything else is

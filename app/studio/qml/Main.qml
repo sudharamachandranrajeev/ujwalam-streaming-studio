@@ -48,7 +48,7 @@ ApplicationWindow {
         s.posts = postsDlg.probe();
         s.sceneBuilder = sceneBuilderDlg.probe();
         s.more = bar.moreProbe();
-        s.youtubeEvents = ytEventsDlg.probe();
+        s.youtube = ytWin.probe();
         s.clips = { text: studioStore.clipsText, tip: studioStore.clipsTip, asks: (studioStore.clips.asks || []).length, ask: clipsAskDlg.probe(),
                     reviewShown: studioStore.flags["learning-review"] === true && studioStore.reviewCount > 0, reviewCount: studioStore.reviewCount };
         s.alerts = alerts.probe();
@@ -71,8 +71,8 @@ ApplicationWindow {
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
     function probeAction(action) {
         if (String(action).startsWith("settings-") || String(action).startsWith("stream-") || String(action).startsWith("tr-") || String(action).startsWith("ap-") || String(action).startsWith("int-") || String(action).startsWith("conn-")) return settingsDlg.probeAction(String(action));
-        if (action === "yte-golive") { studioStore.toggleStream(); return true } // Go live as the button does (the button needs the LIVE start)
-        if (String(action).startsWith("yte-")) return ytEventsDlg.probeAction(String(action));
+        if (action === "yt-golive") { studioStore.toggleStream(); return true } // Go live as the button does (the button needs the LIVE start)
+        if (String(action).startsWith("yt-")) return ytWin.probeAction(String(action));
         if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
         if (String(action).startsWith("growth-")) return growthDlg.probeAction(String(action));
         if (String(action).startsWith("review-")) return reviewDlg.probeAction(String(action));
@@ -126,7 +126,7 @@ ApplicationWindow {
         onAddLayerReady: (sceneId, sceneName) => addLayerDlg.ask(sceneId, sceneName)
         onAddSceneReady: (canvases) => addSceneDlg.ask(canvases)
         onSettingsWanted: (page) => settingsDlg.openAt(page)
-        onYoutubeEventsWanted: ytEventsDlg.show()
+        onYoutubeEventsWanted: ytWin.show("presets")
     }
     Connections {
         target: studioStore.edit
@@ -153,7 +153,7 @@ ApplicationWindow {
         store: studioStore
         taskCenter: taskCenter
         guide: guide
-        windows: ({ youtubeEvents: ytEventsDlg, growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg, sceneBuilder: sceneBuilderDlg })
+        windows: ({ youtube: ytWin, growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg, sceneBuilder: sceneBuilderDlg })
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
         height: 56
     }
@@ -277,7 +277,7 @@ ApplicationWindow {
     ReportDialog { id: reportDlg; store: studioStore }
     ImportWindow { id: importDlg; store: studioStore }
     SceneBuilderWindow { id: sceneBuilderDlg; store: studioStore }
-    YoutubeEventsDialog { id: ytEventsDlg; store: studioStore }
+    YoutubeWindow { id: ytWin; store: studioStore }
     PostsWindow { id: postsDlg; store: studioStore }
     ClipsAsk { id: clipsAskDlg; store: studioStore }
     Connections {

@@ -64,7 +64,7 @@ QtObject {
     signal addLayerReady(string sceneId, string sceneName)
     signal addSceneReady(var canvases)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
-    signal youtubeEventsWanted()       // open the YouTube event picker (a Go live was refused for a missing event, D386)
+    signal youtubeEventsWanted()       // open the YouTube window on its Presets tab (a Go live was refused for a missing event, D386, D388)
     signal clipsAsk(var ask)           // "Make clips?" after a recording or stream (setting: Ask me each time)
     signal flagsRead()                 // after each flag read (every status poll)
     signal statusRead(var s)           // each status that came back (the guide's hints follow what changed)
@@ -378,7 +378,7 @@ QtObject {
             pollStatus(() => { actionBusy = false; });
         });
     }
-    // D386: a refused start says why (detail, as the server wrote it); a missing or failed YouTube event also opens the picker.
+    // D386: a refused start says why (detail, as the server wrote it); a missing or failed YouTube event also opens the YouTube window.
     function startRefused(b) {
         if (!b || b.verdict !== "refuse") return false;
         say(typeof b.detail === "string" && b.detail !== "" ? b.detail : "Not started: " + (b.reason || "refused"));
