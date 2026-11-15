@@ -69,6 +69,7 @@ import { CONNECT_FLAG, ERROR_TEXT as CONNECT_ERROR_TEXT, PROBLEM_TEXT as CONNECT
 import { EVENTS_FLAG as YT_EVENTS_FLAG, ID_RE as YT_ID_RE, cleanTitle as ytCleanTitle, createYoutubeEvents, readChoices as readYtChoices, writeChoices as writeYtChoices } from '../platform-connect/youtube-events.mjs';
 import { connectRow as instagramRow, createUseWatcher as createInstagramWatcher, freshnessText as instagramText, INSTAGRAM_FLAG, keyFreshness as instagramFreshness, loadAddon as instagramAddon, noteKeyStarted as instagramStarted } from '../outputs/instagram.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG, createSettingsRoutes } from './settings-routes.mjs';
+import { createYoutubePresets } from './youtube-presets.mjs';
 import { createSceneBuilderRoutes } from './scene-builder-routes.mjs';
 import { connectTargets, readSetup } from './stream-setup.mjs';
 import { integrationsInEffect } from './integrations.mjs';
@@ -1293,6 +1294,13 @@ export function createStudioServer(opts) {
     },
   });
 
+  // D388 A: named YouTube quality presets. No flag. Key presence from the Connections status rows (presence only).
+  const ytPresets = createYoutubePresets({
+    dataDir: opts.dataDir, json, log, settings: settingsRoutes, readSetup,
+    keyPresence: async () => new Map((await connect().status()).outputs.map((o) => [o.id, o.key?.present === true])),
+    events: () => ytEventsView(),
+  });
+
   async function handleCoreOutcome(r, summary) {
     // r: { verdict, reason, confirm?, dispatch? } from the event core. The page gets verdict/reason and, when the core
     // asks for an approval (a rule / remote / system write), a pending id for one Allow click. confirmId and actionHash
@@ -1355,6 +1363,7 @@ export function createStudioServer(opts) {
       try { const c = connect(); return json(res, 200, { ...(await c.status({ fresh: url.searchParams.get('fresh') === '1' })), job: c.currentJob() }); } catch (e) { return connectFail(res, e); }
     }
     if (req.method === 'GET' && route === '/ui/api/youtube/events') return ytEventsRoute(req, res, route, null); // D386
+    if (req.method === 'GET' && await ytPresets.handle('GET', route, null, res)) return undefined; // D388
     if (route.startsWith('/ui/api/growth') && !growthOn()) return json(res, 404, { error: 'growth-off' });
     if (route.startsWith('/ui/api/posts') && !postingOn()) return json(res, 404, { error: 'posting-off' });
     if (route.startsWith('/ui/api/bots') && !botsOn()) return json(res, 404, { error: 'bot-manager-off' });
@@ -1596,6 +1605,7 @@ export function createStudioServer(opts) {
     }
     if (route.startsWith('/ui/api/connect/')) return connectRoute(res, route, body);
     if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set') return ytEventsRoute(req, res, route, body); // D386
+    if (await ytPresets.handle('POST', route, body, res)) return undefined; // D388
     if (route === '/ui/api/learning/confirm') {
       if (Object.keys(body).some((k) => !['session', 'id', 'value'].includes(k)) || typeof body.session !== 'string' || typeof body.id !== 'string' || typeof body.value !== 'string') return json(res, 400, { error: 'bad-params' });
       const r = await createReview({ dataDir: opts.dataDir }).confirm(body);

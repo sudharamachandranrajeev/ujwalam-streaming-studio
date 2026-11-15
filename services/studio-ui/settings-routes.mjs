@@ -84,6 +84,18 @@ export function createSettingsRoutes(opts) {
     return setup.outputs.filter((o) => o.enabled && included.has(o.id) && (!states || states.has(o.id))).map((o) => o.id);
   }
 
+  /** The one save path of a stream setup (Settings > Stream Save, D388 YouTube presets): same checks and platform limits
+   *  (writeSetup), then the D387 apply. Never stops anything. Not flag-gated: callers decide.
+   *  -> { ok: false, problems } | { ok: true, setup, appliesAt: 'now'|'next-go-live'|'next-start', applied, outputs?, reason?, detail? } */
+  async function saveSetup(setup) {
+    const w = writeSetup(dataDir, setup, planOpts());
+    if (!w.ok) return { ok: false, problems: w.problems };
+    let a;
+    try { a = await streamApply.apply(); } catch { a = { applied: false, error: 'host-refused', pending: false }; }
+    const appliesAt = a.applied ? 'now' : a.pending ? 'next-go-live' : 'next-start';
+    return { ok: true, setup: w.setup, appliesAt, applied: a.applied === true, outputs: a.sinks, reason: a.error, detail: a.detail };
+  }
+
   async function handle(method, route, body, res) {
     // ---- Stream settings ----
     if (route === '/ui/api/stream/setup' || route === '/ui/api/stream/check') {
@@ -98,13 +110,10 @@ export function createSettingsRoutes(opts) {
       }
       if (method !== 'POST' || !isPlain(body) || Object.keys(body).some((k) => k !== 'setup')) return json(res, 400, { error: 'bad-params' }), true;
       if (route === '/ui/api/stream/check') return json(res, 200, { problems: setupProblems(body.setup, planOpts()) }), true;
-      const w = writeSetup(dataDir, body.setup, planOpts());
+      const w = await saveSetup(body.setup);
       if (!w.ok) return json(res, 422, { error: 'refused', problems: w.problems }), true;
-      let a;
-      try { a = await streamApply.apply(); } catch { a = { applied: false, error: 'host-refused', pending: false }; }
-      const appliesAt = a.applied ? 'now' : a.pending ? 'next-go-live' : 'next-start';
-      return json(res, 200, { ok: true, setup: w.setup, appliesAt, applied: a.applied === true,
-        ...(a.applied ? { outputs: a.sinks } : { reason: a.error, detail: a.detail }),
+      return json(res, 200, { ok: true, setup: w.setup, appliesAt: w.appliesAt, applied: w.applied,
+        ...(w.applied ? { outputs: w.outputs } : { reason: w.reason, detail: w.detail }),
         summaries: Object.fromEntries(w.setup.outputs.map((o) => [o.id, outputSummary(w.setup, o, opt())])) }), true;
     }
 
@@ -243,7 +252,11 @@ export function createSettingsRoutes(opts) {
     return a.applied ? { applied: true } : a.error ? { applied: false, error: a.error, detail: a.detail } : { applied: false };
   }
 
-  return { handle, confirm, startSinks, applyPendingBeforeStart,
+  return { handle, confirm, startSinks, applyPendingBeforeStart, saveSetup,
+    /** Is the saved setup in use (flag stream-settings on)? Without it the launcher plans from alpha-live.json. */
+    streamSettingsOn: () => on(STREAM_SETTINGS_FLAG),
+    /** The project's canvas sizes and the stream options, as the Save route sees them. */
+    planOptions: () => planOpts(),
     /** The live plan file the host runs after a runtime apply (or the launcher's), null without a --live start. */
     planFileInEffect: () => streamApply?.planFileInEffect() ?? null,
     pendingSetup: () => streamApply?.pending() === true };
