@@ -64,6 +64,8 @@ QtObject {
     signal addLayerReady(string sceneId, string sceneName)
     signal addSceneReady(var canvases)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
+    signal goLiveWanted(var options)   // Go live with a YouTube output on and signed in: the chooser opens first (D389)
+    signal connectionsWanted(string output) // open Settings > Connections with only this output (the chooser's "Add the key")
     signal youtubeEventsWanted()       // open the YouTube window on its Presets tab (a Go live was refused for a missing event, D386, D388)
     signal clipsAsk(var ask)           // "Make clips?" after a recording or stream (setting: Ask me each time)
     signal flagsRead()                 // after each flag read (every status poll)
@@ -360,7 +362,20 @@ QtObject {
     }
 
     // ---- stream and recording (the widget's hostAction / confirm, D332: one click) ----
-    function toggleStream() { hostAction(live ? "stream.stop" : "stream.start") }
+    // D389: Go live asks YouTube-ready outputs first. With a YouTube output switched on and YouTube signed in the chooser opens
+    // (GoLiveDialog, which then calls startPrepared); with no YouTube output, not signed in, or the options not readable,
+    // Go live is the plain stream.start as before. Stop is never asked about.
+    function toggleStream() {
+        if (live) return hostAction("stream.stop");
+        if (actionBusy) return;
+        actionBusy = true; // a second click while the options are read does nothing
+        Api.get("ui/api/youtube/golive/options", (ok, b) => {
+            actionBusy = false;
+            const yt = ok && !!b && b.signedIn === true && Array.isArray(b.outputs) && b.outputs.some(o => o.on === true);
+            if (yt) goLiveWanted(b); else hostAction("stream.start");
+        });
+    }
+    function startPrepared() { hostAction("stream.start") } // the chooser's Go live, after golive/prepare
     function toggleRecord() { hostAction(recording ? "record.stop" : "record.start") }
 
     // One stream or record action at a time (Codex review of Q2): the buttons stay off from the click until the action

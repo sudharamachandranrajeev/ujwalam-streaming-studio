@@ -146,6 +146,7 @@ Dialog {
                 query = "";
                 saving = false;
                 open();
+                if (wantOnly !== "") { const w = wantOnly; wantOnly = ""; connectOutput(w) }
             });
         });
     }
@@ -304,6 +305,13 @@ Dialog {
         ready = false;
     }
 
+    // The Go live chooser's "Add the key": Settings > Connections with only that output (its quality keys too).
+    property string wantOnly: ""
+    function openConnections(id) {
+        if (opened) return connectOutput(id);
+        wantOnly = id;
+        openAt("Connections");
+    }
     // Edit output > Connect: Settings > Connections with only that output (the widget opens the same page for it in a
     // window of its own); "Show all outputs" brings the others back.
     function connectOutput(id) {

@@ -54,6 +54,7 @@ async function boot({ flagsOn = ['stream-settings', 'outputs-panel', 'integratio
   const dataDir = mk();
   const f = createFlags({ dataDir });
   for (const id of flagsOn) f.set(id, true);
+  if (!flagsOn.includes('outputs-panel')) f.set('outputs-panel', false); // on by default since D389: these tests mean "off" when it is not listed
   const fake = createFakeHost({ outputsReady: true });
   const calls = [];
   // beforeHost(m, p): awaited before the fake host runs a call (race tests: a slow start on its way to the host).
@@ -70,9 +71,10 @@ async function boot({ flagsOn = ['stream-settings', 'outputs-panel', 'integratio
 const settle = () => new Promise((r) => setTimeout(r, 120)); // one status poll
 
 describe('flags', () => {
-  test('the three flags are defined, off by default, and every route is 404 while off', async () => {
+  test('the three flags are defined (the outputs panel on by default since D389, the others off), and every route is 404 while off', async () => {
     const defs = JSON.parse(readFileSync(path.join(REPO, 'data', 'flags.json'), 'utf8')).flags;
-    for (const id of ['stream-settings', 'outputs-panel', 'integrations']) assert.equal(defs.find((x) => x.id === id)?.default, false, id);
+    for (const id of ['stream-settings', 'integrations']) assert.equal(defs.find((x) => x.id === id)?.default, false, id);
+    assert.equal(defs.find((x) => x.id === 'outputs-panel')?.default, true, 'outputs-panel');
     const c = await boot({ flagsOn: [] });
     for (const u of ['/ui/api/stream/setup', '/ui/api/outputs/panel', '/ui/api/integrations']) assert.equal((await get(c, u)).status, 404, u);
     for (const [u, b] of [['/ui/api/stream/setup', { setup: {} }], ['/ui/api/outputs/toggle', { id: 'twitch', on: false }], ['/ui/api/integrations', { value: {} }], ['/ui/api/transitions/force', { canvas: 'h' }], ['/ui/api/integrations/remote-token', {}]]) {
