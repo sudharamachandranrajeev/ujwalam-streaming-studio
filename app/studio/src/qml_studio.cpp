@@ -77,10 +77,17 @@ bool QmlStudio::begin(Mode mode)
 		win_->resize(1600, 900);
 		win_->create();
 		break;
-	case Mode::Probe: // the offscreen platform: "shown" so bindings and layouts run, never on a screen
-		win_->resize(1600, 900);
+	case Mode::Probe: { // the offscreen platform: "shown" so bindings and layouts run, never on a screen
+		int pw = 1600, ph = 900;
+		const QStringList sz = qEnvironmentVariable("UJWALAM_STUDIO_PROBE_SIZE").split(QLatin1Char('x'));
+		if (sz.size() == 2 && sz[0].toInt() >= 640 && sz[1].toInt() >= 400) { // a smaller or larger window, to see how the layout copes
+			pw = sz[0].toInt();
+			ph = sz[1].toInt();
+		}
+		win_->resize(pw, ph);
 		win_->show();
 		break;
+	}
 	}
 	QMetaObject::invokeMethod(win_, "start");
 	return true;
@@ -170,6 +177,171 @@ QObject *findNamed(QObject *root, const QString &name)
 	QSet<const QObject *> seen;
 	return findNamed(root, name, seen);
 }
+
+// ---- layout check (D389) ----
+// What a person would call broken: an item cut off or hanging outside the area that clips it, text that does not fit its box
+// and has no elide, and two sibling controls drawn over each other. Items are judged by what is drawn: visible, opaque,
+// with a size. A subtree can opt out with the property layoutIgnore (shadows, focus rings, decoration that is meant to
+// reach past its parent).
+bool isTextItem(const QObject *o) { return o->inherits("QQuickText"); }
+bool isControlItem(const QObject *o) { return !o->inherits("QQuickScrollBar") && !o->inherits("QQuickScrollIndicator") && (o->inherits("QQuickControl") || o->inherits("QQuickTextInput") || o->inherits("QQuickTextEdit")); }
+
+bool drawn(const QQuickItem *it)
+{
+	if (it->inherits("QQuickPlaceholderText")) // internal to a text field, sized by it
+		return false;
+	for (const QQuickItem *a = it; a; a = a->parentItem()) {
+		if (!a->isVisible() || a->opacity() < 0.05 || a->property("layoutIgnore").toBool())
+			return false;
+	}
+	return it->width() >= 1 && it->height() >= 1;
+}
+
+QString pathOf(const QQuickItem *it)
+{
+	QStringList parts;
+	for (const QQuickItem *a = it; a && parts.size() < 7; a = a->parentItem()) {
+		QString n = a->objectName();
+		if (n.isEmpty())
+			n = QString::fromLatin1(a->metaObject()->className()).section(QLatin1Char('_'), 0, 0);
+		parts.prepend(n);
+	}
+	QString lead;
+	if (isTextItem(it) || isControlItem(it)) {
+		const QString t = it->property("text").toString().simplified().left(40);
+		if (!t.isEmpty())
+			lead = QStringLiteral(" \"%1\"").arg(t);
+	}
+	return parts.join(QLatin1Char('>')) + lead;
+}
+
+// The Flickable whose content item holds this item (or an ancestor of it), if any.
+const QQuickItem *flickableOf(const QQuickItem *it)
+{
+	for (const QQuickItem *a = it; a && a->parentItem(); a = a->parentItem())
+		if (a->parentItem()->inherits("QQuickFlickable") && a->parentItem()->property("contentItem").value<QObject *>() == a)
+			return a->parentItem();
+	return nullptr;
+}
+
+void checkItem(QQuickItem *it, QJsonArray &out)
+{
+	QQuickItem *parent = it->parentItem();
+	if (!parent || !drawn(it))
+		return;
+	const bool leaf = isTextItem(it) || isControlItem(it);
+	auto add = [&](const char *kind, const QString &what) {
+		if (out.size() < 400)
+			out.append(QJsonObject{{QStringLiteral("kind"), QLatin1String(kind)}, {QStringLiteral("item"), pathOf(it)}, {QStringLiteral("what"), what}});
+	};
+	const QRectF own = it->boundingRect();
+	// 1. outside the area that clips it (each ancestor that clips), or, for text and controls, outside its parent
+	const QQuickItem *flick = flickableOf(it);
+	bool passedFlick = false; // above the Flickable the content may sit past the bottom: it scrolls
+	bool surfaceDone = false; // only the nearest drawn surface (a filled or edged Rectangle, or a control) is compared
+	for (QQuickItem *a = parent; a; a = a->parentItem()) {
+		if (a == flick)
+			passedFlick = true;
+		const bool clips = a->clip();
+		bool surface = false;
+		if (leaf && !surfaceDone && a->width() > 0 && a->height() > 0 && !a->inherits("QQuickFlickable")) {
+			if (a->inherits("QQuickControl")) {
+				surface = true;
+			} else if (a->inherits("QQuickRectangle")) {
+				const QObject *border = a->property("border").value<QObject *>();
+				surface = a->property("color").value<QColor>().alphaF() > 0.05 || (border && border->property("width").toDouble() > 0);
+			}
+		}
+		if (surface)
+			surfaceDone = true;
+		const bool direct = surface;
+		if (!clips && !direct)
+			continue;
+		if (a->inherits("QQuickFlickable") && a->property("contentItem").value<QObject *>() == it)
+			continue;
+		const QRectF r = a->mapRectFromItem(it, own);
+		const QRectF box = a->boundingRect();
+		const double tol = 1.5;
+		const bool offX = r.left() < box.left() - tol || r.right() > box.right() + tol;
+		const bool offY = !passedFlick && (r.top() < box.top() - tol || r.bottom() > box.bottom() + tol);
+		if (offX || offY) {
+			add("outside", QStringLiteral("%1 by %2 at %3,%4 in a %5 of %6 by %7").arg(qRound(r.width())).arg(qRound(r.height())).arg(qRound(r.x())).arg(qRound(r.y()))
+				.arg(clips ? QStringLiteral("clipped area") : QStringLiteral("parent")).arg(qRound(box.width())).arg(qRound(box.height())));
+			break;
+		}
+	}
+	// 2. text wider than its box, not elided and not wrapped; wrapped text taller than its box
+	if (isTextItem(it)) {
+		const double cw = it->property("contentWidth").toDouble(), ch = it->property("contentHeight").toDouble();
+		const int elide = it->property("elide").toInt();   // Text.ElideNone = 0
+		const int wrap = it->property("wrapMode").toInt(); // Text.NoWrap = 0
+		if (wrap == 0 && elide == 0 && cw > it->width() + 1.5)
+			add("clipped-text", QStringLiteral("needs %1 px, has %2").arg(qRound(cw)).arg(qRound(it->width())));
+		else if (wrap != 0 && ch > it->height() + 1.5)
+			add("clipped-text", QStringLiteral("wrapped text needs %1 px, has %2").arg(qRound(ch)).arg(qRound(it->height())));
+	}
+}
+
+struct Leaf {
+	QQuickItem *item;
+	QRectF seen; // what shows of it, in its window's coordinates: its box cut by every clipping ancestor
+	bool popup;  // inside a popup (an overlay: it is meant to cover what is behind)
+};
+
+// The box of a text or control as it shows (in window coordinates), or an empty rect when a clip hides all of it.
+QRectF shownRect(const QQuickItem *it, bool *popup)
+{
+	QRectF r = it->mapRectToScene(it->boundingRect());
+	*popup = false;
+	for (const QQuickItem *a = it->parentItem(); a; a = a->parentItem()) {
+		if (a->clip())
+			r = r.intersected(a->mapRectToScene(a->boundingRect()));
+		if (a->inherits("QQuickOverlay"))
+			*popup = true;
+	}
+	return r;
+}
+
+void walkLayout(const QObject *o, QJsonArray &out, QSet<const QObject *> &seen, QList<Leaf> &leaves)
+{
+	for (const QObject *c : kids(o)) {
+		if (seen.contains(c))
+			continue;
+		seen.insert(c);
+		if (auto *it = const_cast<QQuickItem *>(qobject_cast<const QQuickItem *>(c))) {
+			checkItem(it, out);
+			if ((isTextItem(it) || isControlItem(it)) && drawn(it) && it->width() > 2 && it->height() > 2) {
+				bool popup = false;
+				const QRectF r = shownRect(it, &popup);
+				if (r.width() > 2 && r.height() > 2)
+					leaves.append({it, r, popup});
+			}
+		}
+		walkLayout(c, out, seen, leaves);
+	}
+}
+
+// Two texts or controls drawn over each other (neither inside the other), and text or controls that hang outside their window.
+void checkLeaves(const QList<Leaf> &leaves, QJsonArray &out)
+{
+	for (const Leaf &l : leaves) {
+		const QRectF win(0, 0, l.item->window() ? l.item->window()->width() : 0, l.item->window() ? l.item->window()->height() : 0);
+		const QQuickItem *fl = flickableOf(l.item);
+		if (!l.popup && win.width() > 0 && !fl && (l.seen.left() < -1.5 || l.seen.top() < -1.5 || l.seen.right() > win.right() + 1.5 || l.seen.bottom() > win.bottom() + 1.5) && out.size() < 400)
+			out.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("outside-window")}, {QStringLiteral("item"), pathOf(l.item)},
+					       {QStringLiteral("what"), QStringLiteral("shows %1 by %2 at %3,%4 in a window of %5 by %6").arg(qRound(l.seen.width())).arg(qRound(l.seen.height())).arg(qRound(l.seen.x())).arg(qRound(l.seen.y())).arg(qRound(win.width())).arg(qRound(win.height()))}});
+	}
+	for (int i = 0; i < leaves.size(); ++i)
+		for (int j = i + 1; j < leaves.size(); ++j) {
+			const Leaf &a = leaves[i], &b = leaves[j];
+			if (a.popup != b.popup || a.item->window() != b.item->window() || a.item->isAncestorOf(b.item) || b.item->isAncestorOf(a.item))
+				continue;
+			const QRectF x = a.seen.intersected(b.seen);
+			if (x.width() > 3 && x.height() > 3 && out.size() < 400)
+				out.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("intersect")}, {QStringLiteral("item"), pathOf(a.item)},
+						       {QStringLiteral("what"), QStringLiteral("overlaps %1 by %2 by %3 px").arg(pathOf(b.item)).arg(qRound(x.width())).arg(qRound(x.height()))}});
+		}
+}
 } // namespace
 
 QJsonObject QmlStudio::probe() const
@@ -187,11 +359,24 @@ QJsonObject QmlStudio::probe() const
 	if (QMetaObject::invokeMethod(win_, "probeState", Q_RETURN_ARG(QVariant, state)))
 		o.insert(QStringLiteral("state"), jsonOf(state));
 	o.insert(QStringLiteral("size"), QJsonArray{win_->width(), win_->height()});
+	if (!layoutRuns_.isEmpty())
+		o.insert(QStringLiteral("layout"), layoutRuns_);
 	return o;
 }
 
 bool QmlStudio::probeAction(const QString &action)
 {
+	if (action.startsWith(QStringLiteral("layout-check:"))) { // layout-check:<label>: what is cut off, hanging out or overlapping now
+		if (!win_)
+			return false;
+		QJsonArray issues;
+		QSet<const QObject *> seen;
+		QList<Leaf> leaves;
+		walkLayout(win_, issues, seen, leaves);
+		checkLeaves(leaves, issues);
+		layoutRuns_.append(QJsonObject{{QStringLiteral("label"), action.mid(13)}, {QStringLiteral("size"), QJsonArray{win_->width(), win_->height()}}, {QStringLiteral("issues"), issues}});
+		return true;
+	}
 	if (action.startsWith(QStringLiteral("theme:")) || action.startsWith(QStringLiteral("effects:")))
 		return theme::probeAction(action);
 	if (action.startsWith(QStringLiteral("type:"))) { // type:<objectName>=<text>: a text field's whole text, as typed

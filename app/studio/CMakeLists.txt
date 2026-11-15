@@ -106,6 +106,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/AddLayerDialog.qml
 		qml/AddSceneDialog.qml
 		qml/UButton.qml
+		qml/UFocusRing.qml
 		qml/UField.qml
 		qml/UIconButton.qml
 		qml/UPanel.qml

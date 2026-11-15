@@ -566,8 +566,15 @@ Data fromJson(const QJsonObject &o, bool custom)
 	return d;
 }
 
-Data load(const QString &id)
+// The saved id of the pack that Ujwalam Light replaced (D389): the old Soft look is gone, its saved choice opens the light pack.
+QString migratedId(const QString &id)
 {
+	return id == QStringLiteral("soft") ? QStringLiteral("ujwalam-light") : id;
+}
+
+Data load(const QString &idIn)
+{
+	const QString id = migratedId(idIn);
 	bool custom = false;
 	const QJsonObject o = packJson(id, &custom); // before fromJson: argument order is unspecified
 	return fromJson(o, custom);
@@ -1505,8 +1512,11 @@ QList<Info> available()
 	ids.sort();
 	ids.removeAll(kDefaultId);
 	ids.prepend(kDefaultId);
-	if (ids.removeAll(QStringLiteral("soft")))
-		ids.prepend(QStringLiteral("soft"));
+	// The two designed packs first (D389): Ujwalam Light, then Ujwalam Night, then the default and the rest.
+	if (ids.removeAll(QStringLiteral("ujwalam-night")))
+		ids.prepend(QStringLiteral("ujwalam-night"));
+	if (ids.removeAll(QStringLiteral("ujwalam-light")))
+		ids.prepend(QStringLiteral("ujwalam-light"));
 	QList<Info> out;
 	for (const QString &id : ids) {
 		const Data d = load(id);
@@ -1619,6 +1629,11 @@ Spring spring()
 	sp.damping = std::clamp(o.value(QStringLiteral("damping")).toDouble(sp.damping), 0.0, 200.0);
 	sp.mass = std::clamp(o.value(QStringLiteral("mass")).toDouble(sp.mass), 0.1, 10.0);
 	return sp;
+}
+
+QJsonObject systemBlock()
+{
+	return g_cur.src.value(QStringLiteral("system")).toObject();
 }
 
 DepthSpec depthSpec(const QString &cls)

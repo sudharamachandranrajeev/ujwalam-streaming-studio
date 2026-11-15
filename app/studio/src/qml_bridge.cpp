@@ -201,6 +201,68 @@ QVariantMap QmlTheme::spring() const
 	return {{QStringLiteral("stiffness"), sp.stiffness}, {QStringLiteral("damping"), sp.damping}, {QStringLiteral("mass"), sp.mass}};
 }
 
+// ---- design system (D389): defaults, then the pack's "system" block over them ----
+namespace {
+QVariantMap sysGroup(const QString &name, const QVariantMap &defaults)
+{
+	QVariantMap out = defaults;
+	const QJsonObject g = theme::systemBlock().value(name).toObject();
+	for (auto it = defaults.begin(); it != defaults.end(); ++it) {
+		const QJsonValue v = g.value(it.key());
+		if (it.value().typeId() == QMetaType::QString) {
+			if (v.isString() && !v.toString().isEmpty())
+				out[it.key()] = v.toString();
+		} else if (v.isDouble()) {
+			out[it.key()] = v.toDouble();
+		}
+	}
+	return out;
+}
+} // namespace
+
+QVariantMap QmlTheme::sp() const
+{
+	return sysGroup(QStringLiteral("space"), {{"xs", 4}, {"s", 8}, {"m", 12}, {"l", 16}, {"xl", 24}, {"xxl", 32}});
+}
+
+QVariantMap QmlTheme::ty() const
+{
+	return sysGroup(QStringLiteral("type"), {{"caption", 12}, {"small", 13}, {"body", 14}, {"subtitle", 16}, {"title", 20}, {"display", 28},
+						 {"displayFamily", QStringLiteral("Barlow")}});
+}
+
+QVariantMap QmlTheme::elev() const
+{
+	// e0 flat, e1 a resting card, e2 a raised control or popover, e3 a menu or toast, e4 a dialog. keyBlur and ambBlur are how far
+	// the soft edge spreads past the item; the alphas are the darkest point of each shadow (a dark pack sets them stronger).
+	const QJsonObject e = theme::systemBlock().value(QStringLiteral("elevation")).toObject();
+	static const double defs[5][5] = {{0, 0, 0, 0, 0}, {6, 1, 0.10, 14, 0.05}, {12, 3, 0.14, 24, 0.07}, {20, 8, 0.18, 36, 0.09}, {30, 14, 0.22, 52, 0.11}};
+	static const char *keys[5] = {"keyBlur", "keyY", "keyAlpha", "ambBlur", "ambAlpha"};
+	QVariantMap out;
+	for (int l = 0; l < 5; ++l) {
+		const QJsonObject o = e.value(QStringLiteral("e%1").arg(l)).toObject();
+		QVariantMap m;
+		for (int k = 0; k < 5; ++k)
+			m.insert(QLatin1String(keys[k]), o.contains(QLatin1String(keys[k])) ? o.value(QLatin1String(keys[k])).toDouble() : defs[l][k]);
+		out.insert(QStringLiteral("e%1").arg(l), m);
+	}
+	return out;
+}
+
+QVariantMap QmlTheme::ring() const { return sysGroup(QStringLiteral("ring"), {{"width", 2}, {"offset", 2}, {"alpha", 0.55}}); }
+QVariantMap QmlTheme::st() const { return sysGroup(QStringLiteral("state"), {{"hover", 0.07}, {"pressed", 0.13}, {"disabled", 0.45}}); }
+
+QVariantMap QmlTheme::mo() const
+{
+	QVariantMap m = sysGroup(QStringLiteral("motion"), {{"enter", 240}, {"exit", 160}});
+	m.insert(QStringLiteral("fast"), theme::duration(QStringLiteral("fast")));
+	m.insert(QStringLiteral("normal"), theme::duration(QStringLiteral("normal")));
+	m.insert(QStringLiteral("slow"), theme::duration(QStringLiteral("slow")));
+	m.insert(QStringLiteral("enter"), std::min(599.0, m.value(QStringLiteral("enter")).toDouble())); // the project rule: entrances under 600 ms
+	m.insert(QStringLiteral("exit"), std::min(399.0, m.value(QStringLiteral("exit")).toDouble()));   // exits under 400 ms
+	return m;
+}
+
 void QmlTheme::setOnAir(bool on)
 {
 	if (on == onAir_)

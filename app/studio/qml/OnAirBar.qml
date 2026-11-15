@@ -37,6 +37,8 @@ Rectangle {
         return false;
     }
 
+    // Narrow window (D389): the secondary buttons show their icon alone and the idle chips step aside, so nothing runs off the bar.
+    readonly property bool compact: width < 1500
     readonly property bool reviewShown: store.flags["learning-review"] === true && store.reviewCount > 0
     readonly property var oa: store.onAir || {}
     readonly property string mbps: typeof oa.kbps === "number" && oa.kbps > 0 ? (oa.kbps / 1000).toFixed(1) + " Mbps" : ""
@@ -87,12 +89,14 @@ Rectangle {
         }
         UChip {
             objectName: "chipRec"
+            visible: !bar.compact || bar.store.recording
             on: bar.store.recording
             text: bar.store.recording ? "REC  " + bar.clock(bar.oa.recordForMs) : "Not recording"
         }
         // Clips from finished recordings and streams (D283, D284), in plain words; the tip has the modes, folder and why.
         UChip {
             objectName: "chipClips"
+            visible: !bar.compact || (bar.store.clips.asks || []).length > 0
             text: bar.store.clipsText
             tip: bar.store.clipsTip
             on: (bar.store.clips.asks || []).length > 0
@@ -100,6 +104,7 @@ Rectangle {
         }
         UButton {
             objectName: "clipsFolderBtn"
+            iconOnly: bar.compact
             text: "My clips"
             iconName: "folder"
             tip: "Open the folder with your finished clips."
@@ -108,6 +113,7 @@ Rectangle {
         // LL3 (D340, flag learning-review): beside My clips, only with the flag on and something to review. Optional.
         UButton {
             objectName: "reviewBtn"
+            iconOnly: bar.compact
             visible: bar.reviewShown
             text: "Review reads (" + bar.store.reviewCount + ")"
             iconName: "clip"
@@ -173,6 +179,7 @@ Rectangle {
         UButton {
             id: moreBtn
             objectName: "moreBtn"
+            iconOnly: bar.compact && dock.look !== "dock"
             bare: dock.look === "dock"
             onHoveredChanged: if (hovered) dock.hoverBtn = moreBtn; else if (dock.hoverBtn === moreBtn) dock.hoverBtn = null
             text: "More"
@@ -218,6 +225,7 @@ Rectangle {
         UButton {
             id: settingsBtn
             objectName: "settingsBtn"
+            iconOnly: bar.compact && dock.look !== "dock"
             bare: dock.look === "dock"
             onHoveredChanged: if (hovered) dock.hoverBtn = settingsBtn; else if (dock.hoverBtn === settingsBtn) dock.hoverBtn = null
             text: "Settings"
@@ -229,6 +237,7 @@ Rectangle {
         // Clipping (D281): save the replay buffer now; mark a moment for the post-stream clipper. One click each (D332).
         UButton {
             objectName: "clipBtn"
+            iconOnly: bar.compact
             text: "Save clip"
             iconName: "clip"
             tip: "Save the last 60 seconds of H and V as clip files (replay buffer)."
@@ -236,6 +245,7 @@ Rectangle {
         }
         UButton {
             objectName: "markBtn"
+            iconOnly: bar.compact
             text: "Mark moment"
             iconName: "flag"
             tip: "Mark this moment for the clipper (same as the marker hotkey, Ctrl+Alt+Shift+M by default)."
@@ -253,6 +263,7 @@ Rectangle {
         // D388: the YouTube window (presets, event, live status, chat, past streams). Always there, also while live.
         UButton {
             objectName: "youtubeEventsBtn"
+            iconOnly: bar.compact
             text: "YouTube"
             iconName: "play"
             tip: "YouTube presets, the event for each output, live status and chat, and your past streams."

@@ -1,0 +1,253 @@
+{
+  "$schema": "./theme.schema.json",
+  "id": "ujwalam-light",
+  "name": "Ujwalam Light",
+  "topic": "A clean light studio: white panels on a cool grey window, one violet accent, large soft layered shadows and a clear focus ring. Replaces Soft.",
+  "version": 1,
+  "dark": false,
+  "colors": {
+    "bg": "#eef0f5",
+    "panel": "#ffffff",
+    "field": "#f2f4f8",
+    "border": "#d4d9e3",
+    "text": "#141824",
+    "muted": "#4b5368",
+    "accent": "#5a3fe0",
+    "accentHi": "#4429c4",
+    "danger": "#bf2230",
+    "ok": "#12713a",
+    "onAccent": "#ffffff",
+    "disabled": "#9ba2b3"
+  },
+  "gradients": {
+    "window": {
+      "from": "#f5f7fb",
+      "to": "#e8ebf2",
+      "angle": 90
+    },
+    "accent": {
+      "from": "#5a3fe0",
+      "to": "#5a3fe0",
+      "angle": 90
+    }
+  },
+  "typography": {
+    "family": "Inter",
+    "fallbacks": [
+      "Segoe UI"
+    ],
+    "baseSize": 10,
+    "captionSize": 8.5,
+    "titleSize": 16,
+    "headingWeight": 600,
+    "letterSpacing": 0,
+    "captionLetterSpacing": 0.2,
+    "captionCaps": false,
+    "buttonCaps": false,
+    "tabCaps": false,
+    "headingCaps": false,
+    "hinting": "full",
+    "scale": {
+      "h1": 16,
+      "h2": 12,
+      "subtitle": 10.5,
+      "body": 10,
+      "caption": 8.5,
+      "button": 10
+    }
+  },
+  "geometry": {
+    "radius": {
+      "small": 8,
+      "medium": 12,
+      "large": 18
+    },
+    "spacing": {
+      "small": 4,
+      "medium": 8,
+      "large": 16
+    },
+    "borderWidth": 1,
+    "controlHeight": 20,
+    "roundControl": 52,
+    "controlPadding": {
+      "y": 6,
+      "x": 14
+    }
+  },
+  "depth": {
+    "card": {
+      "shadow": {
+        "blur": 24,
+        "offsetX": 0,
+        "offsetY": 6,
+        "color": "#1b2133",
+        "opacity": 0.14
+      }
+    },
+    "button": {},
+    "primaryButton": {
+      "shadow": {
+        "blur": 10,
+        "offsetX": 0,
+        "offsetY": 3,
+        "color": "#5a3fe0",
+        "opacity": 0.2
+      }
+    },
+    "roundControl": {
+      "shadow": {
+        "blur": 14,
+        "offsetX": 0,
+        "offsetY": 4,
+        "color": "#1b2133",
+        "opacity": 0.14
+      }
+    },
+    "toast": {
+      "shadow": {
+        "blur": 30,
+        "offsetX": 0,
+        "offsetY": 10,
+        "color": "#1b2133",
+        "opacity": 0.2
+      }
+    },
+    "menu": {
+      "shadow": {
+        "blur": 24,
+        "offsetX": 0,
+        "offsetY": 8,
+        "color": "#1b2133",
+        "opacity": 0.2
+      }
+    },
+    "taskPanel": {
+      "shadow": {
+        "blur": 30,
+        "offsetX": 0,
+        "offsetY": 9,
+        "color": "#1b2133",
+        "opacity": 0.2
+      }
+    }
+  },
+  "motion": {
+    "fastMs": 110,
+    "normalMs": 170,
+    "slowMs": 240,
+    "easing": "outCubic",
+    "hoverLift": 0,
+    "pressSink": 1,
+    "spring": {
+      "stiffness": 320,
+      "damping": 30,
+      "mass": 1
+    },
+    "enterMs": 260,
+    "exitMs": 180,
+    "loopMs": 0
+  },
+  "system": {
+    "space": {
+      "xs": 4,
+      "s": 8,
+      "m": 12,
+      "l": 16,
+      "xl": 24,
+      "xxl": 32
+    },
+    "type": {
+      "caption": 12,
+      "small": 13,
+      "body": 14,
+      "subtitle": 16,
+      "title": 20,
+      "display": 28,
+      "displayFamily": "Inter"
+    },
+    "elevation": {
+      "e0": {
+        "keyBlur": 0,
+        "keyY": 0,
+        "keyAlpha": 0,
+        "ambBlur": 0,
+        "ambAlpha": 0
+      },
+      "e1": {
+        "keyBlur": 6,
+        "keyY": 1,
+        "keyAlpha": 0.1,
+        "ambBlur": 16,
+        "ambAlpha": 0.05
+      },
+      "e2": {
+        "keyBlur": 12,
+        "keyY": 3,
+        "keyAlpha": 0.12,
+        "ambBlur": 26,
+        "ambAlpha": 0.07
+      },
+      "e3": {
+        "keyBlur": 20,
+        "keyY": 8,
+        "keyAlpha": 0.15,
+        "ambBlur": 38,
+        "ambAlpha": 0.09
+      },
+      "e4": {
+        "keyBlur": 30,
+        "keyY": 14,
+        "keyAlpha": 0.18,
+        "ambBlur": 54,
+        "ambAlpha": 0.11
+      }
+    },
+    "ring": {
+      "width": 2,
+      "offset": 2,
+      "alpha": 0.6
+    },
+    "state": {
+      "hover": 0.06,
+      "pressed": 0.12,
+      "disabled": 0.45
+    },
+    "motion": {
+      "enter": 260,
+      "exit": 180
+    }
+  },
+  "background": {
+    "kind": "gradient",
+    "pattern": "none",
+    "patternColor": "#000000",
+    "patternOpacity": 0,
+    "patternSpacing": 24
+  },
+  "icons": {
+    "stroke": 1.7
+  },
+  "components": {
+    "button": {
+      "shape": "rounded",
+      "style": "solid",
+      "secondary": "outline",
+      "caps": false
+    },
+    "tabs": "segmented",
+    "input": "outline",
+    "focus": "ring",
+    "switch": "labelled",
+    "slider": {
+      "track": "thin",
+      "handle": "round",
+      "valueBubble": true
+    },
+    "sectionHeader": "plain",
+    "card": "raised",
+    "list": "plain",
+    "chip": "pill",
+    "density": "normal"
+  }
+}

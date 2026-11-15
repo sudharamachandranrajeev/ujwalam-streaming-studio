@@ -10,8 +10,8 @@ Rectangle {
     property bool on: false
     property string token: "danger"
     property string tip: ""
-    implicitWidth: label.implicitWidth + 20
-    implicitHeight: 26
+    implicitWidth: label.implicitWidth + Theme.sp.l * 1.25
+    implicitHeight: 28
     radius: height / 2
     color: on ? Theme.c[token] : Theme.c.field
     border.width: on ? 0 : 1
@@ -23,8 +23,8 @@ Rectangle {
         anchors.centerIn: parent
         text: c.text
         color: c.on ? Theme.c.onAccent : Theme.c.text
-        font.family: "Barlow"
-        font.pixelSize: 13
+        font.family: Theme.family
+        font.pixelSize: Theme.ty.small
         font.weight: c.on ? Font.Bold : Font.Medium
     }
     HoverHandler { id: hov }

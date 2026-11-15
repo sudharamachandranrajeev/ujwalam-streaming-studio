@@ -204,7 +204,7 @@ static int runQml(QApplication &app, ApiClient &api, const QString &key, bool he
 				qint64 nextAt = 2500;
 			};
 			auto run = std::make_shared<Run>();
-			for (const QString &a : qEnvironmentVariable("UJWALAM_STUDIO_PROBE_ACTIONS").split(QLatin1Char(','), Qt::SkipEmptyParts).mid(0, 20))
+			for (const QString &a : qEnvironmentVariable("UJWALAM_STUDIO_PROBE_ACTIONS").split(QLatin1Char(','), Qt::SkipEmptyParts).mid(0, 60))
 				run->todo.append(a.trimmed());
 			const qint64 readAt = std::min(probeMs, 60000), lastAt = std::min<qint64>(readAt + 15000, 60000);
 			auto clock = std::make_shared<QElapsedTimer>();

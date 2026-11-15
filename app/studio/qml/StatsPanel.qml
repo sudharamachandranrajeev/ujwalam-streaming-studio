@@ -8,7 +8,7 @@ Item {
     id: stats
     objectName: "statsPanel"
     required property var store
-    implicitHeight: 2 * 58 + 8
+    implicitHeight: 3 * 58 + 2 * 8 // the session and FPS cards take a row each (their words need the width), GPU and CPU share one
 
     readonly property int keep: 90 // 3 minutes at one sample per 2 s
     property var cpu: []
@@ -61,20 +61,23 @@ Item {
         property real lo: 0
         property real hi: 100
         Text {
-            anchors { left: parent.left; top: parent.top; leftMargin: 12; topMargin: 7 }
+            anchors { left: parent.left; top: parent.top; leftMargin: Theme.sp.m; topMargin: 7 }
             text: sc.name
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 11
+            font.pixelSize: Theme.ty.caption
             font.weight: Font.DemiBold
         }
         Text {
             objectName: "statValue:" + sc.name
-            anchors { right: parent.right; top: parent.top; rightMargin: 12; topMargin: 6 }
+            anchors { right: parent.right; top: parent.top; rightMargin: Theme.sp.m; topMargin: 6 }
+            width: Math.min(implicitWidth, sc.width - 2 * Theme.sp.m - 40)
+            horizontalAlignment: Text.AlignRight
+            elide: Text.ElideLeft
             text: sc.value
             color: Theme.c.text
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         Canvas {
             id: line
@@ -112,26 +115,25 @@ Item {
         }
     }
 
-    Grid {
+    Column {
         anchors.fill: parent
-        columns: 2
         spacing: 8
-        readonly property real cw: (width - spacing) / 2
+        readonly property real cw: (width - 8) / 2
         Card {
             objectName: "statSession"
-            width: parent.cw
+            width: parent.width
             height: 58
             Text {
-                anchors { left: parent.left; top: parent.top; leftMargin: 12; topMargin: 6 }
+                anchors { left: parent.left; top: parent.top; leftMargin: Theme.sp.m; topMargin: 6 }
                 text: "STREAM STATS"
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 11
+                font.pixelSize: Theme.ty.caption
                 font.weight: Font.DemiBold
             }
             Text {
                 objectName: "statSessionTime"
-                anchors { left: parent.left; bottom: parent.bottom; leftMargin: 12; bottomMargin: 5 }
+                anchors { left: parent.left; bottom: parent.bottom; leftMargin: Theme.sp.m; bottomMargin: 5 }
                 text: stats.session
                 color: Theme.c.text
                 font.family: Theme.family
@@ -139,34 +141,37 @@ Item {
                 font.weight: Font.DemiBold
             }
             Text {
-                anchors { right: parent.right; bottom: parent.bottom; rightMargin: 12; bottomMargin: 8 }
+                anchors { right: parent.right; bottom: parent.bottom; rightMargin: Theme.sp.m; bottomMargin: 8 }
                 text: stats.sessionNote
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 11
+                font.pixelSize: Theme.ty.caption
             }
         }
         Spark {
             id: fpsCard
-            width: parent.cw; height: 58
+            width: parent.width; height: 58
             name: "FPS"
             hi: 75
             points: stats.fps
             value: stats.fps.length ? stats.last(stats.fps).toFixed(1) + " fps, " + stats.dropped + " dropped" : "-"
         }
-        Spark {
-            id: gpuCard
-            width: parent.cw; height: 58
-            name: "GPU"
-            points: stats.gpu
-            value: stats.gpu.length ? stats.last(stats.gpu).toFixed(0) + "%" : "-"
-        }
-        Spark {
-            id: cpuCard
-            width: parent.cw; height: 58
-            name: "CPU"
-            points: stats.cpu
-            value: stats.cpu.length ? stats.last(stats.cpu).toFixed(0) + "%" : "-"
+        Row {
+            spacing: 8
+            Spark {
+                id: gpuCard
+                width: parent.parent.cw; height: 58
+                name: "GPU"
+                points: stats.gpu
+                value: stats.gpu.length ? stats.last(stats.gpu).toFixed(0) + "%" : "-"
+            }
+            Spark {
+                id: cpuCard
+                width: parent.parent.cw; height: 58
+                name: "CPU"
+                points: stats.cpu
+                value: stats.cpu.length ? stats.last(stats.cpu).toFixed(0) + "%" : "-"
+            }
         }
     }
 }

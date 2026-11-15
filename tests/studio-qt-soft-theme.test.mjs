@@ -24,7 +24,10 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const UI = path.join(REPO, 'ui');
 const QT = qtDir();
 const skip = !existsSync(EXE) || !QT ? 'studio shell not built (npm run build:studio)' : false;
-const read = (f) => JSON.parse(readFileSync(path.join(REPO, 'data', 'themes', f), 'utf8'));
+const read = (f) => JSON.parse(readFileSync(f === 'soft.json' ? path.join(REPO, 'tests', 'fixtures', 'themes', 'soft-plates.json') : path.join(REPO, 'data', 'themes', f), 'utf8'));
+// D389: the Soft theme was replaced by Ujwalam Light. Its pack lives on as a test fixture (id soft-plates) so the soft painters
+// (soft.cpp) and their hinting rules stay tested; the shell finds it through UJWALAM_THEMES_DIR.
+const FIXTURE_THEMES = path.join(REPO, 'tests', 'fixtures', 'themes');
 
 // Windows font smoothing as the user set it (HKCU\Control Panel\Desktop, what SPI_GETFONTSMOOTHING and
 // SPI_GETFONTSMOOTHINGTYPE read): smoothing on (FontSmoothing "2") and of the ClearType kind (FontSmoothingType 2).
@@ -96,9 +99,9 @@ describe('Qt studio: Soft theme and ClearType (D376)', { skip }, () => {
   }
 
   test('Soft loads with the components flag off: surfaces painted, no depth effects, hinting full, first in the list', async () => {
-    const p = await probe({ env: { UJWALAM_THEME: 'soft' }, actions: ['settings-open', 'settings-page:Clips'], ms: 7000 });
+    const p = await probe({ env: { UJWALAM_THEME: 'soft-plates', UJWALAM_THEMES_DIR: FIXTURE_THEMES }, actions: ['settings-open', 'settings-page:Clips'], ms: 7000 });
     const t = p.theme;
-    assert.equal(t.id, 'soft');
+    assert.equal(t.id, 'soft-plates');
     assert.equal(t.componentsOn, false, 'the flag stays off');
     assert.equal(t.componentsAlways, true);
     assert.equal(t.surfaceOn, true);
@@ -109,8 +112,8 @@ describe('Qt studio: Soft theme and ClearType (D376)', { skip }, () => {
     assert.equal(t.hinting, 'full');
     assert.equal(t.appliedHinting, 3, 'QFont::PreferFullHinting on the application font');
     assert.equal(t.appliedFamily, 'Segoe UI');
-    assert.equal(t.available[0], 'soft');
-    assert.equal(t.available[1], 'violet-night');
+    assert.deepEqual(t.available.slice(0, 3), ['ujwalam-light', 'ujwalam-night', 'violet-night']);
+    assert.ok(t.available.includes('soft-plates') && !t.available.includes('soft'), 'the old soft id is gone (a saved soft opens ujwalam-light)');
     assert.doesNotMatch(p.err, /Could not parse|Unknown property|stylesheet/i, p.err);
   });
 
@@ -118,7 +121,7 @@ describe('Qt studio: Soft theme and ClearType (D376)', { skip }, () => {
     const fresh = await probe();
     assert.equal(fresh.theme.id, 'violet-night');
     assert.equal(fresh.theme.surfaceOn, false);
-    const p = await probe({ env: { UJWALAM_THEME: 'soft' }, actions: ['settings-open', 'settings-page:Clips', 'theme:violet-night'], ms: 7500 });
+    const p = await probe({ env: { UJWALAM_THEME: 'soft-plates', UJWALAM_THEMES_DIR: FIXTURE_THEMES }, actions: ['settings-open', 'settings-page:Clips', 'theme:violet-night'], ms: 7500 });
     assert.equal(p.actions.at(-1).done, true);
     assert.equal(p.theme.id, 'violet-night');
     assert.equal(p.theme.surfaceOn, false);
@@ -131,25 +134,25 @@ describe('Qt studio: Soft theme and ClearType (D376)', { skip }, () => {
   });
 
   test('effects modes: reduced and High performance keep the painters (flat faces), no gradient in the stylesheet in performance', async () => {
-    const perf = await probe({ env: { UJWALAM_THEME: 'soft', UJWALAM_EFFECTS: 'performance' } });
+    const perf = await probe({ env: { UJWALAM_THEME: 'soft-plates', UJWALAM_THEMES_DIR: FIXTURE_THEMES, UJWALAM_EFFECTS: 'performance' } });
     assert.equal(perf.theme.performance, true);
     assert.equal(perf.theme.gradientsInStyle, false);
     assert.ok(perf.theme.softWidgets > 0);
     assert.equal(perf.theme.softCached, 0, 'no shadow pictures in High performance');
-    const back = await probe({ env: { UJWALAM_THEME: 'soft' }, actions: ['effects:reduced', 'effects:full'] });
+    const back = await probe({ env: { UJWALAM_THEME: 'soft-plates', UJWALAM_THEMES_DIR: FIXTURE_THEMES }, actions: ['effects:reduced', 'effects:full'] });
     assert.ok(back.actions.every((a) => a.done));
     assert.equal(back.theme.gradientsInStyle, true);
   });
 
   test('a quick enter-press-release-leave never leaves a button hovered or pressed (fades end at the last target)', async () => {
-    const p = await probe({ env: { UJWALAM_THEME: 'soft' }, actions: ['settings-open', 'settings-page:Clips', 'soft-flick:Cancel', 'soft-rest:Cancel'], ms: 7000 });
+    const p = await probe({ env: { UJWALAM_THEME: 'soft-plates', UJWALAM_THEMES_DIR: FIXTURE_THEMES }, actions: ['settings-open', 'settings-page:Clips', 'soft-flick:Cancel', 'soft-rest:Cancel'], ms: 7000 });
     const [flick, rest] = p.actions.slice(-2);
     assert.equal(flick.done, true, 'the button was found and its hover fades (motion on)');
     assert.equal(rest.done, true, 'hover and press back at 0');
   });
 
   test('probe actions run one after another: each starts after the previous returned, on a 700 ms beat', async () => {
-    const p = await probe({ env: { UJWALAM_THEME: 'soft' }, actions: ['settings-open', 'settings-page:Clips', 'settings-page:Appearance'], ms: 6000 });
+    const p = await probe({ env: { UJWALAM_THEME: 'soft-plates', UJWALAM_THEMES_DIR: FIXTURE_THEMES }, actions: ['settings-open', 'settings-page:Clips', 'settings-page:Appearance'], ms: 6000 });
     assert.deepEqual(p.actions.map((a) => a.action), ['settings-open', 'settings-page:Clips', 'settings-page:Appearance']);
     for (let i = 1; i < p.actions.length; i++) {
       const [a, b] = [p.actions[i - 1], p.actions[i]];
@@ -158,15 +161,15 @@ describe('Qt studio: Soft theme and ClearType (D376)', { skip }, () => {
   });
 
   test('offscreen probe text is greyscale (no ClearType): pictures from it are no evidence of how text looks', async () => {
-    const p = await probe({ env: { UJWALAM_THEME: 'soft' } });
+    const p = await probe({ env: { UJWALAM_THEME: 'soft-plates', UJWALAM_THEMES_DIR: FIXTURE_THEMES } });
     assert.equal(p.theme.platform, 'offscreen');
     assert.ok(p.theme.clearType.edgePixels > 100);
     assert.equal(p.theme.clearType.fringed, 0);
   });
 
   test('hidden native probe: the studio font renders with ClearType (Windows ClearType on)', { skip: clearTypeOn() ? false : 'Windows ClearType is off on this machine' }, async () => {
-    for (const id of ['soft', 'violet-night']) {
-      const p = await probe({ env: { UJWALAM_THEME: id, UJWALAM_STUDIO_HIDDEN: '1' } });
+    for (const id of ['soft-plates', 'violet-night']) {
+      const p = await probe({ env: { UJWALAM_THEME: id, UJWALAM_THEMES_DIR: FIXTURE_THEMES, UJWALAM_STUDIO_HIDDEN: '1' } });
       assert.equal(p.theme.platform, 'windows');
       assert.ok(p.theme.clearType.share > 0.4, `${id}: subpixel fringes on text edges: ${JSON.stringify(p.theme.clearType)}`);
     }

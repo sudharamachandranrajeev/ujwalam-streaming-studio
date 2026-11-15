@@ -23,6 +23,8 @@ Button {
     property string tip: ""
     // True inside a RareUI dock (OnAirBar): the dock and its hover disc are the button's face, so it paints no fill or edge of its own.
     property bool bare: false
+    // A compact bar shows the icon alone (the words stay as the accessible name and the tooltip).
+    property bool iconOnly: false
     // The style drawn now ("" = the plain look).
     readonly property string look: {
         if (bare || !Theme.rareui || Theme.fx === "plain") return "";
@@ -47,21 +49,22 @@ Button {
     // Colour changes under the pointer: the studio's fast time, and under 100 ms once the RareUI flag is on.
     readonly property int colorMs: Theme.rareui ? Math.min(Theme.fast, 90) : Theme.fast
 
-    implicitHeight: 34
-    leftPadding: look === "pixel" ? 14 + blockRest : 14
-    rightPadding: 14
+    implicitHeight: 36
+    implicitWidth: iconOnly ? implicitHeight : Math.max(implicitBackgroundWidth + leftInset + rightInset, implicitContentWidth + leftPadding + rightPadding)
+    leftPadding: iconOnly ? 0 : look === "pixel" ? Theme.sp.l + blockRest : Theme.sp.l
+    rightPadding: iconOnly ? 0 : Theme.sp.l
     font.family: look === "pixel" ? "Barlow" : Theme.family // bundled OFL only (D384 Q7)
-    font.pixelSize: 14
+    font.pixelSize: Theme.ty.body
     font.weight: kind === "normal" ? Font.Normal : Font.DemiBold
     font.letterSpacing: look === "soft" || look === "glass" ? 0.5 : 0
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
     Accessible.name: text
-    ToolTip.visible: tip !== "" && hovered
-    ToolTip.text: tip
+    ToolTip.visible: (tip !== "" || iconOnly) && hovered
+    ToolTip.text: tip !== "" ? tip : text
     ToolTip.delay: 500
     // Hover grows the soft and glass looks, a press sinks them (the plan's 1.05 / 0.98 / 0.95 / 0.975); only in "full".
-    scale: !full ? 1 : look === "glass" ? (down ? 0.95 : hovered ? 1.05 : 1)
+    scale: !full ? 1 : look === "" ? (down && !bare ? 0.985 : 1) : look === "glass" ? (down ? 0.95 : hovered ? 1.05 : 1)
          : look === "soft" ? (down ? 0.98 : hovered ? 1.05 : 1)
          : look === "neumorph" ? (down ? 0.975 : 1)
          : look === "pixel" ? (down ? 0.98 : 1) : 1
@@ -87,7 +90,7 @@ Button {
             id: row
             x: -b.px * b.blockRest // the pixel label slides left as the block grows (plan)
             anchors.verticalCenter: parent.verticalCenter
-            spacing: 8
+            spacing: Theme.sp.s
             Canvas { // the premium crown (plan: viewBox 36 by 24, 23 px wide), drawn once
                 id: crown
                 visible: b.look === "premium"
@@ -115,6 +118,7 @@ Button {
                 height: 16
             }
             Text {
+                visible: !b.iconOnly
                 anchors.verticalCenter: parent.verticalCenter
                 text: b.text
                 font: b.font
@@ -128,7 +132,7 @@ Button {
         id: bg
         objectName: "ubuttonBg"
         property string look: b.look // read by the probe
-        opacity: b.enabled ? 1 : 0.6
+        opacity: b.enabled ? 1 : Theme.st.disabled
 
         // Everything a look paints. Not created in "plain" or with the flag off.
         Loader {
@@ -138,15 +142,27 @@ Button {
             sourceComponent: b.look === "soft" ? softC : b.look === "neumorph" ? neuC : b.look === "premium" ? premiumC
                            : b.look === "pixel" ? pixelC : b.look === "glass" ? glassC : null
         }
-        // The plain look; with a RareUI look it only keeps the focus ring.
+        // The plain look (D389): a flat fill, one edge, the hover and press as a tint of the label colour, a soft key shadow under a
+        // filled button (not in "plain"); with a RareUI look it only keeps the focus ring.
+        ShadowLayers {
+            visible: b.look === "" && !b.bare && b.kind !== "normal" && b.enabled && !b.down
+            level: 1
+            radius: b.rad
+        }
         Rectangle {
+            id: face
             anchors.fill: parent
             radius: b.rad
-            color: b.look !== "" || b.bare ? "transparent" : !b.enabled ? Theme.c.field : b.down ? Qt.darker(b.fill, 1.15) : b.hovered ? Qt.lighter(b.fill, 1.12) : b.fill
-            border.width: b.look !== "" || b.bare ? (b.visualFocus ? 1 : 0) : (b.kind === "normal" || b.visualFocus ? 1 : 0)
-            border.color: b.visualFocus ? Theme.c.accentHi : Theme.c.border
+            readonly property color tintInk: b.kind === "normal" ? Theme.c.text : Theme.c.onAccent
+            readonly property color base: !b.enabled ? Theme.c.field : b.fill
+            color: b.look !== "" || b.bare ? "transparent"
+                 : b.down ? Qt.tint(base, Qt.rgba(tintInk.r, tintInk.g, tintInk.b, Theme.st.pressed))
+                 : b.hovered ? Qt.tint(base, Qt.rgba(tintInk.r, tintInk.g, tintInk.b, Theme.st.hover)) : base
+            border.width: b.look !== "" || b.bare ? 0 : (b.kind === "normal" ? 1 : 0)
+            border.color: b.hovered && b.enabled ? Theme.c.muted : Theme.c.border
             Behavior on color { enabled: Theme.motion; ColorAnimation { duration: b.colorMs } }
         }
+        UFocusRing { active: b.visualFocus; radius: b.rad }
     }
 
     // ---- soft: a pill with a light and a dark shadow; under the pointer it turns accent and glows (plan item 11) ----

@@ -29,8 +29,12 @@ Button {
     }
     background: Rectangle {
         radius: Theme.radiusSmall
-        color: b.down ? Theme.c.border : b.hovered || b.checked ? Theme.c.field : "transparent"
-        border.width: b.visualFocus ? 1 : 0
-        border.color: Theme.c.accentHi
+        color: b.down ? Qt.tint(Theme.c.field, Qt.rgba(Theme.c.text.r, Theme.c.text.g, Theme.c.text.b, Theme.st.pressed))
+             : b.hovered || b.checked ? Theme.c.field : "transparent"
+        border.width: b.hovered || b.checked ? 1 : 0
+        border.color: Theme.c.border
+        opacity: b.enabled ? 1 : Theme.st.disabled
+        Behavior on color { enabled: Theme.motion; ColorAnimation { duration: Theme.mo.fast } }
+        UFocusRing { active: b.visualFocus; radius: Theme.radiusSmall }
     }
 }

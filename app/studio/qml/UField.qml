@@ -7,21 +7,23 @@ import Ujwalam.Core
 TextField {
     id: f
     property string label: ""
-    implicitHeight: 34
-    leftPadding: 10
-    rightPadding: 10
+    implicitHeight: 36
+    leftPadding: Theme.sp.m
+    rightPadding: Theme.sp.m
     color: Theme.c.text
     placeholderTextColor: Theme.c.muted
     selectionColor: Theme.c.accent
     selectedTextColor: Theme.c.onAccent
     font.family: Theme.family
-    font.pixelSize: 14
+    font.pixelSize: Theme.ty.body
     selectByMouse: true
     Accessible.name: label !== "" ? label : placeholderText
     background: Rectangle {
         radius: Theme.radiusSmall
         color: Theme.c.field
-        border.width: 1
-        border.color: f.activeFocus ? Theme.c.accentHi : Theme.c.border
+        border.width: f.activeFocus ? 2 : 1
+        border.color: f.activeFocus ? Theme.c.accentHi : f.hovered ? Theme.c.muted : Theme.c.border
+        opacity: f.enabled ? 1 : Theme.st.disabled
+        Behavior on border.color { enabled: Theme.motion; ColorAnimation { duration: Theme.mo.fast } }
     }
 }

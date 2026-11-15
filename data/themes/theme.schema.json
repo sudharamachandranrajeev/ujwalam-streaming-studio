@@ -137,6 +137,61 @@
         "loopMs": { "type": "integer", "minimum": 0, "maximum": 20000, "description": "optional (RareUI slice 0): period of continuous decoration (shimmer, sweep); 0 = off. Never runs while on air (Theme.fx)" }
       }
     },
+    "system": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "optional (D389): the design system the Qt Quick studio's components read (Theme.sp, ty, elev, ring, st, mo). Any part left out keeps the built-in default.",
+      "properties": {
+        "space": {
+          "type": "object", "additionalProperties": false,
+          "description": "spacing scale in px",
+          "properties": {
+            "xs": { "type": "number", "minimum": 0, "maximum": 96 }, "s": { "type": "number", "minimum": 0, "maximum": 96 },
+            "m": { "type": "number", "minimum": 0, "maximum": 96 }, "l": { "type": "number", "minimum": 0, "maximum": 96 },
+            "xl": { "type": "number", "minimum": 0, "maximum": 96 }, "xxl": { "type": "number", "minimum": 0, "maximum": 96 }
+          }
+        },
+        "type": {
+          "type": "object", "additionalProperties": false,
+          "description": "type scale in px (bundled families only); displayFamily is the heading family",
+          "properties": {
+            "caption": { "type": "number", "minimum": 9, "maximum": 48 }, "small": { "type": "number", "minimum": 9, "maximum": 48 },
+            "body": { "type": "number", "minimum": 9, "maximum": 48 }, "subtitle": { "type": "number", "minimum": 9, "maximum": 48 },
+            "title": { "type": "number", "minimum": 9, "maximum": 48 }, "display": { "type": "number", "minimum": 9, "maximum": 64 },
+            "displayFamily": { "type": "string", "minLength": 1, "maxLength": 60 }
+          }
+        },
+        "elevation": {
+          "type": "object", "additionalProperties": false,
+          "description": "real layered soft shadows per level e0 (flat) to e4 (dialog): a tight key shadow and a wide ambient one",
+          "patternProperties": {
+            "^e[0-4]$": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "keyBlur": { "type": "number", "minimum": 0, "maximum": 80 }, "keyY": { "type": "number", "minimum": 0, "maximum": 40 },
+                "keyAlpha": { "type": "number", "minimum": 0, "maximum": 0.6 },
+                "ambBlur": { "type": "number", "minimum": 0, "maximum": 120 }, "ambAlpha": { "type": "number", "minimum": 0, "maximum": 0.4 }
+              }
+            }
+          }
+        },
+        "ring": {
+          "type": "object", "additionalProperties": false,
+          "description": "keyboard focus ring: width and offset in px, alpha of the accent",
+          "properties": { "width": { "type": "number", "minimum": 1, "maximum": 4 }, "offset": { "type": "number", "minimum": 0, "maximum": 6 }, "alpha": { "type": "number", "minimum": 0.2, "maximum": 1 } }
+        },
+        "state": {
+          "type": "object", "additionalProperties": false,
+          "description": "strength (0..1) of the hover and pressed overlays, and the opacity of a disabled control",
+          "properties": { "hover": { "type": "number", "minimum": 0, "maximum": 0.3 }, "pressed": { "type": "number", "minimum": 0, "maximum": 0.4 }, "disabled": { "type": "number", "minimum": 0.2, "maximum": 0.8 } }
+        },
+        "motion": {
+          "type": "object", "additionalProperties": false,
+          "description": "longest entrance and exit in ms (the project rule: under 600 and under 400)",
+          "properties": { "enter": { "type": "integer", "minimum": 0, "maximum": 599 }, "exit": { "type": "integer", "minimum": 0, "maximum": 399 } }
+        }
+      }
+    },
     "background": {
       "type": "object",
       "additionalProperties": false,

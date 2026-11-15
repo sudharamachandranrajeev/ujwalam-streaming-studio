@@ -56,23 +56,25 @@ Item {
             x: Math.max(modelData.x, modelData.x + modelData.w - width)
             y: area.caption + Math.floor(area.ph) + 6
             spacing: 6
+            // a narrow preview (small window) gets shorter words so the row stays under it
+            readonly property bool narrow: modelData.w < 190
             UButton {
                 implicitHeight: 26
-                leftPadding: 10
-                rightPadding: 10
-                font.pixelSize: 12
+                leftPadding: parent.narrow ? 6 : 10
+                rightPadding: parent.narrow ? 6 : 10
+                font.pixelSize: Theme.ty.caption
                 objectName: "previewOpen:" + parent.modelData.canvas
-                text: "Own window"
+                text: parent.narrow ? "Window" : "Own window"
                 tip: "Open this preview in its own window (if it does not show here)."
                 onClicked: area.store.previewWindow(parent.modelData.canvas, false)
             }
             UButton {
                 implicitHeight: 26
-                leftPadding: 10
-                rightPadding: 10
-                font.pixelSize: 12
+                leftPadding: parent.narrow ? 6 : 10
+                rightPadding: parent.narrow ? 6 : 10
+                font.pixelSize: Theme.ty.caption
                 objectName: "previewFront:" + parent.modelData.canvas
-                text: "To front"
+                text: parent.narrow ? "Front" : "To front"
                 tip: "Bring that preview window to the front."
                 onClicked: area.store.previewWindow(parent.modelData.canvas, true)
             }

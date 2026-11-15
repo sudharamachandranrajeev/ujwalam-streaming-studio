@@ -87,6 +87,17 @@ class QmlTheme : public QObject {
 	Q_PROPERTY(QString spinnerStyle READ spinnerStyle NOTIFY lookChanged)
 	// RareUI slice 2 (D384): the pack's tab style (components.tabs; the studio draws slide, dock and avatar), same gating as buttonStyle.
 	Q_PROPERTY(QString tabsStyle READ tabsStyle NOTIFY lookChanged)
+	// The design system (D389, schema "system"): every group is a map of numbers, merged over built-in defaults so a pack may
+	// leave a part out. sp = spacing scale (xs s m l xl xxl, px), ty = type scale (caption small body subtitle title display,
+	// px; displayFamily the heading family), elev = elevation levels e0..e4 (each: keyBlur keyY keyAlpha ambBlur ambAlpha),
+	// ring = focus ring (width offset alpha), st = state overlay strengths (hover pressed disabled, 0..1), mo = motion in
+	// ms (fast normal slow enter exit; enter < 600, exit < 400).
+	Q_PROPERTY(QVariantMap sp READ sp NOTIFY changed)
+	Q_PROPERTY(QVariantMap ty READ ty NOTIFY changed)
+	Q_PROPERTY(QVariantMap elev READ elev NOTIFY changed)
+	Q_PROPERTY(QVariantMap ring READ ring NOTIFY changed)
+	Q_PROPERTY(QVariantMap st READ st NOTIFY changed)
+	Q_PROPERTY(QVariantMap mo READ mo NOTIFY changed)
 public:
 	explicit QmlTheme(QObject *parent = nullptr);
 	QString id() const;
@@ -101,6 +112,12 @@ public:
 	bool motion() const;
 	QString fx() const;
 	QVariantMap spring() const;
+	QVariantMap sp() const;
+	QVariantMap ty() const;
+	QVariantMap elev() const;
+	QVariantMap ring() const;
+	QVariantMap st() const;
+	QVariantMap mo() const;
 	bool onAir() const { return onAir_; }
 	void setOnAir(bool on);
 	bool rareui() const { return rareui_; }

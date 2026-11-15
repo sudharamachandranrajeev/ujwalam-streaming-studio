@@ -23,7 +23,7 @@ const packs = readdirSync(THEMES).filter((f) => f.endsWith('.json') && f !== 'th
 const KEY = 'k'.repeat(48);
 
 describe('generator over the shipped themes', () => {
-  test('there are 10 packs', () => assert.equal(packs.length, 10));
+  test('there are 11 packs', () => assert.equal(packs.length, 11));
   for (const p of packs) {
     test(`${p.id}: valid CSS, every variable present, colours equal the pack`, () => {
       assert.deepEqual(packProblems(p), []);
@@ -89,7 +89,7 @@ describe('server /css/tokens.css', () => {
     dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-webtheme-'));
     custom = path.join(dataDir, 'custom-themes'); mkdirSync(custom);
     // a user's own theme (a copy with a new background), a broken file and a file whose id differs from its name
-    const mine = structuredClone(packs.find((p) => p.id === 'soft')); mine.id = 'my-own'; mine.colors.bg = '#123456';
+    const mine = structuredClone(packs.find((p) => p.id === 'ujwalam-light')); mine.id = 'my-own'; mine.colors.bg = '#123456';
     writeFileSync(path.join(custom, 'my-own.json'), JSON.stringify(mine));
     writeFileSync(path.join(custom, 'broken-one.json'), '{ "id": "broken-one", "colors": ');
     writeFileSync(path.join(custom, 'wrong-id.json'), JSON.stringify({ ...mine, id: 'something-else' }));
@@ -116,8 +116,8 @@ describe('server /css/tokens.css', () => {
   test('flag on: the theme the user chose; switching changes the answer without a restart', async () => {
     flags.set('web-theme', true);
     writeSettings(dataDir, { ui: { theme: 'soft' } });
-    const soft = await tokens();
-    assert.equal(soft.status, 200); assert.equal(soft.text, tokensCss(packs.find((p) => p.id === 'soft'))); assert.notEqual(soft.text, STATIC);
+    const soft = await tokens(); // an old saved Soft opens Ujwalam Light (D389)
+    assert.equal(soft.status, 200); assert.equal(soft.text, tokensCss(packs.find((p) => p.id === 'ujwalam-light'))); assert.notEqual(soft.text, STATIC);
     assert.equal(soft.headers['cache-control'], 'no-store');
     writeSettings(dataDir, { ui: { theme: 'tactical' } });
     const tac = await tokens();

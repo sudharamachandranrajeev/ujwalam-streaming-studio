@@ -124,6 +124,9 @@ struct Spring {
 	qreal stiffness = 300, damping = 30, mass = 1;
 };
 Spring spring();
+// The pack's optional design-system block (schema "system": space, type, elevation, ring, state, motion ms): the raw object,
+// or empty. The QML studio's Theme merges it over its defaults (qml_bridge.cpp), so a pack may leave any part out.
+QJsonObject systemBlock();
 
 DepthSpec depthSpec(const QString &cls);
 int depthRadius(const QString &cls, const QSize &widget); // the corner radius the stylesheet gives that class
