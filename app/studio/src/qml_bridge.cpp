@@ -213,6 +213,8 @@ void QmlTheme::setRareui(bool on)
 // Empty (the plain look) unless rareui-look is on and the pack names a style with the components flag on.
 QString QmlTheme::buttonStyle() const { return rareui_ ? theme::component(QStringLiteral("button.style")) : QString(); }
 
+QString QmlTheme::tabsStyle() const { return rareui_ ? theme::component(QStringLiteral("tabs")) : QString(); }
+
 QString QmlTheme::spinnerStyle() const
 {
 	const QString s = rareui_ ? theme::component(QStringLiteral("spinner")) : QString();

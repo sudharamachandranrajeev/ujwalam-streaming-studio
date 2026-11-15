@@ -114,9 +114,18 @@ export const VARIANTS = {
     underline: (p) => [['normal', 'underline tab label', p.colors.muted, surfaces(p), TEXT], ['hover', 'underline tab label', p.colors.text, surfaces(p), TEXT],
       ['checked', 'selected underline tab label', p.colors.accentHi, surfaces(p), TEXT], ['checked', 'selected tab underline', p.colors.accent, surfaces(p), CTRL]],
     segmented: (p) => [['normal', 'segment label', p.colors.muted, [p.colors.field], TEXT]],
-    slide: (p) => [['normal', 'slide tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected slide tab label', p.colors.accentHi, surfaces(p), TEXT]],
-    avatar: (p) => [['normal', 'avatar tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected avatar tab label', p.colors.accentHi, surfaces(p), TEXT]],
-    dock: (p) => [['normal', 'dock tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected dock tab label', p.colors.accentHi, surfaces(p), TEXT]],
+    // The Qt Quick studio paints these in RareUI slice 2 (NavPill.qml, SettingsDialog, OnAirBar, SettingsAppearance): slide = the page
+    // list with a field-coloured pill under the chosen page (label: text) and a 6 percent text-colour pill under the pointer;
+    // dock = the bar's navigation buttons on a field-coloured pill with a 10 percent text-colour disc under the pointer;
+    // avatar = round theme discs and a bubble (field fill, label: text).
+    slide: (p) => [['normal', 'slide tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected slide tab label', p.colors.accentHi, surfaces(p), TEXT],
+      ['checked', 'selected slide tab label on the pill (Qt Quick)', p.colors.text, [p.colors.field], TEXT],
+      ['hover', 'slide tab label under the pointer (Qt Quick)', p.colors.text, [mix(p.colors.panel, p.colors.text, 0.06)], TEXT]],
+    avatar: (p) => [['normal', 'avatar tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected avatar tab label', p.colors.accentHi, surfaces(p), TEXT],
+      ['normal', 'avatar bubble text (Qt Quick)', p.colors.text, [p.colors.field], TEXT], ['checked', 'avatar ring against the panel (Qt Quick)', p.colors.accentHi, [p.colors.panel], CTRL]],
+    dock: (p) => [['normal', 'dock tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected dock tab label', p.colors.accentHi, surfaces(p), TEXT],
+      ['normal', 'dock button label on the dock (Qt Quick)', p.colors.text, [p.colors.field], TEXT],
+      ['hover', 'dock button label on the hover disc (Qt Quick)', p.colors.text, [mix(p.colors.field, p.colors.text, 0.10)], TEXT]],
     boxed: (p, x) => [['normal', 'boxed tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected boxed tab label', p.colors.accentHi, [x.tint], TEXT], ['checked', 'selected boxed tab edge', p.colors.accent, surfaces(p), CTRL]],
   },
   input: {

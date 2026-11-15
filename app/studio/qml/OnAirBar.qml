@@ -121,10 +121,60 @@ Rectangle {
         id: controls
         anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
         spacing: 8
+        // RareUI slice 2 (D384, Floating Navigation; design after RareUI, MIT, Swapnil Kalambe): More, ? and Settings (the
+        // bar's navigation; it has no mode switches, the rest are actions) sit in a pill dock when the pack's components.tabs
+        // is "dock". A disc follows the hovered button (a spring in "full", a jump in "calm"). "plain" (on air, High
+        // performance) and the flag off: the row as it was.
+        Item {
+            id: dock
+            objectName: "tabLook:dock"
+            readonly property string look: Theme.rareui && Theme.fx !== "plain" && Theme.tabsStyle === "dock" ? "dock" : ""
+            readonly property bool full: Theme.fx === "full" && Theme.motion
+            readonly property bool loop: false // read by the probe: a spring that stops at rest, not a loop
+            readonly property int pad: look === "dock" ? 4 : 0
+            property Item hoverBtn: null
+            width: dockRow.width + 2 * pad
+            height: dockRow.height + 2 * pad
+            // Left and right move the focus along the dock and wrap.
+            Keys.onPressed: (e) => {
+                if (look !== "dock" || (e.key !== Qt.Key_Left && e.key !== Qt.Key_Right)) return;
+                const it = [moreBtn, helpBtn, settingsBtn];
+                const i = it.findIndex(x => x.activeFocus);
+                if (i < 0) return;
+                it[(i + (e.key === Qt.Key_Right ? 1 : it.length - 1)) % it.length].forceActiveFocus(Qt.TabFocusReason);
+                e.accepted = true;
+            }
+            Loader {
+                anchors.fill: parent
+                active: dock.look === "dock"
+                sourceComponent: Rectangle {
+                    radius: height / 2
+                    color: Theme.c.field
+                    border.width: 1
+                    border.color: Theme.c.border
+                    NavPill {
+                        host: parent
+                        target: dock.hoverBtn
+                        animate: dock.full
+                        fill: Theme.c.text
+                        fillOpacity: 0.10
+                        stiffness: 400
+                        damping: 25
+                        mass: 1
+                    }
+                }
+            }
+            Row {
+                id: dockRow
+                x: dock.pad
+                y: dock.pad
+                spacing: 8
         // More (the widget's More menu, same order and tips): the flag-gated items show only with their flag on.
         UButton {
             id: moreBtn
             objectName: "moreBtn"
+            bare: dock.look === "dock"
+            onHoveredChanged: if (hovered) dock.hoverBtn = moreBtn; else if (dock.hoverBtn === moreBtn) dock.hoverBtn = null
             text: "More"
             iconName: "more"
             onClicked: moreMenu.popup(moreBtn, 0, moreBtn.height + 4)
@@ -154,7 +204,10 @@ Rectangle {
         }
         // Help (the widget's ? button): how clips are made, how posting works, and the welcome tour.
         UButton {
+            id: helpBtn
             objectName: "helpBtn"
+            bare: dock.look === "dock"
+            onHoveredChanged: if (hovered) dock.hoverBtn = helpBtn; else if (dock.hoverBtn === helpBtn) dock.hoverBtn = null
             text: "?"
             implicitWidth: 34
             leftPadding: 0
@@ -163,10 +216,15 @@ Rectangle {
             onClicked: if (bar.guide) bar.guide.toggleHelp()
         }
         UButton {
+            id: settingsBtn
             objectName: "settingsBtn"
+            bare: dock.look === "dock"
+            onHoveredChanged: if (hovered) dock.hoverBtn = settingsBtn; else if (dock.hoverBtn === settingsBtn) dock.hoverBtn = null
             text: "Settings"
             iconName: "gear"
             onClicked: bar.store.settingsWanted("")
+        }
+            }
         }
         // Clipping (D281): save the replay buffer now; mark a moment for the post-stream clipper. One click each (D332).
         UButton {

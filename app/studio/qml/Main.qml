@@ -33,6 +33,7 @@ ApplicationWindow {
         s.rareui = Theme.rareui;
         s.buttonStyle = Theme.buttonStyle;
         s.spinnerStyle = Theme.spinnerStyle;
+        s.tabsStyle = Theme.tabsStyle; // RareUI slice 2 (D384)
         const cols = {}; // what the QML items paint with
         for (const k in Theme.c) cols[k] = String(Theme.c[k]);
         s.themeColors = cols;
