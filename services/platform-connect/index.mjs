@@ -742,7 +742,8 @@ export function createConnect(opts = {}) {
   // stream key for an in-memory comparison there; nothing here is ever put in a response.
   const youtube = Object.freeze({
     accessToken: () => ytAuth.accessToken(),
-    signedIn: async () => (await facts(TARGETS.youtubeRefresh)).present,
+    // Throws when Credential Manager cannot be read: "not signed in" and "unknown" differ at Go live (Codex review of D388).
+    signedIn: async () => { const f = await facts(TARGETS.youtubeRefresh); if (f.error) throw new ConnectError('youtube-signin-unreadable'); return f.present; },
     readKey: async (ref) => (typeof ref === 'string' && STREAM_REF_RE.test(ref) ? store(ref).get() : null),
     onUnauthorized: () => { try { noteToken('youtube', 'expired'); } catch { /* bookkeeping only */ } invalidate(); },
     fetchImpl, endpoints: ep, now,
@@ -792,6 +793,8 @@ export const ERROR_TEXT = Object.freeze({
   // D388 in-app YouTube control
   'youtube-bad-choice': 'One of the saved event details (description, privacy, tags, category) is not valid; open the YouTube window and set it again.',
   'youtube-bad-thumbnail': 'The thumbnail must be a PNG or JPEG picture of at most 2 MB.',
+  'youtube-signin-unreadable': 'The YouTube sign-in could not be read from Windows Credential Manager; try again.',
+  'youtube-not-idle': 'A stream or recording may be running (or its state is not clear), and this event is not finished. End it once the stream has stopped.',
   'youtube-chat-unavailable': 'The live chat of this event is not open (the event is not live yet, or it has ended).',
   'unknown-broadcast': 'That YouTube event is not on your channel any more.',
   'bad-params': 'That request was not valid.',

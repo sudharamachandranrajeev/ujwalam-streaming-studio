@@ -208,7 +208,9 @@ describe('details and thumbnail', () => {
     const d = mk(); const yt = fakeYoutube(); const { svc } = ctl(yt);
     writeFileSync(path.join(d, 'text.png'), 'this is not a picture at all');
     writeFileSync(path.join(d, 'big.png'), Buffer.concat([PNG, Buffer.alloc(2 * 1024 * 1024)]));
-    for (const p of [path.join(d, 'text.png'), path.join(d, 'big.png'), 'relative.png', path.join(d, 'nope.png'), d, '', null]) {
+    // UNC, device and rooted-without-drive paths are refused before any file access (Codex review of D388).
+    for (const p of [path.join(d, 'text.png'), path.join(d, 'big.png'), 'relative.png', path.join(d, 'nope.png'), d, '', null,
+      '\\\\server\\share\\pic.png', '//server/share/pic.png', '\\\\?\\C:\\pic.png', '\\pic.png', '/pic.png', 'C:pic.png']) {
       await assert.rejects(svc.setThumbnail({ broadcastId: 'liveH001', path: p }), { code: 'youtube-bad-thumbnail' }, String(p));
     }
     assert.equal(apiCalls(yt, /thumbnails/).length, 0);
@@ -241,6 +243,15 @@ describe('broadcast list, End, Delete', () => {
     assert.deepEqual([yt.st.transitions, yt.st.deleted], [['tplH0001'], ['tplV0001']]);
     assert.ok(apiCalls(yt, /transition/)[0].url.includes('broadcastStatus=complete'));
     await assert.rejects(svc.endBroadcast('bad id'), { code: 'bad-params' });
+  });
+  test('lifeCycleOf: the state from one liveBroadcasts.list; unknown id = null; bad id refused', async () => {
+    const yt = fakeYoutube({ broadcasts: [TEMPLATE, baseBroadcast('liveH001')] });
+    const { svc } = ctl(yt);
+    assert.equal(await svc.lifeCycleOf('tplH0001'), 'complete');
+    assert.equal(await svc.lifeCycleOf('liveH001'), 'live');
+    assert.equal(await svc.lifeCycleOf('gone0001'), null);
+    await assert.rejects(svc.lifeCycleOf('bad id'), { code: 'bad-params' });
+    assert.equal(apiCalls(yt, /liveBroadcasts\?part=id,status&id=/).length, 3);
   });
 });
 
@@ -326,6 +337,25 @@ describe('live chat reader', () => {
     assert.equal(live()[0].ms, 60_000);
     svc.close();
   });
+  test('a failing event look-up is not retried at the ask rate: the next try waits 60 s', async () => {
+    const yt = fakeYoutube({ broadcasts: [baseBroadcast(B)], chat: [chatItem(1)], failCode: { 'GET /liveBroadcasts': [500, 'backendError'] } });
+    const { svc, clock, live } = ctl(yt);
+    const look = () => apiCalls(yt, /liveBroadcasts\?part=snippet,status&id=/).length;
+    const r1 = await svc.chatRead({ output: 'youtube-h', broadcastId: B });
+    assert.equal(r1.live, false);
+    assert.equal(typeof r1.error, 'string');
+    assert.equal(look(), 1);
+    for (const step of [3000, 10_000, 20_000, 26_000]) { clock.t += step; await svc.chatRead({ output: 'youtube-h', broadcastId: B }); }
+    assert.equal(look(), 1, '59 s of asks: no second look-up');
+    assert.equal(apiCalls(yt, /liveChatMessages/).length, 0);
+    assert.equal(live().length, 0);
+    delete yt.st.failCode['GET /liveBroadcasts'];
+    clock.t += 2000;
+    const r2 = await svc.chatRead({ output: 'youtube-h', broadcastId: B });
+    assert.equal(look(), 2);
+    assert.deepEqual([r2.live, r2.error, r2.messages.length], [true, undefined, 1]);
+    svc.close();
+  });
   test('the ring keeps 500 messages; the cursor keeps counting; plain text clean of control characters and direction marks', async () => {
     const many = Array.from({ length: 600 }, (_, i) => chatItem(i + 1));
     many[0] = chatItem(1, { snippet: { displayMessage: 'a\u0007b\u202ec<b>x</b>' }, authorDetails: { displayName: 'N\u200fm' } });
@@ -399,8 +429,20 @@ describe('choice file: overrides, autoEvent, createEvent', () => {
     await assert.rejects(ev2.createEvent({ templateId: 'tplH0001', keyRef: 'Ujwalam/stream/youtube-h', privacy: 'secret' }), { code: 'youtube-bad-choice' });
     assert.equal(yt2.st.calls.length, 0);
   });
+  test('an empty description and an empty tag list are real choices: kept in the file and used, not the template values', async () => {
+    const d = mk();
+    writeChoices(d, { 'youtube-h': { templateId: 'tplH0001', templateTitle: 'T', title: null, description: '', tags: [] } });
+    assert.deepEqual(readChoices(d)['youtube-h'], { templateId: 'tplH0001', templateTitle: 'T', title: null, description: '', tags: [] });
+    const yt = fakeYoutube();
+    const ev = createYoutubeEvents({ fetchImpl: yt.fetch, accessToken: async () => ACCESS, readKey: async () => KEY_H, now: () => NOW0 });
+    await ev.createEvent({ templateId: 'tplH0001', keyRef: 'Ujwalam/stream/youtube-h', description: '', tags: [] });
+    const ins = yt.st.calls.find((c) => c.method === 'POST' && c.url.startsWith(`${API}/liveBroadcasts?`));
+    assert.equal(ins.json.snippet.description, '', 'not the template description');
+    const put = yt.st.puts.find((x) => x.path === '/videos');
+    if (put) assert.ok(!put.json.snippet.tags?.length, 'not the template tags');
+  });
   test('every new code has a plain text', () => {
-    for (const c of ['youtube-bad-choice', 'youtube-bad-thumbnail', 'youtube-chat-unavailable', 'unknown-broadcast', 'bad-params']) assert.ok(ERROR_TEXT[c], c);
+    for (const c of ['youtube-bad-choice', 'youtube-signin-unreadable', 'youtube-not-idle', 'youtube-bad-thumbnail', 'youtube-chat-unavailable', 'unknown-broadcast', 'bad-params']) assert.ok(ERROR_TEXT[c], c);
     assert.ok(!/flag/i.test(ERROR_TEXT['youtube-quota']) && !/flag/i.test(ERROR_TEXT['youtube-events-off']));
   });
 });
@@ -454,10 +496,12 @@ const post = (c, route, body) => raw(c.port, {
 });
 function allFiles(dir) { return readdirSync(dir).flatMap((n) => { const p = path.join(dir, n); return statSync(p).isDirectory() ? allFiles(p) : [p]; }); }
 
-async function boot({ signedIn = true, choices = null, yt = fakeYoutube(), hostWrap, planFile } = {}) {
+async function boot({ signedIn = true, choices = null, yt = fakeYoutube(), hostWrap, planFile, refreshUnreadable = null } = {}) {
   const dataDir = mk();
   if (choices) writeChoices(dataDir, choices);
-  const mem = createMemoryStores({ [CLIENT_ID_TARGET]: 'mock-google-client.apps.example', [CLIENT_SECRET_TARGET]: 'mock-secret-zz9', ...(signedIn ? { [TARGETS.youtubeRefresh]: REFRESH } : {}), 'Ujwalam/stream/youtube-h': KEY_H, 'Ujwalam/stream/youtube-v': KEY_V });
+  const mem0 = createMemoryStores({ [CLIENT_ID_TARGET]: 'mock-google-client.apps.example', [CLIENT_SECRET_TARGET]: 'mock-secret-zz9', ...(signedIn ? { [TARGETS.youtubeRefresh]: REFRESH } : {}), 'Ujwalam/stream/youtube-h': KEY_H, 'Ujwalam/stream/youtube-v': KEY_V });
+  // refreshUnreadable(): true = the credential store fails to read the YouTube sign-in (a locked or broken store).
+  const mem = { ...mem0, storeFor: (t) => { const s = mem0.storeFor(t); return t === TARGETS.youtubeRefresh && refreshUnreadable ? { ...s, get: async () => { if (refreshUnreadable()) throw new Error('store-locked'); return s.get(); } } : s; } };
   const fake = createFakeHost({ outputsReady: true });
   const hostCalls = [];
   const host = { describe: () => fake.describe(), call: async (m, p) => { hostCalls.push(m); if (hostWrap) await hostWrap(m); return fake.call(m, p); } };
@@ -503,9 +547,23 @@ describe('no flag, autoEvent, overrides, youtube-live.json at the go-live hook',
     const r = (await goLive(c)).json();
     assert.equal(r.verdict, 'refuse');
     assert.equal(r.reason, 'youtube-event-missing');
-    assert.equal(r.detail, "Pick a YouTube event template for YouTube H and YouTube V. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.");
+    assert.equal(r.detail, "No YouTube event template is picked for YouTube H and YouTube V. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.");
     assert.ok(!c.hostCalls.includes('stream.start'));
     assert.equal(existsSync(path.join(c.dataDir, LIVE_FILE)), false, 'no file on a refusal');
+  });
+  test('the sign-in cannot be read (store error): Go live is refused, not streamed without the event; autoEvent off streams', async () => {
+    let broken = true;
+    const c = await boot({ choices: BOTH, refreshUnreadable: () => broken });
+    const r = (await goLive(c)).json();
+    assert.deepEqual([r.verdict, r.reason], ['refuse', 'youtube-signin-unknown']);
+    assert.ok(!/flag/i.test(r.detail));
+    assert.ok(!c.hostCalls.includes('stream.start'));
+    assert.deepEqual(c.yt.st.made, []);
+    assert.equal(existsSync(path.join(c.dataDir, LIVE_FILE)), false);
+    await post(c, '/ui/api/youtube/event/auto', { on: false });
+    assert.equal((await goLive(c)).json().verdict, 'allow', 'with autoEvent off the sign-in is not read at all');
+    assert.deepEqual(c.yt.st.made, []);
+    broken = false;
   });
   test('event/set overrides are validated, stored, shown, and used by the go-live event', async () => {
     const c = await boot();
@@ -685,6 +743,38 @@ describe('routes', () => {
     assert.equal(r.status, 409);
     assert.equal(r.json().error, 'output-live');
     assert.deepEqual(c.yt.st.transitions, []);
+  });
+  test('while a YouTube output streams, an event not in the current list is checked on YouTube: live refused, unknown refused, complete allowed', async () => {
+    const yt = fakeYoutube({ broadcasts: [TEMPLATE, TEMPLATE_V, baseBroadcast('other001'), baseBroadcast('ready001', { status: { lifeCycleStatus: 'ready' } })] });
+    const c = await boot({ choices: BOTH, yt });
+    assert.equal((await goLive(c)).json().verdict, 'allow');
+    for (const id of ['other001', 'ready001']) {
+      const r = await post(c, '/ui/api/youtube/broadcast/end', { id });
+      assert.equal(r.status, 409, id);
+      assert.equal(r.json().error, 'output-live', id);
+      assert.equal(r.json().message, ERROR_TEXT['youtube-not-idle'], id);
+    }
+    assert.equal((await post(c, '/ui/api/youtube/broadcast/delete', { id: 'gone0001' })).json().error, 'unknown-broadcast');
+    assert.deepEqual([c.yt.st.transitions, c.yt.st.deleted], [[], []]);
+    assert.equal((await post(c, '/ui/api/youtube/broadcast/delete', { id: 'tplV0001' })).status, 200, 'a complete event is allowed');
+    assert.deepEqual(c.yt.st.deleted, ['tplV0001']);
+    // stopped: no YouTube look-up needed, the event is ended directly
+    await c.fake.call('stream.stop', {});
+    const looks = apiCalls(c.yt, /liveBroadcasts\?part=id,status&id=/).length;
+    assert.equal((await post(c, '/ui/api/youtube/broadcast/end', { id: 'other001' })).status, 200);
+    assert.equal(apiCalls(c.yt, /liveBroadcasts\?part=id,status&id=/).length, looks);
+  });
+  test('stale clean-up drops an old event of an idle output but keeps a newer one written meanwhile by a Go live', async () => {
+    let race = null;
+    const yt = fakeYoutube({ broadcasts: [baseBroadcast('old00001', { status: { lifeCycleStatus: 'ready' } }), baseBroadcast('old00002', { status: { lifeCycleStatus: 'ready' } })] });
+    const c = await boot({ yt, hostWrap: async (m) => { if (race && m === 'outputs.status') { const f = race; race = null; f(); } } });
+    const old = new Date(Date.now() - 10 * 60_000).toISOString();
+    setLive(c.dataDir, [{ output: 'youtube-h', broadcastId: 'old00001', title: 'h' }, { output: 'youtube-v', broadcastId: 'old00002', title: 'v' }], old);
+    race = () => setLive(c.dataDir, [{ output: 'youtube-h', broadcastId: 'newer001', title: 'n' }], new Date().toISOString());
+    assert.equal((await get(c, '/ui/api/youtube/live?refresh=1')).status, 200);
+    const now = readLive(c.dataDir);
+    assert.equal(now['youtube-h']?.broadcastId, 'newer001', 'the newer event is kept');
+    assert.equal(now['youtube-v'], undefined, 'the old event of the idle output is dropped');
   });
   test('quota and API failures come back as codes, never bodies', async () => {
     const c = await boot({ yt: fakeYoutube({ failCode: { 'GET /videoCategories': [403, 'quotaExceeded'], 'GET /channels': [500, 'backendError'] } }) });

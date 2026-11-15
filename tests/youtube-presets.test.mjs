@@ -228,6 +228,21 @@ describe('use', () => {
     assert.equal(c.host.configures.length, 0);
     assert.equal((await c.call('GET', '/ui/api/youtube/presets')).body.activeId, null);
   });
+  test('a switched-off output sharing the YouTube rung also refuses (it would stream at the new size once switched on)', async () => {
+    const c = boot();
+    const s = c.setupNow();
+    const tw = s.outputs.find((o) => o.id === 'twitch');
+    tw.name = 'Twitch'; tw.enabled = false;
+    delete tw.video; s.video.bitrateKbps = 6000;
+    assert.ok(writeSetup(c.dataDir, s, { upscale: true }).ok);
+    const raw = readFileSync(path.join(c.dataDir, SETUP_FILE), 'utf8');
+    const p = (await save(c, preset())).body.preset;
+    const r = await c.call('POST', '/ui/api/youtube/preset/use', { id: p.id });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.error, 'shared-rung');
+    assert.equal(readFileSync(path.join(c.dataDir, SETUP_FILE), 'utf8'), raw);
+    assert.equal(c.host.configures.length, 0);
+  });
   test('live: saved and pending, nothing stopped, no configure; the template choices are still written', async () => {
     const c = boot();
     c.host.states.twitch = 'live';

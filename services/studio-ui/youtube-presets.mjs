@@ -178,14 +178,15 @@ export function createYoutubePresets(opts) {
       if (!t) return { error: 'youtube-output-missing' };
       const s = sizes[logical].find((x) => x.id === want.size);
       t.enabled = want.enabled;
-      // The rung this change would move: another enabled stream output on it (Twitch, Kick, ...) would change too.
+      // The rung this change would move: another stream output on it (Twitch, Kick, ...) would change too, also one that
+      // is switched off now (it would stream with the changed values once switched on again; Codex review of D388).
       const portrait = logical === 'youtube-v';
       const own = !portrait && t.video;
       if (!own) {
         const cur = portrait ? portraitOf(options, setup.video) : sizes['youtube-h'].find((x) => x.setupId === setup.video.output);
         const curKbps = portrait ? setup.video.portraitBitrateKbps : setup.video.bitrateKbps;
         const changes = !cur || cur.w !== s.w || cur.h !== s.h || curKbps !== want.bitrateKbps;
-        const sharer = changes ? next.outputs.find((o) => o !== t && o.platform !== 'youtube' && o.enabled && o.canvas === (portrait ? 'V' : 'H') && (portrait || !o.video)) : null;
+        const sharer = changes ? next.outputs.find((o) => o !== t && o.platform !== 'youtube' && o.canvas === (portrait ? 'V' : 'H') && (portrait || !o.video)) : null;
         if (sharer) return { error: 'shared-rung', name: sharer.name };
       }
       if (logical === 'youtube-v') {

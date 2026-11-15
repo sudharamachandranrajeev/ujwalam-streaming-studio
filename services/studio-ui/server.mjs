@@ -635,8 +635,9 @@ export function createStudioServer(opts) {
           if (!t) return ytEventsFail(res, { code: 'unknown-template' });
           choices[body.output] = {
             templateId: t.id, templateTitle: t.title, title,
-            ...(body.description ? { description: body.description } : {}), ...(body.privacy ? { privacy: body.privacy } : {}),
-            ...(Array.isArray(body.tags) && body.tags.length ? { tags: ytCleanTags(body.tags) } : {}), ...(body.categoryId ? { categoryId: body.categoryId } : {}),
+            // '' and [] are kept: the user cleared the template's description / tags (Codex review of D388).
+            ...(typeof body.description === 'string' ? { description: body.description } : {}), ...(body.privacy ? { privacy: body.privacy } : {}),
+            ...(Array.isArray(body.tags) ? { tags: body.tags.length ? ytCleanTags(body.tags) : [] } : {}), ...(body.categoryId ? { categoryId: body.categoryId } : {}),
           };
         }
         writeYtChoices(opts.dataDir, choices);
@@ -650,7 +651,7 @@ export function createStudioServer(opts) {
   // json and text are declared further down; the wrappers read them when a request comes.
   const ytRoutes = createYoutubeRoutes({
     dataDir: opts.dataDir, json: (...a) => json(...a), text: (...a) => text(...a), control: ytControl, connect, signedIn: ytSignedIn,
-    ytOutputs, outputsStatus: ytOutputsStatus, now, log: (m) => log(m),
+    ytOutputs, outputsStatus: ytOutputsStatus, now, log: (m) => log(m), starting: () => startsInFlight > 0,
   });
   // Public form of a readiness result for the page (the Qt shell reads the summary text of the confirm window).
   const publicReadiness = (r) => ({ at: r.at, ok: r.ok, counts: r.counts, items: r.items.map((i) => ({ id: i.id, title: i.title, status: i.status, message: i.message, ...(i.fix ? { fix: i.fix } : {}), ...(i.unknown ? { unknown: true } : {}) })) });
@@ -1856,10 +1857,18 @@ export function createStudioServer(opts) {
         if (p.method === 'stream.start' && ytEventsOn()) {
           const all = ytOutputs();
           const want = Array.isArray(callParams?.sinks) ? all.filter((o) => callParams.sinks.includes(o.id)) : all;
-          if (want.length && readYtAuto(opts.dataDir) && await ytSignedIn()) {
+          // Codex review of D388: a sign-in state that cannot be read stops the start (never a silent go-live without the
+          // event the user set up); only a sign-in that is surely absent streams without one.
+          let ytSignIn = false;
+          if (want.length && readYtAuto(opts.dataDir)) {
+            try { ytSignIn = (await connect().youtube?.signedIn?.()) === true; } catch {
+              return json(res, 200, { verdict: 'refuse', reason: 'youtube-signin-unknown', detail: "The YouTube sign-in could not be read, so no YouTube event was made and nothing went live. Try Go live again, or turn off 'New YouTube event at every Go live' in the YouTube window." });
+            }
+          }
+          if (ytSignIn) {
             const choices = readYtChoices(opts.dataDir);
             const missing = want.filter((o) => !choices[o.id]);
-            if (missing.length) return json(res, 200, { verdict: 'refuse', reason: 'youtube-event-missing', detail: `Pick a YouTube event template for ${missing.map((o) => o.label).join(' and ')}. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.` });
+            if (missing.length) return json(res, 200, { verdict: 'refuse', reason: 'youtube-event-missing', detail: `No YouTube event template is picked for ${missing.map((o) => o.label).join(' and ')}. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.` });
             const yt = tasks.start({ title: 'Creating the YouTube events', kind: 'youtube' });
             let svc = null;
             try { svc = ytEvents(); } catch { svc = null; }

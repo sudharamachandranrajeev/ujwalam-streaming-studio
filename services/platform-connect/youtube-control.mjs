@@ -25,7 +25,8 @@
 // event (title, scheduledStartTime, privacyStatus are sent); that videos.update keeps the live event's title in step;
 // that liveChatMessages.list answers for a chat that has just opened; the lifeCycle values that allow transition.
 
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { ConnectError, DEFAULT_ENDPOINTS, httpJson } from './index.mjs';
 import { ID_RE, cleanCategoryId, cleanDescription, cleanPrivacy, cleanTags, cleanTitle, failCode } from './youtube-events.mjs';
@@ -97,13 +98,19 @@ export function clearLive(dataDir, drop) {
 // ---- the service ----
 
 /** A picture file the user picked: { type, bytes } or throws youtube-bad-thumbnail. PNG / JPEG by magic bytes, <= 2 MB. */
-export function readThumbnailFile(file) {
-  if (typeof file !== 'string' || !file || file.length > 1024 || file.includes('\0') || !path.isAbsolute(file)) throw new ConnectError('youtube-bad-thumbnail');
+// A drive-letter path only (C:\... or C:/...): never a UNC share (\\host\share, //host/share) or a device path (\\?\, \\.\),
+// so a request can never make the server open a network path (Windows would send the user's credentials) or block on one
+// (Codex review of D388). The real path is checked again, so a link to a share is refused too. Read asynchronously.
+const DRIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+export async function readThumbnailFile(file) {
+  if (typeof file !== 'string' || !file || file.length > 1024 || file.includes('\0') || !DRIVE_PATH_RE.test(file) || /^[\\/]{2}/.test(file)) throw new ConnectError('youtube-bad-thumbnail');
   let bytes;
   try {
-    const st = statSync(file);
+    const real = await fsp.realpath(file);
+    if (!DRIVE_PATH_RE.test(real)) throw new Error('not-local');
+    const st = await fsp.stat(real);
     if (!st.isFile() || st.size <= 8 || st.size > MAX_THUMB_BYTES) throw new Error('size');
-    bytes = readFileSync(file);
+    bytes = await fsp.readFile(real);
   } catch { throw new ConnectError('youtube-bad-thumbnail'); }
   if (bytes.length > MAX_THUMB_BYTES) throw new ConnectError('youtube-bad-thumbnail');
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { type: 'image/png', bytes };
@@ -293,7 +300,7 @@ export function createYoutubeControl(opts = {}) {
   /** thumbnails.set from a local file (PNG / JPEG by magic bytes, <= 2 MB). */
   async function setThumbnail({ broadcastId, path: file } = {}) {
     needId(broadcastId);
-    const { type, bytes } = readThumbnailFile(file);
+    const { type, bytes } = await readThumbnailFile(file);
     const res = await (async () => {
       try {
         return await fetchImpl(`${ep.youtubeUpload}/thumbnails/set?videoId=${idParam(broadcastId)}&uploadType=media`, {
@@ -336,6 +343,13 @@ export function createYoutubeControl(opts = {}) {
   }
   const invalidateLists = () => { listCache.clear(); invalidateStatus(); };
 
+  /** The broadcast's lifeCycleStatus (1 unit), or null when YouTube does not list it. */
+  async function lifeCycleOf(id) {
+    needId(id);
+    const d = await call(`${ep.youtubeApi}/liveBroadcasts?part=id,status&id=${idParam(id)}`);
+    const lc = items(d).find((x) => x?.id === id)?.status?.lifeCycleStatus;
+    return typeof lc === 'string' && /^[A-Za-z]{1,32}$/.test(lc) ? lc : null;
+  }
   /** liveBroadcasts.transition complete. */
   async function endBroadcast(id) {
     needId(id);
@@ -425,8 +439,17 @@ export function createYoutubeControl(opts = {}) {
       r.busy = true;
       try {
         if (!r.live && now() - r.resolvedAt >= CHAT_RESOLVE_MS) {
-          const c = await resolveChat(broadcastId);
-          r.resolvedAt = now(); r.chatId = c.chatId; r.live = c.live;
+          // The attempt counts, not only a success: a failing look-up waits CHAT_ERROR_WAIT_MS instead of being retried at
+          // the window's request rate (Codex review of D388: quota).
+          r.resolvedAt = now();
+          let c;
+          try { c = await resolveChat(broadcastId); } catch (e) {
+            r.error = typeof e?.code === 'string' ? e.code : 'youtube-api-failed';
+            r.resolvedAt = now() + CHAT_ERROR_WAIT_MS - CHAT_RESOLVE_MS;
+            if (r.error === 'youtube-unauthorized' || r.error === 'oauth-reauth-needed') throw e;
+            c = null;
+          }
+          if (c) { r.chatId = c.chatId; r.live = c.live; r.error = null; }
         }
         if (r.live && !r.timer && now() >= r.nextAt) {
           const wait = await pollOnce(r);
@@ -457,5 +480,5 @@ export function createYoutubeControl(opts = {}) {
     readers.clear();
   }
 
-  return { account, categories, liveStatus, updateDetails, setThumbnail, listBroadcasts, endBroadcast, deleteBroadcast, chatRead, chatSend, close, _readers: readers };
+  return { account, categories, liveStatus, updateDetails, setThumbnail, listBroadcasts, lifeCycleOf, endBroadcast, deleteBroadcast, chatRead, chatSend, close, _readers: readers };
 }

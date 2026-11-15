@@ -83,9 +83,10 @@ export const cleanPrivacy = (v) => (typeof v === 'string' && PRIVACY.has(v) ? v 
 function cleanChoice(v) {
   if (!v || typeof v !== 'object' || typeof v.templateId !== 'string' || !ID_RE.test(v.templateId)) return null;
   const c = { templateId: v.templateId, templateTitle: plainText(v.templateTitle, 100), title: cleanTitle(v.title) };
-  const description = cleanDescription(v.description); if (description) c.description = description;
+  // '' and [] are kept (the user cleared the template's value); absent = the template's value.
+  const description = v.description === '' ? '' : cleanDescription(v.description); if (description !== null) c.description = description;
   const privacy = cleanPrivacy(v.privacy); if (privacy) c.privacy = privacy;
-  const tags = cleanTags(v.tags); if (tags) c.tags = tags;
+  const tags = Array.isArray(v.tags) && v.tags.length === 0 ? [] : cleanTags(v.tags); if (tags) c.tags = tags;
   const categoryId = cleanCategoryId(v.categoryId); if (categoryId) c.categoryId = categoryId;
   return c;
 }
@@ -247,9 +248,12 @@ export function createYoutubeEvents(opts = {}) {
     if (title !== undefined && title !== null && !cleanTitle(title)) throw new ConnectError('youtube-bad-title');
     // D388 overrides: a value the user set replaces the template's; a bad one stops the start before anything is made.
     const ov = {};
-    if (ovDescription !== undefined && ovDescription !== null) { ov.description = cleanDescription(ovDescription); if (!ov.description) throw new ConnectError('youtube-bad-choice'); }
+    // '' and [] are kept: the user cleared the template's description / tags (Codex review of D388).
+    if (ovDescription === '') ov.description = '';
+    else if (ovDescription !== undefined && ovDescription !== null) { ov.description = cleanDescription(ovDescription); if (!ov.description) throw new ConnectError('youtube-bad-choice'); }
     if (ovPrivacy !== undefined && ovPrivacy !== null) { ov.privacy = cleanPrivacy(ovPrivacy); if (!ov.privacy) throw new ConnectError('youtube-bad-choice'); }
-    if (ovTags !== undefined && ovTags !== null) { ov.tags = cleanTags(ovTags); if (!ov.tags) throw new ConnectError('youtube-bad-choice'); }
+    if (Array.isArray(ovTags) && ovTags.length === 0) ov.tags = [];
+    else if (ovTags !== undefined && ovTags !== null) { ov.tags = cleanTags(ovTags); if (!ov.tags) throw new ConnectError('youtube-bad-choice'); }
     if (ovCategoryId !== undefined && ovCategoryId !== null) { ov.categoryId = cleanCategoryId(ovCategoryId); if (!ov.categoryId) throw new ConnectError('youtube-bad-choice'); }
     const warnings = [];
     const tData = await call(`${ep.youtubeApi}/liveBroadcasts?part=snippet,status,contentDetails&id=${encodeURIComponent(templateId)}`);

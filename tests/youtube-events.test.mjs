@@ -366,7 +366,7 @@ describe('go-live hook (D386)', () => {
     const r = (await post(c, '/ui/api/host', { method: 'stream.start', params: {} })).json();
     assert.equal(r.verdict, 'refuse');
     assert.equal(r.reason, 'youtube-event-missing');
-    assert.equal(r.detail, "Pick a YouTube event template for YouTube V. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.");
+    assert.equal(r.detail, "No YouTube event template is picked for YouTube V. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.");
     assert.deepEqual(ytApiCalls(c), []);
     assert.ok(!c.hostCalls.includes('stream.start'));
   });

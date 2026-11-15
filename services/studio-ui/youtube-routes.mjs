@@ -93,8 +93,9 @@ export function createYoutubeRoutes(deps) {
     const ended = new Set(st.outputs.filter((o) => ENDED.has(o.lifeCycle)).map((o) => o.broadcastId));
     for (const g of st.gone) ended.add(g);
     const sinks = list.some((e) => !ended.has(e.broadcastId)) ? await sinksNow() : null;
-    const stale = new Set(list.filter((e) => surelyIdle(sinks, e.output) && now() - (Date.parse(e.madeAt) || 0) > IDLE_GRACE_MS).map((e) => e.output));
-    const dropped = clearLive(dataDir, (k, v) => ended.has(v.broadcastId) || stale.has(k));
+    // Keyed by output AND the broadcast inspected: a newer event a Go live wrote meanwhile is never dropped (Codex review).
+    const stale = new Map(list.filter((e) => surelyIdle(sinks, e.output) && now() - (Date.parse(e.madeAt) || 0) > IDLE_GRACE_MS).map((e) => [e.output, e.broadcastId]));
+    const dropped = clearLive(dataDir, (k, v) => ended.has(v.broadcastId) || stale.get(k) === v.broadcastId);
     if (dropped.length) deps.log(`[studio-ui] youtube: ${dropped.length} finished event(s) dropped from the current list`);
     return json(res, 200, { at: st.at, outputs: st.outputs });
   }
@@ -168,9 +169,17 @@ export function createYoutubeRoutes(deps) {
     if (!only(body, ['id']) || typeof body.id !== 'string' || !ID_RE.test(body.id)) return bad(res);
     await needSignIn();
     const mine = Object.entries(readLive(dataDir)).filter(([, v]) => v.broadcastId === body.id);
-    if (mine.length) {
-      const sinks = await sinksNow();
-      if (!mine.every(([k]) => surelyIdle(sinks, k))) return fail(res, { code: 'output-live' }, 'This event belongs to a stream that is on air (or its state is not clear). End the stream instead.');
+    // Codex review of D388: the current-event file is not the only link between an event and a stream (autoEvent off, a
+    // failed write, a start on its way). So unless every YouTube output is surely stopped and no start is in flight, only
+    // an event that is surely not on air (created, complete, revoked) may be ended or deleted; unknown = refused.
+    const sinks = await sinksNow();
+    const allIdle = deps.starting?.() !== true && deps.ytOutputs().every((o) => surelyIdle(sinks, o.id));
+    if (!allIdle) {
+      if (mine.length) return fail(res, { code: 'output-live' }, 'This event belongs to a stream that is on air (or its state is not clear). End the stream instead.');
+      let lc = null;
+      try { lc = await deps.control().lifeCycleOf(body.id); } catch (e) { if (e?.code === 'youtube-unauthorized' || e?.code === 'youtube-quota' || e?.code === 'oauth-reauth-needed') throw e; lc = null; }
+      if (!lc) return fail(res, { code: 'unknown-broadcast' });
+      if (!['created', 'complete', 'revoked'].includes(lc)) return fail(res, { code: 'output-live' }, ERROR_TEXT['youtube-not-idle']);
     }
     if (verb === 'end') await deps.control().endBroadcast(body.id); else await deps.control().deleteBroadcast(body.id);
     if (mine.length) clearLive(dataDir, (k, v) => v.broadcastId === body.id);

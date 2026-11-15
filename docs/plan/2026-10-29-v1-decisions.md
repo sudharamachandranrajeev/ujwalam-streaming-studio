@@ -1965,3 +1965,28 @@ Growth plan ED2. Decided:
 - **Quota.** About 203 units per YouTube output per go-live (3 reads, then insert 50, videos.update 50, thumbnails.set 50, bind 50), so about 406 for H + V. That is out of the default 10 000 per day. Listing templates costs 1.
 - **UNVERIFIED (no real stream yet).** Monitor stream off with auto-start on should go straight live when data arrives, with no testing stage. A copied thumbnail is YouTube's published image, possibly a smaller or re-encoded copy. Custom thumbnails need a verified channel; without one the copy is a warning. It is unknown whether YouTube applies the category, tags and languages to a broadcast that has not started.
 - **Not changed.** Keys and tokens stay in Windows Credential Manager. No key, token or response body appears in a file, log or answer. Twitch and Kick starts make no YouTube call. No going live without "start stream test". A live feature is done only after a real stream.
+
+## D388 — YouTube presets and in-app YouTube control, on by default, no flag (2026-11-15, user request)
+
+- Asked by the user: "need the youtube streaming request with multple quality preset and all in all yourube control
+  in-app ASAP". Choices (2026-11-15): named presets holding YouTube H and V size + bitrate + on/off + event template;
+  in-app event details editing, live status panel, live chat (read every 15 s, send on click), past streams manager.
+- The user forbade flag gating for it: "stop your flag based BS implementation that'll get user confused. use toggle
+  function, the least something modern. turn this on by default as this is requested feature by default rather than
+  flagging it". The `youtube-events` flag is retired; on/off lives as a visible toggle inside the YouTube window
+  ("New YouTube event at every Go live", default on). This overrides the AGENTS.md "new features behind a flag, off by
+  default" rule for user-requested features.
+- fps is not part of a preset: the canvas fps is shared with Twitch and Kick, which the user said not to touch.
+- Contract: `docs/plan/2026-11-15-youtube-control.md`. Built in three parallel parts (A presets, B control service and
+  routes, C QML window), reviewed by the main session and Codex before merge.
+- Codex second-opinion review (medium effort) found seven issues, all fixed with regression tests before merge:
+  End/Delete of an event with no current-list entry while an output may be live (now checked on YouTube: only
+  created/complete/revoked allowed while any YouTube output is not surely stopped or a start is in flight); a credential
+  store read error at Go live streamed without the event (now refused, `youtube-signin-unknown`); a UNC or device
+  thumbnail path (only drive-letter paths, real path re-checked); a switched-off output sharing the YouTube rung (now
+  also refuses the preset); a failing chat look-up retried at the request rate (now waits 60 s); the stale clean-up
+  could drop a newer event written meanwhile (keyed by output and event id); an empty description or tag list fell
+  back to the template's (kept as real choices).
+- UNVERIFIED until a real stream: monitorStream/autoStart, liveBroadcasts.update required fields, chat on a fresh
+  chat, End lifecycle states, thumbnail upload (needs a verified channel). Residual: a mapped network drive letter is
+  still accepted as a thumbnail path.
