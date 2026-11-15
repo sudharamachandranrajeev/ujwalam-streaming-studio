@@ -109,7 +109,7 @@ import { refuseReason, SERVICES } from '../supervisor/swap.mjs';
 import { acceptHost, createStartGate, createUpdates, hostArgsFor, hostEntryProblem, outputsBusy, partFor, readRelease, rejectHost, serveUpdates, serviceRootProblem, takeStartupHost } from '../supervisor/updates.mjs';
 import { EXE as STUDIO_EXE, qtDir as studioQtDir } from '../../app/studio/tools/build.mjs';
 import { appendRecoveryEvent, createLiveAuthority, labelsOf, loadRecoveryConfig, recoveryPolicy, RECOVERY_FLAG, serveAuthority, SESSION_ENV, waitStreamsUp, writeAuthorityMirror } from './stream-recovery.mjs';
-import { STREAM_UPSCALE_FLAG, readSetup, setupProblems, writePlanFile } from './stream-setup.mjs';
+import { readSetup, setupProblems, writePlanFile } from './stream-setup.mjs';
 import { createHostWatch, driverResets, driverResetText, HOST_WATCH_FLAG, incidentTask, loadHostWatchConfig, staleText } from './host-watch.mjs';
 import { writeTaskFile } from './tasks.mjs';
 import { INSTAGRAM_FLAG, loadAddon as instagramAddon, writeInstagramPlan } from '../outputs/instagram.mjs';
@@ -128,7 +128,7 @@ export const ALPHA_LIVE_PLAN = path.join(REPO, 'data', 'outputs', 'alpha-live.js
 /** The --live plan file (D327 OS1/OS2). With the `stream-settings` flag on and a saved Settings > Stream setup, the plan
  *  generated from it (<dataDir>/outputs/stream-setup-plan.json, recording "alpha.mkv" on the main H rung like
  *  alpha-live.json); otherwise alpha-live.json. A setup with problems throws (the start stops; the user fixes Settings). */
-export function livePlanFile({ dataDir, streamSettingsOn, instagramOn = false, upscale = false }) {
+export function livePlanFile({ dataDir, streamSettingsOn, instagramOn = false, upscale = true }) {
   const base = baseLivePlanFile({ dataDir, streamSettingsOn, upscale });
   // IG1 (D351, flag instagram-live): the plan in effect plus the instagram sink on the V canvas, written to
   // <dataDir>/outputs/live-plan-instagram.json (target names only). A plan that cannot take it stops the start.
@@ -1348,7 +1348,7 @@ export async function main(argv = process.argv.slice(2)) {
     // (only the scheme, the value is dropped at once) choose "auto" transports (Twitch: rtmp or rtmps) and check named
     // ones. A stand-in (script) host reaches no platform, so nothing is read for it and "auto" stays unresolved.
     const planOnce = async ({ instagramOn }) => {
-      const file = args.live === true ? (() => { const fl = createFlags({ dataDir }); return livePlanFile({ dataDir, streamSettingsOn: fl.isOn(STREAM_SETTINGS_FLAG), instagramOn, upscale: fl.isOn(STREAM_UPSCALE_FLAG) }); })()
+      const file = args.live === true ? (() => { const fl = createFlags({ dataDir }); return livePlanFile({ dataDir, streamSettingsOn: fl.isOn(STREAM_SETTINGS_FLAG), instagramOn }); })()
         : typeof args.outputs === 'string' ? path.resolve(args.outputs) : alpha ? ALPHA_RECORD_PLAN : null;
       if (!file) return { file: null, planned: null };
       let schemes;

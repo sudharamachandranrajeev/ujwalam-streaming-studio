@@ -78,7 +78,7 @@ describe('QML studio Settings > Stream (headless probe)', { skip }, () => {
   }
   const node = (p, name) => p.tree.find((n) => n.name === name);
   const done = (p) => Object.fromEntries(p.actions.map((a) => [a.action, a.done]));
-  const PAGE_NAMES = /^(stream(Mode|Resolution|PortraitOutput|Fps|Quality|Kbps|PortraitKbps|Hardware|Audio|Add|Edit|Delete|Problems|CanvasInfo|Output|NoOutputs)|outputRowText)/;
+  const PAGE_NAMES = /^(stream(Mode|Resolution|PortraitOutput|Fps|Quality|Kbps|PortraitKbps|Hardware|Audio|Add|Edit|Delete|Problems|CanvasInfo|Output|NoOutputs|Key)|outputRowText)/;
   const DIALOG_NAMES = /^output(Platform|Name|Canvas|OwnBitrate|Resolution|Bitrate|BitrateNote|Connect|ConnectStatus)$/;
   // The check after a change waits 250 ms on a QML timer, which runs slowly in the never-shown test window: a few quiet
   // actions give it time (the widget twin has a real QTimer). Real use is unaffected.
@@ -130,7 +130,24 @@ describe('QML studio Settings > Stream (headless probe)', { skip }, () => {
     const r = await probe({ actions: [...open, 'stream-kbps:12000', 'settings-save'] });
     assert.equal(r.setup.video.bitrateKbps, 12000);
     assert.equal(r.s.flagsInSettings, false, 'Settings closed');
-    assert.match(r.s.note, /Settings saved\.|Stream settings saved; they apply the next time you go live\./);
+    assert.match(r.s.note, /Settings saved\.|Stream settings saved\. Close and open Ujwalam to stream with them\./);
+  });
+
+  test('D385: 2K and 4K need no switch; the bitrate follows the size; the YouTube key line names the key that size uses; Set key opens Connections', async () => {
+    const r = await probe({ flagsOn: ['stream-settings', 'platform-connect'], actions: [...open, 'stream-res:1440p', ...WAIT, 'stream-key-set:youtube-h'] });
+    const d = done(r.p);
+    assert.equal(d['stream-res:1440p'], true);
+    assert.equal(r.st.setup.video.output, '1440p');
+    assert.equal(r.st.setup.video.bitrateKbps, 34000, 'YouTube recommended 1440p60 (data/platforms/youtube.json)');
+    assert.equal(r.st.problems, '', 'above the 1080p canvas is not refused');
+    const yh = r.st.keyLines.find((k) => k.output === 'youtube-h');
+    assert.equal(yh.row, 'youtube-h-1440p');
+    assert.match(yh.text, /uses the 2K key - missing/);
+    assert.equal(d['stream-key-set:youtube-h'], true);
+    assert.equal(r.s.settings.page, 'Connections', 'Set key opened Settings > Connections');
+    const four = await probe({ actions: [...open, 'stream-res:2160p', ...WAIT, 'settings-save'] });
+    assert.equal(four.setup.video.output, '2160p', 'saved without a switch');
+    assert.equal(four.setup.video.bitrateKbps, 50000);
   });
 
   test('Settings > Stream: with nothing changed, Save writes no stream setup', async () => {
@@ -210,7 +227,7 @@ describe('QML studio Settings > Stream (headless probe)', { skip }, () => {
     assert.equal(done(p.p)['stream-portrait:1440x2560'], true);
     assert.equal(p.st.portraitOutput.value, '1440x2560');
     assert.equal(node(p.p, 'streamPortraitOutput').text, '1440x2560 (2K)');
-    const s = await probe({ flagsOn: ['stream-settings', 'stream-upscale'], actions: [...open, 'stream-portrait:1440x2560', 'settings-save'] }); // above the canvas size needs the switch
+    const s = await probe({ flagsOn: ['stream-settings'], actions: [...open, 'stream-portrait:1440x2560', 'settings-save'] }); // above the canvas size is scaled up (D385: no switch)
     assert.equal(s.setup.video.portraitOutput, '1440x2560');
     const bad = await probe({ actions: [...open, 'stream-portrait:nope'] });
     assert.equal(done(bad.p)['stream-portrait:nope'], false);
@@ -265,7 +282,7 @@ describe('QML studio Settings > Stream (headless probe)', { skip }, () => {
   });
 
   test('flag on: no sideways scrolling, plain words only (no decision numbers, no file paths), every control inside the page', async () => {
-    const r = await probe({ flagsOn: ['stream-settings', 'stream-upscale'], actions: [...open, 'stream-output-edit:0'] });
+    const r = await probe({ flagsOn: ['stream-settings'], actions: [...open, 'stream-output-edit:0'] });
     const page = node(r.p, 'settingsPage:Stream');
     assert.ok(page && page.visible);
     const [px, , pw] = page.rect;

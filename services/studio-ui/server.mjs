@@ -522,14 +522,16 @@ export function createStudioServer(opts) {
     // start (the URL and key are pasted before each broadcast); a plan row with that id is replaced by it.
     const ig = instagramOn() || instagramFlag() ? (() => { try { return instagramRow(); } catch { return null; } })() : null;
     const rows = planTargets(opts.livePlanFile).filter((r) => !ig || r.id !== ig.id).concat(ig ? [ig] : []);
+    // D385: also before the first Save (the setup is then the seed from the live plan, same output ids), so the 2K and 4K
+    // YouTube key rows can be filled before the setup that uses them is saved.
     if (flags && flags.isOn(STREAM_SETTINGS_FLAG) && typeof opts.dataDir === 'string') {
       try {
-        const { exists, setup } = readSetup(opts.dataDir);
-        if (exists) {
-          const mine = connectTargets(setup);
-          const ids = new Set(mine.map((t) => t.id));
-          return outputsFromPlan([...rows.filter((r) => !ids.has(r.id)), ...mine]);
-        }
+        const { setup } = readSetup(opts.dataDir);
+        // A key row (sinkId) never replaces a stream output of the running plan with the same id (Codex review, D385).
+        const planIds = new Set(rows.map((r) => r.id));
+        const mine = connectTargets(setup).filter((t) => !t.sinkId || !planIds.has(t.id));
+        const ids = new Set(mine.map((t) => t.id));
+        return outputsFromPlan([...rows.filter((r) => !ids.has(r.id)), ...mine]);
       } catch { /* an unreadable setup: the plan's outputs only */ }
     }
     return outputsFromPlan(rows);
@@ -667,7 +669,9 @@ export function createStudioServer(opts) {
     try { c = connect(); } catch (e) { return connectFail(res, e); }
     const label = (id) => c.outputs().find((o) => o.id === id)?.label ?? id;
     const ask = (summary, rec) => runAction({ kind: 'connect', summary, ...rec }, res); // the click is the decision (D332)
-    const notLive = async (id) => { try { return (await outputLive(id)) === 'idle' ? null : 'output-live'; } catch { return 'live-unknown'; } };
+    // A 2K / 4K key row (D385) is live-checked as the stream output it belongs to (sinkId).
+    const sinkOf = (id) => c.outputs().find((o) => o.id === id)?.sinkId ?? id;
+    const notLive = async (id) => { try { return (await outputLive(sinkOf(id))) === 'idle' ? null : 'output-live'; } catch { return 'live-unknown'; } };
     try {
       if (op === 'paste') {
         if (!only(['output', 'key', 'server']) || !str(body.output, 32) || (body.key !== undefined && !str(body.key, 2048)) || (body.server !== undefined && !str(body.server, 512))) return json(res, 400, { error: 'bad-params' });

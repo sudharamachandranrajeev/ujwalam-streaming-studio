@@ -1,5 +1,5 @@
 {
-  "$comment": "Choices the studio's Settings > Stream page offers (D327, OS1). UI choices only: platform limits stay in data/platforms/*.json and are checked by services/outputs/validate.mjs, never here. videoBitrateKbps bounds are what the bitrate box accepts, not a platform limit. Quality presets map to the host's encoder presets (NVENC p1-p7, x264 ultrafast-medium). seedPlan: the live plan a new stream setup starts from; its rung values are copied, never guessed.",
+  "$comment": "Choices the studio's Settings > Stream page offers (D327, OS1). UI choices only: platform limits stay in data/platforms/*.json and are checked by services/outputs/validate.mjs, never here. videoBitrateKbps bounds are what the bitrate box accepts, not a platform limit. Quality presets map to the host's encoder presets (NVENC p1-p7, x264 ultrafast-medium). seedPlan: the live plan a new stream setup starts from; its rung values are copied, never guessed. qualityKeys + platforms[].keyPerQuality (D385): a platform that gives a stream key per resolution (YouTube: 1080p, 2K and 4K keys made in YouTube Studio) uses the key Ujwalam/stream/<output>-<quality id> when the output is sent at that size or larger (short side), else Ujwalam/stream/<output>.",
   "resolutions": [
     { "id": "720p", "label": "720p", "w": 1280, "h": 720 },
     { "id": "1080p", "label": "1080p", "w": 1920, "h": 1080 },
@@ -25,8 +25,12 @@
   "keyframeSec": 2,
   "seedPlan": "data/outputs/alpha-live.json",
   "seedQuality": "balanced",
+  "qualityKeys": [
+    { "id": "1440p", "label": "2K", "minShortSide": 1440 },
+    { "id": "2160p", "label": "4K", "minShortSide": 2160 }
+  ],
   "platforms": [
-    { "id": "youtube", "label": "YouTube", "badge": "YT", "canvases": ["H", "V"] },
+    { "id": "youtube", "label": "YouTube", "badge": "YT", "canvases": ["H", "V"], "keyPerQuality": true },
     { "id": "twitch", "label": "Twitch", "badge": "TW", "canvases": ["H"] },
     { "id": "kick", "label": "Kick", "badge": "K", "canvases": ["H"] }
   ]

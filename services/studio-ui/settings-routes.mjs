@@ -4,8 +4,8 @@
 // stream-settings). Kept out of server.mjs; server.mjs calls handle() for these routes. Every route answers 404
 // <flag>-off while its flag is off.
 //
-//   GET  /ui/api/stream/setup             { setup, exists, options, summaries, problems }
-//   POST /ui/api/stream/setup  {setup}    saved (used at the next live start) | 422 { problems } (platform limit shown)
+//   GET  /ui/api/stream/setup             { setup, exists, options, canvases, recommendedKbps, summaries, problems }
+//   POST /ui/api/stream/setup  {setup}    saved (used from the next start of Ujwalam) | 422 { problems } (platform limit shown)
 //   POST /ui/api/stream/check  {setup}    { problems } (nothing saved)
 //   GET  /ui/api/outputs/panel            { outputs: [{ id, name, platform, canvas, enabled, summary, state }], live, virtualCamera }
 //   POST /ui/api/outputs/toggle {id, on}  offline: saves enabled (what Start stream starts); live: on the click (D332)
@@ -21,7 +21,7 @@ import path from 'node:path';
 import { BOTS, BOT_LABELS, tcpAnswers as realTcpAnswers } from '../bots/index.mjs';
 import { lanAddresses } from '../common/lan-remote.mjs';
 import { BOT_ADDRESS, readIntegrations, writeIntegrations } from './integrations.mjs';
-import { outputSummary, readOptions, readSetup, setupProblems, STREAM_UPSCALE_FLAG, toPlan, writeSetup } from './stream-setup.mjs';
+import { outputSummary, readOptions, readSetup, recommendedKbps, setupProblems, toPlan, writeSetup } from './stream-setup.mjs';
 
 export const STREAM_SETTINGS_FLAG = 'stream-settings';
 export const OUTPUTS_PANEL_FLAG = 'outputs-panel';
@@ -45,8 +45,10 @@ export function createSettingsRoutes(opts) {
   let options = null;
   const opt = () => (options ??= readOptions());
   const canvases = () => { try { return opts.canvases?.(); } catch { return undefined; } };
-  // Every setup check and plan sees the project's canvas sizes and whether a rung may be scaled up (D378).
-  const planOpts = () => ({ options: opt(), canvases: canvases(), upscale: on(STREAM_UPSCALE_FLAG) });
+  // Every setup check and plan sees the project's canvas sizes; a rung larger than its canvas is scaled up (D378, D385).
+  const planOpts = () => ({ options: opt(), canvases: canvases(), upscale: true });
+  let recommended = null;
+  const rec = () => (recommended ??= recommendedKbps());
 
   async function sinkStates() {
     try {
@@ -80,7 +82,7 @@ export function createSettingsRoutes(opts) {
       if (method === 'GET' && route === '/ui/api/stream/setup') {
         let r;
         try { r = readSetup(dataDir, { options: opt() }); } catch { return json(res, 409, { error: 'setup-unreadable' }), true; }
-        return json(res, 200, { exists: r.exists, setup: r.setup, options: opt(), canvases: canvases() ?? null, upscale: on(STREAM_UPSCALE_FLAG),
+        return json(res, 200, { exists: r.exists, setup: r.setup, options: opt(), canvases: canvases() ?? null, recommendedKbps: rec(),
           summaries: Object.fromEntries(r.setup.outputs.map((o) => [o.id, outputSummary(r.setup, o, opt())])),
           problems: setupProblems(r.setup, planOpts()) }), true;
       }

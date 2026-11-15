@@ -133,9 +133,13 @@ export function outputsFromPlan(targets) {
     const platform = typeof t.platform === 'string' && Object.hasOwn(PLATFORM_LABEL, t.platform) ? t.platform : platformOf(t.id);
     const schemes = t.transport === 'auto' ? (Array.isArray(t.schemes) && t.schemes.length ? t.schemes : ['rtmp', 'rtmps']) : (t.transport === 'rtmp' || t.transport === 'rtmps' ? [t.transport] : ['rtmps']);
     const canvas = t.canvas === 'V' || t.canvas === 'H' ? t.canvas : (/-v$/.test(t.id) ? 'V' : 'H');
+    // D385: a per-resolution key of an output (YouTube 2K / 4K): its own row, live-checked as its stream output (sinkId).
+    const q = typeof t.quality === 'string' && /^[0-9]{3,4}p$/.test(t.quality) && typeof t.sinkId === 'string' && /^[a-z0-9-]{1,32}$/.test(t.sinkId)
+      ? { sinkId: t.sinkId, quality: t.quality, qualityLabel: typeof t.qualityLabel === 'string' && /^[A-Za-z0-9 ]{1,8}$/.test(t.qualityLabel) ? t.qualityLabel : t.quality, ...(t.fps === 30 || t.fps === 60 ? { fps: t.fps } : {}) }
+      : null;
     out.push({
-      id: t.id, platform, label: `${PLATFORM_LABEL[platform]}${platform === 'youtube' ? ` ${canvas}` : ''}`,
-      keyRef: t.keyRef, ...(t.serverRef ? { serverRef: t.serverRef } : {}), schemes,
+      id: t.id, platform, label: `${PLATFORM_LABEL[platform]}${platform === 'youtube' ? ` ${canvas}` : ''}${q ? ` ${q.qualityLabel}` : ''}`,
+      keyRef: t.keyRef, ...(t.serverRef ? { serverRef: t.serverRef } : {}), schemes, ...(q ?? {}),
       signIn: platform === 'youtube' || platform === 'twitch' ? platform : null,
       // IG1 (D351): a new server URL and key for every broadcast (Instagram Live Producer). Needs a server address.
       ...(t.perBroadcast === true && t.serverRef ? { perBroadcast: true } : {}),
@@ -257,9 +261,11 @@ export function createConnect(opts = {}) {
   // the re-check after the write below protects a start that slips in.
   const gate = opts.gate && typeof opts.gate.enter === 'function' ? opts.gate : { enter: () => () => {} };
 
+  // The stream output a row belongs to (a per-resolution key row: its output, D385).
+  const sinkOf = (o) => o.sinkId ?? o.id;
   async function assertWritable(output) {
     let st;
-    try { st = await outputLive(output.id); } catch { throw new ConnectError('live-unknown', 'could not confirm that this output is not live'); }
+    try { st = await outputLive(sinkOf(output)); } catch { throw new ConnectError('live-unknown', 'could not confirm that this output is not live'); }
     if (st !== 'idle') throw new ConnectError('output-live', `${output.label} is streaming: change its key after the stream`);
   }
   /**
@@ -281,7 +287,7 @@ export function createConnect(opts = {}) {
         try {
           alive();
           const result = await apply();
-          let st; try { st = await outputLive(o.id); } catch { st = 'unknown'; }
+          let st; try { st = await outputLive(sinkOf(o)); } catch { st = 'unknown'; }
           if (st !== 'idle') { await restore(); throw new ConnectError(st === 'live' ? 'output-live' : 'live-unknown', 'the output started while its key was being changed; the previous key is back'); }
           return result;
         } catch (e) {
@@ -331,10 +337,12 @@ export function createConnect(opts = {}) {
       youtube: { clientSet: ytId.present && ytSecret.present, ...account(ytRefresh.present, 'youtube') },
       twitch: { clientSet: twId.present, ...account(twRefresh.present, 'twitch') },
     };
+    // Every output's credentials are read at the same time: each read is a PowerShell start (~0.4 s), so one after
+    // the other took longer than the studio's request time-out with 2K/4K key rows (D385).
+    const read = await Promise.all(outs.map((o) => Promise.all([facts(o.keyRef, { hint: true }), o.serverRef ? facts(o.serverRef, { scheme: true }) : null])));
     const rows = [];
-    for (const o of outs) {
-      const key = await facts(o.keyRef, { hint: true });
-      const server = o.serverRef ? await facts(o.serverRef, { scheme: true }) : null;
+    for (const [i, o] of outs.entries()) {
+      const [key, server] = read[i];
       const source = meta.outputs[o.id]?.source ?? null;
       let state = 'connected'; let detail = '';
       if (key.error || server?.error) { state = 'missing'; detail = 'Could not be read from Windows Credential Manager.'; }
@@ -353,6 +361,7 @@ export function createConnect(opts = {}) {
       } else detail = source === 'pasted' || !source ? 'Key stored.' : `Key from ${PLATFORM_LABEL[source]} sign-in.`;
       rows.push({
         id: o.id, platform: o.platform, label: o.label, signIn: o.signIn, source, state, detail, ...(o.perBroadcast ? { perBroadcast: true } : {}),
+        ...(o.quality ? { sinkId: o.sinkId, quality: o.quality, qualityLabel: o.qualityLabel } : {}),
         key: { present: key.present, ...(key.last4 ? { last4: key.last4 } : {}) },
         ...(o.serverRef ? { server: { present: !!server?.present, scheme: server?.scheme ?? null, schemes: o.schemes } } : {}),
       });
@@ -541,6 +550,9 @@ export function createConnect(opts = {}) {
     j.streams = r.data.items.filter((s) => s?.cdn?.ingestionType === 'rtmp' && typeof s.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(s.id)).slice(0, 50).map((s) => ({
       id: s.id, title: String(s.snippet?.title ?? '').slice(0, 100), resolution: String(s.cdn?.resolution ?? '').slice(0, 16), frameRate: String(s.cdn?.frameRate ?? '').slice(0, 16), reusable: s.contentDetails?.isReusable === true,
     }));
+    // D385: the keys made for this row's resolution (YouTube Studio: 1440p, 2160p) come first; the order is stable otherwise.
+    const want = o.quality ?? '1080p';
+    j.streams = [...j.streams.filter((s) => s.resolution === want), ...j.streams.filter((s) => s.resolution !== want)];
     step(j, 'choose');
   }
   /** YouTube step 2: streamId of one listed stream, or null to create a new reusable stream for this output. */
@@ -561,7 +573,7 @@ export function createConnect(opts = {}) {
       if (streamId === null) {
         const r = await httpJson(fetchImpl, `${ep.youtubeApi}/liveStreams?part=id,snippet,cdn,contentDetails`, {
           method: 'POST', headers: auth, signal: sig,
-          json: { snippet: { title: `Ujwalam ${o.label}` }, cdn: { ingestionType: 'rtmp', resolution: 'variable', frameRate: 'variable' }, contentDetails: { isReusable: true } },
+          json: { snippet: { title: `Ujwalam ${o.label}` }, cdn: { ingestionType: 'rtmp', ...newStreamFormat(o) }, contentDetails: { isReusable: true } },
         });
         alive(j);
         if (r.status !== 200) throw new ConnectError(r.status === 403 ? 'youtube-live-not-enabled' : 'youtube-api-failed', `HTTP ${r.status}`);
@@ -758,6 +770,13 @@ export const ERROR_TEXT = Object.freeze({
   'browser-open-failed': 'No browser could be opened.',
   timeout: 'Sign-in took too long; try again.',
 });
+
+/** D385: the format of a new YouTube stream key: a per-resolution row's own size and frame rate (both fixed, as YouTube
+ *  Studio makes them), else variable (the key then takes any size). */
+export function newStreamFormat(o) {
+  if (o?.quality && (o.fps === 30 || o.fps === 60)) return { resolution: o.quality, frameRate: `${o.fps}fps` };
+  return { resolution: 'variable', frameRate: 'variable' };
+}
 
 function youtubeDataIngestHost() {
   try {

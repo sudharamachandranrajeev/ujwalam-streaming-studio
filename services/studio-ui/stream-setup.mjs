@@ -26,9 +26,9 @@ export const OPTIONS_FILE = path.join(REPO, 'data', 'stream', 'stream-options.js
 export const OUTPUT_ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const MAX_OUTPUTS = 12;
 export const CANVAS_MODES = Object.freeze(['main', 'multi']);
-// D378: with this flag on, a stream may be sent larger than its canvas (GPU-scaled up, same aspect ratio), e.g. a 1080p
-// canvas sent as 1440p so YouTube gives it its higher-quality encode. Off: larger than the canvas is refused as before.
-export const STREAM_UPSCALE_FLAG = 'stream-upscale';
+// D378 -> D385: a stream may be sent larger than its canvas (GPU-scaled up, same aspect ratio), e.g. the 1080p canvas
+// sent as 1440p so YouTube gives it its higher-quality encode. The user's bug report (2026-11-15) retired the switch
+// (flag stream-upscale): picking 2K or 4K in Settings > Stream is the decision. Callers pass upscale: true.
 // Validator codes that mean "a value is over a platform limit". Severity "warning" in data/platforms is still a limit
 // for the settings page: the user asked for values to be refused, with the limit shown (D327).
 export const LIMIT_CODES = Object.freeze(['BITRATE_RANGE', 'RESOLUTION_MAX', 'FPS_MAX', 'GOP_MAX', 'CODEC_REFUSED', 'RC_REFUSED', 'PROTO_UNSUPPORTED', 'AUDIO_BITRATE_RANGE', 'AUDIO_CODEC_REFUSED']);
@@ -116,8 +116,9 @@ export function shapeProblems(s, options = readOptions()) {
       const w = `outputs[${i}]`;
       if (!isObj(o)) { out.push({ field: w, message: `${w} must be an object` }); return; }
       keysOnly(o, ['id', 'name', 'platform', 'canvas', 'enabled', 'video'], w, out);
-      // "record" and "record-v" are the plan's local recording sinks; ids double as Credential Manager names (Ujwalam/stream/<id>).
-      if (typeof o.id !== 'string' || !OUTPUT_ID.test(o.id) || o.id.length > 25 || RECORD_IDS.includes(o.id)) out.push({ field: `${w}.id`, message: `${w}: id must be lowercase letters, digits and dashes (at most 25), not "record" or "record-v"` });
+      // "record" and "record-v" are the plan's local recording sinks; ids double as Credential Manager names (Ujwalam/stream/<id>,
+      // <id>-server, <id>-<quality key id>), so an id never ends like one of those suffixes.
+      if (typeof o.id !== 'string' || !OUTPUT_ID.test(o.id) || o.id.length > 25 || RECORD_IDS.includes(o.id) || reservedSuffix(options, o.id)) out.push({ field: `${w}.id`, message: `${w}: id must be lowercase letters, digits and dashes (at most 25), not "record" or "record-v", and not end in ${['server', ...qualityKeysOf(options).map((q) => q.id)].map((x) => `"-${x}"`).join(', ')}` });
       else if (seen.has(o.id)) out.push({ field: `${w}.id`, message: `${w}: id "${o.id}" is used twice` });
       else seen.add(o.id);
       if (typeof o.name !== 'string' || !o.name.trim() || o.name.length > 60) out.push({ field: `${w}.name`, message: `${w}: name must be 1 to 60 characters` });
@@ -146,32 +147,65 @@ export const vRecordName = (name) => name.replace(/(.[A-Za-z0-9]+)?$/, (ext) => 
 
 const keyRefOf = (id) => `Ujwalam/stream/${id}`;
 
-/** A real target for an output, from the platform's ingest data (data/platforms/<id>.json ingest + protocols). */
-function targetOf(o, platform) {
+// D385: per-resolution stream keys (stream-options qualityKeys; a platform with keyPerQuality, YouTube). Largest first.
+const qualityKeysOf = (options) => [...(options.qualityKeys ?? [])].sort((a, b) => b.minShortSide - a.minShortSide);
+const keyPerQuality = (options, platformId) => options.platforms.some((p) => p.id === platformId && p.keyPerQuality === true);
+const reservedSuffix = (options, id) => ['server', ...qualityKeysOf(options).map((q) => q.id)].some((x) => id.endsWith(`-${x}`));
+/** The quality key entry ({ id, label, minShortSide }) for a stream of w x h, or null (the output's base key). */
+export function qualityKeyOf(options, w, h) {
+  const short = Math.min(w, h);
+  return qualityKeysOf(options).find((q) => short >= q.minShortSide) ?? null;
+}
+/** The stream size (w, h) an output is sent at: its own rung, the portrait rung or the main rung. */
+export function outputSize(setup, o, options = readOptions()) {
+  if (o.canvas === 'V') return portraitOf(options, setup.video) ?? options.portrait;
+  return resolutionOf(options, o.video?.output ?? setup.video.output);
+}
+
+/** A real target for an output, from the platform's ingest data (data/platforms/<id>.json ingest + protocols).
+ *  quality: a qualityKeys entry when the output is sent at that size on a keyPerQuality platform (its own key). */
+function targetOf(o, platform, quality = null) {
   const ingest = platform.ingest?.value;
   const protos = platform.protocols?.value ?? ['rtmps'];
+  const keyRef = keyRefOf(quality ? `${o.id}-${quality.id}` : o.id);
   if (ingest?.serverFrom === 'data') {
     const srv = (ingest.servers ?? []).find((x) => x.url?.startsWith('rtmps://')) ?? ingest.servers?.[0];
-    return { transport: srv.url.startsWith('rtmps://') ? 'rtmps' : 'rtmp', server: srv.id, keyRef: keyRefOf(o.id) };
+    return { transport: srv.url.startsWith('rtmps://') ? 'rtmps' : 'rtmp', server: srv.id, keyRef };
   }
   // Per-account server, stored next to the key: rtmp or rtmps follows the stored address when the platform takes both.
   const transport = protos.includes('rtmp') && protos.includes('rtmps') ? 'auto' : (protos.includes('rtmps') ? 'rtmps' : 'rtmp');
-  return { transport, serverRef: keyRefOf(`${o.id}-server`), keyRef: keyRefOf(o.id) };
+  return { transport, serverRef: keyRefOf(`${o.id}-server`), keyRef };
+}
+function planTargetOf(setup, o, platform, options) {
+  if (!keyPerQuality(options, o.platform)) return targetOf(o, platform);
+  const size = outputSize(setup, o, options);
+  return targetOf(o, platform, size ? qualityKeyOf(options, size.w, size.h) : null);
 }
 
 /**
  * Credential targets of every output in a setup, for the platform sign-in service (D327): [{ id, platform, canvas,
  * transport, keyRef, serverRef?, schemes? }]. Same key names as toPlan (Ujwalam/stream/<id>), but all outputs, also those
  * the current canvas mode leaves out of the plan or that are switched off, so a new output can be connected before use.
+ * D385: an output on a keyPerQuality platform also gets one row per quality key ({ id: <output>-<quality>, sinkId:
+ * <output>, quality, qualityLabel, fps }), so its 2K and 4K keys can be pasted or fetched before they are used.
  */
-export function connectTargets(setup, { platforms = loadPlatforms(PLATFORMS_DIR) } = {}) {
+export function connectTargets(setup, { platforms = loadPlatforms(PLATFORMS_DIR), options = readOptions() } = {}) {
   const out = [];
+  const fps = Number.isInteger(setup?.video?.fps) ? setup.video.fps : null;
+  // A setup saved before D385 may hold an output whose id ends like a key row (e.g. "youtube-h-1440p"): that row is not
+  // made, so one id never names two things (Codex review); shapeProblems refuses such an id at the next save or start.
+  const outputIds = new Set((Array.isArray(setup?.outputs) ? setup.outputs : []).map((o) => o?.id));
   for (const o of Array.isArray(setup?.outputs) ? setup.outputs : []) {
     const pf = platforms[o?.platform];
     if (!pf || typeof o.id !== 'string') continue;
-    const t = targetOf(o, pf);
-    out.push({ id: o.id, platform: o.platform, canvas: o.canvas, transport: t.transport, keyRef: t.keyRef, ...(t.serverRef ? { serverRef: t.serverRef } : {}),
-      ...(t.transport === 'auto' ? { schemes: liveSchemesOf(pf) } : {}) });
+    const row = (t, extra = {}) => ({ id: o.id, platform: o.platform, canvas: o.canvas, transport: t.transport, keyRef: t.keyRef, ...(t.serverRef ? { serverRef: t.serverRef } : {}),
+      ...(t.transport === 'auto' ? { schemes: liveSchemesOf(pf) } : {}), ...extra });
+    out.push(row(targetOf(o, pf)));
+    if (!keyPerQuality(options, o.platform)) continue;
+    for (const q of [...qualityKeysOf(options)].reverse()) {
+      if (outputIds.has(`${o.id}-${q.id}`)) continue;
+      out.push(row(targetOf(o, pf, q), { id: `${o.id}-${q.id}`, sinkId: o.id, quality: q.id, qualityLabel: q.label, ...(fps ? { fps } : {}) }));
+    }
   }
   return out;
 }
@@ -191,7 +225,7 @@ export function toPlan(setup, { options = readOptions(), canvases, platforms = l
   const cv = { H: canvases?.H ?? { w: main.w, h: main.h }, V: canvases?.V ?? options.portrait };
   const q = options.qualityPresets.find((x) => x.id === v.quality);
   const encoder = v.hardware ? 'nvenc' : 'x264';
-  // upscale (flag stream-upscale, D378): every rung may be larger than its canvas; the validator and the host still
+  // upscale (D378, always on from D385): every rung may be larger than its canvas; the validator and the host still
   // refuse one that changes the canvas aspect ratio. The launcher plans without the project's canvas sizes, so the
   // mark goes on every rung, not only on those larger than the sizes known here.
   const rung = (id, canvas, w, h, bitrate) => ({
@@ -211,7 +245,7 @@ export function toPlan(setup, { options = readOptions(), canvases, platforms = l
       encoders.push(rung(enc, 'H', r.w, r.h, o.video.bitrateKbps));
     }
     sinks.push({ id: o.id, platform: o.platform, encoder: enc, proto: 'rtmps', priority: i + 1 });
-    targets[o.id] = targetOf(o, platforms[o.platform]);
+    targets[o.id] = planTargetOf(setup, o, platforms[o.platform], options);
   });
   if (recordName) {
     sinks.push({ id: 'record', platform: 'local', encoder: 'h-main', proto: 'file', priority: included.length + 1 });
@@ -242,11 +276,19 @@ export function setupProblems(setup, { options = readOptions(), canvases, platfo
   for (const e of [...res.errors, ...res.warnings.filter((w) => LIMIT_CODES.includes(w.code))]) {
     if (e.code === 'SHARED_RUNG_CONFLICT' || !e.message || seen.has(e.message)) continue;
     seen.add(e.message);
-    // Larger than the canvas with the flag off: say how to send it scaled up (D378).
-    const message = e.code === 'UPSCALE' ? `${e.message}. Switch on "Stream above the canvas size" (Settings > Stream, FEATURES) to send it scaled up, or pick a size up to the canvas.` : e.message;
-    out.push({ field: e.sink ? `output:${e.sink}` : 'video', code: e.code, platform: e.platform, message });
+    out.push({ field: e.sink ? `output:${e.sink}` : 'video', code: e.code, platform: e.platform, message: e.message });
   }
   return out;
+}
+
+/**
+ * D385: the main video bitrate the page sets when the output resolution or frame rate changes: "<resolution id><fps>"
+ * -> kbps, from the main output's platform data (YouTube recommendedByResolution, data/platforms). The main H rung goes
+ * to YouTube (output topology, 2026-10-27). Only listed pairs; any other pair keeps the bitrate as it is.
+ */
+export function recommendedKbps(platforms = loadPlatforms(PLATFORMS_DIR), platformId = 'youtube') {
+  const v = platforms[platformId]?.videoBitrateKbps?.recommendedByResolution?.value;
+  return v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k, n]) => /^\d{3,4}p\d{2}$/.test(k) && Number.isInteger(n))) : {};
 }
 
 /** Plans a setup through the host planner (refuses what the planner refuses). allowLive for real targets. */

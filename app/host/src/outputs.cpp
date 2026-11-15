@@ -878,7 +878,7 @@ json::Value Outputs::build(const json::Value &params)
 		r->fps = (uint32_t)opt_int(rv, "fps", cfps, 1, 240, what);
 		r->bitrate = (uint32_t)req_int(rv, "bitrate", 100, 200000, what);
 		r->gop = (double)req_int(rv, "gopSec", 1, 10, what);
-		// A rung is never larger than its canvas unless the plan asks for it ("upscale": true, flag stream-upscale, D378):
+		// A rung is never larger than its canvas unless the plan asks for it ("upscale": true, D378; Settings > Stream plans set it, D385):
 		// the same GPU scaler (Lanczos) then scales up, e.g. a 1080p canvas sent as 1440p so YouTube gives it its
 		// higher-quality encode. The aspect ratio must stay the canvas's (no stretching).
 		const json::Value *up = rv.find("upscale");

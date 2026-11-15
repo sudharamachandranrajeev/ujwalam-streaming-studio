@@ -109,7 +109,7 @@
           },
           "upscale": {
             "type": "boolean",
-            "description": "true: the rung may be larger than its canvas (GPU-scaled up, same aspect ratio; flag stream-upscale, D378). Absent or false: larger than the canvas is an error. Part of the dedup key."
+            "description": "true: the rung may be larger than its canvas (GPU-scaled up, same aspect ratio; D378, Settings > Stream plans set it from D385). Absent or false: larger than the canvas is an error. Part of the dedup key."
           },
           "migration": {
             "type": "object",

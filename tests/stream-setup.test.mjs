@@ -8,7 +8,7 @@ import path from 'node:path';
 import { validate, loadPlatforms } from '../services/outputs/validate.mjs';
 import { PLATFORMS_DIR, planFile } from '../app/host/lib/outputs-plan.mjs';
 import {
-  newOutputId, outputSummary, planSetup, readSetup, seedSetup, setupProblems, shapeProblems, toPlan, writePlanFile, writeSetup
+  connectTargets, newOutputId, outputSummary, planSetup, readSetup, recommendedKbps, seedSetup, setupProblems, shapeProblems, toPlan, writePlanFile, writeSetup
 } from '../services/studio-ui/stream-setup.mjs';
 
 const tmp = () => mkdtempSync(path.join(tmpdir(), 'ujw-setup-'));
@@ -109,14 +109,14 @@ test('main-canvas mode leaves portrait outputs out of the plan (no V rung)', () 
   assert.ok(!config.encoders.some((e) => e.canvas === 'V'));
 });
 
-test('D378: 2K on both YouTube outputs from 1080p canvases only with stream-upscale; aspect kept; portrait size choice', () => {
+test('D378/D385: 2K on both YouTube outputs from 1080p canvases (scaled up, no switch); aspect kept; portrait size choice', () => {
   const canvases = { H: { w: 1920, h: 1080 }, V: { w: 1080, h: 1920 } };
   const s = seedSetup(); s.video.output = '1440p'; s.video.portraitOutput = '1440x2560';
   s.video.bitrateKbps = 24000; s.video.portraitBitrateKbps = 24000;
-  // Flag off: larger than the canvas is refused, with a hint to the flag.
+  // A caller that does not allow scaling up (upscale false) still gets the plain refusal, with no pointer to a switch.
   const off = setupProblems(s, { canvases });
-  assert.ok(off.some((p) => p.code === 'UPSCALE' && /Stream above the canvas size/.test(p.message)), JSON.stringify(off));
-  // Flag on: no problems; rungs are 2560x1440 and 1440x2560, marked upscale, and reach the host params.
+  assert.ok(off.some((p) => p.code === 'UPSCALE' && !/Stream above the canvas size|FEATURES/.test(p.message)), JSON.stringify(off));
+  // The settings routes and the launcher pass upscale: true (D385): no problems; rungs are 2560x1440 and 1440x2560, marked upscale, and reach the host params.
   assert.deepEqual(setupProblems(s, { canvases, upscale: true }), []);
   const { config } = toPlan(s, { canvases, upscale: true });
   const res = validate(config, loadPlatforms(PLATFORMS_DIR));
@@ -131,7 +131,37 @@ test('D378: 2K on both YouTube outputs from 1080p canvases only with stream-upsc
   assert.ok(shapeProblems(bad).some((p) => p.field === 'video.portraitOutput'));
   // No portraitOutput: the portrait default (1080x1920), as before.
   assert.equal(toPlan(seedSetup()).config.encoders.find((e) => e.id === 'v-main').w, 1080);
-  assert.equal(toPlan(seedSetup()).config.encoders[0].upscale, undefined, 'flag off: no upscale mark');
+  assert.equal(toPlan(seedSetup()).config.encoders[0].upscale, undefined, 'upscale false: no upscale mark');
+});
+
+test('D385: per-resolution YouTube keys: the plan picks the key of the size sent; connect rows for 2K and 4K; recommended bitrates', () => {
+  const canvases = { H: { w: 1920, h: 1080 }, V: { w: 1080, h: 1920 } };
+  const keys = (s) => Object.fromEntries(Object.entries(toPlan(s, { canvases, upscale: true }).targets).filter(([, t]) => t.keyRef).map(([k, t]) => [k, t.keyRef]));
+  const s = seedSetup();
+  assert.equal(keys(s)['youtube-h'], 'Ujwalam/stream/youtube-h', '1080p: the base key (the key stored before D385 keeps working)');
+  s.video.output = '1440p';
+  assert.equal(keys(s)['youtube-h'], 'Ujwalam/stream/youtube-h-1440p');
+  s.video.output = '2160p';
+  assert.equal(keys(s)['youtube-h'], 'Ujwalam/stream/youtube-h-2160p');
+  assert.equal(keys(s).twitch, 'Ujwalam/stream/twitch', 'a platform without keyPerQuality keeps one key');
+  assert.equal(keys(s)['youtube-v'], 'Ujwalam/stream/youtube-v');
+  s.video.portraitOutput = '2160x3840';
+  assert.equal(keys(s)['youtube-v'], 'Ujwalam/stream/youtube-v-2160p', 'portrait: by the short side');
+  // The plan is accepted by the host planner (key names match the host's pattern).
+  planSetup(s, { canvases, upscale: true, allowLive: true, schemes: { 'Ujwalam/stream/twitch-server': { present: true, scheme: 'rtmps' }, 'Ujwalam/stream/kick-server': { present: true, scheme: 'rtmps' } } });
+  // Connect rows: every YouTube output also has its 2K and 4K key rows, tied to the output (sinkId).
+  const rows = connectTargets(seedSetup());
+  assert.deepEqual(rows.filter((r) => r.sinkId === 'youtube-h').map((r) => [r.id, r.keyRef, r.quality, r.qualityLabel, r.fps]),
+    [['youtube-h-1440p', 'Ujwalam/stream/youtube-h-1440p', '1440p', '2K', 60], ['youtube-h-2160p', 'Ujwalam/stream/youtube-h-2160p', '2160p', '4K', 60]]);
+  assert.ok(!rows.some((r) => r.sinkId === 'twitch'));
+  // A pre-D385 setup with an output named like a key row: that key row is not made (one id, one thing).
+  const old = clone(seedSetup()); old.outputs.push({ ...old.outputs[0], id: 'youtube-h-1440p', name: 'Old' });
+  assert.deepEqual(connectTargets(old).filter((r) => r.id === 'youtube-h-1440p').map((r) => r.sinkId ?? null), [null]);
+  // An output id may not end like a key suffix (it would share a credential name).
+  const bad = clone(seedSetup()); bad.outputs[0].id = 'youtube-1440p';
+  assert.ok(shapeProblems(bad).some((p) => p.field === 'outputs[0].id'));
+  // Recommended main bitrates come from data/platforms/youtube.json.
+  assert.deepEqual(recommendedKbps(), { '1080p60': 17000, '1440p60': 34000, '2160p60': 50000 });
 });
 
 test('summary line and new ids', () => {

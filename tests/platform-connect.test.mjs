@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, afterEach, describe, test } from 'node:test';
 import { CLIENT_ID_TARGET, CLIENT_SECRET_TARGET } from '../services/posting/oauth.mjs';
-import { TARGETS, createConnect, createMemoryStores, keyProblem, outputsFromPlan, serverProblem } from '../services/platform-connect/index.mjs';
+import { TARGETS, createConnect, createMemoryStores, keyProblem, newStreamFormat, outputsFromPlan, serverProblem } from '../services/platform-connect/index.mjs';
 import { planTargets } from '../services/studio-ui/readiness.mjs';
 import { SECRETS, googleBrowser, startPlatformMock } from './helpers/platform-mocks.mjs';
 
@@ -157,6 +157,29 @@ describe('YouTube sign-in (PC1)', () => {
     const ins = mock.st.requests.find((r) => r.method === 'POST' && r.path === '/yt/liveStreams');
     assert.deepEqual(ins.json.contentDetails, { isReusable: true });
     assert.equal(ins.json.snippet.title, 'Ujwalam YouTube V');
+  });
+  test('D385: a 4K key row: own target, live-checked as its output, "create new" makes a 2160p stream at the setup frame rate', async () => {
+    const rows = outputsFromPlan([...planTargets(), { id: 'youtube-h-2160p', platform: 'youtube', canvas: 'H', transport: 'rtmps', keyRef: 'Ujwalam/stream/youtube-h-2160p', sinkId: 'youtube-h', quality: '2160p', qualityLabel: '4K', fps: 60 }]);
+    const q = rows.find((o) => o.id === 'youtube-h-2160p');
+    assert.deepEqual([q.label, q.sinkId, q.signIn], ['YouTube H 4K', 'youtube-h', 'youtube']);
+    assert.deepEqual(newStreamFormat(q), { resolution: '2160p', frameRate: '60fps' });
+    assert.deepEqual(newStreamFormat(rows.find((o) => o.id === 'youtube-h')), { resolution: 'variable', frameRate: 'variable' });
+    // youtube-h is live: its 4K key is not changed in the middle of the stream
+    const mock = await startPlatformMock(); mocks.push(mock);
+    const mem = createMemoryStores({ [CLIENT_ID_TARGET]: 'mock-google-client.apps.example', [CLIENT_SECRET_TARGET]: SECRETS.googleClientSecret });
+    let live = true;
+    const c = createConnect({ dataDir: mk(), outputs: rows, storeFor: mem.storeFor, endpoints: mock.endpoints, sleep: async () => {}, browserOpen: googleBrowser(mock), outputLive: async (id) => (id === 'youtube-h' && live ? 'live' : 'idle') });
+    await assert.rejects(c.paste('youtube-h-2160p', { key: SECRETS.ytKeyH }), { code: 'output-live' });
+    live = false;
+    await c.startSignIn('youtube', 'youtube-h-2160p');
+    const j = await settle(c);
+    await c.choose(j.id, null);
+    assert.equal(mem.map.get('Ujwalam/stream/youtube-h-2160p'), SECRETS.ytKeyNew);
+    assert.ok(!mem.map.has('Ujwalam/stream/youtube-h'), 'the 1080p key is not touched');
+    const ins = mock.st.requests.find((r) => r.method === 'POST' && r.path === '/yt/liveStreams');
+    assert.deepEqual([ins.json.cdn.resolution, ins.json.cdn.frameRate, ins.json.snippet.title], ['2160p', '60fps', 'Ujwalam YouTube H 4K']);
+    const st = (await c.status({ fresh: true })).outputs.find((o) => o.id === 'youtube-h-2160p');
+    assert.deepEqual([st.state, st.quality, st.qualityLabel, st.sinkId], ['connected', '2160p', '4K', 'youtube-h']);
   });
   test('a wrong state in the redirect is ignored: the job fails, nothing is stored', async () => {
     const { c, mem } = await setup({ browser: (mock) => googleBrowser(mock, { state: 'forged-state-value' }) });

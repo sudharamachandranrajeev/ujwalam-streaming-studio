@@ -282,7 +282,7 @@ StreamPage::StreamPage(ApiClient *api, QWidget *parent) : QWidget(parent), api_(
 	auto *vf = new QFormLayout(vid);
 	canvasInfo_ = muted(QString(), vid);
 	res_ = new QComboBox(vid);
-	pres_ = new QComboBox(vid); // D378: the portrait stream size (above the canvas needs flag stream-upscale)
+	pres_ = new QComboBox(vid); // D378: the portrait stream size (above the canvas is scaled up, D385)
 	pres_->setObjectName(QStringLiteral("streamPortraitOutput"));
 	fps_ = new QComboBox(vid);
 	hw_ = new Switch(vid);
@@ -335,7 +335,7 @@ StreamPage::StreamPage(ApiClient *api, QWidget *parent) : QWidget(parent), api_(
 	problems_->setWordWrap(true);
 	problems_->setStyleSheet(QStringLiteral("color:%1;").arg(theme::color(QStringLiteral("danger")).name()));
 	v->addWidget(problems_);
-	v->addWidget(muted(QStringLiteral("Changes apply the next time you go live. Values over a platform's limit are refused with the limit shown."), this));
+	v->addWidget(muted(QStringLiteral("Saved changes apply the next time Ujwalam starts. Values over a platform's limit are refused with the limit shown."), this));
 
 	checkTimer_ = new QTimer(this);
 	checkTimer_->setSingleShot(true);
@@ -494,7 +494,7 @@ void StreamPage::save(const Note &note)
 	const QJsonObject next = current();
 	api_->post(QStringLiteral("ui/api/stream/setup"), QJsonObject{{QStringLiteral("setup"), next}}, [note](bool ok, const QJsonObject &b, const QString &err) {
 		if (ok)
-			return note(QStringLiteral("Stream settings saved; they apply the next time you go live."));
+			return note(QStringLiteral("Stream settings saved. Close and open Ujwalam to stream with them."));
 		const QString why = problemsText(b.value(QStringLiteral("problems")).toArray());
 		note(QStringLiteral("Stream settings not saved: ") + (why.isEmpty() ? err : why));
 	});

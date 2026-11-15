@@ -124,7 +124,9 @@ Column {
             texts.push((s.title || "") + " (" + (s.resolution || "") + (s.reusable === true ? ", reusable" : "") + ")");
             ids.push(s.id || "");
         }
-        texts.push("Create a new stream key for this output");
+        // D385: a 2K / 4K row makes a key of that size (the streams of that size are listed first by the server)
+        const row = rows.find(r => r.id === (job.output || "")) || ({});
+        texts.push(row.quality ? "Create a new " + (row.qualityLabel || row.quality) + " stream key (" + row.quality + ")" : "Create a new stream key for this output");
         choiceTexts = texts;
         choiceIds = ids;
         choiceJob = chosenFor;
@@ -416,7 +418,7 @@ Column {
         objectName: "connChoiceBox"
         visible: cp.choiceJob !== ""
         title: "YOUTUBE STREAM KEY"
-        Words { text: "Which YouTube stream key should this output use? (The one you use today is usually \"Default stream key\".)" }
+        Words { text: "Which YouTube stream key should this output use? Keys of the matching size are listed first. (For 1080p the one you use today is usually \"Default stream key\".)" }
         Repeater {
             model: cp.choiceTexts
             delegate: UButton {

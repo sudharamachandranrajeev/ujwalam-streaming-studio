@@ -3,6 +3,9 @@
 // with Add, Edit and Delete. It loads ui/api/stream/setup when Settings opens (flag stream-settings on), checks every
 // change with ui/api/stream/check after 250 ms, and Save sends ui/api/stream/setup, so both studios write the same
 // stream-setup.json. The Edit output window is OutputDialog.qml (sp.editor).
+// D385 (bug report 2026-11-15): picking 1080p, 2K or 4K also sets the main bitrate the platform recommends for that size
+// and frame rate (recommendedKbps from the server, data/platforms); 2K and 4K above the canvas are scaled up without a
+// separate switch; and each YouTube output shows which of its stream keys (1080p, 2K, 4K) that size uses, with Set key.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -19,6 +22,7 @@ Column {
     property var setup: ({})             // the draft: what Save sends
     property var options: ({})
     property var canvases: ({})
+    property var recommended: ({})       // "<resolution id><fps>" -> kbps (D385)
     property string orig: ""             // the setup as loaded, to see a change
     property string problemsLine: ""
     property bool connectOn: false       // flag platform-connect: ui/api/connect answers
@@ -66,6 +70,7 @@ Column {
         setup = ({});
         options = ({});
         canvases = ({});
+        recommended = ({});
         orig = "";
         problemsLine = "";
         connectOn = false;
@@ -100,6 +105,7 @@ Column {
             if (!ok) { problemsLine = "Stream settings not available: " + err; return }
             options = b.options || {};
             canvases = b.canvases || {};
+            recommended = b.recommendedKbps || {};
             setup = normalize(b.setup || {});
             orig = JSON.stringify(setup);
             loaded = true;
@@ -127,6 +133,11 @@ Column {
     function setVideo(k, v) {
         const s = Object.assign({}, setup), vv = Object.assign({}, s.video);
         vv[k] = v;
+        // a new size or frame rate takes the bitrate the platform recommends for it (still editable after)
+        if (k === "output" || k === "fps") {
+            const r = recommended[vv.output + vv.fps];
+            if (typeof r === "number") vv.bitrateKbps = clampKbps(r);
+        }
         s.video = vv;
         setup = s;
         changed();
@@ -200,7 +211,7 @@ Column {
     function save() {
         if (!loaded || !dirty) return;
         Api.post("ui/api/stream/setup", { setup: setup }, (ok, b, err) => {
-            if (ok) return box.store.say("Stream settings saved; they apply the next time you go live.");
+            if (ok) return box.store.say("Stream settings saved. Close and open Ujwalam to stream with them.");
             const why = problemsText(b ? b.problems : []);
             box.store.say("Stream settings not saved: " + (why !== "" ? why : err));
         });
@@ -214,7 +225,37 @@ Column {
         return t;
     }
 
+    // ---- D385: which stream key each per-resolution output (YouTube) uses at the chosen size ----
+    function sizeOf(o) {
+        if (o.canvas === "V") return (options.portraitResolutions || []).find(r => r.id === video.portraitOutput) || options.portrait || null;
+        return (options.resolutions || []).find(r => r.id === ((o.video || {}).output || video.output)) || null;
+    }
+    function qualityOf(sz) {
+        if (!sz) return null;
+        const side = Math.min(sz.w, sz.h);
+        const qs = (options.qualityKeys || []).slice().sort((a, b) => b.minShortSide - a.minShortSide);
+        return qs.find(q => side >= q.minShortSide) || null;
+    }
+    readonly property var keyLines: {
+        const out = [];
+        for (const o of (setup.outputs || [])) {
+            if (!platformOf(o.platform).keyPerQuality || (o.canvas === "V" && !multi)) continue;
+            const q = qualityOf(sizeOf(o));
+            const rowId = q ? o.id + "-" + q.id : o.id;
+            const row = connectRows[rowId] || null;
+            const which = q ? q.label + " key" : "1080p key";
+            const state = !connectOn ? "" : !row ? "not known yet" : row.state === "connected" ? stateText(row) : "missing: set it before you go live";
+            out.push({ output: o.id, rowId: rowId, text: o.name + ": uses the " + which + (state !== "" ? " - " + state : ""), ok: !!row && row.state === "connected" });
+        }
+        return out;
+    }
+
     Timer { id: checkTimer; interval: 250; repeat: false; onTriggered: sp.check() }
+    // back from Settings > Connections (Set key...): the key lines show the new state
+    Connections {
+        target: sp.box
+        function onPageChanged() { if (sp.loaded && sp.box.page === "Stream") sp.refreshConnect() }
+    }
 
     component Words: Text {
         color: Theme.c.text
@@ -396,6 +437,44 @@ Column {
     }
 
     UCard {
+        objectName: "streamKeys"
+        title: "STREAM KEYS"
+        visible: sp.keyLines.length > 0
+        Quiet {
+            text: "YouTube gives one stream key per quality: make the 1080p, 2K and 4K keys in YouTube Studio (or let Sign in with "
+                + "YouTube make them), then store each one here once. The size you pick above chooses the key."
+        }
+        Repeater {
+            model: sp.keyLines
+            delegate: Item {
+                id: kl
+                required property var modelData
+                width: parent.width
+                height: Math.max(klText.implicitHeight, klSet.implicitHeight)
+                Text {
+                    id: klText
+                    objectName: "streamKey:" + kl.modelData.output
+                    anchors { left: parent.left; right: klSet.left; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                    wrapMode: Text.Wrap
+                    textFormat: Text.PlainText
+                    text: kl.modelData.text
+                    color: kl.modelData.ok || !sp.connectOn ? Theme.c.text : Theme.c.danger
+                    font.family: Theme.family
+                    font.pixelSize: 13
+                }
+                UButton {
+                    id: klSet
+                    objectName: "streamKeySet:" + kl.modelData.output
+                    anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                    visible: sp.connectOn
+                    text: "Set key..."
+                    onClicked: sp.box.connectOutput(kl.modelData.rowId)
+                }
+            }
+        }
+    }
+
+    UCard {
         title: "AUDIO"
         Field {
             label: "Audio bitrate"
@@ -498,14 +577,15 @@ Column {
         font.family: Theme.family
         font.pixelSize: 13
     }
-    Quiet { text: "Changes apply the next time you go live. Values over a platform's limit are refused with the limit shown." }
+    Quiet { text: "Saved changes apply the next time Ujwalam starts. Values over a platform's limit are refused with the limit shown." }
 
     // ---- probe (tests): the same names and values as the widget page's probe ----
     function probe() {
         const outs = setup.outputs || [];
         const o = { loaded: loaded, setup: setup, outputs: outs.map(x => x.id), problems: problemsLine, connectOn: connectOn,
             rowStatus: outs.filter(x => connectOn && connectRows[x.id]).map(x => x.name + "  " + (x.canvas === "V" ? "Portrait" : "Main") + " " + rowSub(x)),
-            portraitOutput: { choices: portraitModel.map(m => m.value), value: video.portraitOutput, enabled: portraitModel.length > 0 } };
+            portraitOutput: { choices: portraitModel.map(m => m.value), value: video.portraitOutput, enabled: portraitModel.length > 0 },
+            keyLines: keyLines.map(k => ({ output: k.output, row: k.rowId, text: k.text })) };
         if (editor) Object.assign(o, editor.probe());
         return o;
     }
@@ -535,6 +615,7 @@ Column {
             return true;
         case "stream-output-connect": return !!editor && editor.connectClick();
         case "stream-output-own": return !!editor && editor.setOwn(p[1] === "1");
+        case "stream-key-set": { const k = keyLines.find(x => x.output === p[1]); if (!k || !connectOn) return false; box.connectOutput(k.rowId); return true }
         }
         return false;
     }
