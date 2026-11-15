@@ -120,7 +120,8 @@ export function createYoutubePresets(opts) {
   const platforms = opts.platforms ?? loadPlatforms(PLATFORMS_DIR);
   const sizes = sizeLists(options);
   const limits = limitsFor(options, platforms);
-  const file = path.join(dataDir, PRESETS_FILE);
+  // No data folder (a server built without one): the routes answer no-data-dir (handle), so no path is made.
+  const file = dataDir ? path.join(dataDir, PRESETS_FILE) : null;
   const fail = (res, status, code, extra = {}) => json(res, status, { error: code, message: MESSAGES[code] ?? 'Not done.', ...extra });
 
   function readStore() {

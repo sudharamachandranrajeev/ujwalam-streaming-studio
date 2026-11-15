@@ -105,6 +105,13 @@ describe('store validation', () => {
 });
 
 describe('save, delete, active', () => {
+  test('no data folder: built without a crash; every preset route answers 409 no-data-dir', async () => {
+    const out = {};
+    const p = createYoutubePresets({ dataDir: undefined, settings: {}, json: (res, status, body) => { res.status = status; res.body = body; }, readSetup: () => ({ exists: false }), keyPresence: async () => new Map(), events: async () => EVENTS_BODY });
+    assert.equal(await p.handle('GET', '/ui/api/youtube/presets', null, out), true);
+    assert.deepEqual([out.status, out.body.error], [409, 'no-data-dir']);
+    assert.equal(await p.handle('GET', '/ui/api/youtube/account', null, {}), false, 'not a preset route');
+  });
   test('new preset gets a p-<8 hex> id; update keeps it; unknown id 404; delete clears activeId', async () => {
     const c = boot();
     const r = await save(c, preset());
