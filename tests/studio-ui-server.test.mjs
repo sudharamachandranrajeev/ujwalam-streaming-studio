@@ -12,6 +12,12 @@ import { fileURLToPath } from 'node:url';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
 import { audioReadiness, createStudioServer, HOST_CALLS } from '../services/studio-ui/server.mjs';
 import { writeSettings } from '../services/studio-ui/user-settings.mjs';
+import { createMemoryStores } from '../services/platform-connect/index.mjs';
+
+// Every server here gets an empty in-memory credential store: without one the sign-in service falls back to the real
+// Windows Credential Manager, and a laptop signed in to YouTube then changes what Go live does in these tests (and a
+// test must never read the user's real keys or tokens). A test that needs stored values passes its own `connect`.
+const createServer = (o) => createStudioServer({ connect: { storeFor: createMemoryStores().storeFor }, ...o });
 
 const UI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
 const REPO = path.resolve(UI, '..');
@@ -47,7 +53,7 @@ function setup({ outputsReady = true, limits } = {}) {
     call: async (m, p) => { calls.core.push([m, p]); if (m === 'core.status') return { live: { liveState: 'offline', panic: false }, secret: CORE_TOKEN }; return { verdict: 'confirm', reason: 'confirmation-required', confirm: { confirmId: CONFIRM_ID, phrase: 'yes', actionHash: ACTION_HASH } }; },
     confirm: async (c) => { calls.core.push(['actions.confirm', c]); return { verdict: 'allow', reason: 'confirmed', dispatch: { ok: true } }; },
   };
-  const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, limits });
+  const srv = createServer({ uiRoot: UI, core, host, launchKey: KEY, limits });
   return { srv, calls };
 }
 
@@ -123,7 +129,7 @@ describe('login rate limit and key expiry', () => {
   test('an expired launch key is refused', async () => {
     let t = 1_000_000;
     const host = createFakeHost();
-    const srv = createStudioServer({ uiRoot: UI, core: { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } }, host, launchKey: KEY, now: () => t, limits: { launchKeyTtlMs: 1000 } });
+    const srv = createServer({ uiRoot: UI, core: { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } }, host, launchKey: KEY, now: () => t, limits: { launchKeyTtlMs: 1000 } });
     const { port } = await srv.listen();
     try { t += 5000; assert.equal((await raw(port, { url: `/login?k=${KEY}` })).status, 401); } finally { await srv.close(); }
   });
@@ -297,7 +303,7 @@ describe('Meld import and project.load', () => {
       },
     };
     const core = { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } };
-    const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, sessionFile, limits: { loadRetryMs: [1, 1, 1] } });
+    const srv = createServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, sessionFile, limits: { loadRetryMs: [1, 1, 1] } });
     const { port } = await srv.listen();
     const a = await login(port);
     return { srv, port, a, calls, dataDir, files: () => readdirSync(path.join(dataDir, 'projects')) };
@@ -360,7 +366,7 @@ describe('settings and clip answers', () => {
     const fake = createFakeHost({});
     const host = { describe: () => fake.describe(), call: async (m, p) => { const r = await fake.call(m, p); return m === 'host.status' ? { ...r, live: hostLive } : r; } };
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
-    srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 20 } });
+    srv = createServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 20 } });
     ({ port } = await srv.listen());
     a = await login(port);
   });
@@ -414,7 +420,7 @@ describe('audio readiness (D297 proposed)', () => {
     let ah = AH;
     const host = { describe: () => fake.describe(), call: async (m, p) => { const r = await fake.call(m, p); return m === 'host.status' ? { ...r, audioHealth: ah } : r; } };
     const core = { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } };
-    const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY });
+    const srv = createServer({ uiRoot: UI, core, host, launchKey: KEY });
     const { port } = await srv.listen();
     try {
       const a = await login(port);
@@ -453,7 +459,7 @@ describe('record while live (LC2, D334 proposed)', () => {
       },
     };
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
-    r.srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 20 } });
+    r.srv = createServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 20 } });
     ({ port: r.port } = await r.srv.listen());
     r.a = await login(r.port);
     r.click = async (route, body) => JSON.parse((await post(r.port, r.a, route, body)).text);
@@ -582,7 +588,7 @@ describe('record while live: Codex review of LC2 (server)', () => {
       },
     };
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
-    const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 20 },
+    const srv = createServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 20 },
       readiness: { config: { endAll: { waitMs: 300, pollMs: 50 } }, run: async () => ({ ok: true, items: [] }) } });
     try {
       const { port } = await srv.listen();
@@ -622,7 +628,7 @@ describe('record while live: Codex review of LC2 (server)', () => {
       },
     };
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
-    const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 20 },
+    const srv = createServer({ uiRoot: UI, core, host, launchKey: KEY, dataDir, limits: { statusPollMs: 20 },
       readiness: { config: { endAll: { waitMs: 300, pollMs: 50 } }, run: async () => ({ ok: true, items: [] }) } });
     const until = async (fn) => { for (let i = 0; i < 150 && !fn(); i++) await new Promise((x) => setTimeout(x, 20)); assert.ok(fn()); };
     try {

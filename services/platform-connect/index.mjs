@@ -213,7 +213,10 @@ export function createConnect(opts = {}) {
   // is known without a restart).
   const readOutputs = () => { const v = typeof opts.outputs === 'function' ? opts.outputs() : opts.outputs; return Array.isArray(v) ? v : []; };
   const outputsNow = () => { try { return readOutputs(); } catch { return []; } };
-  const storeFor = opts.storeFor ?? ((t) => createCredentialStore(t));
+  // Test runs (UJWALAM_HEADLESS=1, set for every CI test and passed to child servers) never read or write the real
+  // Windows Credential Manager: a test that wants stored values passes its own storeFor. Without this, a laptop signed in
+  // to YouTube changed what Go live did in server tests, and a test could touch the user's real keys.
+  const storeFor = opts.storeFor ?? (process.env.UJWALAM_HEADLESS === '1' ? createMemoryStores().storeFor : (t) => createCredentialStore(t));
   const stores = new Map();
   const store = (t) => { if (!stores.has(t)) stores.set(t, storeFor(t)); return stores.get(t); };
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
