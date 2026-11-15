@@ -72,6 +72,13 @@ QString QmlApi::chooseFolder(const QString &title, const QString &start) const
 	return QFileDialog::getExistingDirectory(nullptr, title, start);
 }
 
+QString QmlApi::chooseImage(const QString &title) const
+{
+	if (qEnvironmentVariable("UJWALAM_HEADLESS") == QStringLiteral("1"))
+		return QString();
+	return QFileDialog::getOpenFileName(nullptr, title, QString(), QStringLiteral("Pictures (*.png *.jpg *.jpeg)"));
+}
+
 void QmlApi::copyText(const QString &text) const
 {
 	QGuiApplication::clipboard()->setText(text);
