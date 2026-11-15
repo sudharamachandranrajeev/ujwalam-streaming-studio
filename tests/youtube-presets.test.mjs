@@ -209,6 +209,25 @@ describe('use', () => {
     assert.equal(after.video.output, before.video.output);
     assert.equal(after.video.bitrateKbps, before.video.bitrateKbps);
   });
+  test('another stream output sharing the YouTube rung: 409 shared-rung, nothing written, no host call', async () => {
+    const c = boot();
+    const s = c.setupNow();
+    s.outputs.find((o) => o.id === 'twitch').name = 'Twitch';
+    delete s.outputs.find((o) => o.id === 'twitch').video; s.video.bitrateKbps = 6000;
+    assert.ok(writeSetup(c.dataDir, s, { upscale: true }).ok);
+    const raw = readFileSync(path.join(c.dataDir, SETUP_FILE), 'utf8');
+    const p = (await save(c, preset())).body.preset;
+    const callsBefore = c.host.calls.length;
+    const r = await c.call('POST', '/ui/api/youtube/preset/use', { id: p.id });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.error, 'shared-rung');
+    assert.equal(r.body.message, 'Twitch streams from the same encoder as YouTube, so a preset would change it too. Give Twitch its own size in Settings > Stream (Edit output), then use the preset.');
+    assert.equal(readFileSync(path.join(c.dataDir, SETUP_FILE), 'utf8'), raw);
+    assert.equal(existsSync(path.join(c.dataDir, CHOICES_FILE)), false);
+    assert.equal(c.host.calls.length, callsBefore);
+    assert.equal(c.host.configures.length, 0);
+    assert.equal((await c.call('GET', '/ui/api/youtube/presets')).body.activeId, null);
+  });
   test('live: saved and pending, nothing stopped, no configure; the template choices are still written', async () => {
     const c = boot();
     c.host.states.twitch = 'live';

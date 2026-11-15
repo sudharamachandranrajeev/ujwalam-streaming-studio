@@ -17,7 +17,7 @@ import path from 'node:path';
 import { loadPlatforms } from '../outputs/validate.mjs';
 import { PLATFORMS_DIR } from '../../app/host/lib/outputs-plan.mjs';
 import { ID_RE, cleanTitle, readChoices, writeChoices } from '../platform-connect/youtube-events.mjs';
-import { qualityKeyOf, readOptions, recommendedKbps } from './stream-setup.mjs';
+import { portraitOf, qualityKeyOf, readOptions, recommendedKbps } from './stream-setup.mjs';
 
 export const PRESETS_FILE = 'youtube-presets.json';
 export const MAX_PRESETS = 12;
@@ -178,6 +178,16 @@ export function createYoutubePresets(opts) {
       if (!t) return { error: 'youtube-output-missing' };
       const s = sizes[logical].find((x) => x.id === want.size);
       t.enabled = want.enabled;
+      // The rung this change would move: another enabled stream output on it (Twitch, Kick, ...) would change too.
+      const portrait = logical === 'youtube-v';
+      const own = !portrait && t.video;
+      if (!own) {
+        const cur = portrait ? portraitOf(options, setup.video) : sizes['youtube-h'].find((x) => x.setupId === setup.video.output);
+        const curKbps = portrait ? setup.video.portraitBitrateKbps : setup.video.bitrateKbps;
+        const changes = !cur || cur.w !== s.w || cur.h !== s.h || curKbps !== want.bitrateKbps;
+        const sharer = changes ? next.outputs.find((o) => o !== t && o.platform !== 'youtube' && o.enabled && o.canvas === (portrait ? 'V' : 'H') && (portrait || !o.video)) : null;
+        if (sharer) return { error: 'shared-rung', name: sharer.name };
+      }
       if (logical === 'youtube-v') {
         next.video.portraitOutput = s.setupId;
         next.video.portraitBitrateKbps = want.bitrateKbps;
@@ -247,6 +257,7 @@ export function createYoutubePresets(opts) {
       const r = loadSetup();
       if (!r) return fail(res, 409, 'setup-unreadable'), true;
       const a = applyToSetup(r.setup, preset);
+      if (a.error === 'shared-rung') return json(res, 409, { error: 'shared-rung', message: `${a.name} streams from the same encoder as YouTube, so a preset would change it too. Give ${a.name} its own size in Settings > Stream (Edit output), then use the preset.` }), true;
       if (a.error) return fail(res, 409, a.error), true;
       setup = a.setup;
     }
