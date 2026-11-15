@@ -48,7 +48,7 @@ Button {
     implicitHeight: 34
     leftPadding: look === "pixel" ? 14 + blockRest : 14
     rightPadding: 14
-    font.family: look === "pixel" ? "Consolas" : Theme.family
+    font.family: look === "pixel" ? "Barlow" : Theme.family // bundled OFL only (D384 Q7)
     font.pixelSize: 14
     font.weight: kind === "normal" ? Font.Normal : Font.DemiBold
     font.letterSpacing: look === "soft" || look === "glass" ? 0.5 : 0
