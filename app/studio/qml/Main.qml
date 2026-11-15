@@ -29,6 +29,10 @@ ApplicationWindow {
         s.motionMode = Theme.motionMode();
         s.motion = Theme.motion;
         s.effects = Theme.effects();
+        s.fx = Theme.fx; // RareUI slice 1 (D384): plain on air or in High performance, calm in reduced, else full
+        s.rareui = Theme.rareui;
+        s.buttonStyle = Theme.buttonStyle;
+        s.spinnerStyle = Theme.spinnerStyle;
         const cols = {}; // what the QML items paint with
         for (const k in Theme.c) cols[k] = String(Theme.c[k]);
         s.themeColors = cols;

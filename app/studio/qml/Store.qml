@@ -544,7 +544,14 @@ QtObject {
     function takeFlags(list) {
         const f = {};
         for (const x of list) f[x.id] = x.on === true;
-        if (JSON.stringify(f) !== JSON.stringify(flags)) flags = f;
+        if (JSON.stringify(f) !== JSON.stringify(flags)) {
+            // RareUI slice 1 (D384): the decorated look needs rareui-look; the pack's components block (button style, spinner)
+            // is read only with theme-components too. Both off: nothing changes anywhere.
+            const look = f["rareui-look"] === true;
+            Theme.rareui = look;
+            Theme.setComponentsOn(look && f["theme-components"] === true);
+            flags = f;
+        }
         if (JSON.stringify(list) !== JSON.stringify(flagList)) flagList = list;
     }
 

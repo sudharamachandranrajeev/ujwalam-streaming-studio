@@ -78,14 +78,27 @@ export const VARIANTS = {
   'button.shape': { rounded: () => [], pill: () => [], sharp: () => [] },
   'button.style': {
     solid: (p) => [['normal', 'solid button label', p.colors.text, [p.colors.field], TEXT]],
-    soft: (p, x) => [['normal', 'soft button label', p.colors.text, [x.tint], TEXT], ['normal', 'soft primary label', p.colors.onAccent, [p.colors.accent], TEXT]],
+    // soft, neumorph, glass, premium and pixel also have the Qt Quick studio's paint (RareUI slice 1, UButton.qml); its pairs are added here.
+    soft: (p, x) => [['normal', 'soft button label', p.colors.text, [x.tint], TEXT], ['normal', 'soft primary label', p.colors.onAccent, [p.colors.accent], TEXT],
+      ['normal', 'soft button label on its field fill (Qt Quick)', p.colors.text, [p.colors.field], TEXT], ['hover', 'soft hover label on the accent (Qt Quick)', p.colors.onAccent, [p.colors.accent], TEXT],
+      ['hover', 'soft danger hover label (Qt Quick)', p.colors.onAccent, [p.colors.danger], CTRL]],
     metal: (p, x) => [['normal', 'metal button label', p.colors.text, [x.metalHi, p.colors.field, x.metalLo], TEXT], ['normal', 'metal primary label', p.colors.onAccent, [x.accentTop, x.accentBot], TEXT]],
     bezel: (p) => [['normal', 'bezel primary rim against the window', p.colors.accentHi, surfaces(p), CTRL]],
-    neumorph: (p) => [['normal', 'neumorph button label', p.colors.text, [p.colors.bg], TEXT]],
+    neumorph: (p) => [['normal', 'neumorph button label', p.colors.text, [p.colors.bg], TEXT],
+      // Qt Quick: the face is the panel (the accent for a primary button) with a gradient up to 10 percent lighter and darker, and flat for a filled button.
+      ['normal', 'neumorph button label on its face (Qt Quick)', p.colors.text, [p.colors.panel, mix(p.colors.panel, '#ffffff', 0.10), mix(p.colors.panel, '#000000', 0.10)], TEXT],
+      ['normal', 'neumorph primary label (Qt Quick)', p.colors.onAccent, [p.colors.accent], TEXT]],
     // RareUI looks (D384, slice 0): the label pairs the later slices must keep; none of them paints yet.
-    glass: (p) => [['normal', 'glass button label', p.colors.text, [p.colors.field, ...surfaces(p)], TEXT]],
-    premium: (p) => [['normal', 'premium button label', p.colors.onAccent, [p.colors.accent], TEXT]],
-    pixel: (p) => [['normal', 'pixel button label', p.colors.text, [p.colors.field], TEXT]],
+    // The Qt Quick studio paints glass (the field, or the accent for a primary button, with a 12 percent band of the label colour
+    // sweeping over it), premium (the accent in four shades, pushed away from the label colour: 0 to 34 percent toward black
+    // for a light label, 0 to 24 percent toward white for a dark one) and pixel (a normal button; hover: onAccent on the accent block).
+    glass: (p) => [['normal', 'glass button label', p.colors.text, [p.colors.field, ...surfaces(p)], TEXT],
+      ['normal', 'glass label under the sweep (Qt Quick)', p.colors.text, [mix(p.colors.field, p.colors.text, 0.12), mix(mix(p.colors.field, '#000000', 0.1), p.colors.text, 0.12)], TEXT],
+      ['normal', 'glass primary label under the sweep (Qt Quick)', p.colors.onAccent, [p.colors.accent, mix(p.colors.accent, p.colors.onAccent, 0.03)], TEXT]],
+    premium: (p) => [['normal', 'premium button label', p.colors.onAccent, [p.colors.accent], TEXT],
+      ['normal', 'premium label on the darkest or lightest shade (Qt Quick)', p.colors.onAccent, [lum(p.colors.onAccent) > 0.5 ? mix(p.colors.accent, '#000000', 0.34) : mix(p.colors.accent, '#ffffff', 0.24)], TEXT]],
+    pixel: (p) => [['normal', 'pixel button label', p.colors.text, [p.colors.field], TEXT],
+      ['hover', 'pixel hover label on the block (Qt Quick)', p.colors.onAccent, [p.colors.accent], TEXT]],
     liquid: (p) => [['normal', 'liquid button label', p.colors.onAccent, [p.colors.accent], TEXT]],
     raised: (p) => sf(p, (s) => [['normal', 'raised button label', p.colors.text, [s.faceTop, s.faceBottom], TEXT], ['hover', 'raised button label', p.colors.text, ['#ffffff', s.faceBottom], TEXT],
       ['pressed', 'pressed raised button label', p.colors.text, [s.wellTop, s.wellBottom], TEXT], ['checked', 'checked (warm) button label', s.glowInk, [s.warmTop, s.warmBottom], TEXT],
@@ -167,7 +180,10 @@ export const VARIANTS = {
   'toast.richColors': { true: (p) => [['normal', 'rich toast danger text', p.colors.danger, [p.colors.panel], TEXT]], false: () => [] },
   'toast.position': { 'top-right': () => [], 'top-left': () => [], 'bottom-right': () => [], 'bottom-left': () => [] },
   'toast.swipe': { true: () => [], false: () => [] },
-  spinner: { ring: (p) => [['normal', 'spinner ring against the panel', p.colors.accent, [p.colors.panel], CTRL]], bars: (p) => [['normal', 'spinner bars against the panel', p.colors.accent, [p.colors.panel], CTRL]], dots: (p) => [['normal', 'spinner dots against the panel', p.colors.accent, [p.colors.panel], CTRL]] },
+  // The Qt Quick task chip (RareUI slice 1) paints the spinner in accentHi on the chip's field (the border colour under the pointer).
+  spinner: { ring: (p) => [['normal', 'spinner ring against the panel', p.colors.accent, [p.colors.panel], CTRL], ['normal', 'spinner ring on the task chip (Qt Quick)', p.colors.accentHi, [p.colors.field, p.colors.border], CTRL]],
+    bars: (p) => [['normal', 'spinner bars against the panel', p.colors.accent, [p.colors.panel], CTRL], ['normal', 'spinner bars on the task chip (Qt Quick)', p.colors.accentHi, [p.colors.field, p.colors.border], CTRL]],
+    dots: (p) => [['normal', 'spinner dots against the panel', p.colors.accent, [p.colors.panel], CTRL], ['normal', 'spinner dots on the task chip (Qt Quick)', p.colors.accentHi, [p.colors.field, p.colors.border], CTRL]] },
   'text.entrance': { none: () => [], vapor: () => [], scatter: () => [] },
   'text.hover': { none: () => [], magnet: () => [], bounce: () => [] },
   help: { plain: () => [], book: (p) => [['normal', 'book page text', p.colors.text, [p.colors.panel], TEXT]] },

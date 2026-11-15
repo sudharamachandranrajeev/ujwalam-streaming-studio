@@ -136,7 +136,7 @@ void collect(const QObject *o, QJsonArray &out, QSet<const QObject *> &seen)
 			QJsonObject n;
 			n.insert(QStringLiteral("name"), c->objectName());
 			n.insert(QStringLiteral("type"), QString::fromLatin1(c->metaObject()->className()).section(QLatin1Char('_'), 0, 0));
-			for (const char *p : {"text", "checked", "enabled", "value", "visible", "opened", "toolTipText"}) {
+			for (const char *p : {"text", "checked", "enabled", "value", "visible", "opened", "toolTipText", "look", "loop"}) {
 				const QVariant v = c->property(p);
 				if (v.isValid())
 					n.insert(QLatin1String(p), jsonOf(v));

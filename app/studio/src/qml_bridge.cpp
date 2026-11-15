@@ -147,6 +147,7 @@ QmlTheme::QmlTheme(QObject *parent) : QObject(parent)
 {
 	connect(theme::notifier(), &theme::Notifier::changed, this, &QmlTheme::changed);
 	connect(theme::notifier(), &theme::Notifier::changed, this, &QmlTheme::fxChanged);
+	connect(theme::notifier(), &theme::Notifier::changed, this, &QmlTheme::lookChanged);
 	connect(theme::notifier(), &theme::Notifier::rejected, this, &QmlTheme::rejected);
 }
 
@@ -199,6 +200,29 @@ void QmlTheme::setOnAir(bool on)
 		return;
 	onAir_ = on;
 	emit fxChanged();
+}
+
+void QmlTheme::setRareui(bool on)
+{
+	if (on == rareui_)
+		return;
+	rareui_ = on;
+	emit lookChanged();
+}
+
+// Empty (the plain look) unless rareui-look is on and the pack names a style with the components flag on.
+QString QmlTheme::buttonStyle() const { return rareui_ ? theme::component(QStringLiteral("button.style")) : QString(); }
+
+QString QmlTheme::spinnerStyle() const
+{
+	const QString s = rareui_ ? theme::component(QStringLiteral("spinner")) : QString();
+	return s.isEmpty() ? QStringLiteral("ring") : s;
+}
+
+void QmlTheme::setComponentsOn(bool on)
+{
+	theme::setComponents(on);
+	emit lookChanged();
 }
 
 QString QmlTheme::icon(const QString &name, const QString &token, int px) const

@@ -76,6 +76,12 @@ class QmlTheme : public QObject {
 	Q_PROPERTY(QVariantMap spring READ spring NOTIFY changed)
 	// True while a stream or recording runs; the Store sets it from its live and recording state.
 	Q_PROPERTY(bool onAir READ onAir WRITE setOnAir NOTIFY fxChanged)
+	// RareUI slice 1 (D384): the flag rareui-look (the Store sets it), the pack's button style (components.button.style) and
+	// spinner style (components.spinner, "ring" when the pack names none) as the studio may use them. Both are empty
+	// or the plain defaults unless the flag is on and the pack's components are read (flag theme-components).
+	Q_PROPERTY(bool rareui READ rareui WRITE setRareui NOTIFY lookChanged)
+	Q_PROPERTY(QString buttonStyle READ buttonStyle NOTIFY lookChanged)
+	Q_PROPERTY(QString spinnerStyle READ spinnerStyle NOTIFY lookChanged)
 public:
 	explicit QmlTheme(QObject *parent = nullptr);
 	QString id() const;
@@ -92,6 +98,12 @@ public:
 	QVariantMap spring() const;
 	bool onAir() const { return onAir_; }
 	void setOnAir(bool on);
+	bool rareui() const { return rareui_; }
+	void setRareui(bool on);
+	QString buttonStyle() const;
+	QString spinnerStyle() const;
+	// Reads the pack's components block (theme::setComponents); the Store calls it with theme-components and rareui-look both on.
+	Q_INVOKABLE void setComponentsOn(bool on);
 	// "image://icon/<name>/<rrggbb>/<px>" for an icon in a token colour.
 	Q_INVOKABLE QString icon(const QString &name, const QString &token, int px = 18) const;
 	Q_INVOKABLE bool setCurrent(const QString &id);
@@ -105,10 +117,12 @@ public:
 signals:
 	void changed();
 	void fxChanged();
+	void lookChanged();
 	// A pack file that changed on disk and was refused (LU2): the last good look stays; the window says why (a toast).
 	void rejected(const QString &title, const QString &why);
 private:
 	bool onAir_ = false;
+	bool rareui_ = false;
 };
 
 class IconProvider : public QQuickImageProvider {
