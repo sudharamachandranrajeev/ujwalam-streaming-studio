@@ -547,7 +547,7 @@ describe('no flag, autoEvent, overrides, youtube-live.json at the go-live hook',
     const r = (await goLive(c)).json();
     assert.equal(r.verdict, 'refuse');
     assert.equal(r.reason, 'youtube-event-missing');
-    assert.equal(r.detail, "No YouTube event template is picked for YouTube H and YouTube V. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.");
+    assert.equal(r.detail, "No YouTube event is chosen for YouTube H and YouTube V. Press Go live and choose one in the Go live window (or turn off 'New YouTube event at every Go live' in the YouTube window), then go live.");
     assert.ok(!c.hostCalls.includes('stream.start'));
     assert.equal(existsSync(path.join(c.dataDir, LIVE_FILE)), false, 'no file on a refusal');
   });
