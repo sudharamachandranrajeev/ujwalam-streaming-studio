@@ -13,28 +13,31 @@ Rectangle {
     radius: Theme.radiusLarge
     border.width: 1
     border.color: Theme.c.border
+    // A panel rests on the window at elevation 1 (nothing in "plain").
+    ShadowLayers { level: 1; radius: p.radius }
 
     Item {
         id: head
-        anchors { left: parent.left; right: parent.right; top: parent.top; leftMargin: 14; rightMargin: 10; topMargin: 8 }
-        height: p.title !== "" ? 30 : 0
+        anchors { left: parent.left; right: parent.right; top: parent.top; leftMargin: Theme.sp.l; rightMargin: Theme.sp.m; topMargin: Theme.sp.s }
+        height: p.title !== "" ? 32 : 0
         visible: p.title !== ""
         Text {
-            anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+            anchors { left: parent.left; right: toolRow.left; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
+            elide: Text.ElideRight
             text: p.title
             color: Theme.c.text
-            font.family: "Barlow"
-            font.pixelSize: 15
+            font.family: Theme.ty.displayFamily
+            font.pixelSize: Theme.ty.subtitle
             font.weight: Font.DemiBold
         }
         Row {
             id: toolRow
             anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-            spacing: 4
+            spacing: Theme.sp.xs
         }
     }
     Item {
         id: body
-        anchors { left: parent.left; right: parent.right; top: head.bottom; bottom: parent.bottom; margins: 10; topMargin: p.title !== "" ? 6 : 10 }
+        anchors { left: parent.left; right: parent.right; top: head.bottom; bottom: parent.bottom; margins: Theme.sp.m; topMargin: p.title !== "" ? Theme.sp.xs : Theme.sp.m }
     }
 }

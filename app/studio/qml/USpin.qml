@@ -10,9 +10,9 @@ SpinBox {
     property string label: ""
     editable: true
     implicitWidth: 132
-    implicitHeight: 32
+    implicitHeight: 36
     font.family: Theme.family
-    font.pixelSize: 14
+    font.pixelSize: Theme.ty.body
     Accessible.name: label
     textFromValue: (v) => v + suffix
     valueFromText: (t) => parseInt(String(t).replace(/[^0-9-]/g, ""), 10) || 0
@@ -31,7 +31,7 @@ SpinBox {
     up.indicator: Rectangle {
         x: sp.width - width
         height: sp.height
-        implicitWidth: 30
+        implicitWidth: 32
         color: sp.up.pressed ? Qt.darker(Theme.c.field, 1.2) : Theme.c.field
         border.width: 1
         border.color: Theme.c.border
@@ -41,7 +41,7 @@ SpinBox {
     down.indicator: Rectangle {
         x: 0
         height: sp.height
-        implicitWidth: 30
+        implicitWidth: 32
         color: sp.down.pressed ? Qt.darker(Theme.c.field, 1.2) : Theme.c.field
         border.width: 1
         border.color: Theme.c.border
@@ -51,8 +51,8 @@ SpinBox {
     background: Rectangle {
         radius: Theme.radiusSmall
         color: Theme.c.field
-        border.width: 1
+        border.width: sp.activeFocus ? 2 : 1
         border.color: sp.activeFocus ? Theme.c.accentHi : Theme.c.border
-        opacity: sp.enabled ? 1 : 0.6
+        opacity: sp.enabled ? 1 : Theme.st.disabled
     }
 }

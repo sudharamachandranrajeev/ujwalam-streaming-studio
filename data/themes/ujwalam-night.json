@@ -1,0 +1,253 @@
+{
+  "$schema": "./theme.schema.json",
+  "id": "ujwalam-night",
+  "name": "Ujwalam Night",
+  "topic": "A calm dark studio: charcoal panels on near-black, one soft violet accent, deep layered shadows and a clear focus ring.",
+  "version": 1,
+  "dark": true,
+  "colors": {
+    "bg": "#0e1016",
+    "panel": "#161922",
+    "field": "#1e222d",
+    "border": "#2c3140",
+    "text": "#eceef6",
+    "muted": "#a2a9bd",
+    "accent": "#8f73ff",
+    "accentHi": "#b9a6ff",
+    "danger": "#ff7480",
+    "ok": "#4fd890",
+    "onAccent": "#0e0b1c",
+    "disabled": "#666d80"
+  },
+  "gradients": {
+    "window": {
+      "from": "#10131a",
+      "to": "#0b0d12",
+      "angle": 90
+    },
+    "accent": {
+      "from": "#8f73ff",
+      "to": "#8f73ff",
+      "angle": 90
+    }
+  },
+  "typography": {
+    "family": "Inter",
+    "fallbacks": [
+      "Segoe UI"
+    ],
+    "baseSize": 10,
+    "captionSize": 8.5,
+    "titleSize": 16,
+    "headingWeight": 600,
+    "letterSpacing": 0,
+    "captionLetterSpacing": 0.2,
+    "captionCaps": false,
+    "buttonCaps": false,
+    "tabCaps": false,
+    "headingCaps": false,
+    "hinting": "full",
+    "scale": {
+      "h1": 16,
+      "h2": 12,
+      "subtitle": 10.5,
+      "body": 10,
+      "caption": 8.5,
+      "button": 10
+    }
+  },
+  "geometry": {
+    "radius": {
+      "small": 8,
+      "medium": 12,
+      "large": 18
+    },
+    "spacing": {
+      "small": 4,
+      "medium": 8,
+      "large": 16
+    },
+    "borderWidth": 1,
+    "controlHeight": 20,
+    "roundControl": 52,
+    "controlPadding": {
+      "y": 6,
+      "x": 14
+    }
+  },
+  "depth": {
+    "card": {
+      "shadow": {
+        "blur": 24,
+        "offsetX": 0,
+        "offsetY": 6,
+        "color": "#000000",
+        "opacity": 0.5
+      }
+    },
+    "button": {},
+    "primaryButton": {
+      "shadow": {
+        "blur": 10,
+        "offsetX": 0,
+        "offsetY": 3,
+        "color": "#8f73ff",
+        "opacity": 0.4
+      }
+    },
+    "roundControl": {
+      "shadow": {
+        "blur": 14,
+        "offsetX": 0,
+        "offsetY": 4,
+        "color": "#000000",
+        "opacity": 0.5
+      }
+    },
+    "toast": {
+      "shadow": {
+        "blur": 30,
+        "offsetX": 0,
+        "offsetY": 10,
+        "color": "#000000",
+        "opacity": 0.55
+      }
+    },
+    "menu": {
+      "shadow": {
+        "blur": 24,
+        "offsetX": 0,
+        "offsetY": 8,
+        "color": "#000000",
+        "opacity": 0.55
+      }
+    },
+    "taskPanel": {
+      "shadow": {
+        "blur": 30,
+        "offsetX": 0,
+        "offsetY": 9,
+        "color": "#000000",
+        "opacity": 0.55
+      }
+    }
+  },
+  "motion": {
+    "fastMs": 110,
+    "normalMs": 170,
+    "slowMs": 240,
+    "easing": "outQuad",
+    "hoverLift": 0,
+    "pressSink": 1,
+    "spring": {
+      "stiffness": 320,
+      "damping": 30,
+      "mass": 1
+    },
+    "enterMs": 260,
+    "exitMs": 180,
+    "loopMs": 0
+  },
+  "system": {
+    "space": {
+      "xs": 4,
+      "s": 8,
+      "m": 12,
+      "l": 16,
+      "xl": 24,
+      "xxl": 32
+    },
+    "type": {
+      "caption": 12,
+      "small": 13,
+      "body": 14,
+      "subtitle": 16,
+      "title": 20,
+      "display": 28,
+      "displayFamily": "Inter"
+    },
+    "elevation": {
+      "e0": {
+        "keyBlur": 0,
+        "keyY": 0,
+        "keyAlpha": 0,
+        "ambBlur": 0,
+        "ambAlpha": 0
+      },
+      "e1": {
+        "keyBlur": 6,
+        "keyY": 1,
+        "keyAlpha": 0.3,
+        "ambBlur": 16,
+        "ambAlpha": 0.14
+      },
+      "e2": {
+        "keyBlur": 12,
+        "keyY": 3,
+        "keyAlpha": 0.36,
+        "ambBlur": 26,
+        "ambAlpha": 0.18
+      },
+      "e3": {
+        "keyBlur": 20,
+        "keyY": 8,
+        "keyAlpha": 0.44,
+        "ambBlur": 38,
+        "ambAlpha": 0.22
+      },
+      "e4": {
+        "keyBlur": 30,
+        "keyY": 14,
+        "keyAlpha": 0.52,
+        "ambBlur": 54,
+        "ambAlpha": 0.26
+      }
+    },
+    "ring": {
+      "width": 2,
+      "offset": 2,
+      "alpha": 0.7
+    },
+    "state": {
+      "hover": 0.08,
+      "pressed": 0.14,
+      "disabled": 0.45
+    },
+    "motion": {
+      "enter": 260,
+      "exit": 180
+    }
+  },
+  "background": {
+    "kind": "gradient",
+    "pattern": "none",
+    "patternColor": "#000000",
+    "patternOpacity": 0,
+    "patternSpacing": 24
+  },
+  "icons": {
+    "stroke": 1.7
+  },
+  "components": {
+    "button": {
+      "shape": "rounded",
+      "style": "solid",
+      "secondary": "outline",
+      "caps": false
+    },
+    "tabs": "segmented",
+    "input": "outline",
+    "focus": "ring",
+    "switch": "labelled",
+    "slider": {
+      "track": "thin",
+      "handle": "round",
+      "valueBubble": true
+    },
+    "sectionHeader": "plain",
+    "card": "raised",
+    "list": "plain",
+    "chip": "pill",
+    "density": "normal"
+  }
+}

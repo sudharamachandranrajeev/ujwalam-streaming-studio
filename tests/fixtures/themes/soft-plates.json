@@ -1,7 +1,7 @@
 {
   "$schema": "./theme.schema.json",
-  "id": "soft",
-  "name": "Soft",
+  "id": "soft-plates",
+  "name": "Soft plates (fixture)",
   "topic": "Soft light plates on an off-white backdrop: raised pills with a light top edge and a soft shadow below, sunken tracks with round knobs, and a warm amber glow on whatever is switched on.",
   "version": 1,
   "dark": false,

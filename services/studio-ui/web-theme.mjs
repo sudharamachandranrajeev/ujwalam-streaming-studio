@@ -144,7 +144,9 @@ export function loadPack(id, dirs) {
 }
 
 /** tokens.css text for a theme id (default: the studio's default), or null when unknown or broken (the caller serves the static file). */
+// The saved id of the pack Ujwalam Light replaced (D389): the old Soft choice opens the light pack (theme.cpp migratedId).
+export const MIGRATED_THEME_IDS = { soft: 'ujwalam-light' };
 export function tokensCssFor(id, dirs = defaultThemeDirs()) {
-  const pack = loadPack(id ?? DEFAULT_THEME_ID, dirs);
+  const pack = loadPack(MIGRATED_THEME_IDS[id] ?? id ?? DEFAULT_THEME_ID, dirs);
   return pack ? tokensCss(pack) : null;
 }

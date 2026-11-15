@@ -9,7 +9,7 @@ Slider {
     id: s
     signal committed(real value)
     property real meter: 0 // 0..1, drawn in the groove (the channel's level)
-    implicitHeight: 24
+    implicitHeight: 28
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
     wheelEnabled: activeFocus // the wheel only with focus (D330): scrolling the page never moves a slider
@@ -25,6 +25,14 @@ Slider {
         color: Theme.c.field
         border.width: 1
         border.color: Theme.c.border
+        opacity: s.enabled ? 1 : Theme.st.disabled
+        Rectangle { // the filled part: from the left to the handle
+            visible: s.meter <= 0
+            width: s.visualPosition * (parent.width - 16) + 8
+            height: parent.height
+            radius: 3
+            color: Theme.c.accent
+        }
         Rectangle { // level
             width: Math.max(0, Math.min(1, s.meter)) * parent.width
             height: parent.height
@@ -33,14 +41,22 @@ Slider {
             opacity: 0.85
         }
     }
-    handle: Rectangle {
+    handle: Item {
         x: s.leftPadding + s.visualPosition * (s.availableWidth - width)
         y: s.topPadding + s.availableHeight / 2 - height / 2
-        width: 16
-        height: 16
-        radius: 8
-        color: s.pressed ? Theme.c.accentHi : Theme.c.accent
-        border.width: s.visualFocus ? 2 : 0
-        border.color: Theme.c.text
+        width: 18
+        height: 18
+        opacity: s.enabled ? 1 : Theme.st.disabled
+        ShadowLayers { level: s.pressed ? 1 : 2; radius: 9 }
+        Rectangle {
+            anchors.fill: parent
+            radius: 9
+            color: s.pressed ? Theme.c.accentHi : Theme.c.accent
+            border.width: 2
+            border.color: Theme.c.panel
+            scale: s.pressed && Theme.motion ? 0.92 : 1
+            Behavior on scale { enabled: Theme.motion; NumberAnimation { duration: Theme.mo.fast; easing.type: Easing.OutCubic } }
+        }
+        UFocusRing { active: s.visualFocus; radius: 9 }
     }
 }

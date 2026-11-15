@@ -9,12 +9,12 @@ MenuItem {
     property string keys: ""
     property string tip: ""
     implicitWidth: 240
-    implicitHeight: 32
-    leftPadding: 12
-    rightPadding: 12
+    implicitHeight: 34
+    leftPadding: Theme.sp.m
+    rightPadding: Theme.sp.m
     hoverEnabled: true
     font.family: Theme.family
-    font.pixelSize: 14
+    font.pixelSize: Theme.ty.body
     ToolTip.visible: tip !== "" && hovered
     ToolTip.text: tip
     ToolTip.delay: 300
@@ -29,7 +29,7 @@ MenuItem {
             anchors { right: parent.right; verticalCenter: parent.verticalCenter }
             text: it.keys
             font.family: Theme.family
-            font.pixelSize: 12
+            font.pixelSize: Theme.ty.caption
             color: Theme.c.muted
         }
     }

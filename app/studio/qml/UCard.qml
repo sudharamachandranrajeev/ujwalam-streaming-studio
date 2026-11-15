@@ -8,7 +8,8 @@ Rectangle {
     property string title: ""
     default property alias content: body.data
     width: parent ? parent.width : 0
-    implicitHeight: body.implicitHeight + head.height + 30
+    readonly property real pad: Theme.sp.l
+    implicitHeight: body.implicitHeight + (card.title !== "" ? head.height + Theme.sp.s : 0) + pad * 2
     height: implicitHeight
     color: Theme.c.panel
     radius: Theme.radiusMedium
@@ -16,20 +17,24 @@ Rectangle {
     border.color: Theme.c.border
     Text {
         id: head
-        x: 14
-        y: 12
+        x: card.pad
+        y: card.pad
+        width: card.width - card.pad * 2
+        visible: card.title !== ""
+        height: visible ? implicitHeight : 0
         text: card.title
         color: Theme.c.muted
+        elide: Text.ElideRight
         font.family: Theme.family
-        font.pixelSize: 11
-        font.weight: Font.Bold
-        font.letterSpacing: 1
+        font.pixelSize: Theme.ty.caption
+        font.weight: Font.DemiBold
+        font.letterSpacing: 0.6
     }
     Column {
         id: body
-        x: 14
-        y: head.y + head.height + 10
-        width: card.width - 28
-        spacing: 10
+        x: card.pad
+        y: card.pad + (card.title !== "" ? head.height + Theme.sp.s : 0)
+        width: card.width - card.pad * 2
+        spacing: Theme.sp.m
     }
 }

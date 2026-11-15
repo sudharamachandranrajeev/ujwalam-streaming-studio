@@ -7,6 +7,7 @@
 // <c> embedded", "studio swap: ...", "studio close: stop tasks (n)" and the probe's "studio probe: {json}".
 #pragma once
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
 #include <memory>
@@ -32,6 +33,9 @@ public:
 	void close();
 	// Tests: the objectName tree of the window (and its popups) plus the screens' own state; one action per call
 	// (click:<objectName> | theme:<id> | effects:<mode>); a PNG of the window.
+	// layout-check:<label> (D389) walks every visible item of the window and its popups and records what it found: an item
+	// outside the clipped area it sits in, text wider than its box with no elide, two sibling controls that intersect. The
+	// results are in probe()'s "layout" list. UJWALAM_STUDIO_PROBE_SIZE=WxH sets the probe window's size.
 	QJsonObject probe() const;
 	bool probeAction(const QString &action);
 	bool shot(const QString &png) const;
@@ -44,4 +48,5 @@ private:
 	QmlApi *qapi_ = nullptr;
 	QmlTheme *theme_ = nullptr;
 	QQuickWindow *win_ = nullptr;
+	QJsonArray layoutRuns_;
 };

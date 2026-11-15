@@ -10,13 +10,13 @@ Button {
     checkable: true
     property string onToken: "accent"
     property string tip: ""
-    implicitHeight: 26
-    leftPadding: 10
-    rightPadding: 10
+    implicitHeight: 30
+    leftPadding: Theme.sp.m
+    rightPadding: Theme.sp.m
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
     font.family: Theme.family
-    font.pixelSize: 12
+    font.pixelSize: Theme.ty.small
     font.weight: Font.DemiBold
     Accessible.name: text
     ToolTip.visible: tip !== "" && hovered
@@ -28,11 +28,18 @@ Button {
         color: t.checked ? Theme.c.onAccent : t.enabled ? Theme.c.text : Theme.c.disabled
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
+        elide: Text.ElideRight
     }
     background: Rectangle {
         radius: Theme.radiusSmall
-        color: t.checked ? Theme.c[t.onToken] : t.hovered ? Qt.lighter(Theme.c.field, 1.15) : Theme.c.field
+        readonly property color base: t.checked ? Theme.c[t.onToken] : Theme.c.field
+        readonly property color ink: t.checked ? Theme.c.onAccent : Theme.c.text
+        color: t.down ? Qt.tint(base, Qt.rgba(ink.r, ink.g, ink.b, Theme.st.pressed))
+             : t.hovered ? Qt.tint(base, Qt.rgba(ink.r, ink.g, ink.b, Theme.st.hover)) : base
         border.width: t.checked ? 0 : 1
-        border.color: t.visualFocus ? Theme.c.accentHi : Theme.c.border
+        border.color: t.hovered ? Theme.c.muted : Theme.c.border
+        opacity: t.enabled ? 1 : Theme.st.disabled
+        Behavior on color { enabled: Theme.motion; ColorAnimation { duration: Theme.mo.fast } }
+        UFocusRing { active: t.visualFocus; radius: Theme.radiusSmall }
     }
 }

@@ -15,6 +15,8 @@ Menu {
         radius: Theme.radiusMedium
         border.width: 1
         border.color: Theme.c.border
+        // A window popup is as big as its box, so a shadow past the edge would be cut off: only the in-window kind gets one.
+        ShadowLayers { level: menu.popupType === Popup.Window ? 0 : 3; strength: 0; radius: Theme.radiusMedium }
     }
     // id, text, keys, enabled, tip of every row that is shown (separators have no id)
     function items() {
