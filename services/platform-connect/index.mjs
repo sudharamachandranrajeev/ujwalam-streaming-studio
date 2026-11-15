@@ -783,12 +783,18 @@ export const ERROR_TEXT = Object.freeze({
   // D386 youtube-events
   'youtube-key-not-found': 'The stream key this output uses is not one of the stream keys on your YouTube channel. Sign in under Settings > Connections and pick or create the key there: a pasted key that is not on this channel cannot be linked to a live event.',
   'youtube-key-missing': 'This output has no stream key stored. Sign in under Settings > Connections and pick or create its key.',
-  'youtube-quota': 'The daily YouTube request allowance of this app is used up; try again tomorrow, or switch the youtube-events flag off to go live without a new event.',
+  'youtube-quota': 'The daily YouTube request allowance of this app is used up; try again tomorrow, or turn off "New YouTube event at every Go live" in the YouTube window to go live without a new event.',
   'youtube-forbidden': 'YouTube refused the request (no permission for this channel or event).',
   'youtube-template-missing': 'The template broadcast is no longer on your channel; pick another one.',
   'youtube-bad-title': 'A YouTube title is 1 to 100 characters, without < or >.',
-  'youtube-events-off': 'YouTube events are switched off (flags youtube-events and platform-connect).',
-  'youtube-not-signed-in': 'Sign in with YouTube under Settings > Connections first.',
+  'youtube-events-off': 'YouTube is not available here (no data folder).',
+  'youtube-not-signed-in': 'Sign in with YouTube first (YouTube window, or Settings > Connections).',
+  // D388 in-app YouTube control
+  'youtube-bad-choice': 'One of the saved event details (description, privacy, tags, category) is not valid; open the YouTube window and set it again.',
+  'youtube-bad-thumbnail': 'The thumbnail must be a PNG or JPEG picture of at most 2 MB.',
+  'youtube-chat-unavailable': 'The live chat of this event is not open (the event is not live yet, or it has ended).',
+  'unknown-broadcast': 'That YouTube event is not on your channel any more.',
+  'bad-params': 'That request was not valid.',
   'unknown-template': 'That broadcast is not in the list; refresh the list and pick again.',
 });
 

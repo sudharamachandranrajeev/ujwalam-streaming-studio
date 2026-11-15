@@ -66,7 +66,9 @@ import { TEST_KIT_FLAG, createFeedbackAutoCollect, liveAlerts, loadTestKitConfig
 import { createCredentialStore } from '../event-core/streamerbot/credential.mjs';
 import { loadBotConfig, tcpAnswers } from '../bots/index.mjs';
 import { CONNECT_FLAG, ERROR_TEXT as CONNECT_ERROR_TEXT, PROBLEM_TEXT as CONNECT_PROBLEM_TEXT, STREAM_REF_RE, createConnect, outputsFromPlan } from '../platform-connect/index.mjs';
-import { EVENTS_FLAG as YT_EVENTS_FLAG, ID_RE as YT_ID_RE, cleanTitle as ytCleanTitle, createYoutubeEvents, readChoices as readYtChoices, writeChoices as writeYtChoices } from '../platform-connect/youtube-events.mjs';
+import { ID_RE as YT_ID_RE, cleanCategoryId as ytCleanCategoryId, cleanDescription as ytCleanDescription, cleanPrivacy as ytCleanPrivacy, cleanTags as ytCleanTags, cleanTitle as ytCleanTitle, createYoutubeEvents, readAutoEvent as readYtAuto, readChoices as readYtChoices, writeAutoEvent as writeYtAuto, writeChoices as writeYtChoices } from '../platform-connect/youtube-events.mjs';
+import { createYoutubeControl, setLive as setYtLive } from '../platform-connect/youtube-control.mjs';
+import { GET_ROUTES as YT_GET_ROUTES, POST_ROUTES as YT_POST_ROUTES, createYoutubeRoutes } from './youtube-routes.mjs';
 import { connectRow as instagramRow, createUseWatcher as createInstagramWatcher, freshnessText as instagramText, INSTAGRAM_FLAG, keyFreshness as instagramFreshness, loadAddon as instagramAddon, noteKeyStarted as instagramStarted } from '../outputs/instagram.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG, createSettingsRoutes } from './settings-routes.mjs';
 import { createYoutubePresets } from './youtube-presets.mjs';
@@ -550,11 +552,22 @@ export function createStudioServer(opts) {
     const status = CONNECT_STATUS[code] ?? (Object.hasOwn(CONNECT_PROBLEM_TEXT, code) ? 400 : 502);
     return json(res, status, { error: code, message: CONNECT_ERROR_TEXT[code] ?? CONNECT_PROBLEM_TEXT[code] ?? 'Not done.' });
   };
-  // YouTube live events per go-live (D386, flag youtube-events, needs platform-connect; services/platform-connect/
-  // youtube-events.mjs). Uses the platform sign-in's Google client (connect().youtube); built on first use. Choices per
-  // YouTube output live in <dataDir>/youtube-events.json. Logs counts and codes only: never a title, key or token.
-  const ytEventsOn = () => connectOn() && flags.isOn(YT_EVENTS_FLAG);
+  // YouTube live events per go-live (D386; services/platform-connect/youtube-events.mjs) and in-app YouTube control (D388;
+  // youtube-control.mjs, youtube-routes.mjs). No feature flag (D388): on by default, switched by the toggle "New YouTube
+  // event at every Go live" (autoEvent in <dataDir>/youtube-events.json). Uses the platform sign-in's Google client
+  // (connect().youtube); built on first use. Choices per YouTube output live in the same file. Logs counts and codes only:
+  // never a title, chat text, author, key or token.
+  const ytEventsOn = () => typeof opts.dataDir === 'string';
+  const ytSignedIn = async () => { try { return (await connect().youtube?.signedIn?.()) === true; } catch { return false; } };
   let ytEventsSvc = null;
+  let ytControlSvc = null;
+  function ytControl() {
+    if (ytControlSvc) return ytControlSvc;
+    const y = connect().youtube;
+    if (!y) throw Object.assign(new Error('youtube-events-off'), { code: 'youtube-events-off' });
+    ytControlSvc = createYoutubeControl({ fetchImpl: y.fetchImpl, accessToken: y.accessToken, endpoints: y.endpoints, now: y.now, onUnauthorized: y.onUnauthorized });
+    return ytControlSvc;
+  }
   function ytEvents() {
     if (ytEventsSvc) return ytEventsSvc;
     const y = connect().youtube;
@@ -576,10 +589,9 @@ export function createStudioServer(opts) {
     });
   }
   async function ytEventsView() {
-    let signedIn = false;
-    try { signedIn = (await connect().youtube?.signedIn?.()) === true; } catch { signedIn = false; }
+    const signedIn = await ytSignedIn();
     const choices = readYtChoices(opts.dataDir);
-    return { signedIn, outputs: ytOutputs().map((o) => ({ id: o.id, label: o.label, canvas: o.canvas, quality: o.quality, choice: choices[o.id] ?? null })) };
+    return { signedIn, autoEvent: readYtAuto(opts.dataDir), outputs: ytOutputs().map((o) => ({ id: o.id, label: o.label, canvas: o.canvas, quality: o.quality, choice: choices[o.id] ?? null })) };
   }
   const YT_EVENTS_STATUS = { 'youtube-unauthorized': 401, 'oauth-reauth-needed': 401, 'youtube-not-signed-in': 401, 'oauth-no-client': 409, 'youtube-live-not-enabled': 409, 'youtube-events-off': 404, 'youtube-quota': 429, 'unknown-output': 404, 'unknown-template': 404, 'youtube-bad-title': 400, 'bad-params': 400 };
   const ytEventsFail = (res, e) => {
@@ -600,10 +612,18 @@ export function createStudioServer(opts) {
         if ((await connect().youtube?.signedIn?.()) !== true) return ytEventsFail(res, { code: 'youtube-not-signed-in' });
         return json(res, 200, { templates: await ytEvents().listTemplates({ refresh: body.refresh === true }) });
       }
+      if (route === '/ui/api/youtube/event/auto') {
+        if (!only(['on']) || typeof body.on !== 'boolean') return json(res, 400, { error: 'bad-params' });
+        return json(res, 200, { ok: true, autoEvent: writeYtAuto(opts.dataDir, body.on) });
+      }
       if (route === '/ui/api/youtube/event/set') {
-        if (!only(['output', 'templateId', 'title']) || typeof body.output !== 'string' || body.output.length > 32
+        // D388 overrides (description, privacy, tags, categoryId): null or absent = the template's value is used.
+        const ov = (k, ok) => body[k] === undefined || body[k] === null || ok(body[k]);
+        if (!only(['output', 'templateId', 'title', 'description', 'privacy', 'tags', 'categoryId']) || typeof body.output !== 'string' || body.output.length > 32
           || !(body.templateId === null || (typeof body.templateId === 'string' && YT_ID_RE.test(body.templateId)))
-          || !(body.title === undefined || body.title === null || (typeof body.title === 'string' && body.title.length <= 400))) return json(res, 400, { error: 'bad-params' });
+          || !(body.title === undefined || body.title === null || (typeof body.title === 'string' && body.title.length <= 400))
+          || !ov('description', (v) => typeof v === 'string' && (v === '' || ytCleanDescription(v) !== null)) || !ov('privacy', (v) => ytCleanPrivacy(v) !== null)
+          || !ov('tags', (v) => Array.isArray(v) && (v.length === 0 || ytCleanTags(v) !== null)) || !ov('categoryId', (v) => ytCleanCategoryId(v) !== null)) return json(res, 400, { error: 'bad-params' });
         if (!ytOutputs().some((o) => o.id === body.output)) return ytEventsFail(res, { code: 'unknown-output' });
         const choices = readYtChoices(opts.dataDir);
         if (body.templateId === null) delete choices[body.output];
@@ -613,7 +633,11 @@ export function createStudioServer(opts) {
           if (wantsTitle && !title) return ytEventsFail(res, { code: 'youtube-bad-title' });
           const t = await ytEvents().knownTemplate(body.templateId); // re-listed once when it is not in the last list
           if (!t) return ytEventsFail(res, { code: 'unknown-template' });
-          choices[body.output] = { templateId: t.id, templateTitle: t.title, title };
+          choices[body.output] = {
+            templateId: t.id, templateTitle: t.title, title,
+            ...(body.description ? { description: body.description } : {}), ...(body.privacy ? { privacy: body.privacy } : {}),
+            ...(Array.isArray(body.tags) && body.tags.length ? { tags: ytCleanTags(body.tags) } : {}), ...(body.categoryId ? { categoryId: body.categoryId } : {}),
+          };
         }
         writeYtChoices(opts.dataDir, choices);
         const view = await ytEventsView();
@@ -622,6 +646,12 @@ export function createStudioServer(opts) {
       return text(res, 404, 'not-found');
     } catch (e) { return ytEventsFail(res, e); }
   }
+  // D388: the other YouTube routes (account, sign-in, live, details, thumbnail, categories, chat, broadcasts, end, delete).
+  // json and text are declared further down; the wrappers read them when a request comes.
+  const ytRoutes = createYoutubeRoutes({
+    dataDir: opts.dataDir, json: (...a) => json(...a), text: (...a) => text(...a), control: ytControl, connect, signedIn: ytSignedIn,
+    ytOutputs, outputsStatus: ytOutputsStatus, now, log: (m) => log(m),
+  });
   // Public form of a readiness result for the page (the Qt shell reads the summary text of the confirm window).
   const publicReadiness = (r) => ({ at: r.at, ok: r.ok, counts: r.counts, items: r.items.map((i) => ({ id: i.id, title: i.title, status: i.status, message: i.message, ...(i.fix ? { fix: i.fix } : {}), ...(i.unknown ? { unknown: true } : {}) })) });
   // End all streams (D299): the host's stream.stop with no sinks stops every stream sink (both YouTube, Twitch, Kick) and
@@ -1364,6 +1394,7 @@ export function createStudioServer(opts) {
     }
     if (req.method === 'GET' && route === '/ui/api/youtube/events') return ytEventsRoute(req, res, route, null); // D386
     if (req.method === 'GET' && await ytPresets.handle('GET', route, null, res)) return undefined; // D388
+    if (req.method === 'GET' && YT_GET_ROUTES.includes(route)) return ytRoutes.handle(req, res, route, null, url); // D388
     if (route.startsWith('/ui/api/growth') && !growthOn()) return json(res, 404, { error: 'growth-off' });
     if (route.startsWith('/ui/api/posts') && !postingOn()) return json(res, 404, { error: 'posting-off' });
     if (route.startsWith('/ui/api/bots') && !botsOn()) return json(res, 404, { error: 'bot-manager-off' });
@@ -1604,8 +1635,9 @@ export function createStudioServer(opts) {
       return json(res, 200, { verdict: 'allow', flags: applyFlag(body.id, true) }); // ON: the click is the decision (D332)
     }
     if (route.startsWith('/ui/api/connect/')) return connectRoute(res, route, body);
-    if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set') return ytEventsRoute(req, res, route, body); // D386
+    if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set' || route === '/ui/api/youtube/event/auto') return ytEventsRoute(req, res, route, body); // D386, D388
     if (await ytPresets.handle('POST', route, body, res)) return undefined; // D388
+    if (YT_POST_ROUTES.includes(route)) return ytRoutes.handle(req, res, route, body, null); // D388
     if (route === '/ui/api/learning/confirm') {
       if (Object.keys(body).some((k) => !['session', 'id', 'value'].includes(k)) || typeof body.session !== 'string' || typeof body.id !== 'string' || typeof body.value !== 'string') return json(res, 400, { error: 'bad-params' });
       const r = await createReview({ dataDir: opts.dataDir }).confirm(body);
@@ -1817,21 +1849,22 @@ export function createStudioServer(opts) {
         const startGen = p.method === 'stream.start' && authority
           ? (Number.isInteger(p.startGen) ? p.startGen : await authority.begin()) : null;
         const before = await readBefore(p.method, p.params);
-        // D386 (flag youtube-events): a fresh YouTube live event per YouTube output of this start, before the stop-wins
-        // checks below (a Stop during the creation still wins; the events are then deleted again). Twitch and Kick are
-        // never touched; a start without a YouTube output makes no YouTube call.
+        // D386 / D388: a fresh YouTube live event per YouTube output of this start, before the stop-wins checks below (a
+        // Stop during the creation still wins; the events are then deleted again). Twitch and Kick are never touched. A
+        // start without a YouTube output, without a YouTube sign-in, or with the toggle autoEvent off makes no YouTube
+        // call and streams exactly as before D386.
         if (p.method === 'stream.start' && ytEventsOn()) {
           const all = ytOutputs();
           const want = Array.isArray(callParams?.sinks) ? all.filter((o) => callParams.sinks.includes(o.id)) : all;
-          if (want.length) {
+          if (want.length && readYtAuto(opts.dataDir) && await ytSignedIn()) {
             const choices = readYtChoices(opts.dataDir);
             const missing = want.filter((o) => !choices[o.id]);
-            if (missing.length) return json(res, 200, { verdict: 'refuse', reason: 'youtube-event-missing', detail: `Pick a YouTube event template for ${missing.map((o) => o.label).join(' and ')} (Studio: YouTube event), or switch the youtube-events flag off.` });
+            if (missing.length) return json(res, 200, { verdict: 'refuse', reason: 'youtube-event-missing', detail: `Pick a YouTube event template for ${missing.map((o) => o.label).join(' and ')}. Pick a YouTube preset or event template in the YouTube window, or turn off 'New YouTube event at every Go live' there.` });
             const yt = tasks.start({ title: 'Creating the YouTube events', kind: 'youtube' });
             let svc = null;
             try { svc = ytEvents(); } catch { svc = null; }
             const made = svc
-              ? await Promise.allSettled(want.map((o) => svc.createEvent({ templateId: choices[o.id].templateId, title: choices[o.id].title ?? undefined, keyRef: o.keyRef })))
+              ? await Promise.allSettled(want.map((o) => svc.createEvent({ templateId: choices[o.id].templateId, title: choices[o.id].title ?? undefined, keyRef: o.keyRef, description: choices[o.id].description, privacy: choices[o.id].privacy, tags: choices[o.id].tags, categoryId: choices[o.id].categoryId })))
               : want.map(() => ({ status: 'rejected', reason: { code: 'youtube-events-off' } }));
             made.forEach((r, i) => { if (r.status === 'fulfilled') ytMade.push({ output: want[i].id, ...r.value }); });
             const failed = made.map((r, i) => (r.status === 'rejected' ? { o: want[i], code: typeof r.reason?.code === 'string' ? r.reason.code : 'youtube-api-failed' } : null)).filter(Boolean);
@@ -1894,6 +1927,8 @@ export function createStudioServer(opts) {
         // A layout change confirmed while live autosaves like an instant one (P5b).
         const saved = HOST_CALLS[p.method]?.liveConfirm && projectSync && host.describe().kind === 'host' ? projectSync.record(p.method, syncParams(p.method, p.params, out)) : false;
         ytKept = true;
+        // D388: the events this accepted start made are the outputs' current events (youtube-live.json); a write failure never touches the stream.
+        if (ytMade.length) { try { setYtLive(opts.dataDir, ytMade.map((e) => ({ output: e.output, broadcastId: e.broadcastId, title: e.title })), new Date(now()).toISOString()); } catch { log('[studio-ui] WARNING: the current YouTube events could not be written'); } }
         return json(res, 200, { verdict: 'allow', result: p.countsOnly ? countsOnly(out) : (out ?? null), ...(saved ? { saved: 'pending' } : {}), ...(warning ? { warning } : {}), ...(p.readinessOverride ? { override: true, overrideLogged: overrideLogged === true } : {}),
           ...(ytMade.length ? { youtubeEvents: ytMade.map((e) => ({ output: e.output, title: e.title, warnings: e.warnings })) } : {}) });
         } finally {
@@ -2069,6 +2104,7 @@ export function createStudioServer(opts) {
     },
     async close() {
       clearInterval(pollTimer);
+      ytControlSvc?.close(); // D388: the YouTube chat readers and their timers
       stopDataWatch?.(); stopDataWatch = null;
       projectSync?.flush(); // write a pending layer edit now rather than lose it
       for (const c of sseClients) c.write(': bye\n\n');
