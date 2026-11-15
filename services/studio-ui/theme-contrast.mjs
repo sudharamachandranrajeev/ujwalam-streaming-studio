@@ -82,6 +82,11 @@ export const VARIANTS = {
     metal: (p, x) => [['normal', 'metal button label', p.colors.text, [x.metalHi, p.colors.field, x.metalLo], TEXT], ['normal', 'metal primary label', p.colors.onAccent, [x.accentTop, x.accentBot], TEXT]],
     bezel: (p) => [['normal', 'bezel primary rim against the window', p.colors.accentHi, surfaces(p), CTRL]],
     neumorph: (p) => [['normal', 'neumorph button label', p.colors.text, [p.colors.bg], TEXT]],
+    // RareUI looks (D384, slice 0): the label pairs the later slices must keep; none of them paints yet.
+    glass: (p) => [['normal', 'glass button label', p.colors.text, [p.colors.field, ...surfaces(p)], TEXT]],
+    premium: (p) => [['normal', 'premium button label', p.colors.onAccent, [p.colors.accent], TEXT]],
+    pixel: (p) => [['normal', 'pixel button label', p.colors.text, [p.colors.field], TEXT]],
+    liquid: (p) => [['normal', 'liquid button label', p.colors.onAccent, [p.colors.accent], TEXT]],
     raised: (p) => sf(p, (s) => [['normal', 'raised button label', p.colors.text, [s.faceTop, s.faceBottom], TEXT], ['hover', 'raised button label', p.colors.text, ['#ffffff', s.faceBottom], TEXT],
       ['pressed', 'pressed raised button label', p.colors.text, [s.wellTop, s.wellBottom], TEXT], ['checked', 'checked (warm) button label', s.glowInk, [s.warmTop, s.warmBottom], TEXT],
       ['normal', 'raised danger button label', p.colors.danger, [s.faceTop, s.faceBottom], TEXT]]),
@@ -96,6 +101,9 @@ export const VARIANTS = {
     underline: (p) => [['normal', 'underline tab label', p.colors.muted, surfaces(p), TEXT], ['hover', 'underline tab label', p.colors.text, surfaces(p), TEXT],
       ['checked', 'selected underline tab label', p.colors.accentHi, surfaces(p), TEXT], ['checked', 'selected tab underline', p.colors.accent, surfaces(p), CTRL]],
     segmented: (p) => [['normal', 'segment label', p.colors.muted, [p.colors.field], TEXT]],
+    slide: (p) => [['normal', 'slide tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected slide tab label', p.colors.accentHi, surfaces(p), TEXT]],
+    avatar: (p) => [['normal', 'avatar tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected avatar tab label', p.colors.accentHi, surfaces(p), TEXT]],
+    dock: (p) => [['normal', 'dock tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected dock tab label', p.colors.accentHi, surfaces(p), TEXT]],
     boxed: (p, x) => [['normal', 'boxed tab label', p.colors.muted, surfaces(p), TEXT], ['checked', 'selected boxed tab label', p.colors.accentHi, [x.tint], TEXT], ['checked', 'selected boxed tab edge', p.colors.accent, surfaces(p), CTRL]],
   },
   input: {
@@ -145,19 +153,32 @@ export const VARIANTS = {
     raised: () => [],
     neumorph: (p) => [['normal', 'text on a neumorph card', p.colors.text, [p.colors.bg], TEXT]],
     framed: (p) => [['normal', 'text in a framed card', p.colors.text, surfaces(p), TEXT]],
+    tilt: (p) => [['normal', 'text on a tilt card', p.colors.text, surfaces(p), TEXT]],
+    shatter: (p) => [['normal', 'text on a shatter card', p.colors.text, surfaces(p), TEXT]],
     soft: (p) => sf(p, (s) => [['normal', 'text on a soft plate', p.colors.text, [s.faceTop, s.faceBottom], TEXT], ['normal', 'muted text on a soft plate', p.colors.muted, [s.faceTop, s.faceBottom], TEXT],
       ['checked', 'muted text where a plate glows', p.colors.muted, [s.warmTop, s.warmBottom], TEXT], ['normal', 'error text on a soft plate', p.colors.danger, [s.faceTop, s.faceBottom], TEXT]]),
   },
   list: { plain: () => [], plates: (p) => [['normal', 'list plate text', p.colors.text, [p.colors.field], TEXT]] },
   chip: { pill: () => [], bracket: (p) => [['normal', 'bracket chip text', p.colors.text, surfaces(p), TEXT], ['normal', 'quiet bracket chip text', p.colors.muted, surfaces(p), TEXT]] },
   density: { compact: () => [], normal: () => [], airy: () => [] },
+  // RareUI looks (D384, slice 0): text pairs on the surfaces each will paint on; they paint nothing yet.
+  tooltip: { plain: (p) => [['normal', 'tooltip text', p.colors.text, [p.colors.panel], TEXT]], liquid: (p) => [['normal', 'liquid tooltip text', p.colors.text, [p.colors.panel], TEXT]] },
+  'toast.style': { plain: (p) => [['normal', 'toast text', p.colors.text, [p.colors.panel], TEXT]], stack: (p) => [['normal', 'stacked toast text', p.colors.text, [p.colors.panel], TEXT]], bubble: (p) => [['normal', 'bubble toast text', p.colors.text, [p.colors.panel], TEXT]] },
+  'toast.richColors': { true: (p) => [['normal', 'rich toast danger text', p.colors.danger, [p.colors.panel], TEXT]], false: () => [] },
+  'toast.position': { 'top-right': () => [], 'top-left': () => [], 'bottom-right': () => [], 'bottom-left': () => [] },
+  'toast.swipe': { true: () => [], false: () => [] },
+  spinner: { ring: (p) => [['normal', 'spinner ring against the panel', p.colors.accent, [p.colors.panel], CTRL]], bars: (p) => [['normal', 'spinner bars against the panel', p.colors.accent, [p.colors.panel], CTRL]], dots: (p) => [['normal', 'spinner dots against the panel', p.colors.accent, [p.colors.panel], CTRL]] },
+  'text.entrance': { none: () => [], vapor: () => [], scatter: () => [] },
+  'text.hover': { none: () => [], magnet: () => [], bounce: () => [] },
+  help: { plain: () => [], book: (p) => [['normal', 'book page text', p.colors.text, [p.colors.panel], TEXT]] },
+  clips: { grid: () => [], expand: (p) => [['normal', 'expanded clip text', p.colors.text, [p.colors.panel], TEXT]] },
 };
 
 // The pack's chosen variants as flat keys ("button.style": "metal", "slider.valueBubble": "true").
 export function chosen(p) {
   const out = {};
   for (const [k, v] of Object.entries(p.components ?? {}))
-    if (v && typeof v === 'object') for (const [k2, v2] of Object.entries(v)) out[`${k}.${k2}`] = String(v2);
+    if (v && typeof v === 'object') for (const [k2, v2] of Object.entries(v)) { if (typeof v2 !== 'number') out[`${k}.${k2}`] = String(v2); } // numbers (toast.maxVisible) have no variants
     else out[k] = String(v);
   return out;
 }

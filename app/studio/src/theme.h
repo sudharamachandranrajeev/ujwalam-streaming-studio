@@ -100,6 +100,10 @@ void setEffects(const QString &mode);
 QString effects();
 bool effectsOn();
 bool performance();
+// RareUI slice 0 (D384): how much decoration the Qt Quick studio may run. "plain" while on air (live or recording) or in
+// High performance (performance), "calm" in reduced, else "full". Pure: mode is full | reduced | performance (anything
+// else counts as full). Theme.fx in QML is fxLevel(effects(), the Store's live or recording state).
+QString fxLevel(const QString &effectsMode, bool onAir);
 
 QColor color(const QString &token);
 QString hex(const QString &token);
@@ -115,6 +119,11 @@ int duration(const QString &which); // fast | normal | slow, in ms
 QEasingCurve::Type easing();
 qreal hoverLift();
 qreal pressSink();
+// motion.spring (RareUI slice 0, D384): the shared exact spring, default 300 / 30 / 1.
+struct Spring {
+	qreal stiffness = 300, damping = 30, mass = 1;
+};
+Spring spring();
 
 DepthSpec depthSpec(const QString &cls);
 int depthRadius(const QString &cls, const QSize &widget); // the corner radius the stylesheet gives that class

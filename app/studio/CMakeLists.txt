@@ -156,7 +156,9 @@ qt_add_qml_module(ujwalam-studio
 		qml/HelpPanel.qml
 		qml/LookPanel.qml
 		qml/StatsPanel.qml
-		qml/UValueSlider.qml)
+		qml/UValueSlider.qml
+		qml/USpring.qml
+		qml/ShadowLayers.qml)
 if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()

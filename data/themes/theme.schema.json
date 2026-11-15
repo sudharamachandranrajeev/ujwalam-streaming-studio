@@ -29,7 +29,9 @@
         "danger": { "$ref": "#/$defs/hex" },
         "ok": { "$ref": "#/$defs/hex" },
         "onAccent": { "$ref": "#/$defs/hex", "description": "text and icons on accent and danger fills" },
-        "disabled": { "$ref": "#/$defs/hex" }
+        "disabled": { "$ref": "#/$defs/hex" },
+        "warn": { "$ref": "#/$defs/hex", "description": "optional (RareUI slice 0, D384): a warning hue; left out, the studio uses danger" },
+        "info": { "$ref": "#/$defs/hex", "description": "optional (RareUI slice 0, D384): an information hue; left out, accent" }
       }
     },
     "gradients": {
@@ -59,6 +61,8 @@
         "hinting": { "enum": ["default", "none", "vertical", "full"], "description": "optional (D376): glyph hinting. full keeps stems on the pixel grid (ClearType GDI-classic) at every display scale; default lets Qt choose" },
         "buttonCaps": { "type": "boolean", "description": "optional (v2): button labels in capitals" },
         "tabCaps": { "type": "boolean", "description": "optional (v2): tab labels in capitals" },
+        "display": { "type": "string", "minLength": 1, "maxLength": 60, "description": "optional (RareUI slice 0, D384): a display family for large titles (a serif for vapor and book titles). Bundled open families or Windows families only; read by later slices" },
+        "mono": { "type": "string", "minLength": 1, "maxLength": 60, "description": "optional (RareUI slice 0, D384): a monospace family for the pixel button and the tooltip label. Read by later slices" },
         "headingCaps": { "type": "boolean", "description": "optional (v2): section titles and headings in capitals" },
         "scale": {
           "type": "object", "additionalProperties": false,
@@ -118,7 +122,19 @@
         "slowMs": { "type": "integer", "minimum": 0, "maximum": 600 },
         "easing": { "enum": ["linear", "outQuad", "outCubic", "outExpo", "outBack", "inOutQuad", "inOutCubic"] },
         "hoverLift": { "type": "number", "minimum": 0, "maximum": 4, "description": "pixels a button with depth rises on hover" },
-        "pressSink": { "type": "number", "minimum": 0, "maximum": 4, "description": "pixels it sinks while pressed" }
+        "pressSink": { "type": "number", "minimum": 0, "maximum": 4, "description": "pixels it sinks while pressed" },
+        "spring": {
+          "type": "object", "additionalProperties": false,
+          "description": "optional (RareUI slice 0, D384): the shared exact spring (USpring.qml); a part left out keeps 300 / 30 / 1",
+          "properties": {
+            "stiffness": { "type": "number", "minimum": 1, "maximum": 2000 },
+            "damping": { "type": "number", "minimum": 0, "maximum": 200 },
+            "mass": { "type": "number", "minimum": 0.1, "maximum": 10 }
+          }
+        },
+        "enterMs": { "type": "integer", "minimum": 0, "maximum": 600, "description": "optional (RareUI slice 0): longest entrance, ms; the project rule is under 600" },
+        "exitMs": { "type": "integer", "minimum": 0, "maximum": 400, "description": "optional (RareUI slice 0): longest exit, ms; the project rule is under 400" },
+        "loopMs": { "type": "integer", "minimum": 0, "maximum": 20000, "description": "optional (RareUI slice 0): period of continuous decoration (shimmer, sweep); 0 = off. Never runs while on air (Theme.fx)" }
       }
     },
     "background": {
@@ -131,6 +147,7 @@
         "patternColor": { "$ref": "#/$defs/hex" },
         "patternOpacity": { "type": "number", "minimum": 0, "maximum": 0.15 },
         "patternSpacing": { "type": "integer", "minimum": 3, "maximum": 80 },
+        "animated": { "enum": ["none", "waves"], "description": "optional (RareUI slice 0, D384): a moving backdrop drawn by the studio; none when left out. Never on while on air, in High performance or behind the preview" },
         "frame": {
           "type": "object", "additionalProperties": false, "required": ["ticks", "opacity"],
           "description": "optional (v2): a thin frame just inside each window in the pattern colour; ticks adds registration marks at the corners and edge middles",
@@ -147,12 +164,12 @@
           "type": "object", "additionalProperties": false,
           "properties": {
             "shape": { "enum": ["rounded", "pill", "sharp"] },
-            "style": { "enum": ["solid", "soft", "metal", "bezel", "neumorph", "raised"], "description": "fill and edge of buttons and round controls; raised (D376): soft raised pills painted from the surface block, the warm face when checked" },
+            "style": { "enum": ["solid", "soft", "metal", "bezel", "neumorph", "raised", "glass", "premium", "pixel", "liquid"], "description": "glass, premium, pixel and liquid (RareUI slice 0, D384): accepted, drawn by later slices. Fill and edge of buttons and round controls; raised (D376): soft raised pills painted from the surface block, the warm face when checked" },
             "secondary": { "enum": ["outline", "tinted", "ghost"], "description": "plain (not primary) buttons; left out: they follow style" },
             "caps": { "type": "boolean", "description": "button labels in capitals" }
           }
         },
-        "tabs": { "enum": ["pill", "underline", "segmented", "boxed"] },
+        "tabs": { "enum": ["pill", "underline", "segmented", "boxed", "slide", "avatar", "dock"], "description": "slide, avatar and dock (RareUI slice 0, D384): accepted, drawn by later slices" },
         "input": { "enum": ["outline", "filled", "inset", "underline", "soft"], "description": "soft (D376): a sunken well in the surface block's well colours" },
         "focus": { "enum": ["border", "ring", "glow"] },
         "switch": { "enum": ["plain", "labelled", "bezel", "knob"], "description": "the painted on/off switch; labelled (ON / OFF in the track) is the base look; knob (D376): a raised round knob in a sunken track that glows warm when on" },
@@ -165,10 +182,33 @@
           }
         },
         "sectionHeader": { "enum": ["plain", "rule", "caps", "bracket"] },
-        "card": { "enum": ["flat", "raised", "neumorph", "framed", "soft"], "description": "soft (D376): raised plates painted from the surface block (needs it)" },
+        "card": { "enum": ["flat", "raised", "neumorph", "framed", "soft", "tilt", "shatter"], "description": "tilt and shatter (RareUI slice 0, D384): accepted, drawn by later slices, never while on air. soft (D376): raised plates painted from the surface block (needs it)" },
         "list": { "enum": ["plain", "plates"] },
         "chip": { "enum": ["pill", "bracket"] },
-        "density": { "enum": ["compact", "normal", "airy"], "description": "layout spacing: compact x0.75, normal x1, airy x1.25 of the built-in spacing" }
+        "density": { "enum": ["compact", "normal", "airy"], "description": "layout spacing: compact x0.75, normal x1, airy x1.25 of the built-in spacing" },
+        "tooltip": { "enum": ["plain", "liquid"], "description": "optional (RareUI slice 0, D384): accepted, drawn by a later slice" },
+        "toast": {
+          "type": "object", "additionalProperties": false,
+          "description": "optional (RareUI slice 0, D384): notification style, accepted and drawn by a later slice",
+          "properties": {
+            "style": { "enum": ["plain", "stack", "bubble"] },
+            "richColors": { "type": "boolean" },
+            "position": { "enum": ["top-right", "top-left", "bottom-right", "bottom-left"] },
+            "maxVisible": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "swipe": { "type": "boolean" }
+          }
+        },
+        "spinner": { "enum": ["ring", "bars", "dots"], "description": "optional (RareUI slice 0, D384): the busy spinner" },
+        "text": {
+          "type": "object", "additionalProperties": false,
+          "description": "optional (RareUI slice 0, D384): text effects on chosen headings only; never while on air",
+          "properties": {
+            "entrance": { "enum": ["none", "vapor", "scatter"] },
+            "hover": { "enum": ["none", "magnet", "bounce"] }
+          }
+        },
+        "help": { "enum": ["plain", "book"], "description": "optional (RareUI slice 0, D384)" },
+        "clips": { "enum": ["grid", "expand"], "description": "optional (RareUI slice 0, D384): how My clips lists clips" }
       }
     },
     "componentsAlways": { "type": "boolean", "description": "optional (D376): the components block and the other v2 parts apply whether the flag theme-components is on or not. For a pack whose look depends on them (Soft): choosing the theme is the opt-in." },

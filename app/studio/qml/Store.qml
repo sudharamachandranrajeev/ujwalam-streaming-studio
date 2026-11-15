@@ -20,6 +20,10 @@ QtObject {
     property bool routeBusy: false
     property bool live: false
     property bool recording: false
+    // RareUI slice 0 (D384): live or recording turns Theme.fx to "plain" (no decoration while on air).
+    readonly property bool onAirNow: live || recording
+    onOnAirNowChanged: Theme.onAir = onAirNow
+    Component.onCompleted: Theme.onAir = onAirNow
     property bool hostUp: false
     property bool uiUp: true          // the last status read reached the UI server (the status line tells the two apart)
     property bool coreUp: false

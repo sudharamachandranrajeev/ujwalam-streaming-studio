@@ -69,6 +69,13 @@ class QmlTheme : public QObject {
 	Q_PROPERTY(int fast READ fast NOTIFY changed)
 	Q_PROPERTY(int normal READ normal NOTIFY changed)
 	Q_PROPERTY(bool motion READ motion NOTIFY changed)
+	// RareUI slice 0 (D384): "full" | "calm" | "plain" (theme::fxLevel of the effects level and onAir). Notifies on fxChanged
+	// (a theme or effects switch, or onAir flipping) so a flip does not rebind every colour.
+	Q_PROPERTY(QString fx READ fx NOTIFY fxChanged)
+	// motion.spring of the pack: {stiffness, damping, mass}, default 300 / 30 / 1 (USpring.qml reads it).
+	Q_PROPERTY(QVariantMap spring READ spring NOTIFY changed)
+	// True while a stream or recording runs; the Store sets it from its live and recording state.
+	Q_PROPERTY(bool onAir READ onAir WRITE setOnAir NOTIFY fxChanged)
 public:
 	explicit QmlTheme(QObject *parent = nullptr);
 	QString id() const;
@@ -81,6 +88,10 @@ public:
 	int fast() const;
 	int normal() const;
 	bool motion() const;
+	QString fx() const;
+	QVariantMap spring() const;
+	bool onAir() const { return onAir_; }
+	void setOnAir(bool on);
 	// "image://icon/<name>/<rrggbb>/<px>" for an icon in a token colour.
 	Q_INVOKABLE QString icon(const QString &name, const QString &token, int px = 18) const;
 	Q_INVOKABLE bool setCurrent(const QString &id);
@@ -93,8 +104,11 @@ public:
 	Q_INVOKABLE QString motionMode() const;
 signals:
 	void changed();
+	void fxChanged();
 	// A pack file that changed on disk and was refused (LU2): the last good look stays; the window says why (a toast).
 	void rejected(const QString &title, const QString &why);
+private:
+	bool onAir_ = false;
 };
 
 class IconProvider : public QQuickImageProvider {

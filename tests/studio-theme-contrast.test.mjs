@@ -26,7 +26,7 @@ test('every variant in the schema has a contrast table (and only those)', () => 
   const comp = schema.properties.components.properties;
   const keys = [];
   for (const [k, s] of Object.entries(comp)) {
-    if (s.type === 'object') for (const [k2, s2] of Object.entries(s.properties)) keys.push([`${k}.${k2}`, s2.enum ?? (s2.type === 'boolean' ? ['true', 'false'] : null)]);
+    if (s.type === 'object') for (const [k2, s2] of Object.entries(s.properties).filter(([, x]) => x.type !== 'integer')) keys.push([`${k}.${k2}`, s2.enum ?? (s2.type === 'boolean' ? ['true', 'false'] : null)]);
     else keys.push([k, s.enum]);
   }
   assert.deepEqual(keys.map(([k]) => k).sort(), Object.keys(VARIANTS).sort());
@@ -72,7 +72,7 @@ test('schema v2: a full components block validates; unknown variants and keys ar
   const base = read('teal-grid.json');
   const ok = { ...base, components: { button: { shape: 'pill', style: 'metal', secondary: 'tinted', caps: true }, tabs: 'underline', input: 'inset', focus: 'ring', switch: 'bezel', slider: { track: 'inset', handle: 'sphere', valueBubble: true }, sectionHeader: 'bracket', card: 'framed', list: 'plates', chip: 'bracket', density: 'airy' } };
   assert.ok(validate(ok), JSON.stringify(validate.errors));
-  for (const components of [{ tabs: 'wavy' }, { sparkle: 'on' }, { button: { style: 'glass' } }, { button: { size: 'xl' } }, { slider: { handle: 'cube' } }, { density: 'tight' }])
+  for (const components of [{ tabs: 'wavy' }, { sparkle: 'on' }, { button: { style: 'sparkly' } }, { button: { size: 'xl' } }, { slider: { handle: 'cube' } }, { density: 'tight' }])
     assert.equal(validate({ ...base, components }), false, JSON.stringify(components));
   assert.ok(validate({ ...base, typography: { ...base.typography, buttonCaps: true, tabCaps: true, headingCaps: false, scale: { h1: 16, body: 10 } } }), JSON.stringify(validate.errors));
   assert.equal(validate({ ...base, typography: { ...base.typography, scale: { h1: 40 } } }), false, 'type scale stays in 6..28 pt');

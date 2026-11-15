@@ -146,6 +146,7 @@ QVariantList QmlApi::fxTypes() const
 QmlTheme::QmlTheme(QObject *parent) : QObject(parent)
 {
 	connect(theme::notifier(), &theme::Notifier::changed, this, &QmlTheme::changed);
+	connect(theme::notifier(), &theme::Notifier::changed, this, &QmlTheme::fxChanged);
 	connect(theme::notifier(), &theme::Notifier::rejected, this, &QmlTheme::rejected);
 }
 
@@ -183,6 +184,22 @@ int QmlTheme::normal() const { return theme::duration(QStringLiteral("normal"));
 // Animations run unless High performance is on, or the user's choice (Settings > Appearance > Animations), the Windows
 // setting or UJWALAM_REDUCE_MOTION says no (motion::systemAnimations, the widget studio's rule).
 bool QmlTheme::motion() const { return !theme::performance() && motion::systemAnimations(); }
+
+QString QmlTheme::fx() const { return theme::fxLevel(theme::effects(), onAir_); }
+
+QVariantMap QmlTheme::spring() const
+{
+	const theme::Spring sp = theme::spring();
+	return {{QStringLiteral("stiffness"), sp.stiffness}, {QStringLiteral("damping"), sp.damping}, {QStringLiteral("mass"), sp.mass}};
+}
+
+void QmlTheme::setOnAir(bool on)
+{
+	if (on == onAir_)
+		return;
+	onAir_ = on;
+	emit fxChanged();
+}
 
 QString QmlTheme::icon(const QString &name, const QString &token, int px) const
 {

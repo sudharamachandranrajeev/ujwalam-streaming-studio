@@ -38,6 +38,7 @@
 #include <QStyleFactory>
 #include <QWidget>
 
+#include <algorithm>
 #include <cmath>
 
 namespace theme {
@@ -303,6 +304,9 @@ QString componentsProblem(const QJsonObject &pack)
 		return nullptr;
 	};
 	auto check = [&](const QString &key, const QJsonValue &v) -> QString {
+		if (key == QStringLiteral("toast.maxVisible")) // RareUI slice 0: a whole number 1 to 5 (not a variant list)
+			return (v.isDouble() && v.toDouble() >= 1 && v.toDouble() <= 5 && v.toDouble() == std::floor(v.toDouble()))
+				? QString() : QStringLiteral("components.toast.maxVisible must be a whole number from 1 to 5");
 		const QStringList *allowed = variants(key);
 		if (!allowed)
 			return QStringLiteral("components.%1 is not a known component").arg(key);
@@ -314,7 +318,7 @@ QString componentsProblem(const QJsonObject &pack)
 	};
 	for (auto it = c.begin(); it != c.end(); ++it) {
 		const QString k = it.key();
-		if (k == QStringLiteral("button") || k == QStringLiteral("slider")) {
+		if (k == QStringLiteral("button") || k == QStringLiteral("slider") || k == QStringLiteral("toast") || k == QStringLiteral("text")) {
 			if (!it.value().isObject())
 				return QStringLiteral("components.%1 must be an object").arg(k);
 			const QJsonObject sub = it.value().toObject();
@@ -1320,10 +1324,11 @@ const QList<QPair<QString, QStringList>> &componentVariants()
 	static const QList<QPair<QString, QStringList>> v = {
 		{QStringLiteral("button.shape"), {QStringLiteral("rounded"), QStringLiteral("pill"), QStringLiteral("sharp")}},
 		{QStringLiteral("button.style"),
-		 {QStringLiteral("solid"), QStringLiteral("soft"), QStringLiteral("metal"), QStringLiteral("bezel"), QStringLiteral("neumorph"), QStringLiteral("raised")}},
+		 {QStringLiteral("solid"), QStringLiteral("soft"), QStringLiteral("metal"), QStringLiteral("bezel"), QStringLiteral("neumorph"), QStringLiteral("raised"),
+		  QStringLiteral("glass"), QStringLiteral("premium"), QStringLiteral("pixel"), QStringLiteral("liquid")}}, // glass .. liquid: RareUI slice 0, accepted and not drawn yet
 		{QStringLiteral("button.secondary"), {QStringLiteral("outline"), QStringLiteral("tinted"), QStringLiteral("ghost")}},
 		{QStringLiteral("button.caps"), kBool},
-		{QStringLiteral("tabs"), {QStringLiteral("pill"), QStringLiteral("underline"), QStringLiteral("segmented"), QStringLiteral("boxed")}},
+		{QStringLiteral("tabs"), {QStringLiteral("pill"), QStringLiteral("underline"), QStringLiteral("segmented"), QStringLiteral("boxed"), QStringLiteral("slide"), QStringLiteral("avatar"), QStringLiteral("dock")}},
 		{QStringLiteral("input"), {QStringLiteral("outline"), QStringLiteral("filled"), QStringLiteral("inset"), QStringLiteral("underline"), QStringLiteral("soft")}},
 		{QStringLiteral("focus"), {QStringLiteral("border"), QStringLiteral("ring"), QStringLiteral("glow")}},
 		{QStringLiteral("switch"), {QStringLiteral("plain"), QStringLiteral("labelled"), QStringLiteral("bezel"), QStringLiteral("knob")}},
@@ -1331,10 +1336,21 @@ const QList<QPair<QString, QStringList>> &componentVariants()
 		{QStringLiteral("slider.handle"), {QStringLiteral("round"), QStringLiteral("sphere"), QStringLiteral("bar")}},
 		{QStringLiteral("slider.valueBubble"), kBool},
 		{QStringLiteral("sectionHeader"), {QStringLiteral("plain"), QStringLiteral("rule"), QStringLiteral("caps"), QStringLiteral("bracket")}},
-		{QStringLiteral("card"), {QStringLiteral("flat"), QStringLiteral("raised"), QStringLiteral("neumorph"), QStringLiteral("framed"), QStringLiteral("soft")}},
+		{QStringLiteral("card"), {QStringLiteral("flat"), QStringLiteral("raised"), QStringLiteral("neumorph"), QStringLiteral("framed"), QStringLiteral("soft"), QStringLiteral("tilt"), QStringLiteral("shatter")}},
 		{QStringLiteral("list"), {QStringLiteral("plain"), QStringLiteral("plates")}},
 		{QStringLiteral("chip"), {QStringLiteral("pill"), QStringLiteral("bracket")}},
 		{QStringLiteral("density"), {QStringLiteral("compact"), QStringLiteral("normal"), QStringLiteral("airy")}},
+		// RareUI slice 0 (D384): accepted and kept, not drawn yet.
+		{QStringLiteral("tooltip"), {QStringLiteral("plain"), QStringLiteral("liquid")}},
+		{QStringLiteral("toast.style"), {QStringLiteral("plain"), QStringLiteral("stack"), QStringLiteral("bubble")}},
+		{QStringLiteral("toast.richColors"), kBool},
+		{QStringLiteral("toast.position"), {QStringLiteral("top-right"), QStringLiteral("top-left"), QStringLiteral("bottom-right"), QStringLiteral("bottom-left")}},
+		{QStringLiteral("toast.swipe"), kBool},
+		{QStringLiteral("spinner"), {QStringLiteral("ring"), QStringLiteral("bars"), QStringLiteral("dots")}},
+		{QStringLiteral("text.entrance"), {QStringLiteral("none"), QStringLiteral("vapor"), QStringLiteral("scatter")}},
+		{QStringLiteral("text.hover"), {QStringLiteral("none"), QStringLiteral("magnet"), QStringLiteral("bounce")}},
+		{QStringLiteral("help"), {QStringLiteral("plain"), QStringLiteral("book")}},
+		{QStringLiteral("clips"), {QStringLiteral("grid"), QStringLiteral("expand")}},
 	};
 	return v;
 }
@@ -1466,6 +1482,15 @@ bool performance()
 	return g_effects == QStringLiteral("performance");
 }
 
+QString fxLevel(const QString &effectsMode, bool onAir)
+{
+	if (onAir || effectsMode == QStringLiteral("performance"))
+		return QStringLiteral("plain");
+	if (effectsMode == QStringLiteral("reduced"))
+		return QStringLiteral("calm");
+	return QStringLiteral("full");
+}
+
 QList<Info> available()
 {
 	QStringList ids;
@@ -1584,6 +1609,16 @@ qreal hoverLift()
 qreal pressSink()
 {
 	return g_cur.sink;
+}
+
+Spring spring()
+{
+	Spring sp; // 300 / 30 / 1 unless the pack's motion.spring says otherwise (schema limits applied again here)
+	const QJsonObject o = g_cur.src.value(QStringLiteral("motion")).toObject().value(QStringLiteral("spring")).toObject();
+	sp.stiffness = std::clamp(o.value(QStringLiteral("stiffness")).toDouble(sp.stiffness), 1.0, 2000.0);
+	sp.damping = std::clamp(o.value(QStringLiteral("damping")).toDouble(sp.damping), 0.0, 200.0);
+	sp.mass = std::clamp(o.value(QStringLiteral("mass")).toDouble(sp.mass), 0.1, 10.0);
+	return sp;
 }
 
 DepthSpec depthSpec(const QString &cls)

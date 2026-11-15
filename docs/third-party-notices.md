@@ -128,3 +128,35 @@ Manifest: `data/models/face-ai.json` (committed). Files: fetched by `services/fa
 | facemesh-468 (yes) | `face_landmark_detector.onnx` (312,873) + `face_landmark_detector.data` (2,396,848, SHA-256 `7b4be428f66b16768aecb31954848ec9512eb444f13eaf6fc4690acc981d9732`) | `ebd4d22b162cfb3f8113fa48908859a4413c45a82a9ae0bd8a1e5a56f1fb9c5f` | Qualcomm AI Hub `mediapipe_face-onnx-float.zip` v0.66.0 (2,605,273 B, SHA-256 `f6d60fdf53ccf6fa2ce1f3b103fcc468b6860b4e707223a0a6d6733b35e0c630`); MediaPipe face mesh via MediaPipePyTorch | Apache-2.0 |
 
 Redistribution: not done yet. Before any model ships (installer, P17): include the Apache-2.0 / MIT texts and attribution; a GPL-3.0 model (RVM) only with this GPL-3.0 project's source offer. Test image used locally only (never committed): NASA astronaut photo (public domain) from scikit-image v0.24.0, SHA-256 `88431cd9653ccd539741b555fb0a46b61558b301d4110412b5bc28b5e3ea6cb5`.
+
+## RareUI (design reference for the Qt Quick studio redesign, D384, 2026-11-15)
+
+Ujwalam's studio redesign follows the look and behaviour of RareUI components (https://github.com/Codewithswappy/RareUI). No RareUI source file, image or font is copied: the QML is our own code. Where a QML file ports a design closely, its header carries the line "Design after RareUI (MIT, Swapnil Kalambe)". Plan: `docs/plan/2026-11-14-rareui-redesign.md`.
+
+RareUI licence (MIT, from the repository's `LICENSE`, read 2026-11-14):
+
+```
+MIT License
+
+Copyright (c) 2025 Swapnil Kalambe (RareUI)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+Sonner (toasts) is also MIT; its copyright line is not recorded here yet (UNVERIFIED) and is added with the toast slice, after its `LICENSE` is fetched (plan answer Q11).
