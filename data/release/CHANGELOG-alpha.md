@@ -2,6 +2,15 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.33 — 2026-11-16
+
+- The main window now fits the screen size. On a small window the previews get the room; on a large one the scene list, layers and side panels get wider. The mixer grows and shrinks with the window height.
+- On short windows (under 800 px tall) the stats cards get smaller, so the layers list keeps its space.
+- The top bar no longer shifts when you go live: the LIVE and REC badges keep a fixed width and the bitrate shows 0.0 Mbps when offline.
+- Notifications wait while the Go live window is open, so they never cover it.
+- Greyed-out controls are easier to read.
+- Text sizes, gaps and corners follow one set of sizes everywhere (main panels, settings, notifications and dialogs).
+
 ## 0.1.0-alpha.32 — 2026-11-16
 
 - Go live asks how to go live on YouTube (when a YouTube output is on and you are signed in). Four ways:
