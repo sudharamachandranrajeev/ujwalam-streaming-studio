@@ -2009,8 +2009,8 @@ Growth plan ED2. Decided:
   re-checked right before the model call, and aborted by a stream or record start. Input: game name, the user's last 5
   titles, date, a hint; never chat text, viewer names or memory. Fallback smart-fill after 20 s or a bad answer.
 - Outputs panel rewritten as destination cards ("Go live here" switch, plain status chip, duplicate-key warning,
-  summary line, 1-2 column reflow, no size change while saving). `outputs-panel` now defaults on (user-requested feature;
-  the flag stays as a kill switch).
+  summary line, 1-2 column reflow, no size change while saving). `outputs-panel` is now ON by default (user-requested
+  feature; the flag stays as a kill switch).
 - UI design system C1: spacing / type / elevation / focus-ring / state / motion tokens; "Ujwalam light" and "Ujwalam
   night" replace Soft (a saved `soft` migrates to light); layered shadows without bands, still plain while live,
   recording or High performance; every U* control restyled; a headless layout probe (no item outside its parent, no
