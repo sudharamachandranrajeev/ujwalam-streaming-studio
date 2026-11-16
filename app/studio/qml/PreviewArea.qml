@@ -37,8 +37,8 @@ Item {
             text: modelData.title
             elide: Text.ElideRight
             color: Theme.c.muted
-            font.family: "Barlow"
-            font.pixelSize: 13
+            font.family: Theme.ty.displayFamily
+            font.pixelSize: Theme.ty.small
             font.weight: Font.DemiBold
         }
     }
@@ -55,7 +55,7 @@ Item {
             // right-aligned; a preview narrower than the row (a small window) keeps the row from reaching into the other one
             x: Math.max(modelData.x, modelData.x + modelData.w - width)
             y: area.caption + Math.floor(area.ph) + 6
-            spacing: 6
+            spacing: Theme.sp.s
             // a narrow preview (small window) gets shorter words so the row stays under it
             readonly property bool narrow: modelData.w < 190
             UButton {
@@ -99,7 +99,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             color: "#b8b4c4"
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
     }
     Rectangle {
@@ -120,7 +120,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             color: "#b8b4c4"
             font.family: Theme.family
-            font.pixelSize: 12
+            font.pixelSize: Theme.ty.caption
         }
     }
 }

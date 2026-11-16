@@ -105,12 +105,12 @@ Dialog {
     }
     header: Text {
         text: dlg.title
-        padding: 18
-        bottomPadding: 6
+        padding: Theme.sp.l
+        bottomPadding: Theme.sp.s
         elide: Text.ElideRight
         color: Theme.c.text
-        font.family: "Barlow"
-        font.pixelSize: 18
+        font.family: Theme.ty.displayFamily
+        font.pixelSize: Theme.ty.subtitle
         font.weight: Font.DemiBold
     }
     contentItem: Item {
@@ -152,13 +152,13 @@ Dialog {
                     elide: Text.ElideRight
                     color: kd.can ? Theme.c.text : Theme.c.disabled
                     font.family: Theme.family
-                    font.pixelSize: 14
+                    font.pixelSize: Theme.ty.body
                 }
             }
         }
         Item {
             id: right
-            anchors { left: kindList.right; leftMargin: 16; right: parent.right; top: parent.top; bottom: parent.bottom }
+            anchors { left: kindList.right; leftMargin: Theme.sp.l; right: parent.right; top: parent.top; bottom: parent.bottom }
             Text {
                 id: about
                 objectName: "addAbout"
@@ -167,20 +167,20 @@ Dialog {
                 wrapMode: Text.Wrap
                 color: dlg.message !== "" ? Theme.c.danger : Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 13
+                font.pixelSize: Theme.ty.small
             }
             UField {
                 id: search
                 objectName: "addSearch"
                 visible: !dlg.typed
-                anchors { left: parent.left; right: parent.right; top: about.bottom; topMargin: 10 }
+                anchors { left: parent.left; right: parent.right; top: about.bottom; topMargin: Theme.sp.m }
                 placeholderText: "Search"
             }
             ListView {
                 id: choiceList
                 objectName: "addChoices"
                 visible: !dlg.typed
-                anchors { left: parent.left; right: parent.right; top: search.bottom; topMargin: 8; bottom: parent.bottom }
+                anchors { left: parent.left; right: parent.right; top: search.bottom; topMargin: Theme.sp.s; bottom: parent.bottom }
                 clip: true
                 spacing: 2
                 model: dlg.shown
@@ -212,7 +212,7 @@ Dialog {
                         elide: Text.ElideMiddle
                         color: Theme.c.text
                         font.family: Theme.family
-                        font.pixelSize: 14
+                        font.pixelSize: Theme.ty.body
                     }
                 }
             }
@@ -222,13 +222,13 @@ Dialog {
                 text: "Nothing matches the search"
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 13
+                font.pixelSize: Theme.ty.small
             }
             UField {
                 id: field
                 objectName: "addText"
                 visible: dlg.typed
-                anchors { left: parent.left; right: swatch.visible ? swatch.left : parent.right; rightMargin: swatch.visible ? 8 : 0; top: about.bottom; topMargin: 10 }
+                anchors { left: parent.left; right: swatch.visible ? swatch.left : parent.right; rightMargin: swatch.visible ? 8 : 0; top: about.bottom; topMargin: Theme.sp.m }
                 maximumLength: 2000
                 placeholderText: dlg.kind === "color" ? "#RRGGBB" : "Text"
                 onAccepted: dlg.send()
@@ -253,8 +253,8 @@ Dialog {
     footer: Item {
         implicitHeight: 64
         Row {
-            anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
-            spacing: 10
+            anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+            spacing: Theme.sp.m
             UButton {
                 objectName: "addLayerCancel"
                 text: "Close"

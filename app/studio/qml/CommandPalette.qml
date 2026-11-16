@@ -19,7 +19,7 @@ Popup {
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round(parent.height * 0.12) : 0
     width: Math.min(560, parent ? parent.width - 40 : 560)
-    padding: 12
+    padding: Theme.sp.m
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
     property string query: ""
@@ -123,7 +123,7 @@ Popup {
         border.color: Theme.c.border
     }
     contentItem: Column {
-        spacing: 8
+        spacing: Theme.sp.s
         UField {
             id: field
             objectName: "paletteSearch"
@@ -155,12 +155,12 @@ Popup {
                 color: index === pal.index ? Theme.c.accent : hover.hovered ? Theme.c.field : "transparent"
                 property string text: modelData.text
                 Text {
-                    anchors { left: parent.left; right: parent.right; leftMargin: 10; rightMargin: 10; verticalCenter: parent.verticalCenter }
+                    anchors { left: parent.left; right: parent.right; leftMargin: Theme.sp.m; rightMargin: Theme.sp.m; verticalCenter: parent.verticalCenter }
                     text: row.modelData.text
                     elide: Text.ElideRight
                     color: row.index === pal.index ? Theme.c.onAccent : Theme.c.text
                     font.family: Theme.family
-                    font.pixelSize: 14
+                    font.pixelSize: Theme.ty.body
                 }
                 HoverHandler { id: hover }
                 TapHandler { onTapped: pal.runAt(row.index) }
@@ -172,7 +172,7 @@ Popup {
             text: "No command matches \"" + pal.query + "\"."
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
     }
 }

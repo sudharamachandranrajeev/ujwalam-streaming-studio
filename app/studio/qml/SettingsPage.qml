@@ -23,13 +23,13 @@ ScrollView {
     Column {
         id: outer
         width: pg.availableWidth - 12
-        spacing: 12
+        spacing: Theme.sp.m
         Text {
             objectName: "settingsTitle:" + pg.title
             text: pg.title
             color: Theme.c.text
-            font.family: "Barlow"
-            font.pixelSize: 20
+            font.family: Theme.ty.displayFamily
+            font.pixelSize: Theme.ty.title
             font.weight: Font.DemiBold
         }
         Text {
@@ -40,12 +40,12 @@ ScrollView {
             wrapMode: Text.Wrap
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         Column {
             id: col
             width: parent.width
-            spacing: 12
+            spacing: Theme.sp.m
         }
         FeaturesCard {
             box: pg.box
@@ -59,7 +59,7 @@ ScrollView {
             wrapMode: Text.Wrap
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
     }
 }

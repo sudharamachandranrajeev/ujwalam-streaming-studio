@@ -16,7 +16,7 @@ Column {
     id: cp
     required property var box
     width: parent ? parent.width : 0
-    spacing: 12
+    spacing: Theme.sp.m
 
     // ---- state ----
     property bool loaded: false
@@ -249,7 +249,7 @@ Column {
         textFormat: Text.PlainText
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
     }
     component Quiet: Text {
         width: parent ? parent.width : 0
@@ -257,7 +257,7 @@ Column {
         textFormat: Text.PlainText
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
 
     Quiet {
@@ -277,7 +277,7 @@ Column {
                 id: row
                 required property var modelData
                 width: parent.width
-                spacing: 6
+                spacing: Theme.sp.s
                 Item {
                     width: parent.width
                     height: Math.max(nameText.implicitHeight, stText.implicitHeight)
@@ -290,7 +290,7 @@ Column {
                         text: row.modelData.label || row.modelData.id
                         color: Theme.c.text
                         font.family: Theme.family
-                        font.pixelSize: 14
+                        font.pixelSize: Theme.ty.body
                         font.weight: Font.DemiBold
                     }
                     Text {
@@ -303,12 +303,12 @@ Column {
                         text: cp.stateText(row.modelData)
                         color: row.modelData.state === "connected" ? Theme.c.text : Theme.c.muted
                         font.family: Theme.family
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.ty.small
                     }
                 }
                 Flow {
                     width: parent.width
-                    spacing: 8
+                    spacing: Theme.sp.s
                     UButton {
                         objectName: "connSignIn:" + row.modelData.id
                         visible: !!row.modelData.signIn
@@ -356,7 +356,7 @@ Column {
         Column {
             id: pb
             width: parent ? parent.width : 0
-            spacing: 8
+            spacing: Theme.sp.s
             readonly property var o: cp.pasteRow || ({})
             readonly property bool needsServer: o.server !== undefined
             readonly property var schemes: ((o.server || {}).schemes || []).map(s => s + "://")
@@ -401,7 +401,7 @@ Column {
                 text: "This output takes " + pb.schemes.join(" or ") + " (from the platform's stream settings page)."
             }
             Row {
-                spacing: 10
+                spacing: Theme.sp.m
                 UButton { objectName: "connPasteOk"; text: "OK"; kind: "primary"; onClicked: cp.pasteOk() }
                 UButton { objectName: "connPasteCancel"; text: "Cancel"; onClicked: cp.closePaste() }
             }
@@ -446,7 +446,7 @@ Column {
             height: 34
             Item {
                 objectName: "connTwitchClientBox" // the field itself is not named: the probe tree never lists its text
-                anchors { left: parent.left; right: twSave.left; rightMargin: 8 }
+                anchors { left: parent.left; right: twSave.left; rightMargin: Theme.sp.s }
                 height: parent.height
                 UField {
                     id: twField

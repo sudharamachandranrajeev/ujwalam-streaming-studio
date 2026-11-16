@@ -60,7 +60,7 @@ Dialog {
     component Words: Text {
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
     }
     component Quiet: Text {
         width: parent ? parent.width : 0
@@ -68,7 +68,7 @@ Dialog {
         textFormat: Text.PlainText
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
 
     function box() { return stream.box }
@@ -151,15 +151,15 @@ Dialog {
     }
     header: Text {
         text: od.title
-        padding: 18
-        bottomPadding: 6
+        padding: Theme.sp.l
+        bottomPadding: Theme.sp.s
         color: Theme.c.text
-        font.family: "Barlow"
-        font.pixelSize: 18
+        font.family: Theme.ty.displayFamily
+        font.pixelSize: Theme.ty.subtitle
         font.weight: Font.DemiBold
     }
     contentItem: Column {
-        spacing: 8
+        spacing: Theme.sp.s
         Words { text: "Platform" }
         UCombo {
             objectName: "outputPlatform"
@@ -223,10 +223,10 @@ Dialog {
         }
         Quiet { id: bitrateNoteText; objectName: "outputBitrateNote"; text: od.bitrateNote }
 
-        Words { text: "ACCOUNT" ; font.pixelSize: 11; font.weight: Font.Bold; font.letterSpacing: 1; color: Theme.c.muted; topPadding: 6 }
+        Words { text: "ACCOUNT" ; font.pixelSize: Theme.ty.caption; font.weight: Font.Bold; font.letterSpacing: 1; color: Theme.c.muted; topPadding: Theme.sp.s }
         Row {
             width: parent.width
-            spacing: 10
+            spacing: Theme.sp.m
             UButton {
                 id: connectButton
                 objectName: "outputConnect"
@@ -249,8 +249,8 @@ Dialog {
     footer: Item {
         implicitHeight: 64
         Row {
-            anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
-            spacing: 10
+            anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+            spacing: Theme.sp.m
             UButton { objectName: "outputCancel"; text: "Cancel"; onClicked: od.close() }
             UButton { objectName: "outputOk"; text: "OK"; kind: "primary"; onClicked: od.commit() }
         }

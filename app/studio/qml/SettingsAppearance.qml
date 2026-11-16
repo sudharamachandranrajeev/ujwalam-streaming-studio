@@ -14,7 +14,7 @@ Column {
     id: ap
     required property var box
     width: parent ? parent.width : 0
-    spacing: 12
+    spacing: Theme.sp.m
     readonly property var d: box.draft
     readonly property var themes: Theme.themes()
     readonly property string tabLook: Theme.rareui && Theme.fx !== "plain" && Theme.tabsStyle === "avatar" ? "avatar" : ""
@@ -38,7 +38,7 @@ Column {
                   "Your own theme files go in the themes folder next to the program."
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         Flow {
             width: parent.width
@@ -98,7 +98,7 @@ Column {
                         id: cardBg
                     Rectangle {
                         anchors.fill: parent
-                        radius: 10
+                        radius: Theme.radiusMedium
                         color: card.modelData.bg
                         border.width: card.chosen ? 2.2 : card.hovered || card.visualFocus ? 1.6 : 1
                         border.color: card.chosen ? Theme.c.accentHi : card.hovered || card.visualFocus ? card.modelData.accent : Theme.c.border
@@ -107,7 +107,7 @@ Column {
                             x: 8; y: 8
                             width: parent.width - 16
                             height: parent.height - 48
-                            radius: 6
+                            radius: Theme.radiusSmall
                             color: card.modelData.panel
                             Rectangle { x: 8; y: 9; width: parent.width * 0.45; height: 10; radius: 3; color: card.modelData.bg; opacity: 0.8 }
                             Rectangle { x: 8; y: parent.height - 20; width: 50; height: 13; radius: 5; color: card.modelData.accent }
@@ -122,7 +122,7 @@ Column {
                             elide: Text.ElideRight
                             color: card.modelData.text
                             font.family: Theme.family
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.ty.caption
                             font.weight: Font.Bold
                         }
                         Rectangle {
@@ -131,9 +131,9 @@ Column {
                             y: parent.height - 32
                             width: 16
                             height: 16
-                            radius: 8
+                            radius: Theme.radiusSmall
                             color: card.modelData.accent
-                            Text { anchors.centerIn: parent; text: "✓"; color: "white"; font.pixelSize: 11; font.weight: Font.Bold }
+                            Text { anchors.centerIn: parent; text: "✓"; color: "white"; font.pixelSize: Theme.ty.caption; font.weight: Font.Bold }
                         }
                     }
                     }
@@ -162,18 +162,18 @@ Column {
                 y: 12
                 width: Math.min(parent.width, 360)
                 height: bubbleText.implicitHeight + 24
-                radius: 16
+                radius: Theme.radiusLarge
                 color: Theme.c.field
                 border.width: 1
                 border.color: Theme.c.border
                 Text {
                     id: bubbleText
-                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 12 }
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: Theme.sp.m }
                     wrapMode: Text.Wrap
                     text: ap.shownTheme ? ap.shownTheme.name + (ap.shownTheme.topic ? ": " + ap.shownTheme.topic : "") : ""
                     color: Theme.c.text
                     font.family: Theme.family
-                    font.pixelSize: 13
+                    font.pixelSize: Theme.ty.small
                     font.weight: Font.Medium
                 }
             }
@@ -207,7 +207,7 @@ Column {
             text: "Motion in the window:"
             color: Theme.c.text
             font.family: Theme.family
-            font.pixelSize: 14
+            font.pixelSize: Theme.ty.body
         }
         UCombo {
             objectName: "settingsMotion"

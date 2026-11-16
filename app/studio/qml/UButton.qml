@@ -53,7 +53,7 @@ Button {
     implicitWidth: iconOnly ? implicitHeight : Math.max(implicitBackgroundWidth + leftInset + rightInset, implicitContentWidth + leftPadding + rightPadding)
     leftPadding: iconOnly ? 0 : look === "pixel" ? Theme.sp.l + blockRest : Theme.sp.l
     rightPadding: iconOnly ? 0 : Theme.sp.l
-    font.family: look === "pixel" ? "Barlow" : Theme.family // bundled OFL only (D384 Q7)
+    font.family: look === "pixel" ? Theme.ty.displayFamily : Theme.family // bundled OFL only (D384 Q7)
     font.pixelSize: Theme.ty.body
     font.weight: kind === "normal" ? Font.Normal : Font.DemiBold
     font.letterSpacing: look === "soft" || look === "glass" ? 0.5 : 0

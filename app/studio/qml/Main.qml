@@ -149,7 +149,13 @@ ApplicationWindow {
         Qt.callLater(Qt.quit); // a hidden test window is no "last visible window": quit explicitly (exit 0)
     }
 
-    readonly property int pad: 10
+    // Layout (D389 C2): one gap from the spacing scale, and column and mixer sizes that follow the window, so a small window
+    // gives the previews the room and a large one gives the side panels more. The frame only reflows when the window is resized.
+    readonly property int pad: Theme.sp.m
+    readonly property int leftW: width >= 1800 ? 280 : width >= 1400 ? 248 : 216
+    readonly property int rightW: width >= 1800 ? 360 : width >= 1400 ? 320 : 280
+    readonly property bool shortWindow: height < 800
+    readonly property int mixerH: height >= 1000 ? 224 : shortWindow ? 168 : 190
 
     OnAirBar {
         id: bar
@@ -174,7 +180,7 @@ ApplicationWindow {
         objectName: "scenesPanel"
         store: studioStore
         anchors { left: parent.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
-        width: 240
+        width: win.leftW
     }
 
     LayersPanel {
@@ -182,7 +188,7 @@ ApplicationWindow {
         objectName: "layersPanel"
         store: studioStore
         anchors { right: parent.right; top: alerts.bottom; bottom: side.top; margins: win.pad }
-        width: 300
+        width: win.rightW
     }
 
     // Under the layers (the widget's right column): the inspector, Look, Outputs (flag outputs-panel) and Bots (flag
@@ -191,7 +197,7 @@ ApplicationWindow {
         id: side
         objectName: "sideColumn"
         anchors { right: parent.right; bottom: stats.top; rightMargin: win.pad; bottomMargin: win.pad }
-        width: 300
+        width: win.rightW
         height: Math.min(sideCol.implicitHeight, Math.max(0, (stats.y - alerts.y - alerts.height) * 0.6))
         contentHeight: sideCol.implicitHeight
         clip: true
@@ -213,8 +219,9 @@ ApplicationWindow {
     StatsPanel {
         id: stats
         store: studioStore
+        compact: win.shortWindow
         anchors { right: parent.right; bottom: mixer.top; rightMargin: win.pad; bottomMargin: win.pad }
-        width: 300
+        width: win.rightW
         height: implicitHeight
     }
 
@@ -222,32 +229,32 @@ ApplicationWindow {
         id: previews
         objectName: "previewArea"
         store: studioStore
-        anchors { left: scenes.right; right: layers.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad; topMargin: win.pad + 4 }
+        anchors { left: scenes.right; right: layers.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
     }
 
     MixerPanel {
         id: mixer
         objectName: "mixerPanel"
         store: studioStore
-        anchors { left: parent.left; right: parent.right; bottom: statusLine.top; margins: win.pad; bottomMargin: 4 }
-        height: 190
+        anchors { left: parent.left; right: parent.right; bottom: statusLine.top; margins: win.pad; bottomMargin: Theme.sp.xs }
+        height: win.mixerH
     }
 
     Item {
         id: statusLine
         objectName: "statusLine"
-        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: win.pad + 6; rightMargin: win.pad + 6 }
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: win.pad + Theme.sp.s; rightMargin: win.pad + Theme.sp.s }
         height: 28
         // The shared tooltip opens as its own window (Qt 6.8), so a preview never covers it.
         Component.onCompleted: ToolTip.toolTip.popupType = studioHidden ? Popup.Item : Popup.Window // hidden mode: nothing on screen
         Text {
             objectName: "note"
-            anchors { left: parent.left; right: health.left; rightMargin: 16; verticalCenter: parent.verticalCenter }
+            anchors { left: parent.left; right: health.left; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
             text: studioStore.note
             elide: Text.ElideRight
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         Text {
             id: health
@@ -260,7 +267,7 @@ ApplicationWindow {
                   (studioStore.activeTasks > 0 ? "   ·   " + studioStore.activeTasks + (studioStore.activeTasks === 1 ? " task running" : " tasks running") : "")
             color: studioStore.uiUp && studioStore.hostUp ? Theme.c.muted : Theme.c.danger
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
     }
 
@@ -308,8 +315,9 @@ ApplicationWindow {
         id: taskCenter
         objectName: "taskCenter"
         store: studioStore
+        hold: goLiveDlg.opened
         anchors { left: parent.left; right: parent.right; top: parent.top }
-        topY: bar.y + bar.height + 6
+        topY: bar.y + bar.height + Theme.sp.s
         windowHeight: win.height
     }
     // A theme pack that changed on disk and was refused (LU2): the last good look stays, a notification says why.

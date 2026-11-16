@@ -128,8 +128,8 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         text: chip.text
         color: chip.active ? Theme.c.text : Theme.c.muted
-        font.family: "Barlow"
-        font.pixelSize: 13
+        font.family: Theme.ty.displayFamily
+        font.pixelSize: Theme.ty.small
         font.weight: chip.active ? Font.DemiBold : Font.Medium
     }
     HoverHandler { id: hov; cursorShape: Qt.PointingHandCursor }

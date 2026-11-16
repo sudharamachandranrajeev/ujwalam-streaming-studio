@@ -10,7 +10,8 @@ Rectangle {
     property bool on: false
     property string token: "danger"
     property string tip: ""
-    implicitWidth: label.implicitWidth + Theme.sp.l * 1.25
+    property int minWidth: 0 // a chip whose words change (LIVE and its clock) keeps one width, so the bar never shifts
+    implicitWidth: Math.max(minWidth, label.implicitWidth + Theme.sp.l * 1.25)
     implicitHeight: 28
     radius: height / 2
     color: on ? Theme.c[token] : Theme.c.field

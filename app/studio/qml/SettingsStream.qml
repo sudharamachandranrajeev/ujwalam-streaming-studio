@@ -15,7 +15,7 @@ Column {
     required property var box
     property var editor: null            // the Edit output window
     width: parent ? parent.width : 0
-    spacing: 12
+    spacing: Theme.sp.m
 
     // ---- state ----
     property bool loaded: false
@@ -262,20 +262,20 @@ Column {
     component Words: Text {
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
     }
     component Quiet: Text {
         width: parent ? parent.width : 0
         wrapMode: Text.Wrap
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
     // a label over its control; a Flow puts as many of them in a row as fit, so the page never needs sideways room
     component Field: Column {
         property string label: ""
         width: 250
-        spacing: 4
+        spacing: Theme.sp.xs
         Words { text: parent.label }
     }
     component ModeCard: Button {
@@ -287,7 +287,7 @@ Column {
         checked: current
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
-        padding: 12
+        padding: Theme.sp.m
         Accessible.name: heading + ". " + words
         contentItem: Column {
             spacing: 2
@@ -297,7 +297,7 @@ Column {
                 wrapMode: Text.Wrap
                 color: Theme.c.text
                 font.family: Theme.family
-                font.pixelSize: 14
+                font.pixelSize: Theme.ty.body
                 font.weight: Font.DemiBold
             }
             Text {
@@ -306,7 +306,7 @@ Column {
                 wrapMode: Text.Wrap
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 13
+                font.pixelSize: Theme.ty.small
             }
         }
         background: Rectangle {
@@ -321,7 +321,7 @@ Column {
         title: "CANVAS"
         Row {
             width: parent.width
-            spacing: 10
+            spacing: Theme.sp.m
             ModeCard {
                 objectName: "streamMode:main"
                 width: (parent.width - parent.spacing) / 2
@@ -350,11 +350,11 @@ Column {
             wrapMode: Text.Wrap
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         Flow {
             width: parent.width
-            spacing: 14
+            spacing: Theme.sp.l
             Field {
                 label: "Output resolution"
                 UCombo {
@@ -456,13 +456,13 @@ Column {
                 Text {
                     id: klText
                     objectName: "streamKey:" + kl.modelData.output
-                    anchors { left: parent.left; right: klSet.left; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                    anchors { left: parent.left; right: klSet.left; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
                     wrapMode: Text.Wrap
                     textFormat: Text.PlainText
                     text: kl.modelData.text
                     color: kl.modelData.ok || !sp.connectOn ? Theme.c.text : Theme.c.danger
                     font.family: Theme.family
-                    font.pixelSize: 13
+                    font.pixelSize: Theme.ty.small
                 }
                 UButton {
                     id: klSet
@@ -517,12 +517,12 @@ Column {
                     onDoubleClicked: { sp.selected = orow.index; sp.openEditor(orow.index) }
                 }
                 Row {
-                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 8 }
-                    spacing: 10
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: Theme.sp.s }
+                    spacing: Theme.sp.m
                     Rectangle {
                         width: 30
                         height: 22
-                        radius: 6
+                        radius: Theme.radiusSmall
                         anchors.verticalCenter: parent.verticalCenter
                         color: Theme.c.accent
                         Text {
@@ -530,7 +530,7 @@ Column {
                             text: sp.platformOf(orow.modelData.platform).badge || String(orow.modelData.platform).slice(0, 2).toUpperCase()
                             color: Theme.c.onAccent
                             font.family: Theme.family
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.ty.caption
                             font.weight: Font.DemiBold
                         }
                     }
@@ -544,7 +544,7 @@ Column {
                             elide: Text.ElideRight
                             color: Theme.c.text
                             font.family: Theme.family
-                            font.pixelSize: 14
+                            font.pixelSize: Theme.ty.body
                             font.weight: Font.DemiBold
                         }
                         Text {
@@ -554,14 +554,14 @@ Column {
                             elide: Text.ElideRight
                             color: Theme.c.muted
                             font.family: Theme.family
-                            font.pixelSize: 13
+                            font.pixelSize: Theme.ty.small
                         }
                     }
                 }
             }
         }
         Row {
-            spacing: 8
+            spacing: Theme.sp.s
             UButton { objectName: "streamAdd"; text: "Add output"; onClicked: sp.openEditor(-1) }
             UButton { objectName: "streamEdit"; text: "Edit"; enabled: sp.selected >= 0; onClicked: sp.openEditor(sp.selected) }
             UButton { objectName: "streamDelete"; text: "Delete"; enabled: sp.selected >= 0; onClicked: sp.deleteOutput(sp.selected) }
@@ -577,7 +577,7 @@ Column {
         textFormat: Text.PlainText
         color: Theme.c.danger
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
     Quiet { text: "Saved changes are used at once while nothing is live; during a stream or recording, at the next Go live. Values over a platform's limit are refused with the limit shown." }
 

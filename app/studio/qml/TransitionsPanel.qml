@@ -20,7 +20,7 @@ UPanel {
         width: 90
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
         elide: Text.ElideRight
     }
 
