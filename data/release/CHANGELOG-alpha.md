@@ -2,6 +2,17 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.32 — 2026-11-16
+
+- Go live asks how to go live on YouTube (when a YouTube output is on and you are signed in). Four ways:
+  - Use an event on your channel: an upcoming or running event you made in YouTube Studio. Nothing new is made, and Ujwalam never deletes your event, even if the start fails.
+  - Pick from your past streams: a new event copied from the one you pick.
+  - New stream like the last one: a new event copied from your newest finished stream on that output.
+  - Set up a new stream: type the title, description, privacy, category, tags and thumbnail. "Help me write it" fills them in with a local AI model (LM Studio's local server on this PC, started by you). It only works when nothing is live or recording; without the model it fills them from your last stream.
+- Pick the quality per YouTube output (1080p, 1440p, 4K). Each quality uses its own stream key; a quality without a stored key is greyed with "Add the key". Your last choice is pre-selected. Twitch and Kick are not changed.
+- Outputs panel as destination cards: "YouTube · landscape", "YouTube · portrait", "Twitch", "Kick", each with its quality, a plain status (Ready, Add the key, Live, Off, Problem) and a "Go live here" switch. Two cards that would send to the same stream are flagged. A line at the bottom says what Go live will start. The panel no longer jumps while saving. It is on by default.
+- New look: "Ujwalam light" and "Ujwalam night" replace Soft light (if you used Soft, you get Ujwalam light). Softer shadows, clear focus rings, and the overlaps found in the old look are fixed (stats panel, drop-down boxes, the top bar on narrow windows, the portrait preview's buttons).
+
 ## 0.1.0-alpha.31 — 2026-11-15
 
 - YouTube window: press "YouTube" next to Go live in the new studio window (switch "New studio window"). It is always on; there is no switch for it. Five tabs:
