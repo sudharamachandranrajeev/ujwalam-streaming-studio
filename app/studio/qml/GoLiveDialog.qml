@@ -227,7 +227,7 @@ Dialog {
             else if (mode === "new") {
                 const f = { title: String(fields.title).trim(), description: String(fields.description), privacy: fields.privacy, tags: tagList(fields.tags) };
                 if (fields.categoryId !== "") f.categoryId = fields.categoryId;
-                if (fields.thumb !== "") f.thumbnailPath = fields.thumb;
+                if (fields.thumb !== "") f.thumbnail = fields.thumb;
                 e.fields = f;
             }
             outs[o.id] = e;

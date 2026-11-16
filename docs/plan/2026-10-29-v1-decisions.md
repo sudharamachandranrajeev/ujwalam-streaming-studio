@@ -1990,3 +1990,39 @@ Growth plan ED2. Decided:
 - UNVERIFIED until a real stream: monitorStream/autoStart, liveBroadcasts.update required fields, chat on a fresh
   chat, End lifecycle states, thumbnail upload (needs a verified channel). Residual: a mapped network drive letter is
   still accepted as a thumbnail path.
+## D389 — Go live chooser, streamer-friendly outputs cards, UI design system (2026-11-15, user request)
+
+- The user, after installing alpha.31: "keys are getting connected, but the go live implementation is bad". Answers:
+  AI help = local model; theme = full UI overhaul; outputs = hard to use and layout jumps, "make it streamer friendly
+  rather than a programmer or tech friendly, take inspiration from Meld Studio"; chooser = every Go live, last choice
+  pre-selected. Contract: `docs/plan/2026-11-15-go-live-chooser.md`. On by default, no flag (D388 rule).
+- Go live with a YouTube output on and signed in opens a chooser with four ways: use an event on your channel
+  (`existing`, bound to the stream of the chosen quality's key, never deleted by Ujwalam on any failure), pick from past
+  streams (`copy`, D386), new stream like the last one (`last`, newest completed broadcast of that output, resolved at
+  Go live, up to 4 pages of the completed list), set up a new stream (`new`, fields checked like `event/set`). A quality
+  per YouTube output (1080p / 1440p / 4K) picks the D385 key slot; a size without a stored key is greyed with "Add the
+  key". Quality is applied only through the shared `saveSetup` path, only when the size changes (an unchanged size keeps
+  the user's own bitrate; options shows that real bitrate, `null` with Settings > Stream off). The D388 shared-rung
+  refusal applies: Twitch and Kick never change.
+- "Help me write it": local model only (OpenAI-compatible server on 127.0.0.1 / localhost / ::1, default LM Studio
+  `http://127.0.0.1:1234/v1/chat/completions`, `<dataDir>/ai-writer.json`), refused while anything is live or recording,
+  re-checked right before the model call, and aborted by a stream or record start. Input: game name, the user's last 5
+  titles, date, a hint; never chat text, viewer names or memory. Fallback smart-fill after 20 s or a bad answer.
+- Outputs panel rewritten as destination cards ("Go live here" switch, plain status chip, duplicate-key warning,
+  summary line, 1-2 column reflow, no size change while saving). `outputs-panel` now defaults on (user-requested feature;
+  the flag stays as a kill switch).
+- UI design system C1: spacing / type / elevation / focus-ring / state / motion tokens; "Ujwalam light" and "Ujwalam
+  night" replace Soft (a saved `soft` migrates to light); layered shadows without bands, still plain while live,
+  recording or High performance; every U* control restyled; a headless layout probe (no item outside its parent, no
+  clipped text, no overlaps) runs the main window and all 12 Settings pages in both themes at 1100x680 and 1920x1080 and
+  found and fixed four overlaps. Main window layout overhaul (C2) follows.
+- Built in three parallel tracks (A server Opus, B QML Sonnet, C design system Sonnet). Codex review of A (medium):
+  no P1; four P2 fixed before merge (suggest racing a start, `last` reading only the first 50 broadcasts, key presence
+  read from an inactive setup, the shown bitrate not being the one used). Main-session review found the window sent
+  `thumbnailPath` where the server allows `thumbnail` (fixed; the test now checks the body against the server's field
+  check).
+- Found on the way: server tests built without a credential seam read the real Windows Credential Manager, so a laptop
+  signed in to YouTube made 8 tests fail. Tests now get an in-memory store, and the sign-in service's default store is
+  in-memory under `UJWALAM_HEADLESS=1`.
+- UNVERIFIED until a real stream: `existing` mode sending contentDetails back whole with auto-start keeps the user's
+  other event settings; LM Studio honours `ttl`; real-screen look of the new themes at the user's display scaling.

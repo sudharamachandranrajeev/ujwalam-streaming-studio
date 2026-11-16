@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { createFakeBots, createFakeHost } from '../services/studio-ui/backends.mjs';
 import { createFlags } from '../services/flags/index.mjs';
 import { createMemoryStores } from '../services/platform-connect/index.mjs';
+import { cleanFields } from '../services/platform-connect/youtube-events.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 import { createProjectSync } from '../services/studio-ui/project-sync.mjs';
 import { createProject, saveProject } from '../services/project/index.mjs';
@@ -200,7 +201,9 @@ describe('QML studio Go live chooser (headless probe)', { skip }, () => {
 
     const nw = await probe({ actions: ['yt-golive', ...W, 'click:glMode:new', 'gl-title:' + enc('Tonight at 9'), 'gl-desc:' + enc('About it'), 'gl-privacy:unlisted', 'gl-tags:' + enc('a, b'),
       'gl-category:20', 'gl-thumb:' + enc('C:/pics/t.png'), 'click:glGo', ...W, ...W] });
-    const f = { title: 'Tonight at 9', description: 'About it', privacy: 'unlisted', tags: ['a', 'b'], categoryId: '20', thumbnailPath: 'C:/pics/t.png' };
+    const f = { title: 'Tonight at 9', description: 'About it', privacy: 'unlisted', tags: ['a', 'b'], categoryId: '20', thumbnail: 'C:/pics/t.png' };
+    // The exact body the window sends passes the server's own field check (track A, cleanFields), not just the fake.
+    assert.deepEqual(cleanFields(f), f);
     assert.deepEqual(reqs(nw, /prepare$/).map((x) => x.body), [{ mode: 'new', outputs: { 'youtube-h': { size: '1440p', fields: f }, 'youtube-v': { size: '1080p', fields: f } } }]);
     assert.equal(starts(nw).length, 1);
   });
