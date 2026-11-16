@@ -1507,8 +1507,7 @@ QList<Info> available()
 		for (const QString &f : QDir(dir).entryList({QStringLiteral("*.json")}))
 			if (!f.endsWith(QStringLiteral(".schema.json")) && !ids.contains(f.left(f.size() - 5)))
 				ids << f.left(f.size() - 5);
-	// Soft first (D376: the newest look, shown first in Appearance), then Violet Night (the default), then the rest in
-	// name order.
+	// Name order, then the default first; the two designed packs are put in front below (D389).
 	ids.sort();
 	ids.removeAll(kDefaultId);
 	ids.prepend(kDefaultId);

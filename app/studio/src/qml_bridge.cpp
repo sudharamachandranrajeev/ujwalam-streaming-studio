@@ -250,7 +250,7 @@ QVariantMap QmlTheme::elev() const
 }
 
 QVariantMap QmlTheme::ring() const { return sysGroup(QStringLiteral("ring"), {{"width", 2}, {"offset", 2}, {"alpha", 0.55}}); }
-QVariantMap QmlTheme::st() const { return sysGroup(QStringLiteral("state"), {{"hover", 0.07}, {"pressed", 0.13}, {"disabled", 0.45}}); }
+QVariantMap QmlTheme::st() const { return sysGroup(QStringLiteral("state"), {{"hover", 0.07}, {"pressed", 0.13}, {"disabled", 0.55}}); }
 
 QVariantMap QmlTheme::mo() const
 {
