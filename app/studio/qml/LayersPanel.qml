@@ -245,14 +245,14 @@ UPanel {
                 }
                 Text {
                     id: name
-                    anchors { left: eye.right; leftMargin: 8; right: parent.right; top: parent.top; topMargin: row.waiting || row.connecting ? 4 : 0 }
+                    anchors { left: eye.right; leftMargin: Theme.sp.s; right: parent.right; top: parent.top; topMargin: row.waiting || row.connecting ? 4 : 0 }
                     height: row.waiting || row.connecting ? implicitHeight : parent.height
                     verticalAlignment: Text.AlignVCenter
                     text: row.modelData.name
                     elide: Text.ElideRight
                     color: row.modelData.visible && !row.waiting ? Theme.c.text : Theme.c.muted
                     font.family: Theme.family
-                    font.pixelSize: 14
+                    font.pixelSize: Theme.ty.body
                 }
                 Text {
                     visible: row.waiting || row.connecting
@@ -261,7 +261,7 @@ UPanel {
                     elide: Text.ElideRight
                     color: row.waiting ? Theme.c.danger : Theme.c.muted
                     font.family: Theme.family
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.ty.caption
                 }
             }
         }
@@ -272,6 +272,6 @@ UPanel {
         text: "This scene has no layers"
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
 }

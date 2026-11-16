@@ -51,11 +51,11 @@ Dialog {
     }
     header: Text {
         text: dlg.title
-        padding: 18
-        bottomPadding: 6
+        padding: Theme.sp.l
+        bottomPadding: Theme.sp.s
         color: Theme.c.text
-        font.family: "Barlow"
-        font.pixelSize: 18
+        font.family: Theme.ty.displayFamily
+        font.pixelSize: Theme.ty.subtitle
         font.weight: Font.DemiBold
     }
     contentItem: Text {
@@ -65,14 +65,14 @@ Dialog {
         wrapMode: Text.Wrap
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
         lineHeight: 1.2
     }
     footer: Item {
         implicitHeight: 64
         Row {
-            anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
-            spacing: 10
+            anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+            spacing: Theme.sp.m
             UButton {
                 id: keep
                 objectName: "closeCancel"

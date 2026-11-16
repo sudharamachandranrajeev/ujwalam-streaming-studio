@@ -83,7 +83,7 @@ UPanel {
         property alias caption: cap.text
         property alias field: f
         spacing: 2
-        Text { id: cap; color: Theme.c.muted; font.family: Theme.family; font.pixelSize: 12 }
+        Text { id: cap; color: Theme.c.muted; font.family: Theme.family; font.pixelSize: Theme.ty.caption }
         UField {
             id: f
             width: parent.width
@@ -101,14 +101,14 @@ UPanel {
         wrapMode: Text.Wrap
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
 
     Column {
         id: form
         visible: panel.editable
         anchors { left: parent.left; right: parent.right; top: parent.top }
-        spacing: 6
+        spacing: Theme.sp.s
         readonly property real cell4: (width - 3 * 8) / 4
         Text {
             id: title1
@@ -117,7 +117,7 @@ UPanel {
             elide: Text.ElideRight
             color: Theme.c.text
             font.family: Theme.family
-            font.pixelSize: 14
+            font.pixelSize: Theme.ty.body
             font.weight: Font.DemiBold
         }
         Text {
@@ -126,10 +126,10 @@ UPanel {
             text: panel.store.canvas.toUpperCase() + " canvas" + (panel.lyr && panel.lyr.width > 0 ? ", source " + panel.lyr.width + "x" + panel.lyr.height : "")
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 12
+            font.pixelSize: Theme.ty.caption
         }
         Row {
-            spacing: 8
+            spacing: Theme.sp.s
             Box { id: fx; caption: "X"; width: form.cell4; field.objectName: "inspX" }
             Box { id: fy; caption: "Y"; width: form.cell4; field.objectName: "inspY" }
             Box { id: fw; caption: "Width"; width: form.cell4; field.objectName: "inspW" }
@@ -137,14 +137,14 @@ UPanel {
         }
         Box { id: frot; caption: "Rotation"; width: form.cell4 * 2 + 8; field.objectName: "inspRot" }
         Row {
-            spacing: 8
+            spacing: Theme.sp.s
             Box { id: cl; caption: "Crop left"; width: form.cell4; field.objectName: "inspCropL" }
             Box { id: ct; caption: "Crop top"; width: form.cell4; field.objectName: "inspCropT" }
             Box { id: cr; caption: "Crop right"; width: form.cell4; field.objectName: "inspCropR" }
             Box { id: cb; caption: "Crop bottom"; width: form.cell4; field.objectName: "inspCropB" }
         }
         Row {
-            spacing: 8
+            spacing: Theme.sp.s
             UButton { objectName: "inspApply"; text: "Apply"; kind: "primary"; onClicked: panel.apply() }
             UButton { objectName: "inspUndo"; text: "Undo changes"; tip: "Show the layer's current values again."; onClicked: panel.render() }
         }

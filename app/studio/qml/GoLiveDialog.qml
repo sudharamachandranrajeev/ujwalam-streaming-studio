@@ -315,7 +315,7 @@ Dialog {
         textFormat: Text.PlainText
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
     component Heading: Text {
         width: parent ? parent.width : 0
@@ -323,7 +323,7 @@ Dialog {
         elide: Text.ElideRight
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
         font.weight: Font.DemiBold
     }
 
@@ -335,11 +335,11 @@ Dialog {
     }
     header: Text {
         text: "Go live on YouTube"
-        padding: 18
-        bottomPadding: 6
+        padding: Theme.sp.l
+        bottomPadding: Theme.sp.s
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 18
+        font.pixelSize: Theme.ty.subtitle
         font.weight: Font.DemiBold
     }
     contentItem: Item {
@@ -351,7 +351,7 @@ Dialog {
             id: modeRow
             objectName: "glModes"
             anchors { left: parent.left; right: parent.right; top: parent.top }
-            spacing: 10
+            spacing: Theme.sp.m
             readonly property int cols: width >= 720 ? 4 : 2
             Repeater {
                 model: dlg.modes
@@ -375,30 +375,30 @@ Dialog {
                     contentItem: Item {
                         Image {
                             id: ic
-                            anchors { left: parent.left; top: parent.top; leftMargin: 4; topMargin: 2 }
+                            anchors { left: parent.left; top: parent.top; leftMargin: Theme.sp.xs; topMargin: 2 }
                             width: 18
                             height: 18
                             source: Theme.icon(mc.modelData.icon, mc.chosen ? "accentHi" : "text", 18)
                         }
                         Text {
-                            anchors { left: ic.right; leftMargin: 8; right: parent.right; verticalCenter: ic.verticalCenter }
+                            anchors { left: ic.right; leftMargin: Theme.sp.s; right: parent.right; verticalCenter: ic.verticalCenter }
                             text: mc.modelData.title
                             textFormat: Text.PlainText
                             elide: Text.ElideRight
                             color: Theme.c.text
                             font.family: Theme.family
-                            font.pixelSize: 14
+                            font.pixelSize: Theme.ty.body
                             font.weight: Font.DemiBold
                         }
                         Text {
-                            anchors { left: parent.left; right: parent.right; top: ic.bottom; bottom: parent.bottom; leftMargin: 4; topMargin: 6 }
+                            anchors { left: parent.left; right: parent.right; top: ic.bottom; bottom: parent.bottom; leftMargin: Theme.sp.xs; topMargin: Theme.sp.s }
                             text: mc.modelData.text
                             textFormat: Text.PlainText
                             wrapMode: Text.Wrap
                             elide: Text.ElideRight
                             color: Theme.c.muted
                             font.family: Theme.family
-                            font.pixelSize: 13
+                            font.pixelSize: Theme.ty.small
                         }
                     }
                 }
@@ -408,7 +408,7 @@ Dialog {
         Flickable {
             id: scroll
             objectName: "glScroll"
-            anchors { left: parent.left; right: parent.right; top: modeRow.bottom; bottom: tail.top; topMargin: 12; bottomMargin: 8 }
+            anchors { left: parent.left; right: parent.right; top: modeRow.bottom; bottom: tail.top; topMargin: Theme.sp.m; bottomMargin: Theme.sp.s }
             clip: true
             contentWidth: width
             contentHeight: body.implicitHeight
@@ -418,14 +418,14 @@ Dialog {
             Column {
                 id: body
                 width: scroll.width - 12
-                spacing: 12
+                spacing: Theme.sp.m
 
                 // existing: one event per output
                 Column {
                     objectName: "glExistingBox"
                     visible: dlg.mode === "existing"
                     width: parent.width
-                    spacing: 10
+                    spacing: Theme.sp.m
                     Words { visible: dlg.existing.length === 0; objectName: "glNoEvents"; text: "No upcoming or running events found on your channel. Make one in YouTube Studio, or pick another way above." }
                     Repeater {
                         model: dlg.existing.length > 0 ? dlg.active : []
@@ -433,7 +433,7 @@ Dialog {
                             id: ex
                             required property var modelData
                             width: parent.width
-                            spacing: 4
+                            spacing: Theme.sp.xs
                             Heading { text: "Event for " + dlg.outName(ex.modelData) }
                             UCombo {
                                 objectName: "glEvent:" + ex.modelData.id
@@ -453,7 +453,7 @@ Dialog {
                     objectName: "glCopyBox"
                     visible: dlg.mode === "copy"
                     width: parent.width
-                    spacing: 10
+                    spacing: Theme.sp.m
                     Words { visible: dlg.past.length === 0; text: "You have no earlier streams to copy yet. Pick another way above." }
                     Repeater {
                         model: dlg.past.length > 0 ? dlg.active : []
@@ -461,7 +461,7 @@ Dialog {
                             id: cp
                             required property var modelData
                             width: parent.width
-                            spacing: 4
+                            spacing: Theme.sp.xs
                             Heading { text: "Copy from, for " + dlg.outName(cp.modelData) }
                             UCombo {
                                 objectName: "glPast:" + cp.modelData.id
@@ -480,7 +480,7 @@ Dialog {
                     objectName: "glLastBox"
                     visible: dlg.mode === "last"
                     width: parent.width
-                    spacing: 6
+                    spacing: Theme.sp.s
                     Words { visible: dlg.past.length === 0; text: "You have no earlier streams to copy yet. Pick another way above." }
                     Repeater {
                         model: dlg.past.length > 0 ? dlg.active : []
@@ -494,7 +494,7 @@ Dialog {
                             textFormat: Text.PlainText
                             color: Theme.c.text
                             font.family: Theme.family
-                            font.pixelSize: 14
+                            font.pixelSize: Theme.ty.body
                             text: dlg.outName(modelData) + ": a new event like '" + dlg.safe(l ? l.title : "") + "'" + (l && dlg.dateText(l.when) !== "" ? " (" + dlg.dateText(l.when) + ")" : "")
                                   + ". The title, description, privacy, category, tags and picture are copied."
                         }
@@ -506,9 +506,9 @@ Dialog {
                     objectName: "glNewBox"
                     visible: dlg.mode === "new"
                     width: parent.width
-                    spacing: 8
+                    spacing: Theme.sp.s
                     Row {
-                        spacing: 10
+                        spacing: Theme.sp.m
                         UField {
                             objectName: "glHint"
                             width: Math.max(180, body.width - helpBtn.width - 10)
@@ -546,7 +546,7 @@ Dialog {
                         onAccepted: dlg.go()
                     }
                     Row {
-                        spacing: 10
+                        spacing: Theme.sp.m
                         UCombo {
                             objectName: "glPrivacy"
                             width: Math.floor((body.width - 10) / 2)
@@ -574,7 +574,7 @@ Dialog {
                         onAccepted: dlg.go()
                     }
                     Row {
-                        spacing: 10
+                        spacing: Theme.sp.m
                         UButton { objectName: "glThumb"; text: "Choose a picture"; onClicked: dlg.chooseThumb() }
                         Text {
                             objectName: "glThumbName"
@@ -584,7 +584,7 @@ Dialog {
                             elide: Text.ElideMiddle
                             color: Theme.c.muted
                             font.family: Theme.family
-                            font.pixelSize: 13
+                            font.pixelSize: Theme.ty.small
                             text: dlg.fields.thumb !== "" ? dlg.fields.thumb : "No picture chosen (PNG or JPEG, up to 2 MB)."
                         }
                     }
@@ -600,7 +600,7 @@ Dialog {
                         required property var modelData
                         objectName: "glQuality:" + modelData.id
                         width: body.width
-                        spacing: 6
+                        spacing: Theme.sp.s
                         Text {
                             width: parent.width
                             text: dlg.outName(ql.modelData)
@@ -608,18 +608,18 @@ Dialog {
                             elide: Text.ElideRight
                             color: Theme.c.muted
                             font.family: Theme.family
-                            font.pixelSize: 13
+                            font.pixelSize: Theme.ty.small
                         }
                         Flow {
                             width: parent.width
-                            spacing: 10
+                            spacing: Theme.sp.m
                             Repeater {
                                 model: ql.modelData.sizes || []
                                 delegate: Column {
                                     id: tile
                                     required property var modelData
                                     readonly property bool has: modelData.key === true
-                                    spacing: 4
+                                    spacing: Theme.sp.xs
                                     UButton {
                                         objectName: "glSize:" + ql.modelData.id + ":" + tile.modelData.size
                                         width: 110
@@ -635,7 +635,7 @@ Dialog {
                                         text: dlg.mbps(tile.modelData.bitrateKbps)
                                         color: Theme.c.muted
                                         font.family: Theme.family
-                                        font.pixelSize: 12
+                                        font.pixelSize: Theme.ty.caption
                                     }
                                     UButton {
                                         objectName: "glAddKey:" + ql.modelData.id + ":" + tile.modelData.size
@@ -655,7 +655,7 @@ Dialog {
         Column {
             id: tail
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-            spacing: 6
+            spacing: Theme.sp.s
             Text {
                 objectName: "glSummary"
                 width: parent.width
@@ -665,7 +665,7 @@ Dialog {
                 textFormat: Text.PlainText
                 color: Theme.c.text
                 font.family: Theme.family
-                font.pixelSize: 14
+                font.pixelSize: Theme.ty.body
                 text: dlg.summaryText()
             }
             Text {
@@ -676,7 +676,7 @@ Dialog {
                 visible: text !== ""
                 color: Theme.c.danger
                 font.family: Theme.family
-                font.pixelSize: 13
+                font.pixelSize: Theme.ty.small
                 text: dlg.errorText !== "" ? dlg.errorText : dlg.problem()
             }
         }
@@ -684,8 +684,8 @@ Dialog {
     footer: Item {
         implicitHeight: 64
         Row {
-            anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
-            spacing: 10
+            anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+            spacing: Theme.sp.m
             UButton {
                 objectName: "glCancel"
                 text: "Cancel"

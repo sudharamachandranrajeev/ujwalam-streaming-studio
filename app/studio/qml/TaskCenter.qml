@@ -202,7 +202,7 @@ Item {
         x: center.width - width - center.gap
         y: center.topY
         height: Math.min(implicitHeight, center.windowHeight - center.topY - 40)
-        padding: 12
+        padding: Theme.sp.m
         onClosed: center.open = false
         background: Rectangle {
             color: Theme.c.panel
@@ -211,7 +211,7 @@ Item {
             border.color: Theme.c.border
         }
         contentItem: Column {
-            spacing: 8
+            spacing: Theme.sp.s
             Item {
                 width: parent.width
                 height: 28
@@ -219,21 +219,21 @@ Item {
                     anchors { left: parent.left; verticalCenter: parent.verticalCenter }
                     text: "TASKS"
                     color: Theme.c.muted
-                    font.family: "Barlow"
-                    font.pixelSize: 12
+                    font.family: Theme.ty.displayFamily
+                    font.pixelSize: Theme.ty.caption
                     font.weight: Font.Bold
                     font.letterSpacing: 1
                 }
                 Row {
                     anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                    spacing: 8
+                    spacing: Theme.sp.s
                     Text {
                         objectName: "taskCount"
                         anchors.verticalCenter: parent.verticalCenter
                         text: center.listed ? center.running + " running, " + center.listed + " listed" : ""
                         color: Theme.c.muted
                         font.family: Theme.family
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.ty.caption
                     }
                     UButton {
                         objectName: "taskClear"
@@ -258,7 +258,7 @@ Item {
                 text: "Nothing is running."
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 13
+                font.pixelSize: Theme.ty.small
             }
             ListView {
                 id: rowList
@@ -266,7 +266,7 @@ Item {
                 width: parent.width
                 height: Math.min(contentHeight, 520)
                 clip: true
-                spacing: 8
+                spacing: Theme.sp.s
                 model: center.rows
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: Rectangle {
@@ -284,40 +284,40 @@ Item {
                                                       : modelData.state === "waiting" ? "Waiting" : modelData.stalled ? "May be stuck" : "Running"
                     Column {
                         id: rowCol
-                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10; leftMargin: 12 }
-                        spacing: 4
+                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: Theme.sp.m; leftMargin: Theme.sp.m }
+                        spacing: Theme.sp.xs
                         Item {
                             width: parent.width
                             height: Math.max(titleText.implicitHeight, 22)
                             Text {
                                 id: titleText
-                                anchors { left: parent.left; right: rowState.left; rightMargin: 8 }
+                                anchors { left: parent.left; right: rowState.left; rightMargin: Theme.sp.s }
                                 text: row.modelData.title
                                 wrapMode: Text.Wrap
                                 color: Theme.c.text
                                 font.family: Theme.family
-                                font.pixelSize: 14
+                                font.pixelSize: Theme.ty.body
                                 font.weight: Font.DemiBold
                             }
                             Row {
                                 id: rowState
                                 anchors.right: parent.right
-                                spacing: 6
+                                spacing: Theme.sp.s
                                 Text {
                                     objectName: "taskState"
                                     text: row.stateText
                                     color: row.modelData.state === "failed" || row.modelData.stalled ? Theme.c.danger
                                          : row.modelData.state === "done" ? Theme.c.ok : Theme.c.muted
                                     font.family: Theme.family
-                                    font.pixelSize: 12
+                                    font.pixelSize: Theme.ty.caption
                                 }
                                 UButton {
                                     objectName: "taskClose"
                                     visible: row.modelData.finished
                                     text: "x"
                                     implicitHeight: 22
-                                    leftPadding: 7
-                                    rightPadding: 7
+                                    leftPadding: Theme.sp.s
+                                    rightPadding: Theme.sp.s
                                     tip: "Remove from the list"
                                     focusPolicy: Qt.NoFocus
                                     onClicked: center.dismiss(row.modelData.id)
@@ -334,7 +334,7 @@ Item {
                                 wrapMode: Text.Wrap
                                 color: Theme.c.text
                                 font.family: Theme.family
-                                font.pixelSize: 13
+                                font.pixelSize: Theme.ty.small
                             }
                         }
                         Rectangle { // progress: the fraction, a sweep when the amount of work is unknown
@@ -380,7 +380,7 @@ Item {
                                 wrapMode: Text.Wrap
                                 color: Theme.c.muted
                                 font.family: Theme.family
-                                font.pixelSize: 12
+                                font.pixelSize: Theme.ty.caption
                             }
                         }
                         Text {
@@ -391,7 +391,7 @@ Item {
                             wrapMode: Text.Wrap
                             color: Theme.c.danger
                             font.family: Theme.family
-                            font.pixelSize: 13
+                            font.pixelSize: Theme.ty.small
                             font.weight: Font.DemiBold
                         }
                         Item {
@@ -431,7 +431,7 @@ Item {
         background: Item {}
         contentItem: Column {
             id: stackCol
-            spacing: 8
+            spacing: Theme.sp.s
             Repeater {
                 model: center.toasts
                 delegate: Rectangle {
@@ -452,12 +452,12 @@ Item {
                     Rectangle { // the coloured edge: accent, danger for a failure
                         width: 4
                         radius: 2
-                        anchors { left: parent.left; top: parent.top; bottom: parent.bottom; margins: 6 }
+                        anchors { left: parent.left; top: parent.top; bottom: parent.bottom; margins: Theme.sp.s }
                         color: t.failed ? Theme.c.danger : Theme.c.accent
                     }
                     Column {
                         id: tCol
-                        anchors { left: parent.left; right: closeX.left; top: parent.top; leftMargin: 16; topMargin: 12; rightMargin: 6 }
+                        anchors { left: parent.left; right: closeX.left; top: parent.top; leftMargin: Theme.sp.l; topMargin: Theme.sp.m; rightMargin: Theme.sp.s }
                         spacing: 3
                         Text {
                             objectName: "toastTitle"
@@ -466,7 +466,7 @@ Item {
                             wrapMode: Text.Wrap
                             color: Theme.c.text
                             font.family: Theme.family
-                            font.pixelSize: 14
+                            font.pixelSize: Theme.ty.body
                             font.weight: Font.DemiBold
                         }
                         Text {
@@ -476,7 +476,7 @@ Item {
                             wrapMode: Text.Wrap
                             color: Theme.c.muted
                             font.family: Theme.family
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.ty.caption
                         }
                     }
                     TapHandler { onTapped: center.clickToast(t.uid) }
@@ -486,11 +486,11 @@ Item {
                     ToolTip.delay: 500
                     UButton {
                         id: closeX
-                        anchors { right: parent.right; top: parent.top; margins: 6 }
+                        anchors { right: parent.right; top: parent.top; margins: Theme.sp.s }
                         text: "x"
                         implicitHeight: 22
-                        leftPadding: 7
-                        rightPadding: 7
+                        leftPadding: Theme.sp.s
+                        rightPadding: Theme.sp.s
                         tip: "Close"
                         focusPolicy: Qt.NoFocus
                         onClicked: center.closeToast(t.uid)

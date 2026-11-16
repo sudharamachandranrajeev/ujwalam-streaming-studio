@@ -63,7 +63,7 @@ UPanel {
         objectName: "sceneList"
         anchors.fill: parent
         clip: true
-        spacing: 6
+        spacing: Theme.sp.s
         model: panel.store.scenes
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -123,7 +123,7 @@ UPanel {
                     elide: Text.ElideRight
                     color: Theme.c.text
                     font.family: Theme.family
-                    font.pixelSize: 14
+                    font.pixelSize: Theme.ty.body
                     font.weight: card.active ? Font.DemiBold : Font.Normal
                 }
                 Text {
@@ -132,7 +132,7 @@ UPanel {
                     elide: Text.ElideRight
                     color: card.active ? Theme.c.accentHi : Theme.c.muted
                     font.family: Theme.family
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.ty.caption
                 }
             }
         }
@@ -143,6 +143,6 @@ UPanel {
         text: panel.store.hostUp ? "No scenes in this project" : "Waiting for the host..."
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
 }

@@ -34,7 +34,7 @@ UPanel {
         anchors { left: parent.left; right: parent.right; top: parent.top; bottom: offText.visible ? offText.top : parent.bottom; bottomMargin: offText.visible ? 4 : 0 }
         orientation: ListView.Horizontal
         clip: true
-        spacing: 10
+        spacing: Theme.sp.m
         model: panel.strips
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -57,20 +57,20 @@ UPanel {
             Text {
                 id: label
                 objectName: "stripName:" + strip.sid
-                anchors { left: parent.left; right: buttons.left; top: parent.top; margins: 10; rightMargin: 8 }
+                anchors { left: parent.left; right: buttons.left; top: parent.top; margins: Theme.sp.m; rightMargin: Theme.sp.s }
                 text: strip.modelData.name
                 wrapMode: Text.Wrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
                 color: Theme.c.text
                 font.family: Theme.family
-                font.pixelSize: 14
+                font.pixelSize: Theme.ty.body
                 font.weight: Font.DemiBold
             }
             Row {
                 id: buttons
-                anchors { right: parent.right; top: parent.top; margins: 8 }
-                spacing: 6
+                anchors { right: parent.right; top: parent.top; margins: Theme.sp.s }
+                spacing: Theme.sp.s
                 UToggle {
                     objectName: "cue:" + strip.sid
                     text: "CUE"
@@ -91,14 +91,14 @@ UPanel {
             Row {
                 id: trackRow
                 visible: strip.routable
-                anchors { left: parent.left; right: parent.right; top: label.bottom; margins: 10; topMargin: 6 }
-                spacing: 4
+                anchors { left: parent.left; right: parent.right; top: label.bottom; margins: Theme.sp.m; topMargin: Theme.sp.s }
+                spacing: Theme.sp.xs
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Tracks"
                     color: Theme.c.muted
                     font.family: Theme.family
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.ty.caption
                 }
                 Repeater {
                     model: strip.routable ? panel.store.tracks : []
@@ -122,7 +122,7 @@ UPanel {
             UValueSlider {
                 id: vol
                 objectName: "vol:" + strip.sid
-                anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 10 }
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: Theme.sp.m }
                 from: -60
                 to: 0
                 stepSize: 1
@@ -143,6 +143,6 @@ UPanel {
         wrapMode: Text.Wrap
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 12
+        font.pixelSize: Theme.ty.caption
     }
 }

@@ -11,7 +11,7 @@ Column {
     id: ch
     required property var box
     width: parent ? parent.width : 0
-    spacing: 12
+    spacing: Theme.sp.m
 
     // ---- state ----
     property bool loaded: false
@@ -147,19 +147,19 @@ Column {
     component Words: Text {
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
     }
     component Quiet: Text {
         width: parent ? parent.width : 0
         wrapMode: Text.Wrap
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
     component Field: Column {
         property string label: ""
         width: 250
-        spacing: 4
+        spacing: Theme.sp.xs
         Words { text: parent.label }
     }
     // a box that follows the page's value even after the user picked one (a picked value breaks a plain binding)
@@ -180,7 +180,7 @@ Column {
         title: "STREAMER.BOT"
         Flow {
             width: parent.width
-            spacing: 14
+            spacing: Theme.sp.l
             Field {
                 label: "Address:"
                 UField { objectName: "streamerbotAddress"; width: parent.width; label: "Address"; text: "127.0.0.1"; readOnly: true }
@@ -191,7 +191,7 @@ Column {
             }
         }
         Row {
-            spacing: 10
+            spacing: Theme.sp.m
             UButton { objectName: "streamerbotTest"; text: "Test"; onClicked: ch.test("streamerbot") }
             Words { objectName: "streamerbotStatus"; anchors.verticalCenter: parent.verticalCenter; text: ch.sbStatus }
         }
@@ -202,7 +202,7 @@ Column {
         title: "SPEAKER.BOT"
         Flow {
             width: parent.width
-            spacing: 14
+            spacing: Theme.sp.l
             Field {
                 label: "Address:"
                 UField { objectName: "speakerbotAddress"; width: parent.width; label: "Address"; text: "127.0.0.1"; readOnly: true }
@@ -213,7 +213,7 @@ Column {
             }
         }
         Row {
-            spacing: 10
+            spacing: Theme.sp.m
             UButton { objectName: "speakerbotTest"; text: "Test"; onClicked: ch.test("speakerbot") }
             Words { objectName: "speakerbotStatus"; anchors.verticalCenter: parent.verticalCenter; text: ch.spStatus }
         }

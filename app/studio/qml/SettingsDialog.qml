@@ -376,7 +376,7 @@ Dialog {
         Rectangle {
             id: navBox
             objectName: "settingsNav"
-            anchors { left: parent.left; top: parent.top; bottom: parent.bottom; margins: 14; bottomMargin: 0 }
+            anchors { left: parent.left; top: parent.top; bottom: parent.bottom; margins: Theme.sp.l; bottomMargin: 0 }
             width: 210
             color: Theme.c.panel
             radius: Theme.radiusMedium
@@ -387,14 +387,14 @@ Dialog {
             UField {
                 id: search
                 objectName: "settingsSearch"
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10 }
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: Theme.sp.m }
                 label: "Search settings"
                 placeholderText: "Search settings"
                 text: dlg.query
                 onTextChanged: if (text !== dlg.query) dlg.query = text
             }
             Flickable {
-                anchors { left: parent.left; right: parent.right; top: search.bottom; bottom: parent.bottom; margins: 6; topMargin: 8 }
+                anchors { left: parent.left; right: parent.right; top: search.bottom; bottom: parent.bottom; margins: Theme.sp.s; topMargin: Theme.sp.s }
                 contentHeight: navCol.height
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
@@ -443,13 +443,13 @@ Dialog {
                                 objectName: "navGroup:" + grp.modelData.heading
                                 visible: grp.modelData.heading !== ""
                                 height: 30
-                                leftPadding: 10
+                                leftPadding: Theme.sp.m
                                 verticalAlignment: Text.AlignBottom
-                                bottomPadding: 4
+                                bottomPadding: Theme.sp.xs
                                 text: grp.modelData.heading
                                 color: Theme.c.muted
                                 font.family: Theme.family
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.ty.caption
                                 font.weight: Font.Bold
                                 font.letterSpacing: 1.2
                             }
@@ -477,11 +477,11 @@ Dialog {
                                     scale: slide && dlg.tabFull && down ? 0.95 : 1
                                     Behavior on scale { enabled: navBtn.slide && dlg.tabFull; NumberAnimation { duration: 120 } }
                                     contentItem: Text {
-                                        leftPadding: 4
+                                        leftPadding: Theme.sp.xs
                                         text: navBtn.text
                                         color: navBtn.current || (navBtn.slide && navBtn.hovered) ? Theme.c.text : Theme.c.muted
                                         font.family: Theme.family
-                                        font.pixelSize: 14
+                                        font.pixelSize: Theme.ty.body
                                         font.weight: navBtn.current ? Font.DemiBold : Font.Normal
                                         verticalAlignment: Text.AlignVCenter
                                         elide: Text.ElideRight
@@ -508,12 +508,12 @@ Dialog {
                         objectName: "settingsNothing"
                         visible: dlg.shownPages.length === 0
                         width: navCol.width
-                        padding: 10
+                        padding: Theme.sp.m
                         wrapMode: Text.Wrap
                         text: "Nothing found for \"" + dlg.query.trim() + "\"."
                         color: Theme.c.muted
                         font.family: Theme.family
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.ty.small
                     }
                 }
             }
@@ -522,7 +522,7 @@ Dialog {
         // the pages
         Item {
             id: pages
-            anchors { left: navBox.right; right: parent.right; top: parent.top; bottom: parent.bottom; leftMargin: 18; rightMargin: 14; topMargin: 14 }
+            anchors { left: navBox.right; right: parent.right; top: parent.top; bottom: parent.bottom; leftMargin: Theme.sp.l; rightMargin: Theme.sp.l; topMargin: Theme.sp.l }
             visible: dlg.ready && dlg.shownPages.length > 0
 
             SettingsPage {
@@ -553,7 +553,7 @@ Dialog {
                         text: "Tips are small cards that explain what Ujwalam is doing, in front of and behind the scenes. These buttons act at once. The ? button in the top bar always opens Help."
                         color: Theme.c.muted
                         font.family: Theme.family
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.ty.small
                     }
                     Text {
                         objectName: "guideStatus"
@@ -563,10 +563,10 @@ Dialog {
                               (dlg.guide.tourDone ? "done or hidden." : "not hidden.")
                         color: Theme.c.text
                         font.family: Theme.family
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.ty.small
                     }
                     Row {
-                        spacing: 8
+                        spacing: Theme.sp.s
                         UButton {
                             id: guideResetBtn
                             objectName: "guideReset"
@@ -680,19 +680,19 @@ Dialog {
                             id: fr
                             required property var modelData
                             width: parent.width
-                            spacing: 4
+                            spacing: Theme.sp.xs
                             Text {
                                 text: fr.modelData.label
                                 color: Theme.c.text
                                 font.family: Theme.family
-                                font.pixelSize: 14
+                                font.pixelSize: Theme.ty.body
                             }
                             Item {
                                 width: parent.width
                                 height: 34
                                 UField {
                                     objectName: "folder" + fr.modelData.name
-                                    anchors { left: parent.left; right: pick.left; rightMargin: 8 }
+                                    anchors { left: parent.left; right: pick.left; rightMargin: Theme.sp.s }
                                     label: fr.modelData.label
                                     placeholderText: fr.modelData.hint
                                     text: dlg.draft[fr.modelData.key] || ""
@@ -702,7 +702,7 @@ Dialog {
                                     id: pick
                                     objectName: "folderPick" + fr.modelData.name
                                     anchors.right: reset.left
-                                    anchors.rightMargin: 8
+                                    anchors.rightMargin: Theme.sp.s
                                     text: "Choose..."
                                     onClicked: {
                                         const d = Api.chooseFolder("Choose a folder", dlg.draft[fr.modelData.key] || "");
@@ -725,7 +725,7 @@ Dialog {
                         text: "A new recordings folder is used from the next time you start Ujwalam."
                         color: Theme.c.muted
                         font.family: Theme.family
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.ty.small
                     }
                 }
             }
@@ -745,18 +745,18 @@ Dialog {
         implicitHeight: 64
         Text {
             objectName: "settingsError"
-            anchors { left: parent.left; leftMargin: 18; right: buttons.left; rightMargin: 16; verticalCenter: parent.verticalCenter }
+            anchors { left: parent.left; leftMargin: Theme.sp.l; right: buttons.left; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
             visible: dlg.reelError !== ""
             text: "Not saved yet: a reel's shortest length is longer than its longest (Clips)."
             elide: Text.ElideRight
             color: Theme.c.danger
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         Row {
             id: buttons
-            anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
-            spacing: 10
+            anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+            spacing: Theme.sp.m
             UButton {
                 objectName: "settingsCancel"
                 text: "Cancel"
@@ -789,11 +789,11 @@ Dialog {
         }
         header: Text {
             text: unsaved.title
-            padding: 18
-            bottomPadding: 6
+            padding: Theme.sp.l
+            bottomPadding: Theme.sp.s
             color: Theme.c.text
-            font.family: "Barlow"
-            font.pixelSize: 18
+            font.family: Theme.ty.displayFamily
+            font.pixelSize: Theme.ty.subtitle
             font.weight: Font.DemiBold
         }
         contentItem: Text {
@@ -801,13 +801,13 @@ Dialog {
             wrapMode: Text.Wrap
             color: Theme.c.text
             font.family: Theme.family
-            font.pixelSize: 14
+            font.pixelSize: Theme.ty.body
         }
         footer: Item {
             implicitHeight: 64
             Row {
-                anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
-                spacing: 10
+                anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+                spacing: Theme.sp.m
                 UButton { objectName: "unsavedCancel"; text: "Cancel"; onClicked: unsaved.close() }
                 UButton { objectName: "unsavedDiscard"; text: "Discard"; onClicked: dlg.discard() }
                 UButton { objectName: "unsavedSave"; text: "Save changes"; kind: "primary"; onClicked: dlg.save() }

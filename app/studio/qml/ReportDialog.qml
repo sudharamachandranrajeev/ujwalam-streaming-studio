@@ -77,22 +77,22 @@ Dialog {
     }
     header: Text {
         text: dlg.title
-        padding: 18
-        bottomPadding: 6
+        padding: Theme.sp.l
+        bottomPadding: Theme.sp.s
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 18
+        font.pixelSize: Theme.ty.subtitle
         font.weight: Font.DemiBold
     }
     contentItem: Column {
-        spacing: 8
+        spacing: Theme.sp.s
         Text {
             width: parent.width
             text: "Your browser opens a prefilled GitHub issue to review and submit. Nothing is sent from here."
             wrapMode: Text.Wrap
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         UField {
             id: titleField
@@ -113,7 +113,7 @@ Dialog {
                 color: Theme.c.text
                 placeholderTextColor: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 14
+                font.pixelSize: Theme.ty.body
                 Accessible.name: "What happened"
                 background: Rectangle {
                     radius: Theme.radiusSmall
@@ -127,8 +127,8 @@ Dialog {
     footer: Item {
         implicitHeight: 60
         Row {
-            anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
-            spacing: 10
+            anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+            spacing: Theme.sp.m
             UButton {
                 objectName: "reportCancel"
                 text: "Cancel"

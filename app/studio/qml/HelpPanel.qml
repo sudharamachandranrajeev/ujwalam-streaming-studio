@@ -16,7 +16,7 @@ Rectangle {
     signal replayTour()
     readonly property string facts: "In this build: posting is " + (postingOn ? "ON" : "OFF") + ", automatic posting is " + (autoOn ? "ON" : "OFF") + "."
 
-    radius: 16
+    radius: Theme.radiusLarge
     color: Theme.c.panel
     border.color: Theme.c.border
     border.width: 1
@@ -51,7 +51,7 @@ Rectangle {
         wrapMode: Text.Wrap
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
         lineHeight: 1.1
     }
     component Bullet: Para { property string say: ""; text: "•  " + say }
@@ -59,14 +59,14 @@ Rectangle {
         width: body.width
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 11
+        font.pixelSize: Theme.ty.caption
         font.weight: Font.DemiBold
     }
     component Section: Text {
         width: body.width
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 15
+        font.pixelSize: Theme.ty.body
         font.weight: Font.DemiBold
     }
 
@@ -173,14 +173,14 @@ Rectangle {
 
     Item {
         id: head
-        anchors { left: parent.left; right: parent.right; top: parent.top; leftMargin: 16; rightMargin: 10; topMargin: 12 }
+        anchors { left: parent.left; right: parent.right; top: parent.top; leftMargin: Theme.sp.l; rightMargin: Theme.sp.m; topMargin: Theme.sp.m }
         height: 30
         Text {
             anchors { left: parent.left; verticalCenter: parent.verticalCenter }
             text: "Help"
             color: Theme.c.text
             font.family: Theme.family
-            font.pixelSize: 16
+            font.pixelSize: Theme.ty.subtitle
             font.weight: Font.DemiBold
         }
         GuideClose {
@@ -193,7 +193,7 @@ Rectangle {
     }
     Flickable {
         id: scroll
-        anchors { left: parent.left; right: parent.right; top: head.bottom; bottom: replay.top; leftMargin: 16; rightMargin: 10; topMargin: 8; bottomMargin: 10 }
+        anchors { left: parent.left; right: parent.right; top: head.bottom; bottom: replay.top; leftMargin: Theme.sp.l; rightMargin: Theme.sp.m; topMargin: Theme.sp.s; bottomMargin: Theme.sp.m }
         contentHeight: body.implicitHeight + 6
         clip: true
         boundsBehavior: Flickable.StopAtBounds
@@ -201,7 +201,7 @@ Rectangle {
         Column {
             id: body
             width: scroll.width - 8
-            spacing: 8
+            spacing: Theme.sp.s
             Section { id: s1; objectName: "guideSection:clips"; text: "How clips are made" }
             Art { kind: "clips" }
             Bullet { say: "Ujwalam reads the game screen in your recording, or while you stream, and finds your best moments." }
@@ -228,7 +228,7 @@ Rectangle {
     UButton {
         id: replay
         objectName: "guideHelpReplay"
-        anchors { left: parent.left; bottom: parent.bottom; leftMargin: 16; bottomMargin: 14 }
+        anchors { left: parent.left; bottom: parent.bottom; leftMargin: Theme.sp.l; bottomMargin: Theme.sp.l }
         text: "Replay the welcome tour"
         onClicked: help.replayTour()
     }

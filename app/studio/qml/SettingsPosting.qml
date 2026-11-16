@@ -12,7 +12,7 @@ Column {
     id: ap
     required property var box
     width: parent ? parent.width : 0
-    spacing: 12
+    spacing: Theme.sp.m
 
     readonly property var kindList: [
         { id: "short", text: "Short clips" }, { id: "montage", text: "Montages" },
@@ -225,20 +225,20 @@ Column {
     component Words: Text {
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
     }
     component Quiet: Text {
         width: parent ? parent.width : 0
         wrapMode: Text.Wrap
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
     // a label over its control; a Flow puts as many of them in a row as fit, so the page never needs sideways room
     component Field: Column {
         property string label: ""
         width: 250
-        spacing: 4
+        spacing: Theme.sp.xs
         Words { text: parent.label }
     }
     // a box that follows the page's value even after the user picked one (a picked value breaks a plain binding)
@@ -277,7 +277,7 @@ Column {
         Words { text: "What uploads:" }
         Flow {
             width: parent.width
-            spacing: 8
+            spacing: Theme.sp.s
             Repeater {
                 model: ap.kindList
                 delegate: KindToggle {
@@ -291,7 +291,7 @@ Column {
         }
         Flow {
             width: parent.width
-            spacing: 14
+            spacing: Theme.sp.l
             Field {
                 label: "Minimum clip score:"
                 SpinBox2 {
@@ -384,7 +384,7 @@ Column {
             text: ap.problem
             color: Theme.c.danger
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
     }
 
@@ -402,17 +402,17 @@ Column {
                 Text {
                     id: label
                     objectName: "autopostTime:" + tr.index
-                    anchors { left: parent.left; right: btns.left; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                    anchors { left: parent.left; right: btns.left; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
                     wrapMode: Text.Wrap
                     text: tr.modelData.text
                     color: Theme.c.text
                     font.family: Theme.family
-                    font.pixelSize: 13
+                    font.pixelSize: Theme.ty.small
                 }
                 Row {
                     id: btns
                     anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                    spacing: 6
+                    spacing: Theme.sp.s
                     visible: tr.modelData.movable
                     UButton { objectName: "autopostMove:" + tr.modelData.id; text: "Move"; onClicked: ap.startMove(tr.modelData.id) }
                     UButton {
@@ -428,10 +428,10 @@ Column {
             objectName: "autopostMoveBox"
             visible: ap.movingId !== ""
             width: parent.width
-            spacing: 6
+            spacing: Theme.sp.s
             Words { text: "New publish time (your time zone, on the hour):" }
             Row {
-                spacing: 8
+                spacing: Theme.sp.s
                 UField {
                     objectName: "autopostMoveText"
                     width: 200

@@ -10,7 +10,7 @@ Column {
     id: cp
     required property var box
     width: parent ? parent.width : 0
-    spacing: 12
+    spacing: Theme.sp.m
     readonly property var d: box.draft
     readonly property var reelInfo: box.info.reelLengths || {}
     readonly property var hookInfo: box.info.reelHooks || {}
@@ -19,14 +19,14 @@ Column {
     component Words: Text {
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
     }
     component Quiet: Text {
         width: parent ? parent.width : 0
         wrapMode: Text.Wrap
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
 
     UCard {
@@ -37,7 +37,7 @@ Column {
                 id: mr
                 required property var modelData
                 width: parent.width
-                spacing: 4
+                spacing: Theme.sp.xs
                 Words { text: mr.modelData.label }
                 UCombo {
                     objectName: mr.modelData.name
@@ -57,7 +57,7 @@ Column {
             text: "Clips can't be made on this PC yet: " + (cp.clipsState.reason || "") + (cp.clipsState.fix ? ". " + cp.clipsState.fix : "")
             color: Theme.c.danger
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
     }
 
@@ -83,7 +83,7 @@ Column {
             onToggled: cp.box.set("top3", checked)
         }
         Row {
-            spacing: 10
+            spacing: Theme.sp.m
             USwitch {
                 objectName: "settingsKillsOn"
                 wrap: false
@@ -121,10 +121,10 @@ Column {
                 readonly property var v: (cp.d.reel || {})[modelData.id] || { lo: 0, hi: 5 }
                 readonly property int limit: cp.reelInfo.limitMaxSec || 60
                 width: parent.width
-                spacing: 4
+                spacing: Theme.sp.xs
                 Words { text: rr.modelData.label }
                 Row {
-                    spacing: 8
+                    spacing: Theme.sp.s
                     Words { text: "Shortest"; anchors.verticalCenter: parent.verticalCenter }
                     USpin {
                         objectName: "reelMin_" + rr.modelData.id
@@ -157,7 +157,7 @@ Column {
             text: cp.box.reelError
             color: Theme.c.danger
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         UButton {
             objectName: "settingsReelReset"
@@ -185,14 +185,14 @@ Column {
                 required property var modelData
                 readonly property var v: (cp.d.hooks || {})[modelData.id] || { on: true, sec: 2 }
                 width: parent.width
-                spacing: 4
+                spacing: Theme.sp.xs
                 Words { text: hr.modelData.label }
                 Quiet {
                     text: hr.modelData.strategy === "reorder" ? "The clip with the best moment moves to the front; a teaser only when that moment is deep inside it."
                                                               : "A teaser of the best moment plays first, then the reel from its start."
                 }
                 Row {
-                    spacing: 10
+                    spacing: Theme.sp.m
                     USwitch {
                         objectName: "hookOn_" + hr.modelData.id
                         wrap: false
@@ -237,7 +237,7 @@ Column {
         }
         Words { text: "Transition between pieces" }
         Row {
-            spacing: 8
+            spacing: Theme.sp.s
             UCombo {
                 id: kind
                 objectName: "settingsTransKind"

@@ -247,7 +247,7 @@ UPanel {
                     Rectangle {
                         id: badgeBox
                         objectName: "outputBadge:" + card.oid
-                        anchors { left: parent.left; top: parent.top; leftMargin: 10; topMargin: 10 }
+                        anchors { left: parent.left; top: parent.top; leftMargin: Theme.sp.m; topMargin: Theme.sp.m }
                         width: 30; height: 22
                         radius: Theme.radiusSmall
                         color: Theme.c.panel
@@ -258,14 +258,14 @@ UPanel {
                             text: card.c.badge
                             color: Theme.c.text
                             font.family: Theme.family
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.ty.caption
                             font.weight: Font.Bold
                         }
                     }
                     UChip {
                         id: chip
                         objectName: "outputChip:" + card.oid
-                        anchors { right: parent.right; top: parent.top; rightMargin: 10; topMargin: 8 }
+                        anchors { right: parent.right; top: parent.top; rightMargin: Theme.sp.m; topMargin: Theme.sp.s }
                         text: card.c.chip
                         on: card.c.token !== ""
                         token: card.c.token !== "" ? card.c.token : "danger"
@@ -280,34 +280,34 @@ UPanel {
                     Text {
                         id: titleText
                         objectName: "outputTitle:" + card.oid
-                        anchors { left: badgeBox.right; right: chip.left; verticalCenter: badgeBox.verticalCenter; leftMargin: 8; rightMargin: 8 }
+                        anchors { left: badgeBox.right; right: chip.left; verticalCenter: badgeBox.verticalCenter; leftMargin: Theme.sp.s; rightMargin: Theme.sp.s }
                         text: card.c.title
                         textFormat: Text.PlainText
                         elide: Text.ElideRight
                         color: Theme.c.text
                         font.family: Theme.family
-                        font.pixelSize: 14
+                        font.pixelSize: Theme.ty.body
                         font.weight: Font.DemiBold
                     }
                     Text {
                         id: qualityText
                         objectName: "outputQuality:" + card.oid
-                        anchors { left: parent.left; right: parent.right; top: badgeBox.bottom; leftMargin: 10; rightMargin: 10; topMargin: 6 }
+                        anchors { left: parent.left; right: parent.right; top: badgeBox.bottom; leftMargin: Theme.sp.m; rightMargin: Theme.sp.m; topMargin: Theme.sp.s }
                         height: 18
                         text: card.c.quality
                         textFormat: Text.PlainText
                         elide: Text.ElideRight
                         color: Theme.c.muted
                         font.family: Theme.family
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.ty.small
                     }
                     USwitch {
                         id: sw
                         objectName: "outputSwitch:" + card.oid
-                        anchors { left: parent.left; top: qualityText.bottom; leftMargin: 10; topMargin: 6 }
+                        anchors { left: parent.left; top: qualityText.bottom; leftMargin: Theme.sp.m; topMargin: Theme.sp.s }
                         wrap: false
                         text: "Go live here"
-                        font.pixelSize: 15
+                        font.pixelSize: Theme.ty.body
                         font.weight: Font.DemiBold
                         checked: panel.shown(card.c)
                         enabled: card.c.canSwitch
@@ -319,10 +319,10 @@ UPanel {
                     Item {   // the spinner: only while the switch is being saved
                         id: spin
                         objectName: "outputSpinner:" + card.oid
-                        anchors { right: parent.right; verticalCenter: sw.verticalCenter; rightMargin: 14 }
+                        anchors { right: parent.right; verticalCenter: sw.verticalCenter; rightMargin: Theme.sp.l }
                         width: 18; height: 18
                         visible: panel.pending[card.oid] !== undefined
-                        Rectangle { anchors.fill: parent; radius: 9; color: "transparent"; border.width: 2; border.color: Theme.c.border }
+                        Rectangle { anchors.fill: parent; radius: Theme.radiusSmall; color: "transparent"; border.width: 2; border.color: Theme.c.border }
                         Item {
                             id: orbit
                             anchors.fill: parent
@@ -333,7 +333,7 @@ UPanel {
                     Text {
                         id: reasonText
                         objectName: "outputReason:" + card.oid
-                        anchors { left: parent.left; right: parent.right; top: sw.bottom; bottom: parent.bottom; leftMargin: 10; rightMargin: 10; topMargin: 6; bottomMargin: 8 }
+                        anchors { left: parent.left; right: parent.right; top: sw.bottom; bottom: parent.bottom; leftMargin: Theme.sp.m; rightMargin: Theme.sp.m; topMargin: Theme.sp.s; bottomMargin: Theme.sp.s }
                         text: card.c.reason
                         textFormat: Text.PlainText
                         wrapMode: Text.Wrap
@@ -341,7 +341,7 @@ UPanel {
                         elide: Text.ElideRight
                         color: card.c.bad ? Theme.c.danger : Theme.c.muted
                         font.family: Theme.family
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.ty.small
                     }
                 }
             }
@@ -357,7 +357,7 @@ UPanel {
             elide: Text.ElideRight
             color: Theme.c.text
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
             HoverHandler { id: sumHover }
             ToolTip.visible: sumHover.hovered
             ToolTip.text: panel.summaryLine

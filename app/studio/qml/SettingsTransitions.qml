@@ -12,7 +12,7 @@ Column {
     id: tp
     required property var box
     width: parent ? parent.width : 0
-    spacing: 12
+    spacing: Theme.sp.m
 
     // ---- state ----
     property bool loaded: false
@@ -166,20 +166,20 @@ Column {
     component Words: Text {
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
     }
     component Quiet: Text {
         width: parent ? parent.width : 0
         wrapMode: Text.Wrap
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
     }
     // a label over its control; a Flow puts as many of them in a row as fit, so the page never needs sideways room
     component Field: Column {
         property string label: ""
         width: 250
-        spacing: 4
+        spacing: Theme.sp.xs
         Words { text: parent.label }
     }
     // a box that follows the page's value even after the user picked one (a picked value breaks a plain binding)
@@ -201,7 +201,7 @@ Column {
         readonly property var types: tp.typeModel(canvas)
         Flow {
             width: parent.width
-            spacing: 14
+            spacing: Theme.sp.l
             Field {
                 label: "Type"
                 PickBox {

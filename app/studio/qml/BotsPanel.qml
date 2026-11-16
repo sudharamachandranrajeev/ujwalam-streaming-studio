@@ -78,7 +78,7 @@ UPanel {
     Column {
         id: rows
         anchors { left: parent.left; right: parent.right; top: parent.top }
-        spacing: 8
+        spacing: Theme.sp.s
         Text {
             visible: panel.error !== ""
             width: rows.width
@@ -86,7 +86,7 @@ UPanel {
             wrapMode: Text.Wrap
             color: Theme.c.danger
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
         Repeater {
             id: rep
@@ -99,24 +99,24 @@ UPanel {
                 property alias stopBtn: stopBtn
                 objectName: "botRow:" + bot
                 width: rows.width
-                spacing: 4
+                spacing: Theme.sp.xs
                 Item {
                     width: row.width
                     height: Math.max(name.implicitHeight, startBtn.implicitHeight)
                     Text {
                         id: name
-                        anchors { left: parent.left; right: buttons.left; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                        anchors { left: parent.left; right: buttons.left; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
                         text: "<b>" + String(row.modelData.label || row.bot).replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</b> " + panel.stateOf(row.modelData)
                         textFormat: Text.StyledText
                         wrapMode: Text.Wrap
                         color: Theme.c.text
                         font.family: Theme.family
-                        font.pixelSize: 14
+                        font.pixelSize: Theme.ty.body
                     }
                     Row {
                         id: buttons
                         anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                        spacing: 6
+                        spacing: Theme.sp.s
                         UButton {
                             id: startBtn
                             objectName: "botStart:" + row.bot
@@ -139,7 +139,7 @@ UPanel {
                     wrapMode: Text.Wrap
                     color: Theme.c.muted
                     font.family: Theme.family
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.ty.caption
                 }
             }
         }
@@ -151,7 +151,7 @@ UPanel {
             wrapMode: Text.Wrap
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 12
+            font.pixelSize: Theme.ty.caption
         }
     }
 }

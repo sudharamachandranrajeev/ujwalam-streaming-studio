@@ -224,7 +224,7 @@ UPanel {
     Column {
         id: col
         anchors { left: parent.left; right: parent.right; top: parent.top }
-        spacing: 8
+        spacing: Theme.sp.s
 
         // Live: no automatic sends (each slider step would be its own live change); Apply sends the whole list once.
         Item {
@@ -233,12 +233,12 @@ UPanel {
             height: visible ? Math.max(liveHint.implicitHeight, applyBtn.implicitHeight) : 0
             Text {
                 id: liveHint
-                anchors { left: parent.left; right: applyBtn.left; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                anchors { left: parent.left; right: applyBtn.left; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
                 text: "You are live. Changes are sent when you press Apply."
                 wrapMode: Text.Wrap
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 13
+                font.pixelSize: Theme.ty.small
             }
             UButton {
                 id: applyBtn
@@ -255,7 +255,7 @@ UPanel {
             text: "No looks are available."
             color: Theme.c.muted
             font.family: Theme.family
-            font.pixelSize: 13
+            font.pixelSize: Theme.ty.small
         }
 
         Repeater {
@@ -265,13 +265,13 @@ UPanel {
                 required property var modelData
                 readonly property bool on: panel.isOn(modelData.type)
                 width: col.width
-                spacing: 6
+                spacing: Theme.sp.s
                 Text {
                     visible: card.modelData.first
                     text: String(card.modelData.groupTitle).toUpperCase()
                     color: Theme.c.muted
                     font.family: Theme.family
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.ty.caption
                     font.weight: Font.DemiBold
                     font.letterSpacing: 1
                 }
@@ -285,18 +285,18 @@ UPanel {
                     border.color: card.on ? Theme.c.accent : Theme.c.border
                     Column {
                         id: cardBody
-                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 8; leftMargin: 12; rightMargin: 12 }
-                        spacing: 6
+                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: Theme.sp.s; leftMargin: Theme.sp.m; rightMargin: Theme.sp.m }
+                        spacing: Theme.sp.s
                         Item {
                             width: cardBody.width
                             height: sw.implicitHeight
                             Text {
-                                anchors { left: parent.left; right: sw.left; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                                anchors { left: parent.left; right: sw.left; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
                                 text: card.modelData.label
                                 elide: Text.ElideRight
                                 color: Theme.c.text
                                 font.family: Theme.family
-                                font.pixelSize: 14
+                                font.pixelSize: Theme.ty.body
                                 font.weight: Font.DemiBold
                             }
                             USwitch {
@@ -319,7 +319,7 @@ UPanel {
                                 required property var modelData
                                 width: cardBody.width
                                 spacing: 2
-                                Text { text: prm.modelData.label; color: Theme.c.muted; font.family: Theme.family; font.pixelSize: 12 }
+                                Text { text: prm.modelData.label; color: Theme.c.muted; font.family: Theme.family; font.pixelSize: Theme.ty.caption }
                                 UValueSlider {
                                     id: vsl
                                     objectName: "lookSlider:" + reg
@@ -338,7 +338,7 @@ UPanel {
                                 }
                                 Row {
                                     visible: prm.modelData.colour
-                                    spacing: 8
+                                    spacing: Theme.sp.s
                                     Button {
                                         id: swatch
                                         objectName: "swatch"
@@ -349,7 +349,7 @@ UPanel {
                                         ToolTip.text: "Pick a colour"
                                         ToolTip.delay: 500
                                         background: Rectangle {
-                                            radius: 6
+                                            radius: Theme.radiusSmall
                                             color: prm.modelData.colour ? panel.valueOf(card.modelData, prm.modelData) : "transparent"
                                             border.width: 1
                                             border.color: Theme.c.disabled
@@ -383,12 +383,12 @@ UPanel {
             objectName: "lookAdvanced"
             visible: panel.advShown
             width: col.width
-            spacing: 6
+            spacing: Theme.sp.s
             Text {
                 text: "ADVANCED EFFECTS"
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 11
+                font.pixelSize: Theme.ty.caption
                 font.weight: Font.DemiBold
                 font.letterSpacing: 1
             }
@@ -399,7 +399,7 @@ UPanel {
                 text: "No effects. Pick one and press Add."
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 13
+                font.pixelSize: Theme.ty.small
             }
             Repeater {
                 model: panel.effects
@@ -415,18 +415,18 @@ UPanel {
                     border.width: panel.advRow === index ? 1 : 0
                     border.color: Theme.c.accent
                     Text {
-                        anchors { left: parent.left; right: parent.right; leftMargin: 8; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                        anchors { left: parent.left; right: parent.right; leftMargin: Theme.sp.s; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
                         text: panel.summary(advItem.modelData)
                         elide: Text.ElideRight
                         color: Theme.c.text
                         font.family: Theme.family
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.ty.small
                     }
                     MouseArea { anchors.fill: parent; onClicked: panel.advRow = advItem.index }
                 }
             }
             Row {
-                spacing: 6
+                spacing: Theme.sp.s
                 UCombo {
                     id: addType
                     objectName: "advType"
@@ -443,7 +443,7 @@ UPanel {
                 }
             }
             Row {
-                spacing: 6
+                spacing: Theme.sp.s
                 UButton { id: upBtn; objectName: "advUp"; text: "Up"; enabled: panel.advRow > 0; onClicked: panel.advShift(-1) }
                 UButton { id: downBtn; objectName: "advDown"; text: "Down"; enabled: panel.advRow >= 0 && panel.advRow < panel.effects.length - 1; onClicked: panel.advShift(1) }
                 UButton { id: removeBtn; objectName: "advRemove"; text: "Remove"; enabled: panel.advRow >= 0 && panel.advRow < panel.effects.length; onClicked: panel.advRemove() }
@@ -455,7 +455,7 @@ UPanel {
                 text: "This effect type has no settings here; it is kept as it is."
                 color: Theme.c.muted
                 font.family: Theme.family
-                font.pixelSize: 13
+                font.pixelSize: Theme.ty.small
             }
             Repeater {
                 model: panel.advType ? panel.advType.params : []
@@ -465,7 +465,7 @@ UPanel {
                     readonly property var cur: panel.advRow >= 0 && panel.advRow < panel.effects.length ? panel.effects[panel.advRow] : ({})
                     width: adv.width
                     spacing: 2
-                    Text { text: ap.modelData.label; color: Theme.c.muted; font.family: Theme.family; font.pixelSize: 12 }
+                    Text { text: ap.modelData.label; color: Theme.c.muted; font.family: Theme.family; font.pixelSize: Theme.ty.caption }
                     UValueSlider {
                         id: asl
                         visible: !ap.modelData.colour
@@ -493,7 +493,7 @@ UPanel {
                 }
             }
             Row {
-                spacing: 6
+                spacing: Theme.sp.s
                 UButton {
                     id: advApplyBtn
                     objectName: "advApply"

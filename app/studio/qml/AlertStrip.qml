@@ -28,20 +28,20 @@ Rectangle {
     visible: lines.length > 0
     height: visible ? label.implicitHeight + 12 : 0
     color: Theme.c.panel
-    radius: 6
+    radius: Theme.radiusSmall
     border.width: 1
     border.color: worst === 2 ? Theme.c.danger : worst === 1 ? Theme.c.accent : Theme.c.border
 
     Text {
         id: label
         objectName: "alertText"
-        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 10; rightMargin: 10 }
+        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: Theme.sp.m; rightMargin: Theme.sp.m }
         text: strip.text
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         color: Theme.c.text
         font.family: Theme.family
-        font.pixelSize: 13
+        font.pixelSize: Theme.ty.small
         lineHeight: 1.15
     }
 
