@@ -137,7 +137,8 @@ Item {
             }
             Text {
                 objectName: "statSessionTime"
-                anchors { left: parent.left; leftMargin: Theme.sp.m; verticalCenter: stats.compact ? parent.verticalCenter : undefined; bottom: stats.compact ? undefined : parent.bottom; bottomMargin: Theme.sp.xs }
+                x: Theme.sp.m
+                y: stats.compact ? (parent.height - height) / 2 : parent.height - height - Theme.sp.xs
                 text: stats.session
                 color: Theme.c.text
                 font.family: Theme.family
@@ -145,7 +146,8 @@ Item {
                 font.weight: Font.DemiBold
             }
             Text {
-                anchors { right: parent.right; verticalCenter: stats.compact ? parent.verticalCenter : undefined; bottom: stats.compact ? undefined : parent.bottom; rightMargin: Theme.sp.m; bottomMargin: Theme.sp.s }
+                x: parent.width - width - Theme.sp.m
+                y: stats.compact ? (parent.height - height) / 2 : parent.height - height - Theme.sp.s
                 text: stats.sessionNote
                 color: Theme.c.muted
                 font.family: Theme.family

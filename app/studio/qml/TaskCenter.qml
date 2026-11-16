@@ -131,6 +131,7 @@ Item {
     }
 
     // ---- notifications: at most 3, each about 6 s (the x or a click closes it sooner) ----
+    property bool hold: false // true while a modal dialog is open: the notifications wait behind it
     property ListModel toasts: ListModel {}
     function toast(title, note, failed) {
         if (toasts.count >= 3) toasts.remove(0);
@@ -420,7 +421,7 @@ Item {
         id: stack
         objectName: "taskToasts"
         popupType: studioUnseen ? Popup.Item : Popup.Window
-        visible: center.toasts.count > 0
+        visible: center.toasts.count > 0 && !center.hold // a modal chooser (Go live) is not drawn over by a notification (D389 C2)
         modal: false
         focus: false
         closePolicy: Popup.NoAutoClose

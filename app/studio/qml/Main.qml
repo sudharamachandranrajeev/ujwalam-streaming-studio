@@ -315,6 +315,7 @@ ApplicationWindow {
         id: taskCenter
         objectName: "taskCenter"
         store: studioStore
+        hold: goLiveDlg.opened
         anchors { left: parent.left; right: parent.right; top: parent.top }
         topY: bar.y + bar.height + Theme.sp.s
         windowHeight: win.height

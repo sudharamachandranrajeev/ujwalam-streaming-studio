@@ -16,7 +16,7 @@ Dialog {
     id: dlg
     objectName: "goLiveDialog"
     required property var store
-    popupType: studioHidden ? Popup.Item : Popup.Window
+    popupType: studioUnseen ? Popup.Item : Popup.Window
     modal: true
     anchors.centerIn: parent
     width: Math.min(900, parent ? parent.width - 40 : 900)
