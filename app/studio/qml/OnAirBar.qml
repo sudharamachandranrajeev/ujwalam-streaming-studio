@@ -47,29 +47,29 @@ Rectangle {
 
     Text {
         id: brand
-        anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
+        anchors { left: parent.left; leftMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
         text: "Ujwalam"
         color: Theme.c.text
-        font.family: "Barlow"
-        font.pixelSize: 20
+        font.family: Theme.ty.displayFamily
+        font.pixelSize: Theme.ty.title
         font.weight: Font.Bold
     }
     Text {
         id: sceneName
         objectName: "barScene"
-        anchors { left: brand.right; leftMargin: 14; verticalCenter: parent.verticalCenter }
+        anchors { left: brand.right; leftMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
         width: Math.max(0, chips.x - x - 16)
         elide: Text.ElideRight
         text: bar.store.activeSceneObj ? bar.store.activeSceneObj.name : ""
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: 14
+        font.pixelSize: Theme.ty.body
     }
 
     Row {
         id: chips
-        anchors { right: controls.left; rightMargin: 16; verticalCenter: parent.verticalCenter }
-        spacing: 8
+        anchors { right: controls.left; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+        spacing: Theme.sp.s
         TaskChip {
             objectName: "taskChip"
             visible: bar.taskCenter !== null && bar.taskCenter.listed > 0
@@ -77,18 +77,21 @@ Rectangle {
         }
         UChip {
             objectName: "chipLive"
+            minWidth: 124
             on: bar.store.live
             text: bar.store.live ? "LIVE  " + bar.clock(bar.oa.liveForMs) : "Offline"
             tip: bar.store.live ? bar.sinkTip : "Not streaming"
         }
         UChip {
             objectName: "chipBitrate"
-            visible: bar.store.live && bar.mbps !== ""
-            text: bar.mbps
+            minWidth: 88
+            visible: !bar.compact || (bar.store.live && bar.mbps !== "")
+            text: bar.mbps !== "" ? bar.mbps : "0.0 Mbps"
             tip: bar.sinkTip
         }
         UChip {
             objectName: "chipRec"
+            minWidth: 124
             visible: !bar.compact || bar.store.recording
             on: bar.store.recording
             text: bar.store.recording ? "REC  " + bar.clock(bar.oa.recordForMs) : "Not recording"
@@ -125,8 +128,8 @@ Rectangle {
 
     Row {
         id: controls
-        anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
-        spacing: 8
+        anchors { right: parent.right; rightMargin: Theme.sp.m; verticalCenter: parent.verticalCenter }
+        spacing: Theme.sp.s
         // RareUI slice 2 (D384, Floating Navigation; design after RareUI, MIT, Swapnil Kalambe): More, ? and Settings (the
         // bar's navigation; it has no mode switches, the rest are actions) sit in a pill dock when the pack's components.tabs
         // is "dock". A disc follows the hovered button (a spring in "full", a jump in "calm"). "plain" (on air, High
@@ -174,7 +177,7 @@ Rectangle {
                 id: dockRow
                 x: dock.pad
                 y: dock.pad
-                spacing: 8
+                spacing: Theme.sp.s
         // More (the widget's More menu, same order and tips): the flag-gated items show only with their flag on.
         UButton {
             id: moreBtn

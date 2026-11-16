@@ -8,7 +8,10 @@ Item {
     id: stats
     objectName: "statsPanel"
     required property var store
-    implicitHeight: 3 * 58 + 2 * 8 // the session and FPS cards take a row each (their words need the width), GPU and CPU share one
+    // Short windows (Main.qml) use a lower card so the side column keeps room for the layer list; the content never changes size when live starts.
+    property bool compact: false
+    readonly property int cardH: compact ? 44 : 58
+    implicitHeight: 3 * cardH + 2 * Theme.sp.s // the session and FPS cards take a row each (their words need the width), GPU and CPU share one
 
     readonly property int keep: 90 // 3 minutes at one sample per 2 s
     property var cpu: []
@@ -61,7 +64,7 @@ Item {
         property real lo: 0
         property real hi: 100
         Text {
-            anchors { left: parent.left; top: parent.top; leftMargin: Theme.sp.m; topMargin: 7 }
+            anchors { left: parent.left; top: parent.top; leftMargin: Theme.sp.m; topMargin: Theme.sp.s }
             text: sc.name
             color: Theme.c.muted
             font.family: Theme.family
@@ -70,7 +73,7 @@ Item {
         }
         Text {
             objectName: "statValue:" + sc.name
-            anchors { right: parent.right; top: parent.top; rightMargin: Theme.sp.m; topMargin: 6 }
+            anchors { right: parent.right; top: parent.top; rightMargin: Theme.sp.m; topMargin: Theme.sp.s }
             width: Math.min(implicitWidth, sc.width - 2 * Theme.sp.m - 40)
             horizontalAlignment: Text.AlignRight
             elide: Text.ElideLeft
@@ -81,8 +84,8 @@ Item {
         }
         Canvas {
             id: line
-            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: 10; rightMargin: 10; bottomMargin: 6 }
-            height: 26
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: Theme.sp.m; rightMargin: Theme.sp.m; bottomMargin: Theme.sp.s }
+            height: Math.max(12, sc.height - 32)
             Connections { target: sc; function onPointsChanged() { line.requestPaint() } }
             Connections { target: Theme; function onChanged() { line.requestPaint() } }
             onPaint: {
@@ -117,14 +120,15 @@ Item {
 
     Column {
         anchors.fill: parent
-        spacing: 8
-        readonly property real cw: (width - 8) / 2
+        spacing: Theme.sp.s
+        readonly property real cw: (width - Theme.sp.s) / 2
         Card {
             objectName: "statSession"
             width: parent.width
-            height: 58
+            height: stats.cardH
             Text {
-                anchors { left: parent.left; top: parent.top; leftMargin: Theme.sp.m; topMargin: 6 }
+                anchors { left: parent.left; top: parent.top; leftMargin: Theme.sp.m; topMargin: Theme.sp.s }
+                visible: !stats.compact
                 text: "STREAM STATS"
                 color: Theme.c.muted
                 font.family: Theme.family
@@ -133,15 +137,15 @@ Item {
             }
             Text {
                 objectName: "statSessionTime"
-                anchors { left: parent.left; bottom: parent.bottom; leftMargin: Theme.sp.m; bottomMargin: 5 }
+                anchors { left: parent.left; leftMargin: Theme.sp.m; verticalCenter: stats.compact ? parent.verticalCenter : undefined; bottom: stats.compact ? undefined : parent.bottom; bottomMargin: Theme.sp.xs }
                 text: stats.session
                 color: Theme.c.text
                 font.family: Theme.family
-                font.pixelSize: 19
+                font.pixelSize: stats.compact ? Theme.ty.subtitle : Theme.ty.title
                 font.weight: Font.DemiBold
             }
             Text {
-                anchors { right: parent.right; bottom: parent.bottom; rightMargin: Theme.sp.m; bottomMargin: 8 }
+                anchors { right: parent.right; verticalCenter: stats.compact ? parent.verticalCenter : undefined; bottom: stats.compact ? undefined : parent.bottom; rightMargin: Theme.sp.m; bottomMargin: Theme.sp.s }
                 text: stats.sessionNote
                 color: Theme.c.muted
                 font.family: Theme.family
@@ -150,24 +154,24 @@ Item {
         }
         Spark {
             id: fpsCard
-            width: parent.width; height: 58
+            width: parent.width; height: stats.cardH
             name: "FPS"
             hi: 75
             points: stats.fps
             value: stats.fps.length ? stats.last(stats.fps).toFixed(1) + " fps, " + stats.dropped + " dropped" : "-"
         }
         Row {
-            spacing: 8
+            spacing: Theme.sp.s
             Spark {
                 id: gpuCard
-                width: parent.parent.cw; height: 58
+                width: parent.parent.cw; height: stats.cardH
                 name: "GPU"
                 points: stats.gpu
                 value: stats.gpu.length ? stats.last(stats.gpu).toFixed(0) + "%" : "-"
             }
             Spark {
                 id: cpuCard
-                width: parent.parent.cw; height: 58
+                width: parent.parent.cw; height: stats.cardH
                 name: "CPU"
                 points: stats.cpu
                 value: stats.cpu.length ? stats.last(stats.cpu).toFixed(0) + "%" : "-"
