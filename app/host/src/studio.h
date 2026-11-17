@@ -87,6 +87,15 @@ public:
 	// (duplicates, the other canvas). The doc becomes the host's model document.
 	json::Value layer_add_model(const json::Value &doc, const std::string &scene, const std::string &layer);
 	json::Value layer_order_model(const json::Value &doc, const std::string &scene);
+	// Mixer "Add audio" (D393 proposed): builds project audio source `audio` of `doc` (the project after the change)
+	// like project.load does: a device source on the next free output channel, or the binding of a built layer's
+	// source (volume, mute, tracks, monitoring). Refused with a plain sentence when the plan cannot build it; refused
+	// when it is in the mixer already. The doc becomes the host's model document.
+	json::Value audio_add_model(const json::Value &doc, const std::string &audio);
+	// Mixer remove (D393 proposed): `doc` no longer has audio source `audio`. A device source leaves its channel and is
+	// released (parked instead when the watchdog has it as missing: its destroy may never return); a layer's source is
+	// unbound (no tracks, no monitoring) and stays metered. removed false when the host had not built it.
+	json::Value audio_remove_model(const json::Value &doc, const std::string &audio);
 	json::Value layer_set_visible(const std::string &scene, const std::string &canvas, const std::string &layer, bool visible);
 	// Effect editor (D260): replaces a layer's effects on every canvas (project v1 layers only).
 	json::Value layer_set_effects(const std::string &scene, const std::string &layer, const json::Value &effects);

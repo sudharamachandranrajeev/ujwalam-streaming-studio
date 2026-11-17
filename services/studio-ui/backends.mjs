@@ -176,6 +176,20 @@ export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'yo
           m.tracks = TRACKS.filter((t) => p.tracks.includes(t.id)).map((t) => t.id);
           return { id: m.id, audioSource: m.audioSource, tracks: m.tracks, monitoring: m.cue ? (m.tracks.length ? 'monitor-and-output' : 'monitor-only') : 'off' };
         }
+        // D393: the mixer's Add audio / Remove, as the real host takes them from the project document (no devices here).
+        case 'audio.addFromProject': {
+          const a = need(p.project.audio?.sources?.find((x) => x.id === p.audio), 'audio');
+          const row = a.layer ? mixer.find((m) => m.id.endsWith(`/${a.layer}`)) : null;
+          if (row) Object.assign(row, { audioSource: a.id, name: a.name, tracks: [...a.tracks] });
+          else mixer.push({ id: `audio:${a.id}`, name: a.name, volumeDb: a.volumeDb, muted: a.muted, cue: false, audioSource: a.id, tracks: [...a.tracks] });
+          return { audio: a.id, kind: a.layer ? 'layer' : 'device', name: a.name, cueDelayed: false };
+        }
+        case 'audio.removeFromProject': {
+          const i = mixer.findIndex((m) => m.audioSource === p.audio);
+          if (i >= 0 && mixer[i].id.startsWith('audio:')) mixer.splice(i, 1);
+          else if (i >= 0) { delete mixer[i].audioSource; mixer[i].tracks = []; }
+          return { audio: p.audio, removed: i >= 0 };
+        }
         case 'mixer.setVolume': need(mixer.find((m) => m.id === p.id), 'source').volumeDb = p.db; return { ok: true };
         case 'mixer.setMute': need(mixer.find((m) => m.id === p.id), 'source').muted = p.muted; return { ok: true };
         case 'mixer.setCue': need(mixer.find((m) => m.id === p.id), 'source').cue = p.cue; return { id: p.id, cue: p.cue, cueDelayed: false };
