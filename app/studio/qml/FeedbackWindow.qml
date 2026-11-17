@@ -14,8 +14,8 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: false
     anchors.centerIn: parent
-    width: Math.min(600, parent ? parent.width - 40 : 600)
-    height: Math.min(560, parent ? parent.height - 40 : 560)
+    implicitWidth: Math.min(600, parent ? parent.width - 40 : 600)
+    implicitHeight: Math.min(560, parent ? parent.height - 40 : 560)
     title: "Feedback notes"
     closePolicy: Popup.CloseOnEscape
 

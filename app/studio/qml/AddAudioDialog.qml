@@ -22,8 +22,8 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: true
     anchors.centerIn: parent
-    width: 560
-    height: 440
+    implicitWidth: 560
+    implicitHeight: 440
     title: "Add audio"
     closePolicy: Popup.CloseOnEscape
 

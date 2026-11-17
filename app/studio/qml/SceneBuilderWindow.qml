@@ -14,8 +14,8 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: false
     anchors.centerIn: parent
-    width: Math.min(620, parent ? parent.width - 40 : 620)
-    height: Math.min(520, parent ? parent.height - 40 : 520)
+    implicitWidth: Math.min(620, parent ? parent.width - 40 : 620)
+    implicitHeight: Math.min(520, parent ? parent.height - 40 : 520)
     title: "New scene from a reference"
     closePolicy: Popup.CloseOnEscape
 

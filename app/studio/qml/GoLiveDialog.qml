@@ -19,8 +19,8 @@ Dialog {
     popupType: studioUnseen ? Popup.Item : Popup.Window
     modal: true
     anchors.centerIn: parent
-    width: Math.min(900, parent ? parent.width - 40 : 900)
-    height: Math.min(780, parent ? parent.height - 40 : 780)
+    implicitWidth: Math.min(900, parent ? parent.width - 40 : 900)
+    implicitHeight: Math.min(780, parent ? parent.height - 40 : 780)
     title: "Go live"
     closePolicy: Popup.CloseOnEscape
 

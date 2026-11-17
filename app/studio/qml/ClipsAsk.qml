@@ -13,7 +13,7 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: false
     anchors.centerIn: parent
-    width: Math.min(480, parent ? parent.width - 40 : 480)
+    implicitWidth: Math.min(480, parent ? parent.width - 40 : 480)
     title: "Make clips?"
     closePolicy: Popup.CloseOnEscape
 

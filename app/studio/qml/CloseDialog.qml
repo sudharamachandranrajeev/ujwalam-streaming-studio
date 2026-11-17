@@ -17,7 +17,7 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: true
     anchors.centerIn: parent
-    width: Math.min(560, parent ? parent.width - 80 : 560)
+    implicitWidth: Math.min(560, parent ? parent.width - 80 : 560)
     title: "Close Ujwalam"
     closePolicy: Popup.CloseOnEscape
 

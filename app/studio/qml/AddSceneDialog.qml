@@ -14,7 +14,7 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: true
     anchors.centerIn: parent
-    width: 440
+    implicitWidth: 440
     title: "Add scene"
     closePolicy: Popup.CloseOnEscape
 

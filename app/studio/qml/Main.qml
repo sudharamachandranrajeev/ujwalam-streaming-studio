@@ -267,8 +267,16 @@ ApplicationWindow {
         Text {
             objectName: "note"
             anchors { left: parent.left; right: health.left; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
-            text: studioStore.note
+            // One line always: a note with several lines (the go-live check's warnings) is joined, never drawn upwards
+            // over the mixer (alpha.33 feedback); the full note is in the tooltip.
+            readonly property string full: studioStore.note
+            text: full.split("\n").map(s => s.trim()).filter(s => s !== "").join("   ·   ")
+            maximumLineCount: 1
+            wrapMode: Text.NoWrap
             elide: Text.ElideRight
+            ToolTip.visible: noteHover.hovered && truncated
+            ToolTip.text: full
+            HoverHandler { id: noteHover }
             color: Theme.c.muted
             font.family: Theme.family
             font.pixelSize: Theme.ty.small
