@@ -1543,6 +1543,146 @@ json::Value Studio::layer_order_model(const json::Value &doc, const std::string 
 	return r;
 }
 
+// Mixer "Add audio" (D393 proposed). Same build as load_model's audio loop, for one entry, so a restart builds the same.
+json::Value Studio::audio_add_model(const json::Value &doc, const std::string &aid)
+{
+	std::lock_guard<std::recursive_mutex> lk(m_);
+	if (format_ != "project-v1")
+		throw Error(rpc::CONFLICT, "no project v1 is loaded");
+	if (!model::is_model(doc))
+		throw Error(rpc::INVALID_PARAMS, "project must be a project v1 document");
+	devices::List list;
+	model::Options mo = model_options(doc, last_opts_, list, flags_.allow_devices);
+	model::Plan p = model::build(doc, mo);
+	for (auto &u : p.unavailable.as_array())
+		if (const json::Value *a = u.find("audio"); a && a->is_string() && a->as_string() == aid) {
+			const bool forbidden = u.find("code")->as_string() == "forbidden";
+			throw Error(forbidden ? rpc::FORBIDDEN : rpc::UNAVAILABLE,
+				    forbidden ? "This sound cannot be added: this start of Ujwalam has audio devices switched off."
+					      : "This sound cannot be added: " + u.find("reason")->as_string() + ".");
+		}
+	auto x = std::find_if(p.audio.begin(), p.audio.end(), [&](const model::Audio &a) { return a.id == aid; });
+	if (x == p.audio.end())
+		throw Error(rpc::INVALID_PARAMS, "audio source " + aid + " is not in the project");
+	for (auto &g : globals_)
+		if (g.src->audio_id == aid)
+			throw Error(rpc::CONFLICT, "This sound is in the mixer already.");
+	for (auto &s : scenes_)
+		for (auto &l : s.layers)
+			if (l.src && l.src->audio_id == aid)
+				throw Error(rpc::CONFLICT, "This sound is in the mixer already.");
+	std::shared_ptr<Src> target;
+	if (!x->obs_type.empty()) {
+		// One capture per endpoint, whatever the audio id: a second entry for the same device (an unsaved add retried
+		// under a new id) would put its sound in the stream twice.
+		const json::Value *want = x->settings.find("device_id");
+		if (want && want->is_string() && !want->as_string().empty())
+			for (auto &g : globals_) {
+				obs_data_t *gs = obs_source_get_settings(g.src->src); // a new reference
+				const bool same = gs && want->as_string() == obs_data_get_string(gs, "device_id");
+				obs_data_release(gs);
+				if (same)
+					throw Error(rpc::CONFLICT, "This device's sound is in the mixer already.");
+			}
+		uint32_t channel = 1; // the lowest free output channel (0 is the active scene); a removed one is reused
+		for (bool used = true; used && channel < MAX_CHANNELS;) {
+			used = std::any_of(globals_.begin(), globals_.end(), [&](const Global &g) { return g.channel == channel; });
+			if (used)
+				channel++;
+		}
+		if (channel >= MAX_CHANNELS)
+			throw Error(rpc::CONFLICT, "The mixer has no room for another device sound.");
+		obs_data_t *d = obs_data_create_from_json(x->settings.dump().c_str());
+		obs_source_t *src = obs_source_create(x->obs_type.c_str(), ("ujw:audio:" + aid).c_str(), d, nullptr);
+		obs_data_release(d);
+		if (!src)
+			throw Error(rpc::INTERNAL, "source create failed for audio " + aid);
+		// libobs returns a source even when the plugin's create failed (recreate_global): it would never send audio.
+		if (!obs_obj_get_data(src)) {
+			obs_source_release(src);
+			throw Error(rpc::UNAVAILABLE, "This sound cannot be added: Windows did not open the device.");
+		}
+		target = wrap(src, "");
+		obs_set_output_source(channel, src);
+		globals_.push_back({target, channel});
+	} else {
+		target = find_src(x->layer);
+		if (!target)
+			throw Error(rpc::UNAVAILABLE, "This sound cannot be added: its layer is not built.");
+		if (!target->meter)
+			throw Error(rpc::INVALID_PARAMS, "This layer has no sound.");
+		if (!target->audio_id.empty())
+			throw Error(rpc::CONFLICT, "This layer's sound is in the mixer already.");
+	}
+	target->audio_id = aid;
+	target->audio_name = x->name.empty() ? aid : x->name;
+	obs_source_set_volume(target->src, obs_db_to_mul((float)x->volume_db));
+	obs_source_set_muted(target->src, x->muted);
+	obs_source_set_audio_mixers(target->src, x->mixers);
+	if (flags_.allow_devices) // monitoring opens an audio output device
+		obs_source_set_monitoring_type(target->src, monitoring_type(x->monitoring));
+	model_doc_ = doc;
+	dirty_ = false;
+	hlog::info("audio added from the project: %s (%s)", aid.c_str(), x->obs_type.empty() ? "layer sound" : x->obs_type.c_str());
+	json::Value r = json::Value::object();
+	r.set("audio", aid);
+	r.set("kind", x->obs_type.empty() ? "layer" : "device");
+	r.set("name", target->audio_name);
+	r.set("cueDelayed", (obs_source_get_output_flags(target->src) & OBS_SOURCE_VIDEO) != 0);
+	return r;
+}
+
+json::Value Studio::audio_remove_model(const json::Value &doc, const std::string &aid)
+{
+	std::lock_guard<std::recursive_mutex> lk(m_);
+	if (format_ != "project-v1")
+		throw Error(rpc::CONFLICT, "no project v1 is loaded");
+	if (!model::is_model(doc))
+		throw Error(rpc::INVALID_PARAMS, "project must be a project v1 document");
+	if (const json::Value *au = doc.find("audio"); au && au->is_object())
+		if (const json::Value *ss = au->find("sources"); ss && ss->is_array())
+			for (auto &s : ss->as_array())
+				if (const json::Value *id = s.find("id"); id && id->is_string() && id->as_string() == aid)
+					throw Error(rpc::INVALID_PARAMS, "audio source " + aid + " is still in the project");
+	std::string kind;
+	for (auto it = globals_.begin(); it != globals_.end(); ++it) {
+		if (it->src->audio_id != aid)
+			continue;
+		auto src = it->src;
+		obs_set_output_source(it->channel, nullptr);
+		obs_source_set_monitoring_type(src->src, OBS_MONITORING_TYPE_NONE);
+		obs_source_set_audio_mixers(src->src, 0);
+		if (it->missing) { // its capture may have died: destroying it can block libobs's destruction thread
+			obs_source_set_muted(src->src, true);
+			obs_source_set_name(src->src, (std::string(obs_source_get_name(src->src)) + ":stale-" +
+						       std::to_string(parked_.size() + 1)).c_str());
+			src->meter.reset();
+			parked_.push_back(src);
+		}
+		globals_.erase(it); // otherwise the last reference: Src's destructor detaches the meter and releases it
+		kind = "device";
+		break;
+	}
+	if (kind.empty())
+		for (auto &s : scenes_)
+			for (auto &l : s.layers)
+				if (l.src && l.src->audio_id == aid) {
+					l.src->audio_id.clear();
+					l.src->audio_name.clear();
+					obs_source_set_monitoring_type(l.src->src, OBS_MONITORING_TYPE_NONE);
+					obs_source_set_audio_mixers(l.src->src, 0); // metered, in no track (as built without an entry)
+					kind = "layer";
+				}
+	model_doc_ = doc;
+	dirty_ = false;
+	hlog::info("audio removed from the project: %s (%s)", aid.c_str(), kind.empty() ? "was not built" : kind.c_str());
+	json::Value r = json::Value::object();
+	r.set("audio", aid);
+	r.set("removed", !kind.empty());
+	r.set("kind", kind.empty() ? json::Value() : json::Value(kind));
+	return r;
+}
+
 json::Value Studio::canvases_json() const
 {
 	std::lock_guard<std::recursive_mutex> lk(m_);

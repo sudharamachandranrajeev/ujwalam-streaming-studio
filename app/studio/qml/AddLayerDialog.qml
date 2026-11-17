@@ -21,8 +21,8 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: true
     anchors.centerIn: parent
-    width: 660
-    height: 440
+    implicitWidth: 660
+    implicitHeight: 440
     title: "Add layer to “" + sceneName + "”"
     closePolicy: Popup.CloseOnEscape
 

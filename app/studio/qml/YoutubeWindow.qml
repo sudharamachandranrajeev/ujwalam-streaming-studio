@@ -17,8 +17,8 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: false
     anchors.centerIn: parent
-    width: Math.min(940, parent ? parent.width - 40 : 940)
-    height: Math.min(700, parent ? parent.height - 40 : 700)
+    implicitWidth: Math.min(940, parent ? parent.width - 40 : 940)
+    implicitHeight: Math.min(700, parent ? parent.height - 40 : 700)
     title: "YouTube"
     closePolicy: Popup.CloseOnEscape
 

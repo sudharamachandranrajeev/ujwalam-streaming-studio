@@ -15,7 +15,7 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: true
     anchors.centerIn: parent
-    width: 540
+    implicitWidth: 540
     title: adding ? "Add output" : "Edit output"
     closePolicy: Popup.CloseOnEscape
 

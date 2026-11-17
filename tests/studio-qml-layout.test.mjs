@@ -67,6 +67,28 @@ for (const theme of ['ujwalam-light', 'ujwalam-night']) {
   }
 }
 
+// The frame (alpha.33 feedback: "keep layers at left and give more space to layers"): scenes above the layers in a left
+// column that is wider than before, the layers getting the larger share; the side panels and the stats on the right; the
+// previews between; nothing over the mixer.
+for (const [size, leftW] of [['1100x680', 260], ['1280x720', 260], ['1600x900', 300], ['1920x1080', 340]]) {
+  test(`frame: scenes above layers on the left (${leftW} px wide), side panels and stats on the right: ${size}`, { skip: skipReason, timeout: 120_000 }, async () => {
+    const r = await runQmlProbe({ actions: ['layout-check:frame'], ms: 6000, env: { UJWALAM_STUDIO_PROBE_SIZE: size } });
+    assert.ok(r.p, `no probe line: ${r.err.slice(-400)}`);
+    const f = r.p.state.frame;
+    const [sx, sy, sw, sh] = f.scenes, [lx, ly, lw, lh] = f.layers, [px, , pw] = f.previews, [dx, dy, dw] = f.side, [tx, ty] = f.stats, [, my] = f.mixer;
+    assert.deepEqual([sw, lw], [leftW, leftW], 'one left column of that width');
+    assert.equal(lx, sx, 'layers under the scenes, same column');
+    assert.ok(ly >= sy + sh, 'layers below the scenes');
+    assert.ok(lh > sh, `layers get the larger share (${lh} vs ${sh})`);
+    assert.ok(sh >= 150, 'the scenes keep a usable minimum');
+    assert.ok(ly + lh <= my, 'the layers end above the mixer');
+    assert.ok(px >= sx + sw && px + pw <= dx, 'previews between the columns');
+    assert.equal(dx, tx, 'side panels and stats share the right column');
+    assert.ok(dy <= sy + 1, 'the side panels start at the top of the column (no room kept for layers there)');
+    assert.ok(dw > 0 && ty < my, 'the stats sit above the mixer');
+  });
+}
+
 test('the probe window takes the requested size and records a run', { skip: skipReason, timeout: 120_000 }, async () => {
   const r = await runQmlProbe({ actions: ['layout-check:x'], ms: 4000, env: { UJWALAM_STUDIO_PROBE_SIZE: '700x420' } });
   assert.equal(r.p.layout.length, 1);

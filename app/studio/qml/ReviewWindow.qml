@@ -15,8 +15,8 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: false
     anchors.centerIn: parent
-    width: Math.min(820, parent ? parent.width - 40 : 820)
-    height: Math.min(680, parent ? parent.height - 40 : 680)
+    implicitWidth: Math.min(820, parent ? parent.width - 40 : 820)
+    implicitHeight: Math.min(680, parent ? parent.height - 40 : 680)
     title: "Review reads"
     closePolicy: Popup.CloseOnEscape
 

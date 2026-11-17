@@ -967,7 +967,10 @@ Plan build(const json::Value &doc, const Options &o)
 				if (x.layer.empty())
 					u = {"unavailable", "audio of a video device needs a capture layer for that device"};
 			} else {
-				x.obs_type = kind == "microphone" ? "wasapi_input_capture" : "wasapi_output_capture";
+				// Fake devices (devices.testSet, --test-hooks): the host's test audio type, which opens nothing, as
+				// capture layers use ujw_test_capture. It keeps the resolved device_id in its settings.
+				x.obs_type = o.test_capture ? "ujw_test_audio"
+					   : kind == "microphone" ? "wasapi_input_capture" : "wasapi_output_capture";
 				json::Value st = json::Value::object();
 				if (o.devices) {
 					devices::Match m = devices::resolve(*d->second, *o.devices);
@@ -980,7 +983,7 @@ Plan build(const json::Value &doc, const Options &o)
 				} else {
 					u = {"unavailable", "device " + x.device + ": devices were not listed"};
 				}
-				if (!o.allow_devices)
+				if (!o.allow_devices && !o.test_capture)
 					u = {"forbidden", "audio devices are disabled (host started without --allow-devices)" +
 								  (u.code.empty() ? std::string() : "; also " + u.reason)};
 				st.set("use_device_timing", false);

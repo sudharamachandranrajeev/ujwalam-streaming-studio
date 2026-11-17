@@ -15,8 +15,8 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: false
     anchors.centerIn: parent
-    width: Math.min(760, parent ? parent.width - 40 : 760)
-    height: Math.min(620, parent ? parent.height - 40 : 620)
+    implicitWidth: Math.min(760, parent ? parent.width - 40 : 760)
+    implicitHeight: Math.min(620, parent ? parent.height - 40 : 620)
     title: "Posts"
     closePolicy: Popup.CloseOnEscape
 

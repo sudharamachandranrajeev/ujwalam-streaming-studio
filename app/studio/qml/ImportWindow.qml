@@ -15,8 +15,8 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: false
     anchors.centerIn: parent
-    width: Math.min(560, parent ? parent.width - 40 : 560)
-    height: Math.min(460, parent ? parent.height - 40 : 460)
+    implicitWidth: Math.min(560, parent ? parent.width - 40 : 560)
+    implicitHeight: Math.min(460, parent ? parent.height - 40 : 460)
     title: "Import Meld session"
     closePolicy: Popup.CloseOnEscape
 

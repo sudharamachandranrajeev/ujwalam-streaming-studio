@@ -15,7 +15,7 @@ Dialog {
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: true
     anchors.centerIn: parent
-    width: 440
+    implicitWidth: 440
     title: kind === "scene" ? "Rename scene" : "Rename layer"
     closePolicy: Popup.CloseOnEscape
 

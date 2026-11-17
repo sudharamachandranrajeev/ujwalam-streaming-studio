@@ -75,6 +75,7 @@ import { createYoutubePresets } from './youtube-presets.mjs';
 import { createYoutubeQuality } from './youtube-quality.mjs';
 import { createGoLiveRoutes } from './golive-routes.mjs';
 import { createSceneBuilderRoutes } from './scene-builder-routes.mjs';
+import { DEFAULT_PRESETS_DIR, createAudioRoutes } from './audio-routes.mjs';
 import { connectTargets, readSetup } from './stream-setup.mjs';
 import { integrationsInEffect } from './integrations.mjs';
 
@@ -1325,6 +1326,8 @@ export function createStudioServer(opts) {
       broadcast('layers', { source: 'structure', edit: { op: 'scene.build', scene, layer: null } });
     },
   });
+  // D393 (proposed): the mixer's Add audio, Add to stream and Remove (audio-routes.mjs). No flag; works while live.
+  const audioRoutes = createAudioRoutes({ host, json, projectSync, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log });
   // D327: Stream settings, Outputs panel, Integrations, Force complete transition (settings-routes.mjs).
   const settingsRoutes = createSettingsRoutes({
     dataDir: opts.dataDir, flags, host, json, log,
@@ -1516,6 +1519,7 @@ export function createStudioServer(opts) {
     }
     if (req.method === 'GET' && await settingsRoutes.handle('GET', route, null, res)) return undefined; // D327 pages
     if (req.method === 'GET' && await sceneBuilderRoutes.handle('GET', route, null, res)) return undefined; // Q4 G
+    if (req.method === 'GET' && await audioRoutes.handle('GET', route, null, res)) return undefined; // D393 mixer Add audio
     if (req.method !== 'POST') return text(res, 405, 'method-not-allowed');
     // Mutating: Origin == our origin, CSRF header (timing-safe), JSON body.
     if (req.headers.origin !== origin) return text(res, 403, 'bad-origin');
@@ -1525,6 +1529,7 @@ export function createStudioServer(opts) {
     if (body === null) return undefined;
     if (await settingsRoutes.handle('POST', route, body, res)) return undefined;
     if (await sceneBuilderRoutes.handle('POST', route, body, res)) return undefined;
+    if (await audioRoutes.handle('POST', route, body, res)) return undefined;
 
     if (route === '/ui/api/edits/undo' || route === '/ui/api/edits/redo') {
       // Not while live (D238): undo there is the inspector's job. Fresh host.status, fail closed.

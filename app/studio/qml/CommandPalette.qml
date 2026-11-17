@@ -18,7 +18,7 @@ Popup {
     modal: true
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round(parent.height * 0.12) : 0
-    width: Math.min(560, parent ? parent.width - 40 : 560)
+    implicitWidth: Math.min(560, parent ? parent.width - 40 : 560)
     padding: Theme.sp.m
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
