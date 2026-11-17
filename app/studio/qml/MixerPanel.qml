@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The mixer (plan Q2): one strip per sound with its full name, CUE (hear it in the headphones), Mute, the track
 // buttons when routing is on (D273), the level and the volume. Volume, mute and CUE are saved into the project (D358).
-// A sound that is in no stream mix (layer sound off) is listed by name under the strips, as in the widget studio.
+// Every sound the host meters has a strip (alpha.33 feedback: the game capture's sound had none). A sound that is not
+// in the stream mix says so on its strip, with one "Add to stream" button. "Add audio" in the heading adds a mic, the
+// capture card's audio input, desktop sound or a layer's sound; the bin on a strip removes it from the mixer (D393
+// proposed; one click each, no question, also while live). Each strip keeps the same rows in the same places whatever
+// its state, so nothing moves when a button is clicked.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -11,17 +15,39 @@ UPanel {
     required property var store
     title: "Audio mixer"
 
-    // With routing on, a sound with a project audio entry stays listed on no track, so it can be put back.
-    readonly property var strips: store.mixer.filter(m => (store.routing && typeof m.audioSource === "string") || m.mixers === undefined || m.mixers !== 0)
-    readonly property var offMix: store.mixer.filter(m => !strips.includes(m)).map(m => m.name)
+    readonly property var strips: store.mixer
 
-    // ---- probe (tests): volume-type:<strip id>:<dB> (typed into the real box, then Enter) ----
+    tools: [
+        UButton {
+            objectName: "addAudio"
+            text: "Add audio"
+            iconName: "plus"
+            height: 28
+            tip: "Add a sound: a mic, the capture card's audio, desktop sound or a layer's sound"
+            onClicked: panel.store.openAddAudio()
+        }
+    ]
+
+    // ---- probe (tests): volume-type:<strip id>:<dB> (typed into the real box, then Enter);
+    // mixer-stream:<strip id> and mixer-remove:<strip id> (the strip's own buttons) ----
     function probeAction(a) {
-        if (!a.startsWith("volume-type:")) return false;
-        const i = a.lastIndexOf(":"), sid = a.slice(12, i);
-        for (let k = 0; k < list.count; k++) {
-            const it = list.itemAtIndex(k);
-            if (it && it.sid === sid) return it.volBox.typeValue(a.slice(i + 1));
+        const strip = (sid) => {
+            for (let k = 0; k < list.count; k++) {
+                const it = list.itemAtIndex(k);
+                if (it && it.sid === sid) return it;
+            }
+            return null;
+        };
+        if (a.startsWith("volume-type:")) {
+            const i = a.lastIndexOf(":"), it = strip(a.slice(12, i));
+            return it ? it.volBox.typeValue(a.slice(i + 1)) : false;
+        }
+        if (a.startsWith("mixer-stream:") || a.startsWith("mixer-remove:")) {
+            const it = strip(a.slice(13));
+            const btn = it ? (a.startsWith("mixer-stream:") ? it.streamBtn : it.removeBtn) : null;
+            if (!btn || !btn.visible) return false;
+            btn.clicked();
+            return true;
         }
         return false;
     }
@@ -31,7 +57,7 @@ UPanel {
     ListView {
         id: list
         objectName: "mixerStrips"
-        anchors { left: parent.left; right: parent.right; top: parent.top; bottom: offText.visible ? offText.top : parent.bottom; bottomMargin: offText.visible ? 4 : 0 }
+        anchors.fill: parent
         orientation: ListView.Horizontal
         clip: true
         spacing: Theme.sp.m
@@ -45,32 +71,47 @@ UPanel {
             required property var modelData
             readonly property string sid: modelData.id
             property alias volBox: vol
-            readonly property bool routable: panel.store.routing && typeof modelData.audioSource === "string"
+            property alias streamBtn: addStream
+            property alias removeBtn: remove
+            readonly property bool owned: typeof modelData.audioSource === "string" // a project audio source: removable
+            readonly property bool inStream: panel.store.inStream(modelData)
+            readonly property bool routable: panel.store.routing && owned
             objectName: "strip:" + sid
-            width: 280
+            width: 300
             height: ListView.view.height - 12
             radius: Theme.radiusMedium
             color: Theme.c.field
             border.width: 1
-            border.color: Theme.c.border
+            border.color: inStream ? Theme.c.border : Theme.c.accent // a warning edge, as the alert strip draws one
 
             Text {
                 id: label
                 objectName: "stripName:" + strip.sid
-                anchors { left: parent.left; right: buttons.left; top: parent.top; margins: Theme.sp.m; rightMargin: Theme.sp.s }
+                anchors { left: parent.left; right: buttons.left; verticalCenter: buttons.verticalCenter; leftMargin: Theme.sp.m; rightMargin: Theme.sp.s }
                 text: strip.modelData.name
-                wrapMode: Text.Wrap
-                maximumLineCount: 2
+                maximumLineCount: 1
                 elide: Text.ElideRight
                 color: Theme.c.text
                 font.family: Theme.family
                 font.pixelSize: Theme.ty.body
                 font.weight: Font.DemiBold
+                ToolTip.visible: nameHover.hovered && truncated
+                ToolTip.text: strip.modelData.name
+                HoverHandler { id: nameHover }
             }
             Row {
                 id: buttons
                 anchors { right: parent.right; top: parent.top; margins: Theme.sp.s }
                 spacing: Theme.sp.s
+                UIconButton {
+                    id: remove
+                    objectName: "removeAudio:" + strip.sid
+                    visible: strip.owned
+                    iconName: "trash"
+                    size: 30
+                    tip: "Remove " + strip.modelData.name + " from the mixer"
+                    onClicked: panel.store.removeAudio(strip.modelData.audioSource, strip.modelData.name)
+                }
                 UToggle {
                     objectName: "cue:" + strip.sid
                     text: "CUE"
@@ -88,32 +129,63 @@ UPanel {
                     onClicked: panel.store.setMute(strip.sid, checked)
                 }
             }
-            Row {
-                id: trackRow
-                visible: strip.routable
-                anchors { left: parent.left; right: parent.right; top: label.bottom; margins: Theme.sp.m; topMargin: Theme.sp.s }
-                spacing: Theme.sp.xs
+            // One row under the name, the same place in every state: not in the stream (with Add to stream), or the
+            // track buttons (routing on), or "In the stream".
+            Item {
+                id: middle
+                anchors { left: parent.left; right: parent.right; top: buttons.bottom; leftMargin: Theme.sp.m; rightMargin: Theme.sp.s; topMargin: Theme.sp.s }
+                height: 28
                 Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Tracks"
-                    color: Theme.c.muted
+                    objectName: "streamState:" + strip.sid
+                    visible: !strip.routable || !strip.inStream
+                    anchors { left: parent.left; right: addStream.visible ? addStream.left : parent.right; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
+                    text: strip.inStream ? "In the stream" : "Not in the stream"
+                    elide: Text.ElideRight
+                    color: Theme.c.text
                     font.family: Theme.family
-                    font.pixelSize: Theme.ty.caption
+                    font.pixelSize: Theme.ty.small
+                    font.weight: strip.inStream ? Font.Normal : Font.DemiBold
                 }
-                Repeater {
-                    model: strip.routable ? panel.store.tracks : []
-                    UToggle {
-                        required property var modelData
-                        required property int index
-                        objectName: "track:" + strip.sid + ":" + modelData.id
-                        text: modelData.name
-                        checked: (strip.modelData.tracks || []).includes(modelData.id)
-                        tip: index === 0 ? "Track 1: what the stream and the recording hear" : "Not used by the outputs yet"
-                        onClicked: {
-                            const on = strip.modelData.tracks || [];
-                            const tid = modelData.id, want = checked;
-                            // keep the project's track order
-                            panel.store.setTracks(strip.sid, panel.store.tracks.map(t => t.id).filter(x => x === tid ? want : on.includes(x)));
+                UButton {
+                    id: addStream
+                    objectName: "addToStream:" + strip.sid
+                    visible: !strip.inStream
+                    anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                    height: 28
+                    kind: "primary"
+                    text: "Add to stream"
+                    tip: strip.modelData.cueDelayed ? "Put this sound in the stream and the recording. Its headphone sound (CUE) comes a little late, because it comes with video."
+                                                    : "Put this sound in the stream and the recording"
+                    onClicked: panel.store.addToStream(strip.sid)
+                }
+                Row {
+                    id: trackRow
+                    visible: strip.routable && strip.inStream
+                    anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+                    spacing: Theme.sp.xs
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Tracks"
+                        color: Theme.c.muted
+                        font.family: Theme.family
+                        font.pixelSize: Theme.ty.caption
+                    }
+                    Repeater {
+                        model: trackRow.visible ? panel.store.tracks : []
+                        UToggle {
+                            required property var modelData
+                            required property int index
+                            objectName: "track:" + strip.sid + ":" + modelData.id
+                            text: modelData.name
+                            height: 28
+                            checked: (strip.modelData.tracks || []).includes(modelData.id)
+                            tip: index === 0 ? "Track 1: what the stream and the recording hear" : "Not used by the outputs yet"
+                            onClicked: {
+                                const on = strip.modelData.tracks || [];
+                                const tid = modelData.id, want = checked;
+                                // keep the project's track order
+                                panel.store.setTracks(strip.sid, panel.store.tracks.map(t => t.id).filter(x => x === tid ? want : on.includes(x)));
+                            }
                         }
                     }
                 }
@@ -136,13 +208,14 @@ UPanel {
         }
     }
     Text {
-        id: offText
-        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-        visible: panel.offMix.length > 0
-        text: "Not in the stream mix (layer sound off): " + panel.offMix.join(", ") + "."
+        anchors.centerIn: list
+        visible: panel.strips.length === 0
+        text: "No sound yet. Click Add audio to add a mic, the capture card's audio or desktop sound."
+        width: Math.min(implicitWidth, list.width - 2 * Theme.sp.m)
         wrapMode: Text.Wrap
+        horizontalAlignment: Text.AlignHCenter
         color: Theme.c.muted
         font.family: Theme.family
-        font.pixelSize: Theme.ty.caption
+        font.pixelSize: Theme.ty.small
     }
 }

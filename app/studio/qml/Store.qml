@@ -63,6 +63,7 @@ QtObject {
     signal hostRestarted()
     signal addLayerReady(string sceneId, string sceneName)
     signal addSceneReady(var canvases)
+    signal addAudioReady(var choices)  // the mixer's Add audio: what can be added now (audio-routes.mjs)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
     signal goLiveWanted(var options)   // Go live with a YouTube output on and signed in: the chooser opens first (D389)
     signal connectionsWanted(string output) // open Settings > Connections with only this output (the chooser's "Add the key")
@@ -308,6 +309,9 @@ QtObject {
         });
     }
 
+    // In the stream mix: on track 1, the one every output encodes (D273). A host answer without mixers counts as in it.
+    function inStream(m) { return typeof m.mixers === "number" ? (m.mixers & 1) !== 0 : true }
+
     function takePeaks(list) {
         const p = {};
         for (const m of list) p[m.id] = typeof m.peakDb === "number" ? m.peakDb : -100;
@@ -357,6 +361,45 @@ QtObject {
             if (ok && b.verdict === "confirm") confirmNeeded(b.pending); // a held action (D332)
             else if (!ok) say("Tracks not changed: " + err);
             else say(b.saved === "pending" ? "Tracks changed." : "Tracks changed, live only: not saved to the project file.");
+            loadMixer();
+        });
+    }
+
+    // ---- Add audio, Add to stream, Remove (D393 proposed, alpha.33 feedback; audio-routes.mjs): one click each, also
+    // while live (it changes what the stream hears, never the picture). Saved into the project file by the UI server.
+    function audioError(b, err) {
+        if (b && b.error === "host-error" && b.detail) return String(b.detail); // the host's own sentence
+        return b && b.text ? String(b.text) : String(err || "error");
+    }
+    function openAddAudio() {
+        Api.get("ui/api/audio/choices", (ok, b, err) => {
+            if (!ok) return say("Add audio: " + err);
+            if (!b.available) return say(b.error === "no-project-file" ? "Adding a sound needs a loaded project file." : "Add audio: the studio host is not reachable.");
+            addAudioReady(b);
+        });
+    }
+    function addAudio(key, then) {
+        Api.post("ui/api/audio", { op: "add", key: key }, (ok, b, err) => {
+            if (!ok) { const m = "Not added: " + audioError(b, err); if (then) then(false, m); else say(m); return; }
+            const late = b.audio && b.audio.cueDelayed === true;
+            say("Added " + (b.audio ? b.audio.name : "the sound") + " to the stream." +
+                (late ? " Its headphone sound (CUE) comes a little late, because it comes with video. For game sound, the capture card's audio input is heard at once." : "") +
+                (b.saved ? "" : " Not saved to the project file: the change is live only."));
+            if (then) then(true, "");
+            loadMixer();
+        });
+    }
+    function addToStream(id) {
+        Api.post("ui/api/audio", { op: "stream", id: id }, (ok, b, err) => {
+            if (!ok) say("Not added to the stream: " + audioError(b, err));
+            else say("Added to the stream." + (b.saved === false ? " Not saved to the project file: the change is live only." : ""));
+            loadMixer();
+        });
+    }
+    function removeAudio(audio, name) {
+        Api.post("ui/api/audio", { op: "remove", audio: audio }, (ok, b, err) => {
+            if (!ok) say("Not removed: " + audioError(b, err));
+            else say("Removed " + (name || "the sound") + " from the mixer." + (b.saved ? "" : " Not saved to the project file: the change is live only."));
             loadMixer();
         });
     }
@@ -632,7 +675,7 @@ QtObject {
         return {
             scenes: scenes.map(s => s.name), activeScene: activeScene, canvas: canvas,
             layers: layers.map(l => ({ id: l.id, name: l.name, visible: !!l.visible })), selected: selected,
-            mixer: mixer.map(m => ({ id: m.id, name: m.name, volumeDb: m.volumeDb, muted: !!m.muted, cue: !!m.cue })),
+            mixer: mixer.map(m => ({ id: m.id, name: m.name, volumeDb: m.volumeDb, muted: !!m.muted, cue: !!m.cue, inStream: inStream(m), audioSource: m.audioSource || null })),
             live: live, recording: recording, canStream: canStream, canRecord: canRecord, hostUp: hostUp, note: note
         };
     }
