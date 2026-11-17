@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 33,
+  "current": 34,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -44,6 +44,7 @@
     { "n": 30, "date": "2026-11-15", "title": "YouTube event per stream from a template, stream settings without a restart, 2K/4K fix" },
     { "n": 31, "date": "2026-11-15", "title": "YouTube window: quality presets, event details, live status, chat and past streams" },
     { "n": 32, "date": "2026-11-16", "title": "Go live chooser, outputs as destination cards, new light and night look" },
-    { "n": 33, "date": "2026-11-16", "title": "Main window fits small and large screens, steadier top bar, clearer disabled controls" }
+    { "n": 33, "date": "2026-11-16", "title": "Main window fits small and large screens, steadier top bar, clearer disabled controls" },
+    { "n": 34, "date": "2026-11-17", "title": "Add audio in the mixer, every sound gets a strip, layers back on the left, windows open full size" }
   ]
 }

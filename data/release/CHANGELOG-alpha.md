@@ -2,6 +2,14 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.34 — 2026-11-17
+
+- Every sound gets a strip in the mixer, including the game capture's own sound. A sound that is not in the stream says so, with a one-click "Add to stream".
+- "Add audio" in the mixer lists the sound on this PC: mics, the capture card's audio input, desktop and app sound, and layer sounds. Picking one adds it at once, also while live. The capture card's audio input is marked as the best choice for game sound (heard in the headphones at once). A sound you added can be removed with one click.
+- Layers are back on the left, under the scenes, and get the larger share. The left column is wider so layer names fit. The right column holds the inspector, look, outputs, transitions, bots and stats, with its full height.
+- The Go live window, the YouTube window with the presets and the other windows no longer open tiny.
+- The status line at the bottom stays on one line; hover it to read the whole message.
+
 ## 0.1.0-alpha.33 — 2026-11-16
 
 - The main window now fits the screen size. On a small window the previews get the room; on a large one the scene list, layers and side panels get wider. The mixer grows and shrinks with the window height.
