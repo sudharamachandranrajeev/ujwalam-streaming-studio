@@ -9,6 +9,7 @@ One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the sec
 - Layers are back on the left, under the scenes, and get the larger share. The left column is wider so layer names fit. The right column holds the inspector, look, outputs, transitions, bots and stats, with its full height.
 - The Go live window, the YouTube window with the presets and the other windows no longer open tiny.
 - The status line at the bottom stays on one line; hover it to read the whole message.
+- Opening Settings and switching the theme or the effects level no longer stalls the studio for seconds.
 
 ## 0.1.0-alpha.33 — 2026-11-16
 
