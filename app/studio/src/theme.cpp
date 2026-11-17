@@ -1457,6 +1457,16 @@ QString currentId()
 	return g_cur.id;
 }
 
+QString currentFamily()
+{
+	return g_cur.valid ? g_cur.family : QStringLiteral("Inter");
+}
+
+bool currentDark()
+{
+	return g_cur.valid ? g_cur.dark : true;
+}
+
 void setEffects(const QString &mode)
 {
 	const QString m = (mode == QStringLiteral("reduced") || mode == QStringLiteral("performance")) ? mode : QStringLiteral("full");

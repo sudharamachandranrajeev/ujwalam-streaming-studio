@@ -160,13 +160,9 @@ QmlTheme::QmlTheme(QObject *parent) : QObject(parent)
 
 QString QmlTheme::id() const { return theme::currentId(); }
 
-bool QmlTheme::dark() const
-{
-	for (const theme::Info &i : theme::available())
-		if (i.id == theme::currentId())
-			return i.dark;
-	return true;
-}
+// The pack in use, not theme::available(): that loads and parses every pack file per call, and every text binding reads
+// family on each theme or effects change (hundreds of reads; seconds of a blocked GUI thread, 2026-11-17).
+bool QmlTheme::dark() const { return theme::currentDark(); }
 
 QVariantMap QmlTheme::colors() const
 {
@@ -176,13 +172,7 @@ QVariantMap QmlTheme::colors() const
 	return m;
 }
 
-QString QmlTheme::family() const
-{
-	for (const theme::Info &i : theme::available())
-		if (i.id == theme::currentId())
-			return i.family;
-	return QStringLiteral("Inter");
-}
+QString QmlTheme::family() const { return theme::currentFamily(); }
 
 int QmlTheme::radiusSmall() const { return theme::radius(theme::Radius::Small); }
 int QmlTheme::radiusMedium() const { return theme::radius(theme::Radius::Medium); }

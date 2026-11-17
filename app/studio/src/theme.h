@@ -91,6 +91,10 @@ void apply(QApplication &app);
 // Switch live. false (and nothing changes) when the id is unknown. Unknown ids fall back to violet-night only at start.
 bool setCurrent(const QString &id);
 QString currentId();
+// The current pack's font family and dark flag, read from the pack in use. Cheap: the QML Theme reads them once per text
+// binding (hundreds on a theme switch), where available() loads and parses every pack file on each call.
+QString currentFamily();
+bool currentDark();
 QList<Info> available();
 
 // "full" (depth effects as the pack says), "reduced" (no depth effects) or "performance" (High performance, 2026-11-10:
