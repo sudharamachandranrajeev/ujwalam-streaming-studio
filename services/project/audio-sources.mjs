@@ -56,15 +56,19 @@ function boundLayers(doc) {
 
 const usedDevices = (doc) => new Set((doc.audio?.sources ?? []).map((a) => a.device).filter(Boolean));
 
+/** One capture per endpoint: true when any device an audio source uses names this endpoint, whatever that device's id. */
+function endpointInUse(doc, projectKind, entry) {
+  const used = usedDevices(doc);
+  return (doc.devices ?? []).some((d) => used.has(d.id) && (d.match?.deviceId
+    ? lower(d.match.deviceId) === lower(entry.path)
+    : d.kind === projectKind && typeof d.match?.name === 'string' && d.match.name === entry.name));
+}
+
 /** Mixer rows (host mixer.list sources) that are a layer's sound with no project audio entry. */
 const freeLayerSounds = (mixer) => (Array.isArray(mixer) ? mixer : []).filter((m) => m && typeof m.layer === 'string' && typeof m.audioSource !== 'string');
 
 export function audioChoices({ doc, list, mixer, recommended = null } = {}) {
-  const used = usedDevices(doc);
-  const free = (kind) => entriesOf(list).filter((e) => e.kind === KIND_OF[kind]).filter((e) => {
-    const d = deviceFor(doc, PROJECT_KIND[kind], e);
-    return !d || !used.has(d.id);
-  });
+  const free = (kind) => entriesOf(list).filter((e) => e.kind === KIND_OF[kind] && !endpointInUse(doc, PROJECT_KIND[kind], e));
   const rec = recommended && typeof recommended.path === 'string' ? lower(recommended.path) : null;
   const { out: bound, real } = boundLayers(doc);
   return {
@@ -99,8 +103,8 @@ export function addAudioSource(doc, { key, list, mixer, name, volumeDb, muted } 
   } else {
     const entry = entriesOf(list).find((e) => e.kind === KIND_OF[kind] && lower(e.path) === lower(ref));
     if (!entry) return { error: 'unknown-device' };
+    if (endpointInUse(project, PROJECT_KIND[kind], entry)) return { error: 'already-added' };
     let dev = deviceFor(project, PROJECT_KIND[kind], entry);
-    if (dev && usedDevices(project).has(dev.id)) return { error: 'already-added' };
     if (!dev) {
       if ((project.devices ?? []).length >= 64) return { error: 'too-many-devices' };
       dev = { id: newId('dev'), kind: PROJECT_KIND[kind], name: entry.name.slice(0, 120) || 'Audio device', match: { name: entry.name.slice(0, 256) }, origin: { ...ORIGIN } };

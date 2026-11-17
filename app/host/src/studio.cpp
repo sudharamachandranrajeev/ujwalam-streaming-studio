@@ -1573,6 +1573,17 @@ json::Value Studio::audio_add_model(const json::Value &doc, const std::string &a
 				throw Error(rpc::CONFLICT, "This sound is in the mixer already.");
 	std::shared_ptr<Src> target;
 	if (!x->obs_type.empty()) {
+		// One capture per endpoint, whatever the audio id: a second entry for the same device (an unsaved add retried
+		// under a new id) would put its sound in the stream twice.
+		const json::Value *want = x->settings.find("device_id");
+		if (want && want->is_string() && !want->as_string().empty())
+			for (auto &g : globals_) {
+				obs_data_t *gs = obs_source_get_settings(g.src->src); // a new reference
+				const bool same = gs && want->as_string() == obs_data_get_string(gs, "device_id");
+				obs_data_release(gs);
+				if (same)
+					throw Error(rpc::CONFLICT, "This device's sound is in the mixer already.");
+			}
 		uint32_t channel = 1; // the lowest free output channel (0 is the active scene); a removed one is reused
 		for (bool used = true; used && channel < MAX_CHANNELS;) {
 			used = std::any_of(globals_.begin(), globals_.end(), [&](const Global &g) { return g.channel == channel; });

@@ -3,7 +3,7 @@
 // (services/project/audio-sources.mjs) and the UI server routes (/ui/api/audio*, audio-routes.mjs: host first, then the
 // file; a host refusal saves nothing; allowed while live). Device names here are placeholders.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -90,6 +90,15 @@ test('addAudioSource: a layer sound keeps its live volume and mute; removeAudioS
   assert.equal(removeAudioSource(doc, { audio: 'nope' }).error, 'unknown-sound');
 });
 
+test('one capture per endpoint: a second device entry naming an endpoint in use is neither listed nor added', () => {
+  const doc = base();
+  // An unused device that names the mic's endpoint, listed first (as a failed save and a retry could leave behind).
+  doc.devices.unshift({ id: 'mic-copy', kind: 'microphone', name: 'Mic copy', match: { name: '<mic-device>', deviceId: '{in-1}' } });
+  assert.ok(!audioChoices({ doc, list: LIST, mixer: [] }).inputs.some((i) => i.key === 'input|{in-1}'));
+  assert.equal(addAudioSource(doc, { key: 'input|{in-1}', list: LIST }).error, 'already-added');
+  assert.equal(addAudioSource(doc, { key: 'input|{IN-1}', list: LIST }).error, 'already-added', 'endpoint ids compare case-insensitively');
+});
+
 test('streamTracks: the stream track (the first) is added in project order', () => {
   const doc = base();
   doc.audio.tracks.push({ id: 'rec', name: 'Recording' });
@@ -118,13 +127,15 @@ test('server: choices, add, add to stream and remove; host first, then the file;
   const doc = base();
   saveProject(file, doc);
   const calls = [];
-  const state = { live: true, refuse: false, rows: MIXER(doc) };
+  const state = { live: true, refuse: false, refuseUndo: false, rows: MIXER(doc) };
   const host = { describe: () => ({ kind: 'host', available: true }), call: async (m, p) => {
     if (m === 'host.status') return { live: state.live };
     if (m === 'devices.list') return LIST;
     if (m === 'mixer.list') return { sources: state.rows, tracks: doc.audio.tracks };
+    if (!m.startsWith('audio.') && m !== 'mixer.setTracks') return {}; // the server's own polls (outputs.status, ...)
     calls.push([m, p.audio ?? p.id, p.tracks]);
     if (state.refuse) throw new Error('This sound cannot be added: Windows did not open the device.');
+    if (state.refuseUndo && m === 'audio.removeFromProject') throw new Error('host gone');
     if (m === 'mixer.setTracks') return { id: p.id, audioSource: 'aud-mic', tracks: p.tracks, monitoring: 'off' };
     return { audio: p.audio, removed: true, cueDelayed: false };
   } };
@@ -146,8 +157,33 @@ test('server: choices, add, add to stream and remove; host first, then the file;
     assert.deepEqual(ch.layers.map((l) => l.layer), ['game']);
 
     assert.equal((await post({ op: 'add', key: 'input|{in-2}', extra: 1 })).status, 400, 'unknown key');
-    state.refuse = true;
+    // Malformed input: a controlled 400 before anything is read or called, never a throw.
+    const before = calls.length;
+    for (const bad of [{ op: ['add'], key: 'input|{in-2}' }, { op: { a: 1 }, key: 'x' }, { op: 'add', key: 5 }, { op: 'add', key: ['input|{in-2}'] },
+      { op: 'add', key: 'input|{in-2}', name: 7 }, { op: 'stream', id: { a: 1 } }, { op: 'stream', id: ['audio:aud-mic'] }, { op: 'remove', audio: ['aud-mic'] },
+      { op: 'remove', audio: null }, { op: 'constructor' }, { op: 'toString' }, [], 'add', null]) {
+      const b = await post(bad);
+      assert.equal(b.status, 400, JSON.stringify(bad));
+      if (bad !== null && typeof bad === 'object' && !Array.isArray(bad)) assert.equal(b.body.error, 'bad-params', JSON.stringify(bad)); // others: the server's body check
+    }
+    assert.equal(calls.length, before, 'no host call for a malformed request');
+
+    // A failed save undoes the host change: the host never keeps a sound the file does not (a retry would double it).
+    mkdirSync(`${file}.bak`); // saveProject copies the file to .bak first: a folder there makes the save fail
     let r = await post({ op: 'add', key: 'input|{in-2}' });
+    assert.equal(r.status, 500, JSON.stringify(r.body));
+    assert.equal(r.body.error, 'not-saved');
+    assert.deepEqual(calls.slice(-2).map((c) => c[0]), ['audio.addFromProject', 'audio.removeFromProject']);
+    assert.equal(calls.at(-1)[1], calls.at(-2)[1], 'the same id is taken back');
+    assert.equal(disk().audio.sources.length, 1, 'nothing saved');
+    state.refuseUndo = true;
+    r = await post({ op: 'add', key: 'input|{in-2}' });
+    assert.deepEqual([r.status, r.body.error], [500, 'not-saved-live'], 'says plainly when the undo failed too');
+    state.refuseUndo = false;
+    rmSync(`${file}.bak`, { recursive: true });
+
+    state.refuse = true;
+    r = await post({ op: 'add', key: 'input|{in-2}' });
     assert.equal(r.status, 502);
     assert.match(r.body.detail, /did not open the device/);
     assert.equal(disk().audio.sources.length, 1, 'a host refusal saves nothing');

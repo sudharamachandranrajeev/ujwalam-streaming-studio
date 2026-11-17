@@ -4,7 +4,7 @@
 // requested feature ships on. Each click applies at once (D332), also while live: it changes what the stream hears,
 // never the picture. Order as for structure edits (D240): pending mixer edits written -> project file read -> pure
 // change (services/project/audio-sources.mjs, validated) -> host -> file saved. A host refusal saves nothing; a failed
-// save leaves the host change live-only and says so (saved: false).
+// save undoes the host change (500 not-saved), or says it is live only when the undo fails too (500 not-saved-live).
 //
 //   GET  /ui/api/audio/choices          { available, devicesOff, inputs, outputs, layers } (audioChoices); devices are
 //                                       listed fresh each time (never opened); devicesOff when the host lists none
@@ -43,6 +43,8 @@ export const AUDIO_ERROR_TEXT = Object.freeze({
   'bad-key': 'Pick a sound from the list.',
   'in-stream': 'That sound is in the stream already.',
   'bad-params': 'That request was not understood.',
+  'not-saved': 'The project file could not be saved, so the change was undone. Nothing changed.',
+  'not-saved-live': 'The project file could not be saved and the change could not be undone: it is live until Ujwalam restarts.',
   busy: 'The last mixer change is still on its way; try again in a moment.',
   invalid: 'The project would not be valid with that change.',
 });
@@ -91,22 +93,29 @@ export function createAudioRoutes(opts) {
     return json(res, 200, { available: true, devicesOff: !list, ...c });
   }
 
-  // Host first, then the file: a refusal there saves nothing.
-  async function commit(res, file, project, call, answer, done) {
+  // Host first, then the file: a refusal there saves nothing. A failed save undoes the host change (undo: the opposite
+  // host call with the unchanged document), so the host never holds a sound the file does not: a retry would otherwise
+  // add a second id for the same device and the stream would hear it twice.
+  async function commit(res, file, project, call, undo, answer, done) {
     let out;
     try { out = await call(); } catch (e) {
       return json(res, 502, { error: 'host-error', detail: String(e?.message ?? e?.code ?? 'error').slice(0, 200) });
     }
-    let saved = true;
-    try { saveProject(file, project); } catch { saved = false; }
+    try { saveProject(file, project); } catch {
+      let undone = true;
+      try { await undo(); } catch { undone = false; }
+      opts.projectSync.reload();
+      opts.afterEdit?.();
+      return refuse(res, undone ? 'not-saved' : 'not-saved-live', 500);
+    }
     opts.projectSync.reload();
     log(done);
     opts.afterEdit?.();
-    return json(res, 200, { ok: true, ...answer(out), saved });
+    return json(res, 200, { ok: true, ...answer(out), saved: true });
   }
 
   async function edit(res, body) {
-    if (!isPlain(body) || !Object.hasOwn(KEYS, body.op) || Object.keys(body).some((k) => k !== 'op' && !KEYS[body.op].includes(k))) return refuse(res, 'bad-params', 400);
+    if (!isPlain(body) || typeof body.op !== 'string' || !Object.hasOwn(KEYS, body.op) || Object.keys(body).some((k) => k !== 'op' && !KEYS[body.op].includes(k))) return refuse(res, 'bad-params', 400);
     if (body.op === 'add' && (typeof body.key !== 'string' || body.key.length > 600 || (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > 120)))) return refuse(res, 'bad-params', 400);
     if (body.op === 'stream' && (typeof body.id !== 'string' || !MIXER_ID.test(body.id))) return refuse(res, 'bad-params', 400);
     if (body.op === 'remove' && (typeof body.audio !== 'string' || !ID.test(body.audio))) return refuse(res, 'bad-params', 400);
@@ -120,6 +129,7 @@ export function createAudioRoutes(opts) {
       const x = removeAudioSource(doc, { audio: body.audio });
       if (x.error) return refuse(res, x.error, 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
       return commit(res, file, x.project, () => host.call('audio.removeFromProject', { project: x.project, audio: body.audio }),
+        () => host.call('audio.addFromProject', { project: doc, audio: body.audio }),
         (out) => ({ op: 'remove', audio: body.audio, removed: out?.removed === true }), `[studio-ui] mixer: sound removed (${x.removed.device ? 'device' : 'layer'})`);
     }
 
@@ -148,6 +158,7 @@ export function createAudioRoutes(opts) {
     const x = addAudioSource(doc, { key: body.key, list, mixer, name: body.name, volumeDb: row?.volumeDb, muted: row?.muted });
     if (x.error) return refuse(res, x.error, 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
     return commit(res, file, x.project, () => host.call('audio.addFromProject', { project: x.project, audio: x.audio.id }),
+      () => host.call('audio.removeFromProject', { project: doc, audio: x.audio.id }),
       (out) => ({ op: 'add', audio: { id: x.audio.id, name: x.audio.name, kind: x.audio.device ? 'device' : 'layer', cueDelayed: out?.cueDelayed === true } }), `[studio-ui] mixer: sound added (${x.audio.device ? 'device' : 'layer'})`);
   }
 
