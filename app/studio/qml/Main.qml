@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Qt Quick studio window (D355, flag studio-qml; plan Q2): the on-air bar on top, scenes on the left, the H and V
-// previews in the middle, layers on the right, the mixer below and a status line at the bottom. The frame uses anchors
-// only, so it is placed in a window that is never shown too (hidden test mode: the previews embed there).
+// The Qt Quick studio window (D355, flag studio-qml; plan Q2): the on-air bar on top; the left column with the scenes
+// above and the layers below (the layers get the larger share, user feedback on alpha.33); the H and V previews in the
+// middle; the right column with the side panels (inspector, Look, outputs, transitions, bots) above the stream stats;
+// the mixer below and a status line at the bottom. The frame uses anchors only, so it is placed in a window that is
+// never shown too (hidden test mode: the previews embed there).
 // qml_studio.cpp calls start() once the window is placed, and probeState() for the tests' probe.
 import QtQuick
 import QtQuick.Controls.Basic
@@ -67,6 +69,10 @@ ApplicationWindow {
         s.transitionsBox = transitionsPanel.probe();
         s.guide = guide.probe();
         s.stats = stats.probe();
+        s.addAudio = addAudioDlg.probe();
+        // The frame (alpha.33 layout): each panel's x, y, width, height in window pixels.
+        const at = (it) => { const p = it.mapToItem(win.contentItem, 0, 0); return [Math.round(p.x), Math.round(p.y), Math.round(it.width), Math.round(it.height)] };
+        s.frame = { scenes: at(scenes), layers: at(layers), side: at(side), stats: at(stats), previews: at(previews), mixer: at(mixer) };
         return s;
     }
     // Probe actions the C++ side does not know (settings-*): the same names as the widget studio's probe.
@@ -83,7 +89,9 @@ ApplicationWindow {
         if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
         if (String(action).startsWith("posts-")) return postsDlg.probeAction(String(action));
         if (String(action).startsWith("sb-")) return sceneBuilderDlg.probeAction(String(action));
-        if (String(action).startsWith("volume-type:")) return mixer.probeAction(String(action));
+        if (String(action).startsWith("volume-type:") || String(action).startsWith("mixer-")) return mixer.probeAction(String(action));
+        if (action === "add-audio-open") { studioStore.openAddAudio(); return true }
+        if (String(action).startsWith("add-audio-")) return addAudioDlg.probeAction(String(action));
         if (String(action).startsWith("inspector-")) return inspector.probeAction(String(action));
         if (String(action).startsWith("look:") || String(action).startsWith("look-") || String(action).startsWith("adv-")) return lookPanel.probeAction(String(action));
         if (String(action).startsWith("outputs-")) return outputsPanel.probeAction(String(action));
@@ -127,6 +135,7 @@ ApplicationWindow {
         onConfirmNeeded: (pending) => confirm.ask(pending)
         onAddLayerReady: (sceneId, sceneName) => addLayerDlg.ask(sceneId, sceneName)
         onAddSceneReady: (canvases) => addSceneDlg.ask(canvases)
+        onAddAudioReady: (choices) => addAudioDlg.ask(choices)
         onSettingsWanted: (page) => settingsDlg.openAt(page)
         onYoutubeEventsWanted: ytWin.show("presets")
         onGoLiveWanted: (options) => goLiveDlg.ask(options)
@@ -151,11 +160,17 @@ ApplicationWindow {
 
     // Layout (D389 C2): one gap from the spacing scale, and column and mixer sizes that follow the window, so a small window
     // gives the previews the room and a large one gives the side panels more. The frame only reflows when the window is resized.
+    // The left column is wider than the scenes alone needed, so layer names fit (alpha.33 feedback). In it the scenes take
+    // about 38% of the height (never less than sceneMinH: a heading and two scene cards) and the layers the rest.
     readonly property int pad: Theme.sp.m
-    readonly property int leftW: width >= 1800 ? 280 : width >= 1400 ? 248 : 216
+    readonly property int leftW: width >= 1800 ? 340 : width >= 1400 ? 300 : 260
+    readonly property int sceneMinH: 150
+    readonly property int leftColH: Math.max(0, mixer.y - win.pad - (alerts.y + alerts.height + win.pad))
+    readonly property int scenesH: Math.min(Math.max(sceneMinH, Math.round(leftColH * 0.38)), Math.max(0, leftColH - win.pad - sceneMinH))
     readonly property int rightW: width >= 1800 ? 360 : width >= 1400 ? 320 : 280
     readonly property bool shortWindow: height < 800
-    readonly property int mixerH: height >= 1000 ? 224 : shortWindow ? 168 : 190
+    // Each strip has three rows (name and buttons, stream state or tracks, volume); the shortest mixer still fits them.
+    readonly property int mixerH: height >= 1000 ? 232 : shortWindow ? 192 : 208
 
     OnAirBar {
         id: bar
@@ -179,26 +194,28 @@ ApplicationWindow {
         id: scenes
         objectName: "scenesPanel"
         store: studioStore
-        anchors { left: parent.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
+        anchors { left: parent.left; top: alerts.bottom; leftMargin: win.pad; topMargin: win.pad }
         width: win.leftW
+        height: win.scenesH
     }
 
+    // Under the scenes, down to the mixer: the larger share of the left column.
     LayersPanel {
         id: layers
         objectName: "layersPanel"
         store: studioStore
-        anchors { right: parent.right; top: alerts.bottom; bottom: side.top; margins: win.pad }
-        width: win.rightW
+        anchors { left: parent.left; top: scenes.bottom; bottom: mixer.top; leftMargin: win.pad; topMargin: win.pad; bottomMargin: win.pad }
+        width: win.leftW
     }
 
-    // Under the layers (the widget's right column): the inspector, Look, Outputs (flag outputs-panel) and Bots (flag
-    // bot-manager). It scrolls past 60% of the column, so the layer list always keeps room.
+    // The right column, from the top down to the stats: the inspector, Look, Outputs (flag outputs-panel), Transitions and
+    // Bots (flag bot-manager). It scrolls when they are taller than the column.
     Flickable {
         id: side
         objectName: "sideColumn"
-        anchors { right: parent.right; bottom: stats.top; rightMargin: win.pad; bottomMargin: win.pad }
+        anchors { right: parent.right; top: alerts.bottom; rightMargin: win.pad; topMargin: win.pad }
         width: win.rightW
-        height: Math.min(sideCol.implicitHeight, Math.max(0, (stats.y - alerts.y - alerts.height) * 0.6))
+        height: Math.min(sideCol.implicitHeight, Math.max(0, stats.y - win.pad - y))
         contentHeight: sideCol.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
@@ -229,7 +246,7 @@ ApplicationWindow {
         id: previews
         objectName: "previewArea"
         store: studioStore
-        anchors { left: scenes.right; right: layers.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
+        anchors { left: scenes.right; right: side.left; top: alerts.bottom; bottom: mixer.top; margins: win.pad }
     }
 
     MixerPanel {
@@ -274,6 +291,7 @@ ApplicationWindow {
     ConfirmDialog { id: confirm; store: studioStore }
     AddLayerDialog { id: addLayerDlg; store: studioStore }
     AddSceneDialog { id: addSceneDlg; store: studioStore }
+    AddAudioDialog { id: addAudioDlg; store: studioStore }
     NameDialog { id: renameDlg; store: studioStore }
     SettingsDialog {
         id: settingsDlg
