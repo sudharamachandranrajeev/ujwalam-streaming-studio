@@ -79,7 +79,12 @@ tests/live-install-launcher.test.mjs   pass 1  fail 0
 tests/studio-ui-server.test.mjs        pass 40 fail 0
 tests/lint.test.mjs                    pass 35 fail 0
 node tools/lint.mjs                    0 finding(s)
+tests/studio-qml-more-windows.test.mjs pass 9  fail 0 (UJWALAM_HEADLESS=1, studio built by the commit hook)
 ```
+
+`studio-qml-more-windows` first failed 8/9: with every flag on, the More menu also shows `scenebuilder` (flag
+`scene-builder`, added in 811a473 on the base), which the expected list never had; the base fails the same way. The
+expected list now has it, before `feedback`, as the menu shows it.
 
 First round (c505cc4): setup-installer 7/7, package-alpha 18 pass 3 skipped, `qmllint --bare UpdateButton.qml
 OnAirBar.qml` exit 0.
