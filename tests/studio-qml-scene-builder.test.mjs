@@ -29,6 +29,18 @@ const SHELL_EXE = PACKAGED ?? EXE;
 const QT = PACKAGED ? null : qtDir();
 const skip = !existsSync(SHELL_EXE) || (!PACKAGED && !QT) ? 'studio shell not built (npm run build:studio)' : false;
 const REF = 'ref layout.png';
+// SB6 (D394): the model server is always a fake here; nothing leaves this process and no model is loaded. 'up' answers like
+// LM Studio with the picture model; 'down' refuses the connection.
+const chatCalls = [];
+const aiFake = (mode) => async (url) => {
+  if (mode !== 'up') throw new Error('ECONNREFUSED');
+  const u = new URL(String(url));
+  if (u.hostname !== '127.0.0.1') throw new Error('not local');
+  if (u.pathname === '/v1/models') return new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3-vl-4b' }] }), { status: 200 });
+  chatCalls.push(u.pathname);
+  const slots = [{ role: 'game', bbox_2d: [100, 100, 700, 700], confidence: 0.99 }];
+  return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ slots, font: 'sans' }) } }] }), { status: 200 });
+};
 
 function runShell(env) {
   return new Promise((resolve) => {
@@ -62,7 +74,7 @@ function project() {
 describe('QML studio: new scene from a reference (headless probe)', { skip }, () => {
   const dirs = [];
   after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
-  async function probe({ actions = [], ms = Math.max(9000, 4000 + actions.length * 900), flagsOn = ['scene-builder'], live = false } = {}) {
+  async function probe({ actions = [], ms = Math.max(9000, 4000 + actions.length * 900), flagsOn = ['scene-builder'], live = false, ai = 'down' } = {}) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-sb-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
     flags.set('scene-builder', flagsOn.includes('scene-builder')); // on by default since D390: [] means off here
@@ -79,7 +91,7 @@ describe('QML studio: new scene from a reference (headless probe)', { skip }, ()
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
     const key = 's'.repeat(40);
     const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: key, dataDir, flags, bots: createFakeBots(), projectSync: createProjectSync({ file }), assetsDir,
-      limits: { statusPollMs: 50 }, tcpAnswers: async () => false, botConfig: () => ({}) });
+      limits: { statusPollMs: 50 }, tcpAnswers: async () => false, botConfig: () => ({}), sceneBuilder: { aiFetch: aiFake(ai) } });
     const { port } = await srv.listen();
     try {
       const r = await runShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: String(ms),
@@ -148,5 +160,33 @@ describe('QML studio: new scene from a reference (headless probe)', { skip }, ()
     assert.deepEqual(r.sb.refs, [REF]);
     assert.ok(r.p.tree.find((n) => n.name === 'sbLiveNote')?.visible !== false);
     assert.ok(!r.calls.some(([m]) => m === 'scenes.create'));
+  });
+
+  test('D394 SB6: the AI switch is on when the model server answers, Build says which reader was used; off with a reason when it does not answer', async () => {
+    chatCalls.length = 0;
+    const up = await probe({ ai: 'up', actions: [...open, ...WAIT, ...WAIT, 'sb-build', ...WAIT, ...WAIT], ms: 14000 });
+    assert.equal(done(up.p)['sb-build'], true, JSON.stringify(up.p.actions));
+    assert.deepEqual([up.sb.aiOn, up.sb.aiEnabled], [true, true], 'on by default when it answers');
+    assert.match(up.sb.aiHint, /small model on this PC/);
+    assert.match(up.sb.detector, /^Read by the AI model \(lmstudio-qwen-qwen3-vl-4b\)/);
+    assert.equal(chatCalls.length, 1);
+    assert.equal(up.sb.info, 'Dry run: nothing written yet.');
+    assert.ok(up.p.tree.find((n) => n.name === 'sbAi')?.visible);
+    // switched off by the user: the simple reader, no model call
+    chatCalls.length = 0;
+    const off = await probe({ ai: 'up', actions: [...open, ...WAIT, ...WAIT, 'sb-ai:off', 'sb-build', ...WAIT, ...WAIT], ms: 14000 });
+    assert.equal(off.sb.aiOn, false);
+    assert.equal(off.sb.detector, 'Read by the simple reader.');
+    assert.equal(chatCalls.length, 0, 'switched off: the model is not asked');
+    const down = await probe({ ai: 'down', actions: [...open, ...WAIT, ...WAIT, 'sb-ai:on', 'sb-build', ...WAIT, ...WAIT], ms: 14000 });
+    assert.deepEqual([down.sb.aiOn, down.sb.aiEnabled], [false, false], 'off and cannot be switched on');
+    assert.equal(done(down.p)['sb-ai:on'], false);
+    assert.match(down.sb.aiHint, /not answering on this PC/);
+    assert.equal(down.sb.detector, 'Read by the simple reader.');
+    assert.equal(chatCalls.length, 0);
+    const live = await probe({ ai: 'up', live: true, actions: [...open, ...WAIT, ...WAIT] });
+    assert.deepEqual([live.sb.aiOn, live.sb.aiEnabled], [false, false], 'never while live');
+    assert.match(live.sb.aiHint, /live/);
+    assert.equal(chatCalls.length, 0);
   });
 });

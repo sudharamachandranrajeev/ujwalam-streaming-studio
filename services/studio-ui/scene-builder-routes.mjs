@@ -7,9 +7,14 @@
 //
 //   GET  /ui/api/scene-builder          { references: [{ rel, kind }], available }  pictures and videos of the stream
 //                                       assets folder (the only files it reads: never a path the page made up)
-//   POST /ui/api/scene-builder/build {file}  read the reference, build the scene package for this project, plan it:
-//                                       { name, diff, words, notes } (dry run: nothing written; words = the plan in
-//                                       plain words for the studio window). Kept as the one build to add.
+//                                       ai: { available, on, reason?, model } (D394 proposed, SB6): whether the local vision model
+//                                       (LM Studio on this PC, D392) answers; `on` is the toggle's default (true when it answers)
+//   POST /ui/api/scene-builder/build {file, ai?}  read the reference, build the scene package for this project, plan it:
+//                                       { name, diff, words, notes, detector } (dry run: nothing written; words = the plan in
+//                                       plain words for the studio window). Kept as the one build to add. ai true asks the
+//                                       local vision model as well; never while recording (6 GB VRAM, D1/D392): the rules
+//                                       result is built and detector.skipped says why. detector: { used: 'rules'|'model',
+//                                       model, asked, skipped? }.
 //   POST /ui/api/scene-builder/apply {}     add the last built scene: planned again against the project as it is now,
 //                                       one new scene (H + V), existing scenes, layers, devices and settings unchanged
 //                                       (the import rule); { ok, scene: { id, name }, saved }.
@@ -32,6 +37,8 @@ import { planScenePackage } from '../project/scene-package.mjs';
 import { readReference as realRead } from '../scene-builder/read.mjs';
 import { buildPackage as realBuild } from '../scene-builder/build.mjs';
 import { buildScenario as realScenario, listTemplates, templatePreview } from '../scene-builder/scenarios.mjs';
+import { DEFAULT_VISION_MODEL, visionAdapter } from '../scene-builder/vision.mjs';
+import { DEFAULT_AI_URL, localAiUrl } from '../common/local-ai.mjs';
 
 export const SCENE_BUILDER_FLAG = 'scene-builder';
 const TEMPLATES_ROUTE = '/ui/api/scene-templates';
@@ -62,7 +69,7 @@ const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) 
  */
 export function createSceneBuilderRoutes(opts) {
   const { flags, host, json } = opts;
-  const read = opts.read ?? ((file) => realRead(file));
+  const read = opts.read ?? ((file, o) => realRead(file, o));
   const build = opts.build ?? ((r, project) => realBuild(r, project));
   const templates = opts.templates ?? (() => listTemplates());
   const scenario = opts.scenario ?? ((t, project, o) => realScenario(t, project, o));
@@ -83,23 +90,56 @@ export function createSceneBuilderRoutes(opts) {
     return loadProject(projectFile()).project;
   }
 
+  // D394 (proposed, SB6): does the local vision model answer? GET /v1/models only lists the models; it loads nothing.
+  // Never while live or recording (6 GB VRAM, D1/D392). Every answer carries a plain reason when it is not available.
+  async function aiStatus(hs) {
+    const out = (available, reason) => ({ available, on: available, model: DEFAULT_VISION_MODEL, ...(reason ? { reason } : {}) });
+    if (hs?.live === true) return out(false, 'The AI read is off while you are live: the graphics card is needed for the stream.');
+    if (hs?.recording === true) return out(false, 'The AI read is off while you are recording: the graphics card is needed for the recording.');
+    const href = localAiUrl(DEFAULT_AI_URL);
+    if (!href) return out(false, 'No local AI address is set.');
+    try {
+      const r = await (opts.aiFetch ?? globalThis.fetch)(new URL('/v1/models', href), { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(1500) });
+      if (r.status !== 200) { try { await r.text(); } catch { /* not used */ } return out(false, 'LM Studio did not give a list of models. Start its local server, then look again.'); }
+      const list = (await r.json())?.data;
+      if (Array.isArray(list) && list.length > 0 && !list.some((m) => m?.id === DEFAULT_VISION_MODEL)) return out(false, `LM Studio answers, but the picture model ${DEFAULT_VISION_MODEL} is not installed in it.`);
+      return out(true);
+    } catch { return out(false, 'LM Studio is not answering on this PC (127.0.0.1:1234). Start it and switch on its local server to use the AI read.'); }
+  }
+  async function status() {
+    let hs = null;
+    try { hs = await host.call('host.status', {}); } catch { hs = null; }
+    return aiStatus(hs);
+  }
+
   async function buildRoute(res, body) {
-    if (!isPlain(body) || Object.keys(body).some((k) => k !== 'file') || typeof body.file !== 'string' || body.file.length > 260) return json(res, 400, { error: 'bad-params' });
+    if (!isPlain(body) || Object.keys(body).some((k) => !['file', 'ai'].includes(k)) || typeof body.file !== 'string' || body.file.length > 260 || (body.ai !== undefined && typeof body.ai !== 'boolean')) return json(res, 400, { error: 'bad-params' });
     const hit = listAssets(opts.assetsDir).find((a) => a.rel === body.file);
     if (!hit) return json(res, 409, { error: 'unknown-reference' });
     if (busy) return json(res, 409, { error: 'busy' });
-    if (!(await offAir(res))) return undefined;
+    let hs = null;
+    try { hs = await host.call('host.status', {}); } catch { hs = null; }
+    if (!hs || hs.live !== false) return json(res, 409, { error: hs ? 'live-locked' : 'host-unavailable' });
+    // The AI read is asked for only when the page says so AND the card is free; otherwise the rules result is built and says why.
+    let model = null, skipped = null;
+    if (body.ai === true) {
+      const st = await aiStatus(hs);
+      if (!st.available) skipped = st.reason;
+      else { try { model = visionAdapter({ ...(opts.aiFetch ? { fetch: opts.aiFetch } : {}) }); } catch { skipped = 'The local AI address is not on this PC.'; } }
+    }
     busy = true;
     const task = opts.tasks?.start({ title: 'Reading the reference for a new scene', kind: 'scene-builder' });
     try {
-      const r = await read(path.join(opts.assetsDir, ...hit.rel.split('/')));
+      const r = await read(path.join(opts.assetsDir, ...hit.rel.split('/')), model ? { model } : {});
       task?.update?.({ note: 'Building the scene' });
       const project = currentProject();
       const pkg = build(r, project);
       const { diff } = planScenePackage(project, pkg, { flags: flagMap() });
       last = { pkg, name: diff.adds.scenes[0].name, rel: hit.rel };
       task?.done?.();
-      return json(res, 200, { name: last.name, diff, words: planWords(diff), notes:Array.isArray(r?.notes) ? r.notes.slice(0, 8) : [] });
+      const used = typeof r?.detector?.model === 'string' && r.detector.model ? 'model' : 'rules';
+      return json(res, 200, { name: last.name, diff, words: planWords(diff), notes: Array.isArray(r?.notes) ? r.notes.slice(0, 8) : [],
+        detector: { used, model: used === 'model' ? r.detector.model : null, asked: body.ai === true, ...(skipped ? { skipped } : {}) } });
     } catch (e) {
       task?.fail?.('Could not build a scene from it');
       return json(res, 422, { error: 'build-failed', detail: String(e?.message ?? 'error').slice(0, 200) });
@@ -202,7 +242,7 @@ export function createSceneBuilderRoutes(opts) {
     if (!on()) return json(res, 404, { error: `${SCENE_BUILDER_FLAG}-off` }), true;
     if (method === 'GET' && route === '/ui/api/scene-builder') {
       const available = typeof projectFile() === 'string';
-      return json(res, 200, { available, references: available ? listAssets(opts.assetsDir) : [], built: last ? { name: last.name, file: last.rel } : null }), true;
+      return json(res, 200, { available, references: available ? listAssets(opts.assetsDir) : [], built: last ? { name: last.name, file: last.rel } : null, ai: await status() }), true;
     }
     if (method !== 'POST') return false;
     if (typeof projectFile() !== 'string') return json(res, 409, { error: 'no-project-file' }), true;

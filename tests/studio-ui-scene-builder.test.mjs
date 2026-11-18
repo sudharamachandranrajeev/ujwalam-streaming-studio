@@ -74,7 +74,7 @@ test('scene builder routes: flag gate, dry-run build, live lock, apply adds one 
   } };
   const flags = createFlags({ dataDir: dir });
   const core = { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } };
-  const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, flags, assetsDir, projectSync: createProjectSync({ file }), limits: { statusPollMs: 50 } });
+  const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, flags, assetsDir, projectSync: createProjectSync({ file }), limits: { statusPollMs: 50 }, sceneBuilder: { aiFetch: async () => { throw new Error('offline'); } } });
   const { port } = await srv.listen();
   try {
     const cookie = await new Promise((resolve) => http.get({ host: '127.0.0.1', port, path: `/login?k=${KEY}` }, (res) => { res.resume(); resolve(res.headers['set-cookie'][0].split(';')[0]); }));
@@ -149,5 +149,100 @@ test('scene builder routes: flag gate, dry-run build, live lock, apply adds one 
     assert.equal(validateProject(saved).ok, true);
     assert.equal((await get()).body.built, null, 'the build is used up');
     assert.equal((await post('/apply', {})).body.error, 'nothing-built');
+  } finally { await srv.close(); }
+});
+
+test('D394 SB6: the AI read switch: answers on 127.0.0.1:1234 gives on, else off with a reason; never while live or recording; the model is asked only when the page says so; fake fetch only', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ujw-sb-ai-'));
+  const assetsDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-sb-ai-assets-'));
+  writePng(layoutH().canvas, assetsDir, 'ref layout');
+  const file = path.join(dir, 'p.project.json');
+  saveProject(file, project());
+  const hostState = { live: false, recording: false };
+  const host = { describe: () => ({ kind: 'host', available: true }), call: async (m) => (m === 'host.status' ? { live: hostState.live, recording: hostState.recording } : {}) };
+  // The fake model server: nothing leaves this process.
+  const net = { models: [{ id: 'qwen/qwen3-vl-4b' }], down: false, chat: 'good', urls: [], chats: 0 };
+  const aiFetch = async (url, init) => {
+    net.urls.push(String(url));
+    if (net.down) throw new Error('ECONNREFUSED');
+    const u = new URL(String(url));
+    assert.equal(u.hostname, '127.0.0.1', 'only this PC is ever asked');
+    if (u.pathname === '/v1/models') return new Response(JSON.stringify({ data: net.models }), { status: 200 });
+    net.chats++;
+    assert.equal(init.method, 'POST');
+    if (net.chat === 'fail') return new Response('no', { status: 500 });
+    const slots = [{ role: 'game', bbox_2d: [100, 100, 700, 700], confidence: 0.99 }];
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ slots, font: 'sans' }) } }] }), { status: 200 });
+  };
+  const flags = createFlags({ dataDir: dir });
+  const core = { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } };
+  const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, flags, assetsDir, projectSync: createProjectSync({ file }), limits: { statusPollMs: 50 }, sceneBuilder: { aiFetch } });
+  const { port } = await srv.listen();
+  try {
+    const cookie = await new Promise((resolve) => http.get({ host: '127.0.0.1', port, path: `/login?k=${KEY}` }, (res) => { res.resume(); resolve(res.headers['set-cookie'][0].split(';')[0]); }));
+    const csrf = (await raw(port, { url: '/ui/api/session', headers: { cookie } })).body.csrf;
+    const hdr = { cookie, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf };
+    const post = (url, body) => raw(port, { method: 'POST', url: `/ui/api/scene-builder${url}`, body: JSON.stringify(body), headers: hdr });
+    const ai = async () => (await raw(port, { url: '/ui/api/scene-builder', headers: { cookie } })).body.ai;
+
+    let a = await ai();
+    assert.deepEqual([a.available, a.on, a.model, a.reason], [true, true, 'qwen/qwen3-vl-4b', undefined], 'LM Studio answers: on by default');
+    assert.equal(net.urls[0], 'http://127.0.0.1:1234/v1/models');
+    assert.equal(net.chats, 0, 'looking at the list loads nothing');
+    net.models = [{ id: 'other/model' }];
+    a = await ai();
+    assert.deepEqual([a.available, a.on], [false, false]);
+    assert.match(a.reason, /not installed/);
+    net.models = [{ id: 'qwen/qwen3-vl-4b' }];
+    net.down = true;
+    a = await ai();
+    assert.deepEqual([a.available, a.on], [false, false]);
+    assert.match(a.reason, /not answering/);
+    net.down = false;
+    const n = net.urls.length;
+    hostState.live = true;
+    a = await ai();
+    assert.equal(a.available, false);
+    assert.match(a.reason, /live/);
+    hostState.live = false; hostState.recording = true;
+    a = await ai();
+    assert.equal(a.available, false);
+    assert.match(a.reason, /recording/);
+    assert.equal(net.urls.length, n, 'while live or recording the server is not even asked');
+    hostState.recording = false;
+
+    // the model is asked only when the page says so
+    assert.equal((await post('/build', { file: 'ref layout.png', ai: 'yes' })).status, 400);
+    let r = await post('/build', { file: 'ref layout.png' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body.detector, { used: 'rules', model: null, asked: false });
+    assert.equal(net.chats, 0);
+    r = await post('/build', { file: 'ref layout.png', ai: false });
+    assert.equal(r.body.detector.used, 'rules');
+    assert.equal(net.chats, 0);
+    r = await post('/build', { file: 'ref layout.png', ai: true });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual([r.body.detector.used, r.body.detector.asked, r.body.detector.model], ['model', true, 'lmstudio-qwen-qwen3-vl-4b']);
+    assert.equal(net.chats, 1);
+    // the model fails: the rules result stands, with the failure in the notes
+    net.chat = 'fail';
+    r = await post('/build', { file: 'ref layout.png', ai: true });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual([r.body.detector.used, r.body.detector.asked], ['rules', true]);
+    assert.ok(r.body.notes.some((x) => /failed/.test(x)), JSON.stringify(r.body.notes));
+    net.chat = 'good';
+    // recording: the AI read is refused, the rules result is still built, and it says why
+    const chats = net.chats;
+    hostState.recording = true;
+    r = await post('/build', { file: 'ref layout.png', ai: true });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.detector.used, 'rules');
+    assert.match(r.body.detector.skipped, /recording/);
+    assert.equal(net.chats, chats, 'the model was not asked while recording');
+    hostState.recording = false;
+    // live: the build itself is refused, as before
+    hostState.live = true;
+    assert.equal((await post('/build', { file: 'ref layout.png', ai: true })).body.error, 'live-locked');
+    assert.equal(net.chats, chats);
   } finally { await srv.close(); }
 });

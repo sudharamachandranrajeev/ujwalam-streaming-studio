@@ -172,7 +172,7 @@ export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'yo
         case 'marker.add': return { ok: true, fake: true };
         // D390/D391: the fake has no displays, windows or OBS transitions; it lists none (never invented titles).
         case 'capture.listTargets': return { displays: [], windows: [], fake: true };
-        case 'transitions.types': return { types: [{ type: 'cut', fields: [], available: true }, { type: 'fade', fields: ['durationMs', 'easing'], available: true }], wipes: [], fake: true };
+        case 'transitions.types': return { types: ['cut', 'fade', 'stinger', 'slide', 'swipe', 'wipe', 'fadeColor'].map((t) => ({ type: t, fields: [], available: true })), wipes: ['clock', 'iris', 'linear-h'], fake: true };
         case 'mixer.list': return { sources: mixer.map((m) => ({ ...m, mixers: TRACKS.reduce((b, t, n) => (m.tracks.includes(t.id) ? b | (1 << n) : b), 0), peakDb: null })), tracks: TRACKS };
         case 'mixer.setTracks': {
           const m = need(mixer.find((x) => x.id === p.id), 'source');

@@ -44,7 +44,10 @@ Column {
     function typeModel(c) {
         const m = opts((easing.types || []).filter(t => t.id !== "stinger"));
         const k = kept[c];
-        if (k !== "" && !m.some(x => x.value === k)) m.push({ value: k, text: "Stinger (video)" }); // kept as it is unless changed here
+        if (k !== "" && !m.some(x => x.value === k)) { // kept as it is unless changed here: set in the main window's Transitions box
+            const w = ((info.kinds || []).find(x => x.id === k) || ({})).label;
+            m.push({ value: k, text: w || "Stinger (video)" });
+        }
         return m;
     }
     function row(c) { return c === "v" ? rows.v : rows.h }
@@ -137,10 +140,12 @@ Column {
         for (const c of (info.canvases || []))
             if (c.id === "v" && (c.transition || ({})).type === "stinger" && rows.v.type === "stinger" && !mirror) return;
         let hb = body("h"), vb = body("v");
+        const plain = (b) => b.type === "cut" || b.type === "fade"; // the other types have their own fields: set in the main window
+        if (!plain(vb) && !mirror) vb = null;
         if (mirror) { // the portrait canvas follows the main one; the host uses the main canvas's values
             vb = Object.assign({}, hb, { canvas: "v", mirror: true });
         }
-        if (hb.type === "stinger") hb = null; // set in the main window's panel
+        if (!plain(hb)) { hb = null; if (mirror) vb = null } // set in the main window's panel
         // The page goes with the Settings window right after Save: the chain holds only the store.
         const store = box.store;
         const send = (b, next) => {

@@ -5,6 +5,15 @@
     { "id": "fade", "label": "Fade" },
     { "id": "stinger", "label": "Stinger (video)" }
   ],
+  "kinds": [
+    { "id": "stinger", "label": "Stinger (video)", "help": "A short video plays over the switch; the scene changes at the moment you pick. Pick a built-in one or your own video." },
+    { "id": "cut", "label": "Cut", "help": "The new scene appears at once, with no effect." },
+    { "id": "fade", "label": "Fade", "help": "The old scene melts into the new one." },
+    { "id": "slide", "label": "Slide", "help": "The new scene pushes the old one out of the frame in the direction you pick." },
+    { "id": "swipe", "label": "Swipe", "help": "One scene moves over the other, which stays still. Switch on 'Swipe in' to bring the new scene in over the old one; off to swipe the old one away." },
+    { "id": "wipe", "label": "Wipe", "help": "The new scene is revealed through a pattern, such as a clock hand or blinds. Softness blurs the edge; Invert plays the pattern the other way round." },
+    { "id": "fadeColor", "label": "Colour fade", "help": "The picture fades to one colour, then from that colour to the new scene. The point is how far through the colour is at its strongest." }
+  ],
   "easing": [
     { "id": "linear", "label": "Linear" },
     { "id": "in-sine", "label": "In Sine" },

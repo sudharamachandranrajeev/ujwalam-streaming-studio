@@ -51,6 +51,7 @@ import { UNDOABLE, afterOf, beforeOf, createEditHistory, paramsOf } from './edit
 import { addLayer, addScene, duplicateLayer, duplicateScene, moveLayer, realismScene, removeLayer, removeScene, renameLayer, renameScene } from '../project/structure.mjs';
 import { listAssets } from './assets.mjs';
 import { loadProject, saveProject } from '../project/store.mjs';
+import { TRANSITION_RANGES, TRANSITION_TYPES, ownFields, validateProject } from '../project/validate.mjs';
 import { listStingerPresets, stingerTransition } from '../project/stinger-presets.mjs';
 import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
@@ -83,6 +84,10 @@ import { integrationsInEffect } from './integrations.mjs';
 // Scene transition types and easing curves (D327 TR1, data/transitions/easing.json), read once.
 let easingCache = null;
 export const easingChoices = () => (easingCache ??= JSON.parse(readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..'), 'data', 'transitions', 'easing.json'), 'utf8')));
+
+// D394 (proposed): the luma wipe patterns with readable names (data/transitions/luma-wipes.json), read once.
+let lumaCache = null;
+export const lumaWipes = () => (lumaCache ??= JSON.parse(readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..'), 'data', 'transitions', 'luma-wipes.json'), 'utf8')).wipes.map((w) => ({ id: w.id, label: w.label })));
 
 // The app folder (repo or install): settings folders may not point into it (D284).
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -213,9 +218,8 @@ export const PREVIEW_EDIT_FLAG = 'preview-edit';
 export const TRANSITIONS_FLAG = 'transitions';
 // D391: the transition types with their own fields (as services/project/validate.mjs); the host reports colours in
 // upper case, so a colour compares without case.
-const TR_OWN = { slide: ['direction'], swipe: ['direction', 'swipeIn'], wipe: ['pattern', 'softness', 'invert'], fadeColor: ['color', 'pointPct'] };
-const trOwn = (type) => (typeof type === 'string' && Object.hasOwn(TR_OWN, type) ? TR_OWN[type] : null); // never an inherited key
-const TR_OWN_KEYS = [...new Set(Object.values(TR_OWN).flat())];
+const trOwn = (type) => { const f = ownFields(type); return f.length ? f : null; }; // never an inherited key (the validator's table)
+const TR_OWN_KEYS = [...new Set(TRANSITION_TYPES.flatMap(ownFields))];
 const trSame = (a, b) => (typeof a === 'string' && typeof b === 'string' ? a.toLowerCase() === b.toLowerCase() : a === b);
 // Scene and layer structure edits (D240): add/remove scenes and layers from the control page, saved into the project.
 export const SCENE_EDIT_FLAG = 'scene-edit';
@@ -1160,13 +1164,25 @@ export function createStudioServer(opts) {
   // is cleared: its entries may name a layer or scene that is gone.
   // Transitions form (D242, flag transitions): each canvas's project transition, and the videos a stinger may use (the
   // stream assets folder, base "media").
-  function transitionChoices(res) {
+  async function transitionChoices(res) {
     const on = !!flags && flags.isOn(TRANSITIONS_FLAG);
     const file = projectSync?.status?.().file;
     if (!on || typeof file !== 'string') return json(res, 200, { on, available: false });
     let doc;
     try { projectSync.flush(); doc = loadProject(file).project; } catch { return json(res, 200, { on, available: false }); }
-    return json(res, 200, { on, available: true, canvases: doc.canvases.map((c) => ({ id: c.id, transition: c.transition ?? { type: 'cut', durationMs: 0 } })),
+    // D394 (proposed): what this host can run (transitions.types, read only). A host that does not answer leaves every
+    // type offered; the click then gives the host's own refusal. A type the host lists as unavailable is shown off, with the reason.
+    let hostTypes = null;
+    try { const r = await host.call('transitions.types', {}); if (isPlain(r) && Array.isArray(r.types)) hostTypes = r; } catch { hostTypes = null; }
+    const kinds = easingChoices().kinds.map((k) => {
+      const h = hostTypes?.types?.find((t) => t?.type === k.id);
+      const missing = !!hostTypes && (!h || h.available !== true);
+      return { id: k.id, label: k.label, help: k.help, fields: ownFields(k.id), available: !missing,
+        ...(missing ? { reason: `This copy of the studio engine does not include the ${k.label.toLowerCase()} transition.` } : {}) };
+    });
+    const hostWipes = Array.isArray(hostTypes?.wipes) ? new Set(hostTypes.wipes) : null;
+    const wipes = lumaWipes().map((w) => ({ ...w, available: !hostWipes || hostWipes.has(w.id) }));
+    return json(res, 200, { on, available: true, kinds, wipes, ranges: TRANSITION_RANGES, directions: ['left', 'right', 'up', 'down'], canvases: doc.canvases.map((c) => ({ id: c.id, transition: c.transition ?? { type: 'cut', durationMs: 0 } })),
       videos: listAssets(assetsDir).filter((a) => a.kind === 'media').map((a) => a.rel),
       // D391: the built-in cyberpunk stingers, picked by id (`preset`), never by path
       stingers: listStingerPresets().map((p) => ({ id: p.id, label: p.label, description: p.description, pointMs: p.pointMs, default: p.default })),
@@ -1182,21 +1198,30 @@ export function createStudioServer(opts) {
     const file = projectSync?.status?.().file;
     if (typeof file !== 'string') return json(res, 409, { error: 'no-project-file' });
     // easing / mirror (D327 TR1) only with flag stream-settings.
-    const keys = ['canvas', 'type', 'durationMs', 'file', 'pointMs', 'audio', 'preset', ...(flags.isOn(STREAM_SETTINGS_FLAG) ? ['easing', 'mirror'] : [])];
-    if (!isPlain(body) || Object.keys(body).some((k) => !keys.includes(k)) || !['h', 'v'].includes(body.canvas) || !['cut', 'fade', 'stinger'].includes(body.type)) return json(res, 400, { error: 'bad-params' });
+    const keys = ['canvas', 'type', 'durationMs', 'file', 'pointMs', 'audio', 'preset', ...TR_OWN_KEYS, ...(flags.isOn(STREAM_SETTINGS_FLAG) ? ['easing', 'mirror'] : [])];
+    if (!isPlain(body) || Object.keys(body).some((k) => !keys.includes(k)) || !['h', 'v'].includes(body.canvas) || !TRANSITION_TYPES.includes(body.type)) return json(res, 400, { error: 'bad-params' });
     if (body.easing !== undefined && (body.type !== 'fade' || !easingChoices().easing.some((e) => e.id === body.easing))) return json(res, 400, { error: 'bad-params' });
     if (body.mirror !== undefined && (typeof body.mirror !== 'boolean' || body.canvas !== 'v')) return json(res, 400, { error: 'bad-params' });
-    const ms = (v) => Number.isInteger(v) && v >= 0 && v <= 10000;
-    if (body.type === 'fade' && !ms(body.durationMs)) return json(res, 400, { error: 'bad-params' });
+    const ms = (v) => Number.isInteger(v) && v >= TRANSITION_RANGES.durationMs[0] && v <= TRANSITION_RANGES.durationMs[1];
+    if ((body.type === 'fade' || trOwn(body.type)) && !ms(body.durationMs)) return json(res, 400, { error: 'bad-params' });
     // a stinger is either a video from the stream assets folder (`file` + `pointMs`) or a built-in preset by id (`preset`, D391; its own pointMs)
     if (body.preset !== undefined && (body.type !== 'stinger' || typeof body.preset !== 'string' || body.file !== undefined || body.pointMs !== undefined)) return json(res, 400, { error: 'bad-params' });
     if (body.type === 'stinger' && ((body.preset === undefined && (!ms(body.pointMs) || typeof body.file !== 'string')) || (body.audio !== undefined && typeof body.audio !== 'boolean'))) return json(res, 400, { error: 'bad-params' });
     if (body.type !== 'stinger' && body.audio !== undefined) return json(res, 400, { error: 'bad-params' });
     if (body.preset !== undefined && !listStingerPresets().some((p) => p.id === body.preset)) return json(res, 409, { error: 'unknown-stinger' });
     if (body.type === 'stinger' && body.preset === undefined && !listAssets(assetsDir).some((a) => a.kind === 'media' && a.rel === body.file)) return json(res, 409, { error: 'unknown-asset' });
+    if (body.type === 'wipe' && body.pattern !== undefined && !lumaWipes().some((w) => w.id === body.pattern)) return json(res, 409, { error: 'unknown-pattern' });
     let hs = null;
     try { hs = await host.call('host.status', {}); } catch { hs = null; }
-    if (!hs || hs.live !== false) return json(res, 409, { error: hs ? 'live-locked' : 'host-unavailable' });
+    // D394 (proposed): a click acts on air as well (D332); only a host that does not answer refuses.
+    if (!hs) return json(res, 409, { error: 'host-unavailable' });
+    // A type or wipe image this host lists as unavailable is refused with its name (an older host that cannot list them is asked directly later).
+    try {
+      const ht = await host.call('transitions.types', {});
+      const t = Array.isArray(ht?.types) ? ht.types.find((x) => x?.type === body.type) : null;
+      if (Array.isArray(ht?.types) && body.type !== 'cut' && (!t || t.available !== true)) return json(res, 409, { error: 'type-unavailable' });
+      if (body.type === 'wipe' && body.pattern !== undefined && Array.isArray(ht?.wipes) && !ht.wipes.includes(body.pattern)) return json(res, 409, { error: 'unknown-pattern' });
+    } catch { /* no list: the host's own refusal comes from the status poll */ }
     projectSync.reload();
     let doc;
     try { doc = loadProject(file).project; } catch { return json(res, 409, { error: 'project-unreadable' }); }
@@ -1204,8 +1229,12 @@ export function createStudioServer(opts) {
     if (!c) return json(res, 409, { error: 'unknown-canvas' });
     c.transition = body.type === 'stinger' && body.preset !== undefined ? { ...stingerTransition(body.preset, c.id), ...(body.audio === false ? { audio: false } : {}) }
       : body.type === 'stinger' ? { type: 'stinger', durationMs: 0, file: { base: 'media', rel: body.file }, pointMs: body.pointMs, ...(body.audio === false ? { audio: false } : {}) }
-      : { type: body.type, durationMs: body.type === 'fade' ? body.durationMs : 0, ...(body.easing && body.easing !== 'linear' ? { easing: body.easing } : {}) };
+      : { type: body.type, durationMs: body.type === 'fade' || trOwn(body.type) ? body.durationMs : 0, ...(body.easing && body.easing !== 'linear' ? { easing: body.easing } : {}),
+        ...Object.fromEntries(TR_OWN_KEYS.filter((k) => body[k] !== undefined).map((k) => [k, body[k]])) };
     if (body.mirror === true) c.transition.mirror = true;
+    // The project validator is the one rule set (services/project/validate.mjs): every problem it finds on this transition is a bad request.
+    const bad = validateProject(doc).errors.filter((e) => e.path.includes('.transition'));
+    if (bad.length > 0) return json(res, 400, { error: 'bad-params', problems: bad.slice(0, 5).map((e) => `${e.path}: ${e.message}`) });
     try { saveProject(file, doc); } catch { return json(res, 409, { error: 'not-saved' }); }
     projectSync.reload();
     return json(res, 200, { ok: true, canvas: c.id, transition: c.transition });
