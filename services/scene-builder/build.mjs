@@ -147,7 +147,7 @@ export function buildPackage(read, project, { rules = loadBuildRules(), bind = {
   const refCanvas = read.canvas === 'V' ? 'v' : 'h';
   const sizes = Object.fromEntries(project.canvases.map((c) => [c.id, { width: c.width, height: c.height }]));
   const refSize = { width: read.reference.width, height: read.reference.height };
-  const sources = findSources(project, { bind, rules });
+  const sources = findSources(project, { bind, rules, screen: read.slots.some((s) => s.role === 'screen') });
   const { best, graphics, dropped } = pickSlots(read.slots, rules);
   const roles = new Set(Object.keys(best));
   const placeholders = [], notCarried = [], warnings = [], links = {}, deviceRoles = {};
@@ -195,6 +195,16 @@ export function buildPackage(read, project, { rules = loadBuildRules(), bind = {
         return { ...out, type: 'capture', role: ROLE_OF[role] };
       });
     }
+    if (roles.has('screen') && boxes.screen) { // no rule derives a screen box: scenarios give both canvases explicitly
+      add('screen', 'screen', best.screen, boxes.screen, () => {
+        const src = sources.screen;
+        if (src.missing) return src;
+        const f = fitBox(boxes.screen, cv, contentOf(src, rules), rules.screen.fit, 0);
+        const out = { name: 'Screen', rect: f.box, fit: f.fit };
+        if (src.layer) { links.screen = src.layer; return { ...out, type: 'link', role: 'screen', link: { layer: src.layer, name: src.name } }; }
+        return { ...out, type: src.create.type, target: src.create.source, link: { capture: src.create.type, name: src.name } };
+      });
+    }
     for (const role of ['chat', 'alerts']) {
       if (!roles.has(role)) continue;
       add(role, role, best[role], boxes[role], () => {
@@ -211,10 +221,10 @@ export function buildPackage(read, project, { rules = loadBuildRules(), bind = {
     if (fromRef) {
       graphics.forEach((slot, i) => add('graphics', `graphics-${i + 1}`, slot, slot.box, () => ({
         type: 'browser', name: `Panel ${i + 1}`, overlay: rules.panel.overlay,
-        query: query([['radius', radiusToken], ['glow', glow], ['theme', theme]]),
+        query: query([['radius', radiusToken], ['glow', glow], ['text', slot.text], ['theme', theme]]),
       })));
       if (canvas === 'v') {
-        for (const role of ['camera', 'chat', 'alerts']) {
+        for (const role of ['camera', 'chat', 'alerts', 'screen']) {
           if (roles.has(role) && !inside(best[role].box, rules.v.safeBox)) warnings.push(`v: the reference puts the ${role} outside the V safe zone (${rules.v.safe.target}); kept as drawn`);
         }
       }

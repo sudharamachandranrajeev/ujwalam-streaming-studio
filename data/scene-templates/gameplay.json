@@ -1,0 +1,87 @@
+{
+  "id": "gameplay",
+  "version": "0.1.0",
+  "status": "unverified",
+  "label": "Gameplay",
+  "description": "The game on screen with your camera in a corner, chat and alerts on top.",
+  "sceneName": "Gameplay",
+  "order": 1,
+  "slots": {
+    "h": [
+      {
+        "role": "game",
+        "box": {
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1
+        }
+      },
+      {
+        "role": "camera",
+        "box": {
+          "x": 0.01,
+          "y": 0.79,
+          "w": 0.2,
+          "h": 0.2
+        }
+      },
+      {
+        "role": "chat",
+        "box": {
+          "x": 0.74,
+          "y": 0.4,
+          "w": 0.25,
+          "h": 0.45
+        }
+      },
+      {
+        "role": "alerts",
+        "box": {
+          "x": 0.3,
+          "y": 0.02,
+          "w": 0.4,
+          "h": 0.1
+        }
+      }
+    ],
+    "v": [
+      {
+        "role": "camera",
+        "box": {
+          "x": 0.0556,
+          "y": 0.0834,
+          "w": 0.5,
+          "h": 0.1582
+        }
+      },
+      {
+        "role": "alerts",
+        "box": {
+          "x": 0.5656,
+          "y": 0.0834,
+          "w": 0.3047,
+          "h": 0.09
+        }
+      },
+      {
+        "role": "game",
+        "box": {
+          "x": 0.0556,
+          "y": 0.26,
+          "w": 0.8147,
+          "h": 0.2578
+        }
+      },
+      {
+        "role": "chat",
+        "box": {
+          "x": 0.0556,
+          "y": 0.53,
+          "w": 0.8147,
+          "h": 0.26
+        }
+      }
+    ]
+  }
+}

@@ -19,20 +19,21 @@
       "additionalProperties": false,
       "properties": { "left": { "type": "number", "minimum": 0 }, "top": { "type": "number", "minimum": 0 }, "right": { "type": "number", "minimum": 0 }, "bottom": { "type": "number", "minimum": 0 } }
     },
-    "slotRole": { "enum": ["game", "camera", "chat", "alerts", "graphics"] },
+    "slotRole": { "enum": ["game", "camera", "chat", "alerts", "graphics", "screen"] },
     "layer": {
       "type": "object",
       "additionalProperties": false,
       "required": ["key", "type", "name", "z", "rect", "slot"],
       "properties": {
         "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
-        "type": { "enum": ["link", "capture", "browser", "color"] },
+        "type": { "enum": ["link", "capture", "browser", "color", "window", "screen"] },
         "name": { "type": "string", "minLength": 1, "maxLength": 120 },
         "z": { "type": "integer", "minimum": 0 },
         "rect": { "$ref": "#/$defs/rect" },
         "crop": { "$ref": "#/$defs/crop" },
         "fit": { "enum": ["contain", "cover"] },
-        "role": { "enum": ["game", "camera", "game-capture", "facecam"], "description": "link: the bindings.links role; capture: the bindings.roles role." },
+        "role": { "enum": ["game", "camera", "game-capture", "facecam", "screen"], "description": "link: the bindings.links role; capture: the bindings.roles role." },
+        "target": { "type": "object", "description": "window / screen (D390): the source of a NEW window or screen layer, as the project layer contract: { window, match, cursor } or { display, cursor }." },
         "overlay": { "type": "string", "maxLength": 200 },
         "query": { "type": "string", "maxLength": 2000 },
         "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{8}$" },
@@ -99,7 +100,7 @@
       "additionalProperties": false,
       "required": ["links", "roles"],
       "properties": {
-        "links": { "type": "object", "additionalProperties": { "$ref": "#/$defs/id" }, "propertyNames": { "enum": ["game", "camera"] } },
+        "links": { "type": "object", "additionalProperties": { "$ref": "#/$defs/id" }, "propertyNames": { "enum": ["game", "camera", "screen"] } },
         "roles": { "type": "object", "additionalProperties": { "$ref": "#/$defs/id" }, "propertyNames": { "enum": ["game-capture", "facecam"] } }
       }
     },

@@ -31,6 +31,7 @@ export function planWords(diff) {
   for (const l of diff.adds.layers) {
     const what = l.placeholder ? `a placeholder to fill in (${l.placeholder})`
       : l.shows?.layer ? `shows your layer "${l.shows.name ?? l.shows.layer}"`
+        : l.shows?.capture ? `shows ${l.shows.capture === 'window' ? 'the window' : 'the screen'} you picked`
         : l.shows?.device ? `uses your device ${l.shows.device}`
           : l.shows?.overlay ? `overlay ${l.shows.overlay}` : l.type;
     lines.push(`${l.canvas.toUpperCase()}: ${l.name ?? l.key}: ${what}`);

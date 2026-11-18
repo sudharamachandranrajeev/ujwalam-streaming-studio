@@ -31,7 +31,8 @@
       "additionalProperties": false,
       "required": ["role", "box", "confidence", "evidence", "source"],
       "properties": {
-        "role": { "enum": ["game", "camera", "chat", "alerts", "graphics"] },
+        "role": { "enum": ["game", "camera", "chat", "alerts", "graphics", "screen"], "description": "screen: never emitted by the detector; only the scenario templates (D390) use it." },
+        "text": { "type": "string", "minLength": 1, "maxLength": 80, "description": "graphics only, scenario templates: the message on the panel." },
         "box": { "$ref": "#/$defs/box" },
         "confidence": { "$ref": "#/$defs/unit" },
         "evidence": { "type": "array", "maxItems": 12, "items": { "type": "string", "maxLength": 120 } },

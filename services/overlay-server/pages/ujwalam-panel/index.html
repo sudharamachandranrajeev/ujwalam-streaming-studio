@@ -5,12 +5,15 @@
      Theme tokens only, no colour of its own.
      Query: radius= none|sm|md|pill  (the --radius-* token; anything else = none)
             glow=   1 = the --ember-glow token around the panel (anything else = no glow)
+            text=   optional message in the middle of the panel (up to 80 characters; shown as text, never as markup;
+                    used by the starting soon / BRB / ending scenarios). No countdown: a message only.
             theme=  brand theme id (data-theme, as the legacy pages' ?theme=); without it the brand's current theme
      Static: one fade in (300 ms), no flashes. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Panel</title>
+<link rel="stylesheet" href="../../brand/fonts.css">
 <link rel="stylesheet" href="../../brand/tokens.css">
 <link rel="stylesheet" href="../../kit/overlay-base.css">
 <style>
@@ -27,10 +30,17 @@
   .panel.r-pill { border-radius: var(--radius-pill); }
   .panel.is-glow { border-color: var(--ember); box-shadow: var(--ember-glow); inset: 18px; }
   .panel.is-on { opacity: 1; }
+  .label {
+    position: absolute; inset: 0; box-sizing: border-box; padding: 0 4%;
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    color: var(--ink); font-family: var(--font-display); font-style: italic; font-size: 7vmin; line-height: 1.1;
+    text-shadow: var(--text-outline); overflow: hidden;
+  }
 </style>
 </head>
 <body>
 <div class="panel" id="panel"></div>
+<div class="label" id="label"></div>
 <script>
   (function () {
     'use strict';
@@ -41,6 +51,8 @@
     var radius = q.get('radius');
     if (radius === 'sm' || radius === 'md' || radius === 'pill') panel.classList.add('r-' + radius);
     if (q.get('glow') === '1') panel.classList.add('is-glow');
+    var text = (q.get('text') || '').slice(0, 80);
+    if (text) document.getElementById('label').textContent = text;
     requestAnimationFrame(function () { panel.classList.add('is-on'); });
   })();
 </script>

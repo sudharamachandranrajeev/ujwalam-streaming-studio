@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ujwalam.local/schema/scene-template.schema.json",
+  "title": "Scenario scene template (D390)",
+  "description": "A scenario (gameplay, lobby, screen share, starting soon, BRB, ending) as data: the slot boxes of the H scene and of the V scene, each given explicitly (the auto H to V rule is not used). services/scene-builder/scenarios.mjs turns a template into the builder's reference-read shape and lets buildPackage link the slots to the user's own sources, with placeholders where nothing matches. Boxes are fractions of the canvas (0..1). V boxes sit inside the V safe zone (data/clip/targets.json, rules v.safe) and do not overlap; H boxes may overlap (overlays on the picture).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "status", "label", "description", "sceneName", "order", "slots"],
+  "$defs": {
+    "unit": { "type": "number", "minimum": 0, "maximum": 1 },
+    "box": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "w", "h"],
+      "properties": { "x": { "$ref": "#/$defs/unit" }, "y": { "$ref": "#/$defs/unit" }, "w": { "$ref": "#/$defs/unit" }, "h": { "$ref": "#/$defs/unit" } }
+    },
+    "slot": {
+      "type": "object", "additionalProperties": false, "required": ["role", "box"],
+      "properties": {
+        "role": { "enum": ["game", "camera", "chat", "alerts", "screen", "graphics"] },
+        "box": { "$ref": "#/$defs/box" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 80, "description": "graphics only: the message shown on the panel (ujwalam-panel ?text=)." }
+      }
+    },
+    "slots": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/slot" } }
+  },
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "status": { "enum": ["unverified", "verified"] },
+    "label": { "type": "string", "minLength": 1, "maxLength": 60, "description": "The name on the card in the studio." },
+    "description": { "type": "string", "minLength": 1, "maxLength": 200, "description": "One plain sentence for the card." },
+    "sceneName": { "type": "string", "minLength": 1, "maxLength": 60, "description": "Name of the new scene (the importer adds (2), (3) ... when it exists)." },
+    "order": { "type": "integer", "minimum": 1, "maximum": 99 },
+    "needsScreen": { "type": "boolean", "description": "true: the card asks for a window or screen to show." },
+    "slots": {
+      "type": "object", "additionalProperties": false, "required": ["h", "v"],
+      "properties": { "h": { "$ref": "#/$defs/slots" }, "v": { "$ref": "#/$defs/slots" } }
+    }
+  }
+}

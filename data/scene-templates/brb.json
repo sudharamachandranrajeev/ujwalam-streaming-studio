@@ -1,0 +1,53 @@
+{
+  "id": "brb",
+  "version": "0.1.0",
+  "status": "unverified",
+  "label": "Be right back",
+  "description": "A holding screen with a message and chat while you step away.",
+  "sceneName": "BRB",
+  "order": 5,
+  "slots": {
+    "h": [
+      {
+        "role": "graphics",
+        "box": {
+          "x": 0.1,
+          "y": 0.12,
+          "w": 0.8,
+          "h": 0.3
+        },
+        "text": "Be right back"
+      },
+      {
+        "role": "chat",
+        "box": {
+          "x": 0.1,
+          "y": 0.46,
+          "w": 0.8,
+          "h": 0.42
+        }
+      }
+    ],
+    "v": [
+      {
+        "role": "graphics",
+        "box": {
+          "x": 0.0556,
+          "y": 0.15,
+          "w": 0.8147,
+          "h": 0.2
+        },
+        "text": "Be right back"
+      },
+      {
+        "role": "chat",
+        "box": {
+          "x": 0.0556,
+          "y": 0.38,
+          "w": 0.8147,
+          "h": 0.4
+        }
+      }
+    ]
+  }
+}

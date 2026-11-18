@@ -1,0 +1,53 @@
+{
+  "id": "ending",
+  "version": "0.1.0",
+  "status": "unverified",
+  "label": "Ending",
+  "description": "A closing screen with a thank-you message and chat.",
+  "sceneName": "Ending",
+  "order": 6,
+  "slots": {
+    "h": [
+      {
+        "role": "graphics",
+        "box": {
+          "x": 0.1,
+          "y": 0.12,
+          "w": 0.8,
+          "h": 0.3
+        },
+        "text": "Thanks for watching"
+      },
+      {
+        "role": "chat",
+        "box": {
+          "x": 0.1,
+          "y": 0.46,
+          "w": 0.8,
+          "h": 0.42
+        }
+      }
+    ],
+    "v": [
+      {
+        "role": "graphics",
+        "box": {
+          "x": 0.0556,
+          "y": 0.15,
+          "w": 0.8147,
+          "h": 0.2
+        },
+        "text": "Thanks for watching"
+      },
+      {
+        "role": "chat",
+        "box": {
+          "x": 0.0556,
+          "y": 0.38,
+          "w": 0.8147,
+          "h": 0.4
+        }
+      }
+    ]
+  }
+}
