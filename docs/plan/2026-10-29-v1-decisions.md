@@ -2092,3 +2092,18 @@ Growth plan ED2. Decided:
   never into the repo and never committed. The CLI refuses unless `tools/live-check.mjs` says off air.
 - **Open.** The moods stay `proposed` until the user listens. Playback and scene wiring are MU2. ACE-Step comes later.
   Evidence `docs/evidence/2026-11-18-scene-music-moods.md`.
+
+## D394 — Every transition type in the studio; AI read switch in the scene builder (user, 2026-11-18)
+
+- **Transitions box.** It offers every host transition type per canvas, each with plain-word help: stinger (built-in id
+  or own video), cut, fade, slide, swipe, wipe and colour fade. A type or wipe the host lists as unavailable is shown
+  off with its reason.
+- **Applies live.** A click applies on air as well as off air (D332; changes apply live, user 2026-11-15). The
+  `live-locked` refusal on the transition route is removed.
+- **Validation.** The server checks every transition with the project validator. Its numeric limits are exported as
+  `TRANSITION_RANGES` and sent to the boxes.
+- **Scene builder AI read switch.** It defaults on when LM Studio answers on 127.0.0.1:1234 with `qwen/qwen3-vl-4b` in
+  `/v1/models`, and is off with a reason otherwise. It is never used while live or recording (D1, D392). The window
+  states which reader was used.
+- **Evidence.** `docs/evidence/2026-11-18-transitions-ui-and-builder-ai.md`.
+- **UNVERIFIED.** A transition change mid-stream on a real stream; the `/v1/models` shape of the user's LM Studio.
