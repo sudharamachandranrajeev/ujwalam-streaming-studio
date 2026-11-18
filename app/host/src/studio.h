@@ -128,6 +128,11 @@ public:
 	// released (parked instead when the watchdog has it as missing: its destroy may never return); a layer's source is
 	// unbound (no tracks, no monitoring) and stays metered. removed false when the host had not built it.
 	json::Value audio_remove_model(const json::Value &doc, const std::string &audio);
+	// AU2 strip tools: `doc` holds the changed `filters` of audio source `audio`; they are applied in place on the
+	// source it is bound to (audio_tools::apply_filters: never a rebuild). Returns {audio, filters (as libobs holds them)}.
+	json::Value audio_filters_model(const json::Value &doc, const std::string &audio);
+	// --test-hooks: audio_tools::measure on the source bound to project audio source `audio` (blocks for skip+ms).
+	json::Value audio_measure(const std::string &audio, uint32_t skip_ms, uint32_t ms);
 	json::Value layer_set_visible(const std::string &scene, const std::string &canvas, const std::string &layer, bool visible);
 	// Effect editor (D260): replaces a layer's effects on every canvas (project v1 layers only).
 	json::Value layer_set_effects(const std::string &scene, const std::string &layer, const json::Value &effects);
@@ -360,6 +365,7 @@ private:
 	std::vector<Canvas> canvases_;
 	std::vector<Scene> scenes_;
 	std::vector<Global> globals_;
+	obs_source_t *bound_audio_ref(const std::string &aid) const; // AU2: a new reference or null
 	std::string format_; // "project-v1" or "ujwalam-host-test"
 	json::Value model_doc_;
 	LoadOptions last_opts_; // of the last project v1 load (layer_add_model builds with them)

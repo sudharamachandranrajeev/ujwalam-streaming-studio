@@ -8,6 +8,7 @@
 // Both roles (api: UI server, system: supervisor) may call every method. The least-privilege roles (rpc_server.h)
 // may call only the methods marked for them: markers (event core) and clips (live clipper, D226).
 #include "app.h"
+#include "audio_tools.h"
 #include "devices.h"
 #include "log.h"
 #include "obs_runtime.h"
@@ -706,6 +707,30 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 	add("audio.removeFromProject", [&a](const json::Value &p) {
 		Params q(p, {"project", "audio"});
 		return a.studio->audio_remove_model(q.obj("project"), q.str("audio", 64));
+	});	// AU2 (plan 2026-11-18): a strip's tools (libobs audio filters) from the project document, changed in place.
+	add("audio.setFilters", [&a](const json::Value &p) {
+		Params q(p, {"project", "audio"});
+		return a.studio->audio_filters_model(q.obj("project"), q.str("audio", 64));
+	});
+	// AU1: running apps with a window, exe names only (never window titles), for "Add audio > One app's sound".
+	add("audio.apps", [&a](const json::Value &p) {
+		Params q(p, {});
+		if (!a.allow_devices && !a.test_hooks) {
+			json::Value r = json::Value::object();
+			r.set("available", false);
+			r.set("devicesOff", true);
+			r.set("apps", json::Value::array());
+			return r;
+		}
+		return audio_tools::list_apps();
+	});
+	// audio.testMeasure {audio, skipMs, ms}: peak and RMS after the filters of a project audio source. --test-hooks only.
+	add("audio.testMeasure", [&a](const json::Value &p) {
+		Params q(p, {"audio", "skipMs", "ms"});
+		if (!a.test_hooks)
+			throw Error(rpc::FORBIDDEN, "audio.testMeasure needs a host started with --test-hooks");
+		return a.studio->audio_measure(q.str("audio", 64), (uint32_t)q.int_or("skipMs", 300, 0, 10000),
+					       (uint32_t)q.int_or("ms", 1000, 50, 10000));
 	});
 	add("layers.remove", [&a](const json::Value &p) {
 		Params q(p, {"scene", "canvas", "layer"});

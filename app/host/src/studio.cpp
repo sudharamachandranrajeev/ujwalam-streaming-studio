@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // ujwalam-host: scene model on libobs. See studio.h.
 #include "studio.h"
+#include "audio_tools.h"
 #include "checks.h"
 #include "effects.h"
 #include "log.h"
@@ -1695,6 +1696,9 @@ json::Value Studio::load_model(const json::Value &doc, const LoadOptions &o)
 			obs_source_set_audio_mixers(target->src, a.mixers);
 			if (flags_.allow_devices) // monitoring opens an audio output device
 				obs_source_set_monitoring_type(target->src, monitoring_type(a.monitoring));
+			audio_tools::apply_filters(target->src, a.filters); // AU2 strip tools
+			if (!a.obs_type.empty())
+				audio_tools::attach_playlist(target->src, a.playlist, a.playlist_loop); // AU1 folder playlist
 		}
 		for (auto &c : canvases_) {
 			Scene *s = p.active.empty() ? nullptr : scene(p.active, c.id);
@@ -2015,6 +2019,9 @@ json::Value Studio::audio_add_model(const json::Value &doc, const std::string &a
 	obs_source_set_audio_mixers(target->src, x->mixers);
 	if (flags_.allow_devices) // monitoring opens an audio output device
 		obs_source_set_monitoring_type(target->src, monitoring_type(x->monitoring));
+	audio_tools::apply_filters(target->src, x->filters); // AU2 strip tools
+	if (!x->obs_type.empty())
+		audio_tools::attach_playlist(target->src, x->playlist, x->playlist_loop); // AU1 folder playlist
 	model_doc_ = doc;
 	dirty_ = false;
 	hlog::info("audio added from the project: %s (%s)", aid.c_str(), x->obs_type.empty() ? "layer sound" : x->obs_type.c_str());
@@ -2074,6 +2081,69 @@ json::Value Studio::audio_remove_model(const json::Value &doc, const std::string
 	r.set("audio", aid);
 	r.set("removed", !kind.empty());
 	r.set("kind", kind.empty() ? json::Value() : json::Value(kind));
+	return r;
+}
+
+
+// The source bound to project audio source `aid` (a new reference), or null (studio mutex held).
+obs_source_t *Studio::bound_audio_ref(const std::string &aid) const
+{
+	for (auto &g : globals_)
+		if (g.src && g.src->audio_id == aid)
+			return obs_source_get_ref(g.src->src);
+	for (auto &s : scenes_)
+		for (auto &l : s.layers)
+			if (l.src && l.src->audio_id == aid)
+				return obs_source_get_ref(l.src->src);
+	return nullptr;
+}
+
+json::Value Studio::audio_filters_model(const json::Value &doc, const std::string &aid)
+{
+	std::lock_guard<std::recursive_mutex> lk(m_);
+	if (format_ != "project-v1")
+		throw Error(rpc::CONFLICT, "no project v1 is loaded");
+	if (!model::is_model(doc))
+		throw Error(rpc::INVALID_PARAMS, "project must be a project v1 document");
+	const json::Value *entry = nullptr;
+	if (const json::Value *au = doc.find("audio"); au && au->is_object())
+		if (const json::Value *ss = au->find("sources"); ss && ss->is_array())
+			for (auto &s : ss->as_array())
+				if (const json::Value *id = s.find("id"); id && id->is_string() && id->as_string() == aid)
+					entry = &s;
+	if (!entry)
+		throw Error(rpc::INVALID_PARAMS, "audio source " + aid + " is not in the project");
+	const json::Value *f = entry->find("filters");
+	if (f)
+		audio_tools::check_filters(*f, "audio source " + aid + ".filters");
+	obs_source_t *src = bound_audio_ref(aid);
+
+	if (!src)
+		throw Error(rpc::UNAVAILABLE, "This sound is not in the mixer now, so its tools cannot change.");
+	audio_tools::apply_filters(src, f ? *f : json::Value());
+	json::Value r = json::Value::object();
+	r.set("audio", aid);
+	r.set("filters", audio_tools::read_filters(src));
+	obs_source_release(src);
+	model_doc_ = doc;
+	dirty_ = false;
+	hlog::info("audio tools changed: %s", aid.c_str());
+	return r;
+}
+
+json::Value Studio::audio_measure(const std::string &aid, uint32_t skip_ms, uint32_t ms)
+{
+	obs_source_t *src = nullptr;
+	{
+		std::lock_guard<std::recursive_mutex> lk(m_);
+		src = bound_audio_ref(aid);
+
+	}
+	if (!src)
+		throw Error(rpc::INVALID_PARAMS, "no such audio source");
+	json::Value r = audio_tools::measure(src, skip_ms, ms); // not under the studio mutex: it blocks
+	r.set("filters", audio_tools::read_filters(src));
+	obs_source_release(src);
 	return r;
 }
 
@@ -2774,6 +2844,13 @@ int Studio::audio_peak_db(const std::string &audio_id, float &peak_db) const
 namespace {
 constexpr size_t kAudioEvents = 32;
 
+// A device audio global (microphone / audio output / the test device type); AU1 app sound and playback are not.
+bool device_global(obs_source_t *s)
+{
+	const char *id = obs_source_get_id(s);
+	return id && (!strcmp(id, "wasapi_input_capture") || !strcmp(id, "wasapi_output_capture") || !strcmp(id, "ujw_test_audio"));
+}
+
 int64_t ms_since(uint64_t now, uint64_t then)
 {
 	return then && now > then ? (int64_t)((now - then) / 1000000) : 0;
@@ -2868,6 +2945,8 @@ void Studio::audio_watch_tick()
 		return;
 	const uint64_t now = os_gettime_ns();
 	for (auto &g : globals_) {
+		if (!device_global(g.src->src))
+			continue; // AU1 app sound / playback: silence is normal there, never a dead device
 		int64_t last_ms = 0;
 		const std::string state = audio_state(g, now, last_ms);
 		if (state == "ok") {
@@ -2930,6 +3009,8 @@ json::Value Studio::audio_health() const
 	json::Value srcs = json::Value::array(), warns = json::Value::array();
 	bool ok = true;
 	for (auto &g : globals_) {
+		if (!device_global(g.src->src))
+			continue; // AU1 app sound / playback: not a device
 		int64_t last_ms = 0;
 		std::string state = audio_state(g, now, last_ms);
 		if (state == "starting" && g.missing)

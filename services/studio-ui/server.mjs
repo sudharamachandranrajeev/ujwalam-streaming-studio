@@ -1430,7 +1430,7 @@ export function createStudioServer(opts) {
     },
   });
   // D393 (proposed): the mixer's Add audio, Add to stream and Remove (audio-routes.mjs). No flag; works while live.
-  const audioRoutes = createAudioRoutes({ host, json, projectSync, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log });
+  const audioRoutes = createAudioRoutes({ host, json, projectSync, assetsDir, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log });
   // Devices that arrive after the start (2026-11-18 bug report): Connect a placeholder layer, Try again (device-routes.mjs).
   const deviceRoutes = createDeviceRoutes({
     host, json, projectSync, flags, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log,

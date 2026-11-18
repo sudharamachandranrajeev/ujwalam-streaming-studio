@@ -14,20 +14,29 @@
 //                                       a sound with a project entry gets that track (as mixer.setTracks, D273); a
 //                                       layer's sound without one gets a project entry bound to its layer -> { ok, saved }
 //   POST /ui/api/audio {op: 'remove', audio}         the project audio source leaves the mixer -> { ok, removed, saved }
+//   POST /ui/api/audio {op: 'filters', audio, filters}  AU2 strip tools (null = none), applied in place on air (the host
+//                                       never rebuilds the source) -> { ok, audio, filters, saved }
+//   GET  /ui/api/audio/tools            { ranges, order, presets, filters: {audio id: filters} } for the Tools window
+//                                       (presets: data/audio-tools/presets.json)
+// AU1 choices also list apps (host audio.apps: exe names only, never window titles) and sound files / folders under
+// the media base (listAudio; rel paths only, never an absolute path).
 // Device names and endpoint ids are never logged.
 
 import path from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadProject, saveProject } from '../project/store.mjs';
-import { addAudioSource, audioChoices, removeAudioSource, sameDeviceRows, streamTracks } from '../project/audio-sources.mjs';
+import { addAudioSource, audioChoices, removeAudioSource, sameDeviceRows, setAudioFilters, streamTracks } from '../project/audio-sources.mjs';
+import { FILTER_ORDER, FILTER_RANGES } from '../project/audio-filters.mjs';
+import { listAudio } from './assets.mjs';
 
 export { sameDeviceRows };
 import { loadDevicePresets, matchRoles } from '../project/device-roles.mjs';
 
-export const AUDIO_ROUTES = Object.freeze(['/ui/api/audio/choices', '/ui/api/audio']);
+export const AUDIO_ROUTES = Object.freeze(['/ui/api/audio/choices', '/ui/api/audio/tools', '/ui/api/audio']);
+export const AUDIO_PRESETS_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'audio-tools', 'presets.json');
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
-const KEYS = { add: ['key', 'name'], stream: ['id'], remove: ['audio'] };
+const KEYS = { add: ['key', 'name'], stream: ['id'], remove: ['audio'], filters: ['audio', 'filters'] };
 const ID = /^[A-Za-z0-9_.:-]{1,64}$/;
 const MIXER_ID = /^(?:[A-Za-z0-9_.:-]{1,64}\/[A-Za-z0-9_.:-]{1,64}|audio:[A-Za-z0-9_.:-]{1,64})$/;
 
@@ -43,6 +52,9 @@ export const AUDIO_ERROR_TEXT = Object.freeze({
   'too-many-devices': 'The project has the most devices it can hold.',
   'no-track': 'The project has no audio track.',
   'bad-key': 'Pick a sound from the list.',
+  'unknown-app': 'That app is not running any more. Open Add audio again.',
+  'unknown-file': 'That sound file is not in your media folder any more. Open Add audio again.',
+  'bad-tools': 'A tool setting is out of its range.',
   'in-stream': 'That sound is in the stream already.',
   'same-device': 'That device\'s sound is in the mix already through another channel; adding it twice would double it in the stream.',
   'bad-params': 'That request was not understood.',
@@ -84,7 +96,13 @@ export function createAudioRoutes(opts) {
     opts.projectSync.reload(); // pending mixer edits are written first; the cached document is re-read afterwards
     try { return { file, doc: loadProject(file).project }; } catch { return { error: 'project-unreadable' }; }
   }
+  const kindOf = (a) => (a.device ? 'device' : a.app ? 'app' : a.playback ? 'playback' : 'layer');
   const refuse = (res, code, status = 409, detail) => json(res, status, { error: code, text: AUDIO_ERROR_TEXT[code] ?? code, ...(detail ? { detail } : {}) });
+
+  async function listApps() {
+    try { const r = await host.call('audio.apps', {}); return Array.isArray(r?.apps) ? r.apps : []; } catch { return []; }
+  }
+  const audioFiles = () => listAudio(opts.assetsDir ?? null);
 
   async function choices(res) {
     const r = readDoc();
@@ -92,8 +110,18 @@ export function createAudioRoutes(opts) {
     let mixer;
     try { mixer = await mixerRows(); } catch { return json(res, 200, { available: false, error: 'host-unavailable' }); }
     const list = await listDevices();
-    const c = audioChoices({ doc: r.doc, list, mixer, recommended: recommendedEntry(list) });
-    return json(res, 200, { available: true, devicesOff: !list, ...c });
+    const c = audioChoices({ doc: r.doc, list, mixer, recommended: recommendedEntry(list), apps: await listApps(), audio: audioFiles() });
+    return json(res, 200, { available: true, devicesOff: !list, mediaFolder: typeof opts.assetsDir === 'string', ...c });
+  }
+
+  function tools(res) {
+    let presets = [];
+    try { presets = JSON.parse(readFileSync(opts.presetsFile ?? AUDIO_PRESETS_FILE, 'utf8')).presets ?? []; } catch { /* no presets: the tools still work */ }
+    // the saved tools of every project sound, by audio id (a strip without tools is absent)
+    const r = readDoc();
+    const filters = {};
+    for (const a of r.doc?.audio?.sources ?? []) if (a.filters) filters[a.id] = a.filters;
+    return json(res, 200, { order: FILTER_ORDER, ranges: FILTER_RANGES, presets, filters });
   }
 
   // Host first, then the file: a refusal there saves nothing. A failed save undoes the host change (undo: the opposite
@@ -122,6 +150,7 @@ export function createAudioRoutes(opts) {
     if (body.op === 'add' && (typeof body.key !== 'string' || body.key.length > 600 || (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > 120)))) return refuse(res, 'bad-params', 400);
     if (body.op === 'stream' && (typeof body.id !== 'string' || !MIXER_ID.test(body.id))) return refuse(res, 'bad-params', 400);
     if (body.op === 'remove' && (typeof body.audio !== 'string' || !ID.test(body.audio))) return refuse(res, 'bad-params', 400);
+    if (body.op === 'filters' && (typeof body.audio !== 'string' || !ID.test(body.audio) || !(body.filters === null || isPlain(body.filters)))) return refuse(res, 'bad-params', 400);
     const r = readDoc();
     if (r.error) return refuse(res, r.error);
     const { file, doc } = r;
@@ -134,6 +163,14 @@ export function createAudioRoutes(opts) {
       return commit(res, file, x.project, () => host.call('audio.removeFromProject', { project: x.project, audio: body.audio }),
         () => host.call('audio.addFromProject', { project: doc, audio: body.audio }),
         (out) => ({ op: 'remove', audio: body.audio, removed: out?.removed === true }), `[studio-ui] mixer: sound removed (${x.removed.device ? 'device' : 'layer'})`);
+    }
+
+    if (body.op === 'filters') {
+      const x = setAudioFilters(doc, { audio: body.audio, filters: body.filters });
+      if (x.error) return refuse(res, x.error, x.error === 'bad-tools' ? 400 : 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
+      return commit(res, file, x.project, () => host.call('audio.setFilters', { project: x.project, audio: body.audio }),
+        () => host.call('audio.setFilters', { project: doc, audio: body.audio }),
+        (out) => ({ op: 'filters', audio: body.audio, filters: x.audio.filters ?? null, live: out?.filters ?? null }), '[studio-ui] mixer: tools changed');
     }
 
     if (body.op === 'stream') {
@@ -158,21 +195,24 @@ export function createAudioRoutes(opts) {
 
     const list = body.key.startsWith('layer|') ? null : await listDevices();
     const row = body.key.startsWith('layer|') ? mixer.find((m) => m.layer === body.key.slice(6) && typeof m.audioSource !== 'string') : null;
-    const x = addAudioSource(doc, { key: body.key, list, mixer, name: body.name, volumeDb: row?.volumeDb, muted: row?.muted });
+    const kind0 = body.key.slice(0, body.key.indexOf('|'));
+    const x = addAudioSource(doc, { key: body.key, list, mixer, name: body.name, volumeDb: row?.volumeDb, muted: row?.muted,
+      apps: kind0 === 'app' ? await listApps() : null, audio: kind0 === 'file' || kind0 === 'folder' ? audioFiles() : null });
     if (x.error === 'same-device') return json(res, 409, { error: x.error, text: `That device's sound is in the mix already as ${String(x.as).slice(0, 120)}; adding it twice would double it in the stream.` });
     if (x.error) return refuse(res, x.error, 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
     return commit(res, file, x.project, () => host.call('audio.addFromProject', { project: x.project, audio: x.audio.id }),
       () => host.call('audio.removeFromProject', { project: doc, audio: x.audio.id }),
-      (out) => ({ op: 'add', audio: { id: x.audio.id, name: x.audio.name, kind: x.audio.device ? 'device' : 'layer', cueDelayed: out?.cueDelayed === true },
+      (out) => ({ op: 'add', audio: { id: x.audio.id, name: x.audio.name, kind: kindOf(x.audio), cueDelayed: out?.cueDelayed === true },
         // B7: maybe the same card as a sound in the mix (another card of the same model is possible): added, with a warning
         ...(x.maybeSameAs ? { warning: `This may be the same device as ${x.maybeSameAs}, which is in the mix already. If you hear it twice, remove one.` } : {}) }),
-      `[studio-ui] mixer: sound added (${x.audio.device ? 'device' : 'layer'})`);
+      `[studio-ui] mixer: sound added (${kindOf(x.audio)})`);
   }
 
   return {
     /** true when the route was handled. */
     async handle(method, route, body, res) {
       if (method === 'GET' && route === '/ui/api/audio/choices') { await choices(res); return true; }
+      if (method === 'GET' && route === '/ui/api/audio/tools') { tools(res); return true; }
       if (method === 'POST' && route === '/ui/api/audio') {
         if (busy) { refuse(res, 'busy'); return true; }
         busy = true;

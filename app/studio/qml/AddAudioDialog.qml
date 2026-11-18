@@ -6,6 +6,8 @@
 // because libobs holds it back to match the picture). Pick one, then Add (or double-click): it is added and put in the
 // stream at once, with no question. A refusal stays in the window. Its own window (Popup.Window), so the native previews
 // never cover it.
+// AU1 (plan 2026-11-18): also one app's sound (listed by program name only, never a window title) and music from the
+// stream assets folder: one file on repeat, or a folder played as a playlist.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -18,6 +20,7 @@ Dialog {
     property string pick: ""
     property string message: ""
     property bool devicesOff: false
+    property bool mediaFolder: true
     property bool busy: false
     popupType: studioHidden ? Popup.Item : Popup.Window
     modal: true
@@ -38,6 +41,14 @@ Dialog {
             out.push({ key: o.key, label: o.name, group: "Desktop and app sound", note: "What this PC plays on this device" });
         for (const l of choices.layers || [])
             out.push({ key: l.key, label: l.name, group: "Layer sounds", note: l.cueDelayed ? "Its headphone sound (CUE) comes a little late: it comes with video" : "" });
+        // AU1: one app's sound (by program name only) and sound files / folder playlists from the media folder
+        for (const a of choices.apps || [])
+            out.push({ key: a.key, label: a.name, group: "One app's sound", note: a.sound ? "Playing sound now. Only this app is heard, not the rest of the PC" : "Only this app is heard, not the rest of the PC" });
+        for (const f of choices.folders || [])
+            out.push({ key: f.key, label: f.name, group: "Music: a folder as a playlist", note: f.count + (f.count === 1 ? " sound file" : " sound files") + ", played in turn and repeated" });
+        for (const f of choices.files || [])
+            out.push({ key: f.key, label: f.name, group: "Music: one sound file", note: "Plays on repeat" });
+        mediaFolder = choices.mediaFolder !== false;
         rows = out;
         devicesOff = choices.devicesOff === true;
         message = "";
@@ -85,8 +96,9 @@ Dialog {
             objectName: "addAudioAbout"
             anchors { left: parent.left; right: parent.right; top: parent.top }
             text: dlg.message !== "" ? dlg.message
-                : dlg.devicesOff ? "Devices are switched off in this start of Ujwalam, so only layer sounds are listed."
-                : "Pick a sound. It goes into the stream and the recording at once."
+                : dlg.devicesOff ? "Devices are switched off in this start of Ujwalam, so only layer sounds and music files are listed."
+                : "Pick a sound. It goes into the stream and the recording at once. Music comes from your stream assets folder"
+                  + (dlg.mediaFolder ? "." : " (none is set).")
             wrapMode: Text.Wrap
             color: dlg.message !== "" ? Theme.c.danger : Theme.c.muted
             font.family: Theme.family

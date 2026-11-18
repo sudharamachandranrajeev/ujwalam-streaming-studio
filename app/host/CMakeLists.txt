@@ -109,6 +109,7 @@ add_executable(ujwalam-host
   src/moments.cpp
   src/crash.cpp
   src/audio_health.cpp
+  src/audio_tools.cpp
   src/gfx_watch.cpp
   src/ujwalam-host.rc
   src/ujwalam-host.manifest)

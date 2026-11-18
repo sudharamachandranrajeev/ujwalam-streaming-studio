@@ -300,14 +300,51 @@
               "name": { "$ref": "#/$defs/label" },
               "device": { "$ref": "#/$defs/id" },
               "layer": { "$ref": "#/$defs/id" },
+              "app": {
+                "type": "object", "additionalProperties": false, "required": ["exe"],
+                "$comment": "AU1: one app's sound (wasapi_process_output_capture), matched by program file name only; never a window title",
+                "properties": { "exe": { "type": "string", "pattern": "^[^\\\\/:*?\"<>|\\u0000-\\u001f]{1,120}\\.[Ee][Xx][Ee]$" } }
+              },
+              "playback": {
+                "type": "object", "additionalProperties": false, "required": ["loop"],
+                "$comment": "AU1: an audio file (ffmpeg_source) or a folder played as a playlist, under a pathRef base. Exactly one of file / folder, and exactly one of device / layer / app / playback per source: checked by validate.mjs and the host",
+                "properties": { "file": { "$ref": "#/$defs/pathRef" }, "folder": { "$ref": "#/$defs/pathRef" }, "loop": { "type": "boolean" } }
+              },
               "volumeDb": { "type": "number", "minimum": -100, "maximum": 12 },
               "muted": { "type": "boolean" },
               "monitoring": { "enum": ["off", "monitor-only", "monitor-and-output"] },
               "tracks": { "type": "array", "maxItems": 6, "items": { "$ref": "#/$defs/id" } },
+              "filters": { "$ref": "#/$defs/audioFilters" },
               "origin": { "$ref": "#/$defs/origin" }
             }
           }
         }
+      }
+    },
+    "audioFilters": {
+      "type": "object", "additionalProperties": false,
+      "$comment": "AU2: strip tools on libobs audio filters. Ranges are the filters' obs_properties limits in OBS 32.1.2 (plugins/obs-filters, checked 2026-11-18); same table as services/project/audio-filters.mjs and app/host/src/audio_filters.cpp. Order on the strip: suppress, gate, eq, gain, compressor, limiter.",
+      "properties": {
+        "suppress": { "type": "object", "additionalProperties": false, "required": ["on"], "properties": { "on": { "type": "boolean" } } },
+        "gate": { "type": "object", "additionalProperties": false, "required": ["on", "closeDb", "openDb", "attackMs", "holdMs", "releaseMs"],
+          "properties": { "on": { "type": "boolean" },
+            "closeDb": { "type": "number", "minimum": -96, "maximum": 0 }, "openDb": { "type": "number", "minimum": -96, "maximum": 0 },
+            "attackMs": { "type": "integer", "minimum": 0, "maximum": 10000 }, "holdMs": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "releaseMs": { "type": "integer", "minimum": 0, "maximum": 10000 } } },
+        "eq": { "type": "object", "additionalProperties": false, "required": ["on", "lowDb", "midDb", "highDb"],
+          "properties": { "on": { "type": "boolean" },
+            "lowDb": { "type": "number", "minimum": -20, "maximum": 20 }, "midDb": { "type": "number", "minimum": -20, "maximum": 20 },
+            "highDb": { "type": "number", "minimum": -20, "maximum": 20 } } },
+        "gain": { "type": "object", "additionalProperties": false, "required": ["on", "db"],
+          "properties": { "on": { "type": "boolean" }, "db": { "type": "number", "minimum": -30, "maximum": 30 } } },
+        "compressor": { "type": "object", "additionalProperties": false, "required": ["on", "ratio", "thresholdDb", "attackMs", "releaseMs", "outputGainDb"],
+          "properties": { "on": { "type": "boolean" },
+            "ratio": { "type": "number", "minimum": 1, "maximum": 32 }, "thresholdDb": { "type": "number", "minimum": -60, "maximum": 0 },
+            "attackMs": { "type": "integer", "minimum": 1, "maximum": 500 }, "releaseMs": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "outputGainDb": { "type": "number", "minimum": -32, "maximum": 32 } } },
+        "limiter": { "type": "object", "additionalProperties": false, "required": ["on", "thresholdDb", "releaseMs"],
+          "properties": { "on": { "type": "boolean" },
+            "thresholdDb": { "type": "number", "minimum": -60, "maximum": 0 }, "releaseMs": { "type": "integer", "minimum": 1, "maximum": 1000 } } }
       }
     },
     "outputRef": {

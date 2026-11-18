@@ -16,9 +16,15 @@
 //       that layer's sound. The new source goes to the stream mix (the first project track), CUE off (no echo).
 //   removeAudioSource(doc, { audio }) -> { project, removed }  a device this module added and nothing else uses goes too.
 //   streamTracks(doc, audioSource) -> track ids with the stream track added (the first project track), or null.
+//   AU1 (plan 2026-11-18): key "app|<exe>" one app's sound (exe name from the host's audio.apps list; never a window
+//       title), "file|<rel>" / "folder|<rel>" a sound file or a folder playlist under the media base (from listAudio;
+//       never an absolute path). audioChoices takes { apps, audio } for them.
+//   setAudioFilters(doc, { audio, filters }) -> { project, audio }  AU2 strip tools (audio-filters.mjs); null = none.
 // Keys come from audioChoices and are checked against the same fresh device list and mixer: never a made-up device.
 
 import { newId, validateProject } from './index.mjs';
+import { EXE_RE } from './validate.mjs';
+import { filtersProblems } from './audio-filters.mjs';
 
 const ORIGIN = Object.freeze({ importer: 'mixer', id: 'add-audio' });
 const KIND_OF = { input: 'audio-input', output: 'audio-output' };
@@ -160,7 +166,7 @@ export function sameDeviceRows(doc, rows, list) {
   });
 }
 
-export function audioChoices({ doc, list, mixer, recommended = null } = {}) {
+export function audioChoices({ doc, list, mixer, recommended = null, apps = null, audio = null } = {}) {
   const free = (kind) => entriesOf(list).filter((e) => e.kind === KIND_OF[kind] && !endpointInUse(doc, PROJECT_KIND[kind], e));
   const rec = recommended && typeof recommended.path === 'string' ? lower(recommended.path) : null;
   const { out: bound, real } = boundLayers(doc);
@@ -187,15 +193,36 @@ export function audioChoices({ doc, list, mixer, recommended = null } = {}) {
       return { key: `layer|${m.layer}`, layer: m.layer, name, cueDelayed: m.cueDelayed === true, ...warn(name) };
     }),
     skipped,
+    // AU1: apps not in the mix yet (sound first), files and folders under the media base
+    apps: appsFree(doc, apps).map((a) => ({ key: `app|${a.exe}`, name: a.exe, sound: a.sound === true })),
+    files: (Array.isArray(audio?.files) ? audio.files : []).map((rel) => ({ key: `file|${rel}`, name: rel })),
+    folders: (Array.isArray(audio?.folders) ? audio.folders : []).map((x) => ({ key: `folder|${x.rel}`, name: x.rel, count: x.count })),
   };
 }
 
-export function addAudioSource(doc, { key, list, mixer, name, volumeDb, muted } = {}) {
+const appInMix = (doc, exe) => (doc.audio?.sources ?? []).some((a) => typeof a.app?.exe === 'string' && lower(a.app.exe) === lower(exe));
+function appsFree(doc, apps) {
+  return (Array.isArray(apps) ? apps : []).filter((a) => a && typeof a.exe === 'string' && EXE_RE.test(a.exe) && !appInMix(doc, a.exe))
+    .sort((a, b) => Number(b.sound === true) - Number(a.sound === true) || a.exe.localeCompare(b.exe));
+}
+
+export function setAudioFilters(doc, { audio, filters } = {}) {
+  const i = (doc.audio?.sources ?? []).findIndex((a) => a.id === audio);
+  if (i < 0) return { error: 'unknown-sound' };
+  if (filters !== null && filtersProblems(filters, 'filters').length) return { error: 'bad-tools', errors: filtersProblems(filters, 'filters') };
+  const project = structuredClone(doc);
+  const src = project.audio.sources[i];
+  if (filters === null || Object.keys(filters).length === 0) delete src.filters;
+  else src.filters = structuredClone(filters);
+  return checked(project, { audio: src });
+}
+
+export function addAudioSource(doc, { key, list, mixer, name, volumeDb, muted, apps = null, audio: audioFiles = null } = {}) {
   if (typeof key !== 'string') return { error: 'bad-key' };
   const bar = key.indexOf('|');
   const kind = bar > 0 ? key.slice(0, bar) : '';
   const ref = bar > 0 ? key.slice(bar + 1) : '';
-  if (!ref || !['input', 'output', 'layer'].includes(kind)) return { error: 'bad-key' };
+  if (!ref || !['input', 'output', 'layer', 'app', 'file', 'folder'].includes(kind)) return { error: 'bad-key' };
   if ((doc.audio?.sources ?? []).length >= 256) return { error: 'too-many-sounds' };
   const track = doc.audio?.tracks?.[0]?.id;
   if (!track) return { error: 'no-track' };
@@ -204,7 +231,19 @@ export function addAudioSource(doc, { key, list, mixer, name, volumeDb, muted } 
   const src = { id: newId('aud'), name: '', volumeDb: 0, muted: false, monitoring: 'off', tracks: [track], origin: { ...ORIGIN } };
   if (typeof volumeDb === 'number' && Number.isFinite(volumeDb)) src.volumeDb = Math.min(12, Math.max(-100, Math.round(volumeDb * 100) / 100));
   if (typeof muted === 'boolean') src.muted = muted;
-  if (kind === 'layer') {
+  if (kind === 'app') {
+    // the exe must be one the host listed just now (apps), never a made-up name
+    const hit = (Array.isArray(apps) ? apps : []).find((a) => a && typeof a.exe === 'string' && lower(a.exe) === lower(ref));
+    if (!hit || !EXE_RE.test(hit.exe)) return { error: 'unknown-app' };
+    if (appInMix(doc, hit.exe)) return { error: 'already-added' };
+    src.app = { exe: hit.exe };
+    src.name = label(name) ?? hit.exe.replace(/\.exe$/i, '');
+  } else if (kind === 'file' || kind === 'folder') {
+    const ok = kind === 'file' ? (audioFiles?.files ?? []).includes(ref) : (audioFiles?.folders ?? []).some((x) => x.rel === ref);
+    if (!ok) return { error: 'unknown-file' };
+    src.playback = { [kind]: { base: 'media', rel: ref }, loop: true };
+    src.name = label(name) ?? (ref.split('/').pop().replace(/\.[^.]+$/, '') || 'Music');
+  } else if (kind === 'layer') {
     const row = freeLayerSounds(mixer).find((m) => m.layer === ref);
     if (!row) return { error: 'unknown-sound' };
     const { out: bound, real } = boundLayers(doc);

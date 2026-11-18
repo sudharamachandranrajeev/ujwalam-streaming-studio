@@ -43,10 +43,11 @@ UPanel {
             const i = a.lastIndexOf(":"), it = strip(a.slice(12, i));
             return it ? it.volBox.typeValue(a.slice(i + 1)) : false;
         }
-        if (a.startsWith("mixer-stream:") || a.startsWith("mixer-remove:") || a.startsWith("mixer-retry:")) {
+        if (a.startsWith("mixer-stream:") || a.startsWith("mixer-remove:") || a.startsWith("mixer-retry:") || a.startsWith("mixer-tools:")) {
             const it = strip(a.slice(a.indexOf(":") + 1));
-            const btn = it ? (a.startsWith("mixer-stream:") ? it.streamBtn : a.startsWith("mixer-retry:") ? it.retryBtn : it.removeBtn) : null;
-            if (!btn || !btn.visible) return false;
+            const btn = it ? (a.startsWith("mixer-stream:") ? it.streamBtn : a.startsWith("mixer-retry:") ? it.retryBtn
+                              : a.startsWith("mixer-tools:") ? it.toolsButton : it.removeBtn) : null;
+            if (!btn || !btn.visible || (a.startsWith("mixer-tools:") && !btn.enabled)) return false;
             btn.clicked();
             return true;
         }
@@ -80,6 +81,7 @@ UPanel {
             property alias streamBtn: addStream
             property alias removeBtn: remove
             property alias retryBtn: retry
+            property alias toolsButton: toolsBtn
             readonly property bool owned: typeof row.audioSource === "string" // a project audio source: removable
             // A2: a project device sound whose device is not connected (or did not open): says so, with Try again
             readonly property bool waiting: row.waiting === true
@@ -123,6 +125,18 @@ UPanel {
                 id: buttons
                 anchors { right: parent.right; top: parent.top; margins: Theme.sp.s }
                 spacing: Theme.sp.s
+                // AU2: the strip's tools (noise suppression, gate, tone, gain, compressor, limiter). Shown on every strip;
+                // a layer sound that is not in the stream yet has no project entry to keep them, so it says why.
+                UButton {
+                    id: toolsBtn
+                    objectName: "audioTools:" + strip.sid
+                    text: "Tools"
+                    height: 30
+                    enabled: strip.owned && !strip.waiting
+                    tip: strip.owned ? "Clean up and shape " + strip.row.name + ": noise suppression, noise gate, tone, gain, compressor, limiter"
+                                     : "Add it to the stream first: then its tools can be set and kept"
+                    onClicked: panel.store.openAudioTools(strip.row.audioSource, strip.row.name)
+                }
                 UIconButton {
                     id: remove
                     objectName: "removeAudio:" + strip.sid
