@@ -1,0 +1,31 @@
+{
+  "id": "scene-transition-stinger",
+  "version": "0.1.0",
+  "category": "scenes-packages",
+  "family": "transitions",
+  "name": "Stinger transition (generated)",
+  "description": "A short alpha video played over the scene switch (host stinger transition, D242). The built-in cyberpunk stingers are drawn locally by tools/make-stingers.mjs from data/transitions/stingers/<id>.json, one WebM per canvas, fully opaque at pointMs so the swap is hidden. Presets pick the stinger id.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stingerId", "pointMs", "durationMs"],
+      "properties": {
+        "stingerId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "pointMs": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "durationMs": { "type": "integer", "minimum": 100, "maximum": 10000 }
+      }
+    },
+    "defaults": { "pointMs": 450, "durationMs": 900 },
+    "safeRanges": { "pointMs": [200, 1000], "durationMs": [500, 1200] }
+  },
+  "canvases": ["H", "V"],
+  "themeTokens": [],
+  "durationMs": 900,
+  "maxConcurrent": 1,
+  "flashesPerSec": 2,
+  "budgetCost": 1,
+  "status": "in-progress",
+  "format": "native-shader",
+  "planSection": "4.7"
+}

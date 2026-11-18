@@ -51,6 +51,7 @@ import { UNDOABLE, afterOf, beforeOf, createEditHistory, paramsOf } from './edit
 import { addLayer, addScene, duplicateLayer, duplicateScene, moveLayer, realismScene, removeLayer, removeScene, renameLayer, renameScene } from '../project/structure.mjs';
 import { listAssets } from './assets.mjs';
 import { loadProject, saveProject } from '../project/store.mjs';
+import { listStingerPresets, stingerTransition } from '../project/stinger-presets.mjs';
 import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
@@ -1166,6 +1167,8 @@ export function createStudioServer(opts) {
     try { projectSync.flush(); doc = loadProject(file).project; } catch { return json(res, 200, { on, available: false }); }
     return json(res, 200, { on, available: true, canvases: doc.canvases.map((c) => ({ id: c.id, transition: c.transition ?? { type: 'cut', durationMs: 0 } })),
       videos: listAssets(assetsDir).filter((a) => a.kind === 'media').map((a) => a.rel),
+      // D391: the built-in cyberpunk stingers, picked by id (`preset`), never by path
+      stingers: listStingerPresets().map((p) => ({ id: p.id, label: p.label, description: p.description, pointMs: p.pointMs, default: p.default })),
       ...(flags.isOn(STREAM_SETTINGS_FLAG) ? { easing: easingChoices() } : {}) });
   }
   // Sets one canvas's project transition (refused while live); the status poll then applies it to the host.
@@ -1178,15 +1181,18 @@ export function createStudioServer(opts) {
     const file = projectSync?.status?.().file;
     if (typeof file !== 'string') return json(res, 409, { error: 'no-project-file' });
     // easing / mirror (D327 TR1) only with flag stream-settings.
-    const keys = ['canvas', 'type', 'durationMs', 'file', 'pointMs', 'audio', ...(flags.isOn(STREAM_SETTINGS_FLAG) ? ['easing', 'mirror'] : [])];
+    const keys = ['canvas', 'type', 'durationMs', 'file', 'pointMs', 'audio', 'preset', ...(flags.isOn(STREAM_SETTINGS_FLAG) ? ['easing', 'mirror'] : [])];
     if (!isPlain(body) || Object.keys(body).some((k) => !keys.includes(k)) || !['h', 'v'].includes(body.canvas) || !['cut', 'fade', 'stinger'].includes(body.type)) return json(res, 400, { error: 'bad-params' });
     if (body.easing !== undefined && (body.type !== 'fade' || !easingChoices().easing.some((e) => e.id === body.easing))) return json(res, 400, { error: 'bad-params' });
     if (body.mirror !== undefined && (typeof body.mirror !== 'boolean' || body.canvas !== 'v')) return json(res, 400, { error: 'bad-params' });
     const ms = (v) => Number.isInteger(v) && v >= 0 && v <= 10000;
     if (body.type === 'fade' && !ms(body.durationMs)) return json(res, 400, { error: 'bad-params' });
-    if (body.type === 'stinger' && (!ms(body.pointMs) || typeof body.file !== 'string' || (body.audio !== undefined && typeof body.audio !== 'boolean'))) return json(res, 400, { error: 'bad-params' });
+    // a stinger is either a video from the stream assets folder (`file` + `pointMs`) or a built-in preset by id (`preset`, D391; its own pointMs)
+    if (body.preset !== undefined && (body.type !== 'stinger' || typeof body.preset !== 'string' || body.file !== undefined || body.pointMs !== undefined)) return json(res, 400, { error: 'bad-params' });
+    if (body.type === 'stinger' && ((body.preset === undefined && (!ms(body.pointMs) || typeof body.file !== 'string')) || (body.audio !== undefined && typeof body.audio !== 'boolean'))) return json(res, 400, { error: 'bad-params' });
     if (body.type !== 'stinger' && body.audio !== undefined) return json(res, 400, { error: 'bad-params' });
-    if (body.type === 'stinger' && !listAssets(assetsDir).some((a) => a.kind === 'media' && a.rel === body.file)) return json(res, 409, { error: 'unknown-asset' });
+    if (body.preset !== undefined && !listStingerPresets().some((p) => p.id === body.preset)) return json(res, 409, { error: 'unknown-stinger' });
+    if (body.type === 'stinger' && body.preset === undefined && !listAssets(assetsDir).some((a) => a.kind === 'media' && a.rel === body.file)) return json(res, 409, { error: 'unknown-asset' });
     let hs = null;
     try { hs = await host.call('host.status', {}); } catch { hs = null; }
     if (!hs || hs.live !== false) return json(res, 409, { error: hs ? 'live-locked' : 'host-unavailable' });
@@ -1195,7 +1201,8 @@ export function createStudioServer(opts) {
     try { doc = loadProject(file).project; } catch { return json(res, 409, { error: 'project-unreadable' }); }
     const c = doc.canvases.find((x) => x.id === body.canvas);
     if (!c) return json(res, 409, { error: 'unknown-canvas' });
-    c.transition = body.type === 'stinger' ? { type: 'stinger', durationMs: 0, file: { base: 'media', rel: body.file }, pointMs: body.pointMs, ...(body.audio === false ? { audio: false } : {}) }
+    c.transition = body.type === 'stinger' && body.preset !== undefined ? { ...stingerTransition(body.preset, c.id), ...(body.audio === false ? { audio: false } : {}) }
+      : body.type === 'stinger' ? { type: 'stinger', durationMs: 0, file: { base: 'media', rel: body.file }, pointMs: body.pointMs, ...(body.audio === false ? { audio: false } : {}) }
       : { type: body.type, durationMs: body.type === 'fade' ? body.durationMs : 0, ...(body.easing && body.easing !== 'linear' ? { easing: body.easing } : {}) };
     if (body.mirror === true) c.transition.mirror = true;
     try { saveProject(file, doc); } catch { return json(res, 409, { error: 'not-saved' }); }

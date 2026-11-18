@@ -1,0 +1,15 @@
+{
+  "id": "stinger-neon-glitch",
+  "version": "0.1.0",
+  "function": "scene-transition-stinger",
+  "functionVersion": "^0.1.0",
+  "name": "Stinger: Neon glitch (default)",
+  "params": { "stingerId": "neon-glitch", "pointMs": 450, "durationMs": 900 },
+  "themeOverrides": {},
+  "family": "transitions",
+  "tags": { "motion": "slide", "intensity": "high", "mood": "electric", "colourUse": "multi", "flashes": "low" },
+  "canvases": ["H", "V"],
+  "status": "in-progress",
+  "parity": "none",
+  "similar": ["stinger-synthwave-sweep", "stinger-cyan-grid"]
+}

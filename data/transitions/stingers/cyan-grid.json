@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "cyan-grid",
+  "label": "Cyan grid",
+  "description": "Cool and tidy: teal and cyan bars, a dense cyan grid on a near-black slab, a light glitch.",
+  "fps": 60,
+  "durationMs": 900,
+  "pointMs": 450,
+  "palette": { "base": "#03141f", "bars": ["#7dffe9", "#00e0ff", "#0090b8"], "grid": "#00e0ff", "core": "#e8ffff" },
+  "timing": { "startMs": 60, "coverMs": 260, "clearStartMs": 540, "clearMs": 260 },
+  "shape": { "angleDeg": { "h": 22, "v": 68 }, "barWidthPx": 56, "barGapPx": 10, "glowPx": 12, "coreWidthPx": 3, "gridSpacingPx": 54, "gridWidthPx": 2, "gridAlpha": 0.55, "scanlineAlpha": 0.16, "dataBars": 18 },
+  "glitch": { "startMs": 340, "durationMs": 100, "bands": 3, "maxShiftPx": 50, "splitPx": 10 },
+  "tags": { "motion": "slide", "intensity": "medium", "mood": "calm", "colourUse": "multi", "flashes": "low" }
+}

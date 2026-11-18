@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "neon-glitch",
+  "label": "Neon glitch",
+  "description": "Cyberpunk default: yellow, cyan and magenta bars race across on a diagonal, a dark neon grid covers the screen for a beat with an RGB-split glitch, then it clears the same way.",
+  "default": true,
+  "fps": 60,
+  "durationMs": 900,
+  "pointMs": 450,
+  "palette": { "base": "#0b0420", "bars": ["#ffe600", "#00f0ff", "#ff2bd6"], "grid": "#00f0ff", "core": "#ffffff" },
+  "timing": { "startMs": 60, "coverMs": 260, "clearStartMs": 540, "clearMs": 260 },
+  "shape": { "angleDeg": { "h": 16, "v": 74 }, "barWidthPx": 90, "barGapPx": 14, "glowPx": 14, "coreWidthPx": 3, "gridSpacingPx": 72, "gridWidthPx": 2, "gridAlpha": 0.45, "scanlineAlpha": 0.14, "dataBars": 14 },
+  "glitch": { "startMs": 340, "durationMs": 130, "bands": 5, "maxShiftPx": 90, "splitPx": 14 },
+  "tags": { "motion": "slide", "intensity": "high", "mood": "electric", "colourUse": "multi", "flashes": "low" }
+}

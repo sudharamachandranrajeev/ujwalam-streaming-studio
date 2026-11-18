@@ -105,7 +105,7 @@
 
   // ---- transition per canvas (D242, flag transitions): saved into the project; the server applies it to the host ----
   var trChoices = null;
-  var TR_ERRORS = { 'live-locked': 'Not while live.', 'unknown-asset': 'That video is no longer in the stream assets folder.', 'transitions-off': 'Turn on the transitions flag first.', 'no-project-file': 'No project file is open.' };
+  var TR_ERRORS = { 'live-locked': 'Not while live.', 'unknown-asset': 'That video is no longer in the stream assets folder.', 'unknown-stinger': 'That built-in stinger is not available.', 'transitions-off': 'Turn on the transitions flag first.', 'no-project-file': 'No project file is open.' };
   function renderTransitionCard(on) {
     $('transition-edit').hidden = !on;
     if (!on) { trChoices = null; return; }
@@ -114,6 +114,8 @@
       if (!trChoices) { $('transition-edit').hidden = true; return; }
       var f = $('tr-file'); clear(f);
       trChoices.videos.forEach(function (v) { f.appendChild(el('option', { value: v, text: v })); });
+      var pr = $('tr-preset'); clear(pr);
+      (trChoices.stingers || []).forEach(function (p) { pr.appendChild(el('option', { value: p.id, text: p.label + (p.default ? ' (default)' : ''), title: p.description || '' })); });
       showTransition();
     }).catch(function () { /* stays as it was */ });
   }
@@ -121,19 +123,22 @@
     if (!trChoices) return;
     var cv = $('tr-canvas').value, c = trChoices.canvases.filter(function (x) { return x.id === cv; })[0];
     var t = (c && c.transition) || { type: 'cut', durationMs: 0 };
-    $('tr-type').value = t.type;
+    var builtin = t.type === 'stinger' && t.file && t.file.base === 'data';
+    $('tr-type').value = builtin ? 'builtin' : t.type;
+    if (builtin) { var m = /^transitions\/stingers\/(.+)-[hv]\.webm$/.exec(t.file.rel); if (m) $('tr-preset').value = m[1]; }
     $('tr-ms').value = String(t.durationMs || 0);
     $('tr-point').value = String(t.pointMs || 0);
     $('tr-audio').checked = t.audio !== false;
-    if (t.file && t.file.rel) $('tr-file').value = t.file.rel;
+    if (t.file && t.file.rel && !builtin) $('tr-file').value = t.file.rel;
     trFields();
   }
   function trFields() {
     var ty = $('tr-type').value;
-    $('tr-ms').hidden = ty !== 'fade'; $('tr-file').hidden = ty !== 'stinger'; $('tr-point').hidden = ty !== 'stinger'; $('tr-audio-wrap').hidden = ty !== 'stinger';
+    $('tr-ms').hidden = ty !== 'fade'; $('tr-file').hidden = ty !== 'stinger'; $('tr-point').hidden = ty !== 'stinger'; $('tr-audio-wrap').hidden = ty !== 'stinger' && ty !== 'builtin'; $('tr-preset').hidden = ty !== 'builtin';
   }
   function saveTransition() {
-    var ty = $('tr-type').value, body = { canvas: $('tr-canvas').value, type: ty };
+    var ty = $('tr-type').value, body = { canvas: $('tr-canvas').value, type: ty === 'builtin' ? 'stinger' : ty };
+    if (ty === 'builtin') { body.preset = $('tr-preset').value; body.audio = $('tr-audio').checked; }
     if (ty === 'fade') body.durationMs = Math.round(Number($('tr-ms').value));
     if (ty === 'stinger') { body.file = $('tr-file').value; body.pointMs = Math.round(Number($('tr-point').value)); body.audio = $('tr-audio').checked; }
     Api.setTransition(body).then(function () { setText($('tr-note'), 'Saved; scene switches use it within a second.'); renderTransitionCard(true); })

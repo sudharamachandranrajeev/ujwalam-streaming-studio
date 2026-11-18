@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "synthwave-sweep",
+  "label": "Synthwave sweep",
+  "description": "Softer sunset sweep: orange, pink and violet bars over a deep purple grid. A very short glitch only.",
+  "fps": 60,
+  "durationMs": 900,
+  "pointMs": 450,
+  "palette": { "base": "#14062e", "bars": ["#ff9e1f", "#ff3d8b", "#b04bff"], "grid": "#ff3d8b", "core": "#fff1d6" },
+  "timing": { "startMs": 60, "coverMs": 290, "clearStartMs": 520, "clearMs": 290 },
+  "shape": { "angleDeg": { "h": 10, "v": 80 }, "barWidthPx": 96, "barGapPx": 18, "glowPx": 18, "coreWidthPx": 3, "gridSpacingPx": 90, "gridWidthPx": 2, "gridAlpha": 0.4, "scanlineAlpha": 0.1, "dataBars": 8 },
+  "glitch": { "startMs": 365, "durationMs": 70, "bands": 2, "maxShiftPx": 40, "splitPx": 8 },
+  "tags": { "motion": "slide", "intensity": "medium", "mood": "electric", "colourUse": "multi", "flashes": "low" }
+}

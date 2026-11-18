@@ -59,12 +59,12 @@ describe('feature flags API', () => {
   before(async () => { c = await boot(); });
   after(() => c.srv.close());
 
-  test('list: every flag off by default (preview-edit on D330, reel-thumbnail on D368, outputs-panel on D389)', async () => {
+  test('list: every flag off by default (preview-edit on D330, reel-thumbnail on D368, outputs-panel on D389, transitions on D391)', async () => {
     const r = await get(c.port, c.a, '/ui/api/flags');
     assert.equal(r.status, 200);
     const flags = r.json().flags;
     assert.ok(flags.length >= 1);
-    assert.ok(flags.every((f) => f.on === (f.id === 'preview-edit' || f.id === 'reel-thumbnail' || f.id === 'outputs-panel') && typeof f.id === 'string' && typeof f.description === 'string'));
+    assert.ok(flags.every((f) => f.on === (f.id === 'preview-edit' || f.id === 'reel-thumbnail' || f.id === 'outputs-panel' || f.id === 'transitions') && typeof f.id === 'string' && typeof f.description === 'string'));
   });
   test('ON acts on the click (D332): no phrase, nothing pending; it turns on and persists', async () => {
     const id = (await get(c.port, c.a, '/ui/api/flags')).json().flags[0].id;

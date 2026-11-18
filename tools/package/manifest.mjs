@@ -90,7 +90,9 @@ export const REPO_FILES = Object.freeze([
   'data/scene-builder/build-rules.json', // the scene builder's placement rules (services/scene-builder/build.mjs)
 ]);
 // data/luts: the app's own .cube LUTs, base "luts" of the alpha load (D381; services/studio-ui/alpha.mjs LUTS_DIR)
-export const REPO_GLOB_DIRS = Object.freeze([['data/platforms', /\.json$/], ['data/outputs/presets', /\.json$/], ['data/luts', /\.cube$/]]);
+export const REPO_GLOB_DIRS = Object.freeze([['data/platforms', /\.json$/], ['data/outputs/presets', /\.json$/], ['data/luts', /\.cube$/], ['data/transitions', /\.(json|webm)$/]]);
+// D391: the generated cyberpunk stingers (data/transitions/stingers/<id>-<h|v>.webm) are the only media that ships
+export const STINGER_WEBM = /^data\/transitions\/stingers\/[a-z][a-z0-9-]*-[hv]\.webm$/;
 
 const SKIP_IN_DIRS = [/\.test\.m?js$/i, /(^|\/)(tests?|fixtures|__pycache__|node_modules)\//i, /\.py$/i, /\.md$/i, /\.local\./i, /(^|\/)\./];
 
@@ -332,7 +334,7 @@ export function forbiddenProblems(paths, { fontNames = [] } = {}) {
   const out = [];
   const fontRes = fontNames.map((n) => new RegExp(`(^|/)${n.toLowerCase().slice(0, 6)}[^/]*$`, 'i'));
   for (const p of paths) {
-    for (const [re, why] of FORBIDDEN) if (re.test(p)) out.push(`forbidden (${why}): ${p}`);
+    for (const [re, why] of FORBIDDEN) if (re.test(p) && !STINGER_WEBM.test(p)) out.push(`forbidden (${why}): ${p}`);
     if (FONT_EXT.test(p) && !Object.hasOwn(OFL_FONTS, p)) out.push(`forbidden (font file not on the OFL allowlist OFL_FONTS; Microsoft fonts are never redistributable): ${p}`);
     if (fontRes.some((re) => re.test(p)) && (FONT_EXT.test(p) || !/\.(m?js|json|css|html|txt)$/i.test(p))) out.push(`forbidden (Microsoft font named in docs/licence-headers.md): ${p}`);
   }

@@ -1,0 +1,15 @@
+{
+  "id": "stinger-cyan-grid",
+  "version": "0.1.0",
+  "function": "scene-transition-stinger",
+  "functionVersion": "^0.1.0",
+  "name": "Stinger: Cyan grid",
+  "params": { "stingerId": "cyan-grid", "pointMs": 450, "durationMs": 900 },
+  "themeOverrides": {},
+  "family": "transitions",
+  "tags": { "motion": "slide", "intensity": "medium", "mood": "calm", "colourUse": "multi", "flashes": "low" },
+  "canvases": ["H", "V"],
+  "status": "in-progress",
+  "parity": "none",
+  "similar": ["stinger-neon-glitch", "stinger-synthwave-sweep"]
+}
