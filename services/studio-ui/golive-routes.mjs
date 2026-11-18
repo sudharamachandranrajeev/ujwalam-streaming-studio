@@ -27,6 +27,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_AI_URL, localAiUrl } from '../local-ai.mjs';
 import { ERROR_TEXT } from '../platform-connect/index.mjs';
 import { ID_RE, MODES, cleanDescription, cleanFields, cleanTags, cleanTitle, readAutoEvent, readChoices, readMode, writeChoices } from '../platform-connect/youtube-events.mjs';
 import { readThumbnailFile } from '../platform-connect/youtube-control.mjs';
@@ -34,8 +35,7 @@ import { OUTPUT_IDS } from './youtube-quality.mjs';
 
 export const GOLIVE_ROUTES = Object.freeze(['/ui/api/youtube/golive/options', '/ui/api/youtube/golive/prepare', '/ui/api/youtube/golive/suggest']);
 export const AI_WRITER_FILE = 'ai-writer.json';
-export const DEFAULT_AI_URL = 'http://127.0.0.1:1234/v1/chat/completions';
-const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+export { DEFAULT_AI_URL };
 const OPTIONS_CACHE_MS = 60_000;
 const AI_TIMEOUT_MS = 20_000;
 const AI_TTL_S = 300;
@@ -302,10 +302,7 @@ export function createGoLiveRoutes(deps) {
     try { const j = JSON.parse(readFileSync(path.join(dataDir, AI_WRITER_FILE), 'utf8')); cfg = isPlain(j) ? j : {}; } catch { cfg = {}; }
     const url = typeof cfg.url === 'string' && cfg.url ? cfg.url : DEFAULT_AI_URL;
     const model = typeof cfg.model === 'string' && /^[\w.:/@-]{1,200}$/.test(cfg.model) ? cfg.model : null;
-    let u = null;
-    try { u = new URL(url); } catch { u = null; }
-    const local = !!u && (u.protocol === 'http:' || u.protocol === 'https:') && LOCAL_HOSTS.has(u.hostname.toLowerCase()) && !u.username && !u.password;
-    return { url: local ? u.href : null, model };
+    return { url: localAiUrl(url), model };
   }
   async function busyNow() {
     let st;

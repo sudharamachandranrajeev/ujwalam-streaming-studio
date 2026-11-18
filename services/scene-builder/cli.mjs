@@ -38,6 +38,8 @@
 // without --out-dir only lists them. --project gives the canvas sizes and is only read.
 // Behind the feature flag `scene-builder` (off by default): with the flag off it says so and exits 2. --data-dir
 // picks the folder whose flags.local.json is read (the usual CLI order otherwise).
+// --ai (read, build, theme; SB6, D392) also asks the local vision model in LM Studio (vision.mjs; local address only).
+// The rules result stands when the model is not running, fails or answers out of shape (a note says so). Off air only.
 // Exit codes: 0 done, 1 bad arguments or the work failed, 2 the flag is off.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -51,21 +53,22 @@ import { buildPackage } from './build.mjs';
 import { packageFromScene } from './export.mjs';
 import { editPackage, similarVariants } from './iterate.mjs';
 import { readReference } from './read.mjs';
+import { visionAdapter } from './vision.mjs';
 import { reportText, themeFromRead, userThemesDir, writeProblems, writeThemePack } from './theme.mjs';
 
 export const FLAG = 'scene-builder';
 const USAGE = [
-  'usage: cli.mjs read <image-or-video> [--frames N] [--long-side PX] [--data-dir DIR]',
-  '       cli.mjs build <image-or-video> --project FILE [--bind ROLE=ID]... [--theme ID] [--out PACKAGE.json] [--apply] [--json]',
+  'usage: cli.mjs read <image-or-video> [--ai] [--frames N] [--long-side PX] [--data-dir DIR]',
+  '       cli.mjs build <image-or-video> --project FILE [--ai] [--bind ROLE=ID]... [--theme ID] [--out PACKAGE.json] [--apply] [--json]',
   '       cli.mjs import <PACKAGE.json> --project FILE [--apply] [--json]',
-  '       cli.mjs theme <image-or-video> [--name N] [--themes-dir DIR] [--apply] [--json]',
+  '       cli.mjs theme <image-or-video> [--ai] [--name N] [--themes-dir DIR] [--apply] [--json]',
   '       cli.mjs export <scene-id-or-name> --project FILE [--out PACKAGE.json] [--json]',
   '       cli.mjs edit <PACKAGE.json> --project FILE --out PACKAGE.json [--move C:KEY=X,Y] [--resize C:KEY=W,H] [--place C:KEY=X,Y,W,H] [--swap C:A,B]',
   '       cli.mjs variants <PACKAGE.json> --project FILE [--count N] [--seed TEXT] [--out-dir DIR] [--json]',
 ].join('\n');
 const VALUE = new Set(['--frames', '--long-side', '--data-dir', '--project', '--theme', '--out', '--name', '--themes-dir', '--count', '--seed', '--out-dir']);
 const EDIT_FLAGS = new Set(['--move', '--resize', '--place', '--swap']);
-const SWITCH = new Set(['--apply', '--json']);
+const SWITCH = new Set(['--apply', '--json', '--ai']);
 const BIND_ROLES = new Set(['game', 'camera', 'chat', 'alerts']);
 
 const NUM = '(-?\\d*\\.?\\d+)';
@@ -110,7 +113,12 @@ export function parseArgs(argv) {
   return out;
 }
 
-/** Returns the exit code. deps: { flagsOn?(dataDir) -> bool } for tests. */
+// --ai: the local vision model adapter (deps.aiFetch replaces fetch in tests), else no model.
+function aiModel(args, deps) {
+  return args.ai ? visionAdapter({ ...(deps.aiFetch ? { fetch: deps.aiFetch } : {}) }) : null;
+}
+
+/** Returns the exit code. deps: { flagsOn?(dataDir) -> bool, aiFetch? } for tests. */
 export async function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s) => console.error(s), deps = {}) {
   let args;
   try { args = parseArgs(argv); } catch (e) { err(`scene-builder: ${e.message}\n${USAGE}`); return 1; }
@@ -125,6 +133,7 @@ ${USAGE}`); return 1; }
   if (cmd === 'read' && (args.project || args.apply || args.out || args.theme || args.json || Object.keys(args.bind).length)) { err(`scene-builder: read takes no project options\n${USAGE}`); return 1; }
   if (cmd === 'import' && (args.out || args.theme || args.frames || args['long-side'] || Object.keys(args.bind).length)) { err(`scene-builder: import takes the package as it is\n${USAGE}`); return 1; }
   if (ITERATE.includes(cmd) && (args.apply || args.theme || args.frames || args['long-side'] || args.name || Object.keys(args.bind).length)) { err(`scene-builder: ${cmd} never changes the project; import the saved package to use it\n${USAGE}`); return 1; }
+  if (args.ai && !['read', 'build', 'theme'].includes(cmd)) { err(`scene-builder: --ai is for read, build and theme\n${USAGE}`); return 1; }
   if (cmd !== 'edit' && args.edits.length) { err(`scene-builder: --move, --resize, --place and --swap are for edit\n${USAGE}`); return 1; }
   if (cmd !== 'variants' && (args.count !== undefined || args.seed !== undefined || args['out-dir'] !== undefined)) { err(`scene-builder: --count, --seed and --out-dir are for variants\n${USAGE}`); return 1; }
   if (cmd === 'edit' && (!args.out || !args.edits.length)) { err(`scene-builder: edit needs --out and at least one edit\n${USAGE}`); return 1; }
@@ -141,14 +150,14 @@ ${USAGE}`); return 1; }
   if (!on) { err(`scene-builder: the ${FLAG} feature flag is off (switch it on in Settings > Advanced or the control page)`); return 2; }
   try {
     if (cmd === 'read') {
-      out(JSON.stringify(await readReference(args._[1], { frames, longSide }), null, 2));
+      out(JSON.stringify(await readReference(args._[1], { frames, longSide, model: aiModel(args, deps) }), null, 2));
       return 0;
     }
     if (cmd === 'theme') return await themeCommand(args, { frames, longSide }, out, err, deps);
     if (ITERATE.includes(cmd)) return iterateCommand(cmd, args, out, deps);
     let pkg;
     if (cmd === 'build') {
-      const read = await readReference(args._[1], { frames, longSide });
+      const read = await readReference(args._[1], { frames, longSide, model: aiModel(args, deps) });
       const { project } = loadProject(args.project);
       pkg = buildPackage(read, project, { bind: args.bind, theme: args.theme ?? null });
       if (args.out) writeFileSync(args.out, `${JSON.stringify(pkg, null, 2)}\n`, { flag: 'wx' });
@@ -209,7 +218,7 @@ function iterateCommand(cmd, args, out, deps) {
 }
 
 async function themeCommand(args, { frames, longSide }, out, err, deps) {
-  const read = await readReference(args._[1], { frames, longSide });
+  const read = await readReference(args._[1], { frames, longSide, model: aiModel(args, deps) });
   const { pack, report } = themeFromRead(read, { name: args.name ?? null });
   const dir = args['themes-dir'] ? path.resolve(args['themes-dir']) : userThemesDir(deps.env ?? process.env);
   const dryRun = !args.apply;
