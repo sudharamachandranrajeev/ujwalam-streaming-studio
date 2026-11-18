@@ -101,6 +101,7 @@ import { createPostChain } from '../posting/auto-chain.mjs';
 import { createLearningSignals } from '../learning/signals.mjs';
 import { folderProblem, readSettings, SETTINGS_FILE } from './user-settings.mjs';
 import { createStatCache } from '../common/stat-cache.mjs';
+import { createWorkerSlot } from './worker-slot.mjs';
 import { createMediaInfo } from '../project/media-info.mjs';
 import { rpc } from './backends.mjs';
 import { collectDiag, CRASH_LOG_FILE, outputsSafe, SNAPSHOT_FILE } from '../../tools/diag/bundle.mjs';
@@ -874,7 +875,9 @@ function superviseHost(o) {
   const watchMs = Math.max(100, Number(process.env.UJWALAM_HOST_WATCH_MS ?? 2000) || 2000);
   let client = o.initialClient;
   let lastOutputs = null;
-  let lastOutputsAt = 0; // when lastOutputs was read (Date.now)
+  // The watch loop's last answer for other loops to reuse (idle load 2026-11-18): tied to the host process that gave it,
+  // and dropped when crash recovery or a planned restart starts (Codex review), so a dead host's status is never reused.
+  let sample = null; // { outputs, at (Date.now), child }
   let busy = false;
   // Stream recovery (D303 proposed): the streams seen live before the crash wait here until a restarted host is ready
   // (a host that is not ready keeps them for the next attempt; the crash time stays the first one).
@@ -937,7 +940,11 @@ function superviseHost(o) {
   };
   const readOutputs = async () => {
     if (busy || isStopping()) return;
-    try { lastOutputs = await client.call('outputs.status'); lastOutputsAt = Date.now(); } catch { /* host gone or busy: keep the last answer */ }
+    const from = getChild();
+    try {
+      lastOutputs = await client.call('outputs.status');
+      sample = !busy && from && from === getChild() && !hasExited(from) ? { outputs: lastOutputs, at: Date.now(), child: from } : null;
+    } catch { /* host gone or busy: keep the last answer */ }
   };
   const poll = setInterval(readOutputs, watchMs);
   poll.unref();
@@ -1015,6 +1022,7 @@ function superviseHost(o) {
   async function onExit(child, code, signal) {
     if (isStopping() || child !== getChild() || planned.has(child)) return;
     busy = true;
+    sample = null;
     const at = new Date();
     const recording = activeSinks(lastOutputs, 'record');
     const streams = activeSinks(lastOutputs, 'stream');
@@ -1150,7 +1158,11 @@ function superviseHost(o) {
     restarting: () => busy,
     // The watch loop's last outputs.status when it is at most maxAgeMs old, else null (idle load, 2026-11-18: the clip
     // tick reuses it instead of reading its own).
-    recentOutputs: (maxAgeMs) => (lastOutputs && Date.now() - lastOutputsAt <= maxAgeMs ? lastOutputs : null),
+    recentOutputs: (maxAgeMs) => {
+      const ch = getChild();
+      if (busy || !sample || sample.child !== ch || hasExited(ch) || Date.now() - sample.at > maxAgeMs) return null;
+      return sample.outputs;
+    },
     // check(): the candidate's last hash, run after the old host has exited and right before the new one is spawned
     // (Codex re-review). candidateFailed in the answer: the candidate itself failed (check, readiness, project load);
     // without it nothing of the candidate ran (it is kept for a retry). running (Codex review of the merge): which host
@@ -1160,6 +1172,7 @@ function superviseHost(o) {
     async restartPlanned(useNew, useOld, check = () => null) {
       if (busy || isStopping()) return { result: 'refused', reason: 'the host is restarting' };
       busy = true;
+      sample = null;
       try {
         const old = getChild();
         planned.add(old);
@@ -1587,32 +1600,53 @@ export async function main(argv = process.argv.slice(2)) {
       // capture device on the game layer) is tried again on every clip tick, so binding the device later starts it (LC1).
       let lastReason = null;
       const settingsCache = createStatCache(); // settings.json read again only when it changed
-      let clipper = null; // the running clipper process
       // The scene file is read again only when it changed (it is read on every tick while the clipper cannot start).
-      let specCache = { key: null, lc: null };
+      const specCache = createStatCache();
       const clipperSpec = () => {
         const file = alphaFile(dataDir);
-        let key = null;
-        try { const s = statSync(file); key = `${s.mtimeMs}:${s.size}`; } catch { key = null; }
-        if (key !== null && key === specCache.key) return specCache.lc;
-        let lc = { spec: null, reason: 'the scene file could not be read' };
-        try { lc = liveClipsSpec({ project: loadProject(file).project, dataDir, repo: CLIP_ROOT }); } catch { /* reason above */ }
-        specCache = { key, lc };
-        return lc;
+        return specCache(file, () => {
+          try { return liveClipsSpec({ project: loadProject(file).project, dataDir, repo: CLIP_ROOT }); } catch { return { spec: null, reason: 'the scene file could not be read' }; }
+        });
       };
+      const clipperWanted = () => liveClipperWanted({ flagOn: flagIsOn('live-clips'), clips: settingsCache(path.join(dataDir, SETTINGS_FILE), () => readSettings(dataDir)).clips });
+      // Codex review: a clipper that was switched off keeps its slot until it has exited (it may be saving a replay);
+      // a crash restart is cancelled by a switch-off and checks the settings and the scene again before it starts.
+      const clipSlot = createWorkerSlot({ end: endWorker });
+      const spawnWorker = (spec, env) => {
+        const c = spawn(spec.exe, spec.argv, { stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true, env });
+        c.stdin.on('error', () => {}); // the pipe closed by endWorker after the process went, or a worker that died mid-write
+        children.push(c);
+        c.once('exit', () => { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); });
+        return c;
+      };
+      const startClipper = (spec) => clipSlot.launch(() => spawnWorker(spec, { ...clipsEnv({ hostClipsToken, hostDiscovery }), ...PARENT_PIPE }), (code, gen) => {
+        if (stopping) return;
+        const next = clipperExited(lcView, code);
+        Object.assign(lcView, next.view);
+        if (!next.restart) {
+          console.log(`[studio] live clipper exited (${code}); not restarted again`);
+          return;
+        }
+        console.log(`[studio] live clipper exited (${code}); restart ${lcView.restarts}/${LIVE_CLIPPER_MAX_RESTARTS} in 10 s`);
+        // Bound to this generation (a switch-off cancels it); the settings and the scene are checked again first.
+        clipSlot.retry(gen, () => {
+          if (stopping || lcView.state !== 'restarting') return;
+          if (!clipperWanted()) { Object.assign(lcView, clipperStoppedView(lcView)); return; }
+          const lc = clipperSpec();
+          if (!lc.spec) { lcView.state = 'not-started'; lcView.reason = lc.reason; return; }
+          if (startClipper(lc.spec)) { lcView.state = 'running'; lcView.reason = null; }
+        });
+      });
       const syncClipper = () => {
         if (stopping) return;
-        if (!liveClipperWanted({ flagOn: flagIsOn('live-clips'), clips: settingsCache(path.join(dataDir, SETTINGS_FILE), () => readSettings(dataDir)).clips })) {
-          if (clipper) {
-            endWorker(clipper);
-            clipper = null;
-            console.log(`[studio] live clipper stopped (${LIVE_CLIPPER_OFF_REASON})`);
-          }
+        if (!clipperWanted()) {
+          if (clipSlot.stop()) console.log(`[studio] live clipper stopped (${LIVE_CLIPPER_OFF_REASON})`);
           if (lcView.reason !== LIVE_CLIPPER_OFF_REASON || lcView.state !== 'not-started') Object.assign(lcView, clipperStoppedView(lcView));
           lastReason = LIVE_CLIPPER_OFF_REASON;
           return;
         }
-        if (lcView.state !== 'not-started') return;
+        // Running, still stopping after a switch-off, or a restart pending: the next tick checks again.
+        if (clipSlot.busy() || lcView.state !== 'not-started') return;
         const lc = clipperSpec();
         if (!lc.spec) {
           lcView.reason = lc.reason;
@@ -1620,29 +1654,8 @@ export async function main(argv = process.argv.slice(2)) {
           lastReason = lc.reason;
           return;
         }
-        const startClipper = () => {
-          const c = spawn(lc.spec.exe, lc.spec.argv, { stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true, env: { ...clipsEnv({ hostClipsToken, hostDiscovery }), ...PARENT_PIPE } });
-          c.stdin.on('error', () => {}); // the pipe closed by endWorker after the process went
-          children.push(c);
-          clipper = c;
-          lcView.state = 'running'; lcView.reason = null;
-          c.once('exit', (code) => {
-            const i = children.indexOf(c);
-            if (i >= 0) children.splice(i, 1);
-            if (clipper === c) clipper = null;
-            if (stopping || c.endedOnPurpose) return;
-            const next = clipperExited(lcView, code);
-            Object.assign(lcView, next.view);
-            if (!next.restart) {
-              console.log(`[studio] live clipper exited (${code}); not restarted again`);
-              return;
-            }
-            console.log(`[studio] live clipper exited (${code}); restart ${lcView.restarts}/${LIVE_CLIPPER_MAX_RESTARTS} in 10 s`);
-            // Not when it was switched off meanwhile (the view is then not-started again).
-            setTimeout(() => { if (!stopping && lcView.state === 'restarting') startClipper(); }, 10_000).unref();
-          });
-        };
-        startClipper();
+        if (!startClipper(lc.spec)) return;
+        lcView.state = 'running'; lcView.reason = null;
         console.log(`[studio] live clipper started (OCR ${lc.spec.gpu ? 'GPU, DirectML' : 'CPU'}; scans only while live or recording)`);
       };
       // Face AI worker (D295 proposed): runs only while the face-ai flag is on (idle load 2026-11-18; checked every
@@ -1653,36 +1666,34 @@ export async function main(argv = process.argv.slice(2)) {
       if (!fs_.spec) console.log(`[studio] face worker not started: ${fs_.reason}`);
       else {
         let restarts = 0;
-        let pending = false; // a crash restart is scheduled
+        // Same rules as the clipper (Codex review): a stopping worker keeps the slot until it exits; a crash restart is
+        // cancelled by a switch-off and checks the flag again. faceChild is only the running worker (faceTell).
+        const faceSlot = createWorkerSlot({ end: endWorker });
         const startFace = () => {
           // stdin: the parent pipe (D234) and the control line (host pid + face link key); never env, never argv
-          const c = spawn(fs_.spec.exe, fs_.spec.argv, { stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true, env: { ...faceEnv(), ...PARENT_PIPE } });
-          c.stdin.on('error', () => {}); // a worker that died mid-write: its exit handler below deals with it
-          children.push(c);
-          faceChild = c;
-          faceTell();
-          c.once('exit', (code) => {
-            const i = children.indexOf(c);
-            if (i >= 0) children.splice(i, 1);
-            if (faceChild === c) faceChild = null;
-            if (stopping || c.endedOnPurpose) return;
+          const c = faceSlot.launch(() => spawnWorker(fs_.spec, { ...faceEnv(), ...PARENT_PIPE }), (code, gen) => {
+            if (stopping) return;
             if (restarts >= 5) { console.log(`[studio] face worker exited (${code}); not restarted again`); return; }
             restarts += 1;
-            pending = true;
             console.log(`[studio] face worker exited (${code}); restart ${restarts}/5 in 10 s`);
-            setTimeout(() => { pending = false; if (!stopping && flagIsOn('face-ai') && !faceChild) startFace(); }, 10_000).unref();
+            faceSlot.retry(gen, () => { if (!stopping && flagIsOn('face-ai') && !faceSlot.busy()) startFace(); });
           });
+          if (!c) return;
+          faceChild = c;
+          c.once('exit', () => { if (faceChild === c) faceChild = null; });
+          faceTell();
         };
         let gaveUp = false;
         syncFace = () => {
           if (stopping) return;
           const on = flagIsOn('face-ai');
           if (!on) {
-            if (faceChild) { endWorker(faceChild); faceChild = null; console.log('[studio] face worker stopped (the face-ai switch is off)'); }
+            faceChild = null;
+            if (faceSlot.stop()) console.log('[studio] face worker stopped (the face-ai switch is off)');
             restarts = 0; gaveUp = false;
             return;
           }
-          if (faceChild || pending || gaveUp) return;
+          if (faceSlot.busy() || gaveUp) return;
           if (restarts >= 5) { gaveUp = true; return; }
           startFace();
           console.log('[studio] face worker started (the face-ai switch is on)');

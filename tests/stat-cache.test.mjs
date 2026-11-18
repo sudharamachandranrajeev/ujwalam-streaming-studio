@@ -32,6 +32,20 @@ test('stat cache: one read per change; a rename-replace, a size change and a del
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('stat cache: a value is read again once it is maxAgeMs old, even when the stat did not change', () => {
+  let t = 0;
+  const cached = createStatCache({ keyOf: () => 'same', maxAgeMs: 10_000, now: () => t });
+  let reads = 0;
+  const read = () => ++reads;
+  assert.equal(cached('f', read), 1);
+  t = 9_999;
+  assert.equal(cached('f', read), 1, 'fresh enough');
+  t = 10_000;
+  assert.equal(cached('f', read), 2, 'same stat, but old: read again');
+  t = 15_000;
+  assert.equal(cached('f', read), 2);
+});
+
 test('stat cache: entries are per file', () => {
   const cached = createStatCache({ keyOf: () => 'same' });
   assert.equal(cached('x', () => 'x1'), 'x1');

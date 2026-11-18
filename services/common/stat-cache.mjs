@@ -6,6 +6,8 @@
 //   cached(file, () => readSettings(dataDir))   // read() runs on the first call and after each change of file
 // read() must depend on the file only (plus values that never change for this cache). A value read while the file
 // was being replaced is read again on the next call, because the file then has a newer stat than the one stored.
+// Bounded staleness (Codex review): an in-place rewrite with the same size inside the file system's mtime granularity
+// keeps the same stat, so every value is also read again once it is maxAgeMs old (default 10 s), changed or not.
 import { statSync } from 'node:fs';
 
 export function statKey(file) {
@@ -17,14 +19,15 @@ export function statKey(file) {
   }
 }
 
-export function createStatCache({ keyOf = statKey } = {}) {
+export function createStatCache({ keyOf = statKey, maxAgeMs = 10_000, now = Date.now } = {}) {
   const entries = new Map();
   return function cached(file, read) {
     const key = keyOf(file);
+    const t = now();
     const e = entries.get(file);
-    if (e && e.key === key) return e.value;
+    if (e && e.key === key && t - e.at < maxAgeMs) return e.value;
     const value = read();
-    entries.set(file, { key, value });
+    entries.set(file, { key, value, at: t });
     return value;
   };
 }
