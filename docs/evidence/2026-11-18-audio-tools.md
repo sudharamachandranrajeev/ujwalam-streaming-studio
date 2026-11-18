@@ -99,6 +99,9 @@ Notes on the numbers:
   `tests/studio-ui-mixer-routing.test.mjs` 3/0, `tests/studio-qml-devices-mixer.test.mjs` 4/0,
   `app/host/tests/host-audio-add.test.mjs` 4/0, `app/host/tests/host-audio-health.test.mjs` 7/0. `npm run lint`:
   0 findings. Builds: `node app/host/tools/build.mjs`, `node app/studio/tools/build.mjs` (both exit 0).
+- After the rebase onto `claude/alpha0-d1` 823550a (devices round 2, idle load, setup merged): host and studio rebuilt,
+  rerun alone: host-audio-tools 12/0, audio-tools-routes 9/0, studio-qml-audio-tools 3/0, host-audio-add 4/0,
+  studio-qml-devices-mixer 5/0. The commit hook's quick CI passed (9/9).
 - Not run: the full CI (`npm run ci`).
 
 ## Unverified
