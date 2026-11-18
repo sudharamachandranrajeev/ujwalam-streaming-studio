@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ujwalam-guide-data",
-  "$comment": "Schema for data/guide/tour.json and data/guide/hints.json (D294 proposed). Plain English for new users: no jargon, no names. Anchors are object names the studio window registers (app/studio/src/guide.cpp); a step or hint whose anchor is missing is skipped.",
+  "$comment": "Schema for data/guide/tour.json and data/guide/hints.json (D294 proposed). Plain English for new users: no jargon, no names. Anchors are names the studio window knows (app/studio/qml/Guide.qml, anchorNames); a step or hint whose anchor is missing is skipped.",
   "$defs": {
     "slug": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
     "anchor": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,39}$" },

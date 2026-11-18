@@ -381,7 +381,7 @@ export function createWorkerSlot(opts) {
   };
 }
 
-export const STUDIO_SWAP_EXIT = 75; // MainWindow::kSwapExitCode (app/studio/src/main_window.h)
+export const STUDIO_SWAP_EXIT = 75; // QmlStudio::kSwapExitCode (app/studio/src/qml_studio.h)
 const STUDIO_READY_RE = /^studio attach: ready/;
 const STUDIO_PREVIEW_RE = /^studio attach: preview ([a-z]+) embedded/;
 

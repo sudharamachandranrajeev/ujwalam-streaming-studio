@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "qml_studio.h"
 #include "api_client.h"
-#include "main_window.h"
 #include "qml_bridge.h"
 #include "qml_tasks.h"
 #include "theme.h"
@@ -50,7 +49,7 @@ bool QmlStudio::begin(Mode mode)
 	qmlRegisterSingletonInstance("Ujwalam.Core", 1, 0, "Api", qapi_);
 	qmlRegisterSingletonInstance("Ujwalam.Core", 1, 0, "Theme", theme_);
 	qmlRegisterType<PreviewView>("Ujwalam.Core", 1, 0, "PreviewView");
-	// The task panel's words and the tray come from the widget studio's C++ (taskbar.h, tray.h). Only a normal window
+	// The task panel's words and the tray come from C++ (taskbar.h, tray.h). Only a normal window
 	// may put a tray icon or a notification on the screen; hidden and probe modes run the same tray unseen.
 	qmlRegisterSingletonInstance("Ujwalam.Core", 1, 0, "TaskText", new QmlTaskText(this));
 	qmlRegisterSingletonInstance("Ujwalam.Core", 1, 0, "Tray", new QmlTray(mode != Mode::Normal, this));
@@ -97,7 +96,7 @@ void QmlStudio::swapClose()
 {
 	std::printf("studio swap: closing for an update (host and outputs keep running)\n");
 	std::fflush(stdout);
-	QCoreApplication::exit(MainWindow::kSwapExitCode);
+	QCoreApplication::exit(kSwapExitCode);
 }
 
 void QmlStudio::close()

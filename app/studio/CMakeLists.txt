@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Ujwalam studio shell (P5a): Qt 6 Widgets UI, a native client of the studio UI server
-# (docs/plan/2026-11-06-p5a-qt-shell-plan.md). libobs stays in ujwalam-host; this links Qt only.
+# Ujwalam studio shell: the Qt Quick studio window (D355; qml/), a native client of the studio UI server. The only
+# studio since 2026-11-18 (the Qt Widgets window was removed; Widgets stays for the tray and the system dialogs).
+# libobs stays in ujwalam-host; this links Qt only.
 cmake_minimum_required(VERSION 3.24)
 project(ujwalam-studio LANGUAGES CXX)
 if(WIN32)
@@ -17,37 +18,11 @@ qt_policy(SET QTP0001 NEW)
 
 add_executable(ujwalam-studio WIN32
 	src/main.cpp
-	src/add_dialogs.cpp
-	src/add_dialogs.h
-	src/appearance.cpp
-	src/appearance.h
-	src/depth.cpp
-	src/depth.h
-	src/interaction.cpp
-	src/interaction.h
 	src/api_client.cpp
 	src/api_client.h
-	src/autopost_card.cpp
-	src/autopost_card.h
-	src/coach.cpp
-	src/coach.h
-	src/connections_page.cpp
-	src/connections_page.h
-	src/guide.cpp
-	src/guide.h
-	src/help_panel.cpp
-	src/help_panel.h
-	src/hints.cpp
-	src/hints.h
 	src/icons.cpp
 	src/icons.h
-	src/layer_list.cpp
-	src/layer_list.h
 	src/fx_types.cpp
-	src/look_panel.cpp
-	src/look_panel.h
-	src/main_window.cpp
-	src/main_window.h
 	src/qml_bridge.cpp
 	src/qml_bridge.h
 	src/qml_studio.cpp
@@ -56,14 +31,6 @@ add_executable(ujwalam-studio WIN32
 	src/qml_tasks.h
 	src/motion.cpp
 	src/motion.h
-	src/soft.cpp
-	src/soft.h
-	src/stats_cards.cpp
-	src/stats_cards.h
-	src/stream_pages.cpp
-	src/stream_pages.h
-	src/switch_widget.cpp
-	src/switch_widget.h
 	src/studio_log.cpp
 	src/studio_log.h
 	# the host's crash reporter, shared (text report only; 2026-11-08 studio crash)
@@ -74,11 +41,7 @@ add_executable(ujwalam-studio WIN32
 	src/tray.cpp
 	src/tray.h
 	src/theme.cpp
-	src/theme.h
-	src/specimen.cpp
-	src/specimen.h
-	src/value_slider.cpp
-	src/value_slider.h)
+	src/theme.h)
 # Built-in theme packs (D293): data/themes/*.json embedded as :/themes/<id>.json. A file with the same id next to the
 # exe, in the app-data folder or the repo replaces the embedded one; a new id there is a custom theme.
 file(GLOB UJW_THEME_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../data/themes/*.json")
@@ -88,7 +51,7 @@ qt_add_resources(ujwalam-studio themes PREFIX "/themes" BASE "${CMAKE_CURRENT_SO
 file(GLOB UJW_ICON_PNGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/res/png/ujwalam-*.png")
 qt_add_resources(ujwalam-studio appicon PREFIX "/icon" BASE "${CMAKE_CURRENT_SOURCE_DIR}/res/png" FILES ${UJW_ICON_PNGS})
 target_link_libraries(ujwalam-studio PRIVATE Qt6::Widgets Qt6::Network Qt6::Qml Qt6::Quick Qt6::QuickControls2)
-# The Qt Quick studio (D355, flag studio-qml): its screens, compiled into the exe. Api, Theme and PreviewView come from
+# The Qt Quick studio (D355): its screens, compiled into the exe. Api, Theme and PreviewView come from
 # C++ (qml_studio.cpp registers them as module Ujwalam.Core).
 qt_add_qml_module(ujwalam-studio
 	URI Ujwalam.Studio

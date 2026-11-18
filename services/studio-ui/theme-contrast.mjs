@@ -4,9 +4,9 @@
 // For every state a component has (normal, hover, pressed, checked or selected, focus, error), the colours the studio
 // paints are paired: text >= 4.5:1 against what it sits on, control parts and focus indicators >= 3:1 against what
 // they sit next to. Disabled text is exempt (WCAG 1.4.3), and borders that only decorate a filled control are not
-// checked (the fill, the label and the state carry the meaning). The pairs come from the base stylesheet in
-// app/studio/src/theme.cpp, the variant fragments (componentQss) for the variants a pack picks, and the painted
-// Switch; derived() mirrors theme.cpp's derived(): change both together.
+// checked (the fill, the label and the state carry the meaning). The pairs were taken from the widget studio's base
+// stylesheet, its variant fragments and its painted Switch (removed 2026-11-18); they stay as the rules every pack must
+// pass. derived() keeps that studio's derived colours.
 
 export const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 export const toHex = (c) => `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
@@ -15,10 +15,10 @@ export const lum = (h) => {
   return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 };
 export const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
-// a + (b - a) * t per channel, rounded (theme.cpp mixc()); Math.round and std::lround agree for these positive values
+// a + (b - a) * t per channel, rounded
 export const mix = (a, b, t) => { const x = hex(a), y = hex(b); return toHex(x.map((v, i) => Math.round(v + (y[i] - v) * t))); };
 
-// theme.cpp derived()
+// the derived colours of the variant fragments
 export function derived(p) {
   const c = p.colors;
   const well = mix(c.field, '#000000', p.dark ? 0.28 : 0.06);
@@ -141,14 +141,14 @@ export const VARIANTS = {
     glow: (p, x) => [['focus', 'glow focus text', p.colors.text, [x.focusTint], TEXT], ['focus', 'glow focus edge', p.colors.accentHi, [x.focusTint, ...surfaces(p)], CTRL]],
   },
   switch: {
-    // painted (switch_widget.cpp paintVariant): ink is onAccent on the "on" track, text on the "off" track
+    // painted (the widget Switch's variants): ink is onAccent on the "on" track, text on the "off" track
     plain: (p) => [['checked', 'switch knob on', p.colors.onAccent, [p.colors.accent], CTRL], ['normal', 'switch knob off', p.colors.text, [p.colors.border], CTRL],
       ['checked', 'switch track on against the window', p.colors.accent, surfaces(p), CTRL]],
     labelled: (p) => [['checked', 'switch ON label', p.colors.onAccent, [p.colors.accent], TEXT], ['normal', 'switch OFF label', p.colors.text, [p.colors.border], TEXT],
       ['checked', 'switch track on against the window', p.colors.accent, surfaces(p), CTRL]],
     bezel: (p) => [['checked', 'switch ON label', p.colors.onAccent, [p.colors.accent], TEXT], ['normal', 'switch OFF label', p.colors.text, [p.colors.border], TEXT],
       ['checked', 'switch track on against the window', p.colors.accent, surfaces(p), CTRL]],
-    // painted (switch_widget.cpp paintKnob): ON in glowInk on the warm track, OFF in muted on the well; the knob moves
+    // painted (the widget Switch's knob): ON in glowInk on the warm track, OFF in muted on the well; the knob moves
     knob: (p) => sf(p, (s) => [['checked', 'switch ON label', s.glowInk, [s.warmTop, s.warmBottom], TEXT], ['normal', 'switch OFF label', p.colors.muted, [s.wellTop, s.wellBottom], TEXT],
       ['checked', 'warm track edge against the window', s.warmEdge, [s.wellTop], 1.4]]),
   },

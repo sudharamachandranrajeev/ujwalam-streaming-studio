@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tray.h"
 #include "taskbar.h"
-#include "theme.h"
 
 #include <QAction>
 #include <QCursor>
@@ -163,8 +162,8 @@ void TrayKeeper::rebuild()
 		auto *row = new QFrame(list_);
 		row->setObjectName(QStringLiteral("taskRow"));
 		auto *rv = new QVBoxLayout(row);
-		theme::margins(rv, 10, 6, 10, 8);
-		theme::space(rv, 3);
+		rv->setContentsMargins(10, 6, 10, 8);
+		rv->setSpacing(3);
 		auto *title = new QLabel(t.value(QStringLiteral("title")).toString(), row);
 		title->setWordWrap(true);
 		rv->addWidget(title);
@@ -198,13 +197,13 @@ void TrayKeeper::showList()
 		list_->setObjectName(QStringLiteral("taskPanel"));
 		list_->setFixedWidth(360);
 		auto *v = new QVBoxLayout(list_);
-		theme::margins(v, 12, 10, 12, 12);
-		theme::space(v, 8);
+		v->setContentsMargins(12, 10, 12, 12);
+		v->setSpacing(8);
 		auto *head = new QLabel(QStringLiteral("UJWALAM TASKS"), list_);
 		head->setObjectName(QStringLiteral("heading"));
 		v->addWidget(head);
 		rows_ = new QVBoxLayout();
-		theme::space(rows_, 6);
+		rows_->setSpacing(6);
 		v->addLayout(rows_);
 		auto *btns = new QHBoxLayout();
 		auto *open = new QPushButton(QStringLiteral("Open Ujwalam"), list_);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The effect types the studio edits (D260, D290), shared by the widget studio (main_window.cpp, LookPanel) and the QML
-// studio (QmlApi::fxTypes). One table, so a type added here shows up in both.
+// The effect types the studio edits (D260, D290), read by the QML studio (QmlApi::fxTypes). One table, so a type added
+// here shows up in the studio.
 #pragma once
 
 #include <QString>
