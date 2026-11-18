@@ -192,7 +192,7 @@ describe('QML studio Settings > Transitions (headless probe)', { skip }, () => {
   test('with nothing changed, Save sends no transition to the host', async () => {
     const r = await probe({ actions: [...open, ...WAIT, 'settings-save'] });
     assert.equal(r.s.flagsInSettings, false, 'Settings closed');
-    assert.ok(!r.calls.some(([m]) => /transition/i.test(m) && m !== 'transitions.forceComplete'), JSON.stringify(r.calls));
+    assert.ok(!r.calls.some(([m]) => /transition/i.test(m) && m !== 'transitions.forceComplete' && m !== 'transitions.types'), JSON.stringify(r.calls));
   });
 
   test('Cancel with a Transitions change asks Save changes / Discard / Cancel; Discard saves nothing', async () => {
@@ -214,7 +214,7 @@ describe('QML studio Settings > Transitions (headless probe)', { skip }, () => {
     assert.deepEqual(canvasOf(r.doc(), 'h'), { type: 'stinger', durationMs: 0, file: { base: 'media', rel: 'sting.webm' }, pointMs: 400, audio: false });
     assert.equal(canvasOf(r.doc(), 'v').type, 'cut', 'the other canvas untouched');
     const b = r.s.transitionsBox;
-    assert.deepEqual([b.shown, b.type, b.file, b.point, b.audio, b.stingerOn, b.msOn, b.videos], [true, 'stinger', 'sting.webm', 400, false, true, false, 1]);
+    assert.deepEqual([b.shown, b.type, b.file, b.point, b.audio, b.stingerOn, b.msOn, b.videos], [true, 'stinger', 'file:sting.webm', 400, false, true, false, 1]);
     assert.equal(r.s.note, 'Transition saved; the host follows within a few seconds.');
   });
 
@@ -223,18 +223,41 @@ describe('QML studio Settings > Transitions (headless probe)', { skip }, () => {
     assert.deepEqual(r.p.actions.map((a) => a.done), [true, false, true, true, true, true, true], 'Duration refused while the type is cut');
     assert.deepEqual(canvasOf(r.doc(), 'v'), { type: 'fade', durationMs: 600 });
     assert.equal(canvasOf(r.doc(), 'h').type, 'cut');
-    const s = await probe({ actions: [BOX, 'trbox-type:stinger', 'trbox-apply'] });
-    assert.equal(s.s.note, 'A stinger needs a video from the stream assets folder.');
-    assert.equal(canvasOf(s.doc(), 'h').type, 'cut', 'nothing written');
+    // D394: a stinger with no video of its own is the default built-in one, picked by name
+    const s = await probe({ actions: [BOX, 'trbox-type:stinger', 'trbox-apply', BOX], ms: 12000 });
+    assert.deepEqual(canvasOf(s.doc(), 'h').file, { base: 'data', rel: 'transitions/stingers/neon-glitch-h.webm' });
+    assert.equal(s.s.transitionsBox.file, 'preset:neon-glitch');
+    assert.equal(s.s.transitionsBox.pointOn, false, 'a built-in stinger has its own switch point');
   });
 
-  test('box: flag transitions off: not shown, every action refused; live: shown but nothing can be changed', async () => {
+  test('D394 box: slide, swipe, wipe and colour fade with their fields on H and V; rows of other types are off, not hidden; the three stingers are named', async () => {
+    const r = await probe({ ms: 20000, actions: [BOX, 'trbox-type:slide', 'trbox-dir:up', 'trbox-ms:700', 'trbox-apply',
+      'trbox-canvas:v', 'trbox-type:wipe', 'trbox-pattern:clock', 'trbox-softness:0.4', 'trbox-invert:on', 'trbox-ms:900', 'trbox-apply', BOX, 'trbox-type:swipe'] });
+    assert.ok(r.p.actions.every((a) => a.done), JSON.stringify(r.p.actions));
+    assert.deepEqual(canvasOf(r.doc(), 'h'), { type: 'slide', durationMs: 700, direction: 'up' });
+    assert.deepEqual(canvasOf(r.doc(), 'v'), { type: 'wipe', durationMs: 900, pattern: 'clock', softness: 0.4, invert: true });
+    const b = r.s.transitionsBox;
+    assert.equal(b.stingers, 3);
+    assert.deepEqual(b.kinds.map((k) => k.id), ['stinger', 'cut', 'fade', 'slide', 'swipe', 'wipe', 'fadeColor']);
+    assert.equal(b.type, 'swipe');
+    assert.deepEqual([b.dirOn, b.swipeInOn, b.patternOn, b.softnessOn, b.invertOn, b.colorOn, b.pctOn, b.msOn, b.stingerOn], [true, true, false, false, false, false, false, true, false]);
+    assert.match(b.help, /swipe/i);
+    const c = await probe({ ms: 14000, actions: [BOX, 'trbox-type:fadeColor', 'trbox-color:#102030', 'trbox-pct:30', 'trbox-ms:800', 'trbox-apply', 'trbox-type:slide', 'trbox-color:#ffffff'] });
+    assert.deepEqual(c.p.actions.map((a) => a.done), [true, true, true, true, true, true, true, false], 'a colour is refused when the type has none');
+    assert.deepEqual(canvasOf(c.doc(), 'h'), { type: 'fadeColor', durationMs: 800, color: '#102030', pointPct: 30 });
+    const bad = await probe({ actions: [BOX, 'trbox-type:fadeColor', 'trbox-color:red', 'trbox-apply'] });
+    assert.match(bad.s.note, /six digits/);
+    assert.equal(canvasOf(bad.doc(), 'h').type, 'cut', 'nothing written');
+  });
+
+  test('box: flag transitions off: not shown, every action refused; live: shown and applies (D394)', async () => {
     const off = await probe({ flagsOn: ['stream-settings'], actions: [BOX, 'trbox-type:fade', 'trbox-apply'] });
     assert.equal(off.s.transitionsBox.shown, false);
     assert.deepEqual(off.p.actions.map((a) => a.done), [false, false, false]);
-    const live = await probe({ live: true, actions: [BOX, 'trbox-type:fade', 'trbox-apply'] });
-    assert.deepEqual([live.s.transitionsBox.shown, live.s.transitionsBox.enabled], [true, false]);
-    assert.deepEqual(live.p.actions.map((a) => a.done), [false, false, false]);
-    assert.equal(canvasOf(live.doc(), 'h').type, 'cut', 'nothing written');
+    // D394 (D332): a click acts on air as well
+    const live = await probe({ live: true, actions: [BOX, 'trbox-type:fade', 'trbox-apply', BOX], ms: 12000 });
+    assert.deepEqual([live.s.transitionsBox.shown, live.s.transitionsBox.enabled], [true, true]);
+    assert.deepEqual(live.p.actions.map((a) => a.done), [true, true, true, true]);
+    assert.equal(canvasOf(live.doc(), 'h').type, 'fade', 'applied while live');
   });
 });

@@ -18,6 +18,9 @@ const TRANSITION_OWN = { slide: ['direction'], swipe: ['direction', 'swipeIn'], 
 // Own fields of a transition type; [] for cut, fade, stinger and anything else. Object.hasOwn: a type such as
 // 'constructor' must not resolve to an inherited property (the validator reports, it never throws).
 export const ownFields = (type) => (typeof type === 'string' && Object.hasOwn(TRANSITION_OWN, type) ? TRANSITION_OWN[type] : []);
+// D394 (proposed): the numeric limits of a transition, one table for the validator and for the studio's boxes (the UI server
+// sends it with the transition choices, so a slider never offers a value the validator would refuse).
+export const TRANSITION_RANGES = Object.freeze({ durationMs: [0, 10000], pointMs: [0, 10000], softness: [0, 1], pointPct: [1, 99] });
 // D390: display id, printable ASCII, at most 127 bytes (OBS strcpy_s into a 128-byte buffer ends the process on more).
 export const DISPLAY_ID_RE = /^[ -~]{1,127}$/;
 // D390: OBS window spec "title:class:exe" (':' and '#' inside a part encoded by OBS), exe not empty.
@@ -175,15 +178,15 @@ export function validateProject(doc) {
           if ('direction' in t && !['left', 'right', 'up', 'down'].includes(t.direction)) err(`${tp}.direction`, 'must be left, right, up or down');
           if ('swipeIn' in t && typeof t.swipeIn !== 'boolean') err(`${tp}.swipeIn`, 'must be true or false');
           if ('pattern' in t && (typeof t.pattern !== 'string' || t.pattern.length > 48 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(t.pattern))) err(`${tp}.pattern`, 'must be a luma wipe id');
-          if ('softness' in t) num(t.softness, `${tp}.softness`, 0, 1);
+          if ('softness' in t) num(t.softness, `${tp}.softness`, ...TRANSITION_RANGES.softness);
           if ('invert' in t && typeof t.invert !== 'boolean') err(`${tp}.invert`, 'must be true or false');
           if ('color' in t && (typeof t.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(t.color))) err(`${tp}.color`, 'must be #rrggbb');
-          if ('pointPct' in t) num(t.pointPct, `${tp}.pointPct`, 1, 99, true); // 0 and 100: NaN audio in OBS fade-to-colour
-          if ('durationMs' in t) num(t.durationMs, `${tp}.durationMs`, 0, 10000, true);
+          if ('pointPct' in t) num(t.pointPct, `${tp}.pointPct`, ...TRANSITION_RANGES.pointPct, true); // 0 and 100: NaN audio in OBS fade-to-colour
+          if ('durationMs' in t) num(t.durationMs, `${tp}.durationMs`, ...TRANSITION_RANGES.durationMs, true);
           if (t.type === 'stinger') { req(t, ['file', 'pointMs'], tp); if ('file' in t) pathRefOk(t.file, `${tp}.file`); }
           else if ('file' in t || 'pointMs' in t || 'audio' in t) err(tp, 'file, pointMs and audio are for a stinger only');
           if ('audio' in t && typeof t.audio !== 'boolean') err(`${tp}.audio`, 'must be true or false'); // D244: the stinger's own sound
-          if ('pointMs' in t) num(t.pointMs, `${tp}.pointMs`, 0, 10000, true);
+          if ('pointMs' in t) num(t.pointMs, `${tp}.pointMs`, ...TRANSITION_RANGES.pointMs, true);
         }
       }
     });

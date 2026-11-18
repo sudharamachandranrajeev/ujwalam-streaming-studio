@@ -149,7 +149,7 @@ test('stinger (D242): the transition form saves the project; the poll applies it
     assert.equal(sets.filter((p) => p.canvas === 'V' && p.type === 'stinger').length, 1, 'a refused stinger is not asked for again');
     assert.equal(tr.V.type, 'cut');
     state.live = true;
-    assert.equal((await post({ canvas: 'h', type: 'cut' })).body.error, 'live-locked');
+    assert.equal((await post({ canvas: 'h', type: 'cut' })).status, 200, 'D394: a click applies on air as well');
   } finally { await srv.close(); }
 });
 
