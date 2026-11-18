@@ -330,10 +330,12 @@ def cmd_detect(a):
         import g1_scan
         g1_scan.set_ocr_params({"EngineConfig.onnxruntime.use_dml": True})
     total = int(info["duration"] * float(st["fps"])) + 1
-    progress_line("detect", 0, total, "reading the game screen")
+    if not os.path.exists(os.path.join(a.out, dp.CHECKPOINT)):  # a resumed pass starts its lines at its own count
+        progress_line("detect", 0, total, "reading the game screen")
     with dp.HeavyJobLock():
         summ = dp.run_pass(a.recording, a.out, st, pack, names, layout, threads=a.threads, total_frames=total,
-                           progress_line=lambda d, n: progress_line("detect", d, n, "reading the game screen"))
+                           progress_line=lambda d, n, note="reading the game screen":
+                           progress_line("detect", d, n, note))
     doc = {
         "tool": "clipper.detect", "toolVersion": TOOL_VERSION, "detectorPassVersion": dp.TOOL_VERSION,
         "createdAt": _now(), "recording": os.path.basename(a.recording), "duration": round(info["duration"], 3),

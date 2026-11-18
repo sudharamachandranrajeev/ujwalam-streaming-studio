@@ -27,7 +27,9 @@ game (status proposed). ocrRegions "full" OCRs the whole frame; "rois" OCRs only
 (FrameScanner; docs/evidence/2026-11-07-roi-ocr-speed.md). FrameScanner.scan is also the per-frame call of the live
 loop. Resource limits (user, 2026-10-27): OCR on 4 onnxruntime threads (inter-op 1), ffmpeg decode
 on 2 threads, process and children at below-normal priority, and one heavy clip job at a time (a lock file in the
-temp folder). Needs the OCR venv (numpy, opencv-python-headless, rapidocr, onnxruntime). CPU only.
+temp folder). Needs the OCR venv (numpy, opencv-python-headless, rapidocr, onnxruntime). Frames come from
+frame_reader.FrameReader (2026-11-18): GPU decode while the studio is off air (settings.decode "auto"), CPU otherwise,
+and a watchdog that restarts a stalled ffmpeg (docs/evidence/2026-11-18-clip-scan-speed.md).
 """
 
 from __future__ import annotations
@@ -37,7 +39,9 @@ import os
 import re
 import tempfile
 import time
+import zipfile
 
+import frame_reader
 import g1_scan
 import g1_text as gt
 import game_pack
@@ -77,6 +81,8 @@ def load_settings(game=None, path=None):
     sb = s.setdefault("splitBySignal", [])
     if not isinstance(sb, list) or not all(isinstance(x, str) and 0 < len(x) <= 32 for x in sb):
         raise ClipError(f"detector-pass.json games.{gid}.splitBySignal must be a list of detector ids")
+    s.setdefault("decode", "auto")
+    frame_reader.decoders_for(s["decode"])  # ClipError on an unknown value
     s.setdefault("ocrRegions", "full")
     if s["ocrRegions"] not in OCR_REGION_MODES:
         raise ClipError(f"detector-pass.json games.{gid}.ocrRegions must be one of {', '.join(OCR_REGION_MODES)}")
@@ -591,6 +597,198 @@ class FrameScanner:
                              "framesWithOwnLines": self.kills.frames,
                              "holdSec": self.kills.hold}}
 
+    def get_state(self):
+        """(JSON-able dict, {name: ndarray}) of everything a later scan depends on (resume checkpoint), except the
+        S1 readings, which only grow (the checkpoint appends them). The live-only fields (fresh, boxes) are left
+        out."""
+        arrays, bands = {}, []
+        if self.last is not None:
+            arrays["last"] = self.last
+        for k, (key, (small, held, seen)) in enumerate(self.band_state.items()):
+            if small is not None:
+                arrays[f"band{k}"] = small
+            bands.append({"px": list(key[0]), "every": key[1], "small": small is not None, "held": held, "seen": seen})
+        st = {"n": self.n, "mode": self.mode, "stats": self.stats, "prev": self.prev, "prevKeys": self.prev_keys,
+              "prevFeeds": self.prev_feeds, "bands": bands,
+              "kills": {"active": self.kills.active, "times": self.kills.times, "feeds": self.kills.feeds,
+                        "frames": self.kills.frames}}
+        return st, arrays
+
+    def set_state(self, st, arrays, readings):
+        """Inverse of get_state, with the S1 readings so far."""
+        self.n, self.mode, self.stats = st["n"], st["mode"], st["stats"]
+        self.prev, self.prev_keys, self.prev_feeds, self.readings = st["prev"], st["prevKeys"], st["prevFeeds"], readings
+        self.last = arrays.get("last")
+        self.band_state = {(tuple(b["px"]), b["every"]): (arrays[f"band{k}"] if b["small"] else None, b["held"], b["seen"])
+                           for k, b in enumerate(st["bands"])}
+        k = st["kills"]
+        self.kills.active, self.kills.times, self.kills.feeds, self.kills.frames = (k["active"], k["times"], k["feeds"],
+                                                                                    k["frames"])
+
+
+# ---------------------------------------------------------------- resume checkpoint
+
+CHECKPOINT = "detector-pass.checkpoint.npz"
+CHECKPOINT_VERSION = 2
+CHECKPOINT_EVERY_SEC = 30.0
+
+
+def _sha(obj):
+    import hashlib
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+
+
+def checkpoint_key(recording, crop, settings, pack, names, layout, start, duration):
+    """What a checkpoint is valid for: the recording (path, size, mtime), the crop, the sample rate and every other
+    detector setting, the pack's whole content (an in-place rule or ROI edit counts, not only its version), the
+    profile names (a hash only) and the segment. Any change: a fresh scan."""
+    sst = os.stat(recording)
+    sett = {k: v for k, v in settings.items() if k != "decode"}  # the decoder gives the same frames (evidence)
+    return {"v": CHECKPOINT_VERSION, "tool": TOOL_VERSION, "recording": os.path.normcase(os.path.abspath(recording)),
+            "size": sst.st_size, "mtimeNs": sst.st_mtime_ns, "crop": list(crop), "fps": float(settings["fps"]),
+            "settings": _sha(sett), "pack": _sha(pack), "names": _sha(list(names)), "layout": layout,
+            "start": start, "duration": duration}
+
+
+class Checkpoint:
+    """Resume checkpoint of one pass, in the job's output folder (local only; it can hold OCR text; deleted when the
+    pass completes). Two files, so a save costs what changed, not the whole history:
+    - CHECKPOINT + ".rows": append-only, one JSON line per save with the hit rows and S1 readings added since the
+      last save. Bytes past the committed length (a save cut short) are ignored and cut off on resume.
+    - CHECKPOINT: the key, frames read, the last frame's source timestamp, the committed length and counts of the
+      rows file, and the scanner state (npz: JSON meta plus the small band arrays; no pickles), replaced atomically
+      (temp file + fsync + rename) after the rows line is on disk.
+    The npz is bound to the rows it commits (review round 2): it holds the SHA-256 of the rows file's committed
+    prefix and the id of the run that wrote it; a prefix that does not match is not used. One writer per folder:
+    run_pass holds OutputLock while it scans."""
+
+    def __init__(self, path, key):
+        import hashlib
+        import uuid
+        self.path, self.key, self.rows_path = path, key, path + ".rows"
+        self.length = self.nrows = self.nread = 0
+        self.run = uuid.uuid4().hex
+        self.digest = hashlib.sha256()  # of the committed rows prefix
+
+    def load(self):
+        """(frames, last pts, rows, readings, scanner state, arrays) when a checkpoint matches the key, else None
+        (none, other key, or unreadable: a fresh scan)."""
+        import numpy as np
+        if not os.path.isfile(self.path):
+            return None
+        try:
+            with np.load(self.path, allow_pickle=False) as z:
+                doc = json.loads(bytes(z["meta"]).decode("utf-8"))
+                arrays = {k[2:]: z[k] for k in z.files if k.startswith("a_")}
+            if (not isinstance(doc, dict) or doc.get("key") != json.loads(json.dumps(self.key, default=str))
+                    or not isinstance(doc.get("frames"), int) or doc["frames"] < 0
+                    or not isinstance(doc.get("scanner"), dict)):
+                return None
+            length, nrows, nread = int(doc["length"]), int(doc["rows"]), int(doc["readings"])
+            rows, readings = [], []
+            with open(self.rows_path, "rb") as f:
+                data = f.read(length)
+            if len(data) != length:
+                return None
+            import hashlib
+            h = hashlib.sha256(data)
+            if h.hexdigest() != doc.get("rowsSha256"):
+                return None  # rows not written with this npz (another run, an edit, or a mixed copy)
+            for line in data.splitlines():
+                b = json.loads(line)
+                rows += b["rows"]
+                readings += b["readings"]
+            if len(rows) != nrows or len(readings) != nread:
+                return None
+            with open(self.rows_path, "r+b") as f:
+                f.truncate(length)  # a save cut short after its rows line: that line is not committed
+            self.length, self.nrows, self.nread, self.digest = length, nrows, nread, h
+            pts = doc.get("pts")
+            return doc["frames"], (float(pts) if pts is not None else None), rows, readings, doc["scanner"], arrays
+        except (OSError, ValueError, KeyError, TypeError, EOFError, AttributeError, zipfile.BadZipFile):
+            return None
+
+    def save(self, frames, pts, rows, scanner):
+        import numpy as np
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        line = json.dumps({"rows": rows[self.nrows:], "readings": scanner.readings[self.nread:]},
+                          ensure_ascii=False).encode("utf-8") + b"\n"
+        with open(self.rows_path, "r+b" if self.length else "wb") as f:
+            f.seek(self.length)
+            f.write(line)
+            f.truncate()
+            f.flush()
+            os.fsync(f.fileno())
+        st, arrays = scanner.get_state()
+        length, nrows, nread = self.length + len(line), len(rows), len(scanner.readings)
+        digest = self.digest.copy()
+        digest.update(line)
+        meta = json.dumps({"key": self.key, "run": self.run, "frames": frames, "pts": pts, "length": length,
+                           "rowsSha256": digest.hexdigest(), "rows": nrows, "readings": nread, "scanner": st},
+                          ensure_ascii=False, default=str).encode("utf-8")
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as f:
+            np.savez(f, meta=np.frombuffer(meta, np.uint8), **{f"a_{k}": v for k, v in arrays.items()})
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.path)
+        self.length, self.nrows, self.nread, self.digest = length, nrows, nread, digest
+
+    def drop(self):
+        drop_checkpoint(self.path)
+
+
+LOCK = "detector-pass.lock"
+
+
+class OutputLock:
+    """Exclusive lock on a job's output folder for one detector pass (review round 2): a second pass on the same
+    folder (a double-started job) fails at once instead of writing the same checkpoint and hit files. The OS drops
+    the lock when the process ends, however it ends; the lock file itself stays (empty)."""
+
+    def __init__(self, folder):
+        self.path = os.path.join(folder, LOCK)
+        self.f = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.f = open(self.path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.f.seek(0)
+                msvcrt.locking(self.f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.f.close()
+            self.f = None
+            raise ClipError("Another clip job is already working in this folder. Wait for it to finish (or stop it) "
+                            "and start this one again.") from None
+        return self
+
+    def __exit__(self, *exc):
+        if self.f is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    self.f.seek(0)
+                    msvcrt.locking(self.f.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            self.f.close()
+            self.f = None
+
+
+def drop_checkpoint(path):
+    folder, name = os.path.split(path)
+    for f in [name] + [x for x in (os.listdir(folder) if os.path.isdir(folder) else []) if x.startswith(name + ".")]:
+        try:
+            os.remove(os.path.join(folder, f))
+        except OSError:
+            pass
+
 
 # ---------------------------------------------------------------- one heavy job
 
@@ -709,35 +907,132 @@ PROGRESS_EVERY_SEC = 2.0
 
 
 def run_pass(recording, out_dir, settings, pack, names, layout, threads=g1_scan.DEFAULT_THREADS, duration=None,
-             progress=print, start=None, progress_line=None, total_frames=None):
+             progress=print, start=None, progress_line=None, total_frames=None, reader_opts=None, checkpoint=True):
     """Samples the recording at settings.fps, OCRs changed frames, writes out_dir/detector-hits.jsonl and
     out_dir/match-stats.json (match gate readings and own-kill times). Returns the summary dict (counts only; no
     text). start/duration (seconds) limit the pass to a segment; hit times stay recording times.
-    progress_line(done, total): called at most every PROGRESS_EVERY_SEC with frames done of total_frames, and once
-    at the end."""
+    Frames come from frame_reader.FrameReader (settings.decode "auto": GPU decode while off air, else CPU; a
+    watchdog restarts a stalled ffmpeg and raises ClipError when restarts do not help). reader_opts: extra
+    FrameReader keyword arguments (tests: popen, size, timings, gpu_ok).
+    progress_line(done, total[, note]): called at most every PROGRESS_EVERY_SEC with frames done of total_frames,
+    on each reader event (with its plain note), and once at the end.
+    checkpoint (user 2026-11-18: a job cut short goes on where it stopped): every CHECKPOINT_EVERY_SEC the scan so
+    far is saved to out_dir/CHECKPOINT; a later pass with the same checkpoint_key starts ffmpeg at the next frame
+    (-ss, the watchdog's restart path) with the saved rows and scanner state. A mismatched or corrupt checkpoint is
+    ignored; the file is deleted when the pass completes. The pass holds OutputLock on out_dir throughout."""
+    with OutputLock(out_dir):
+        return _run_pass(recording, out_dir, settings, pack, names, layout, threads, duration, progress, start,
+                         progress_line, total_frames, reader_opts, checkpoint)
+
+
+def _run_pass(recording, out_dir, settings, pack, names, layout, threads, duration, progress, start, progress_line,
+              total_frames, reader_opts, checkpoint):
     scanner = FrameScanner(pack, names, settings, layout, threads)
     v = g1_scan.visible_box(layout)
     rows = []
     t0 = time.monotonic()
-    last_line = t0
-    for t, img in g1_scan.decode_frames(recording, float(settings["fps"]), crop=v, start=start, dur=duration):
-        rows.extend(scanner.scan(t, img))
-        st = scanner.stats
-        if progress and st["frames"] % 300 == 0:
-            progress(f"detect: {t:.0f} s, ocr {st['ocrFrames']}, skipped {st['diffGateSkips']}, "
-                     f"{time.monotonic() - t0:.0f} s elapsed")
-        if progress_line and time.monotonic() - last_line >= PROGRESS_EVERY_SEC:
-            last_line = time.monotonic()
-            progress_line(st["frames"], max(total_frames or 0, st["frames"]))
+    step = _progress_fn(progress, progress_line, total_frames, t0)
+    ck = None
+    if checkpoint:
+        try:
+            ck = Checkpoint(os.path.join(out_dir, CHECKPOINT),
+                            checkpoint_key(recording, v, settings, pack, names, layout, start, duration))
+        except OSError:  # no file to key on: no checkpoint
+            ck = None
+    first, first_pts = 0, None
+    got = ck.load() if ck else None
+    if got:
+        try:
+            scanner.set_state(got[4], got[5], got[3])
+            first, first_pts, rows = got[0], got[1], got[2]
+        except (KeyError, TypeError, ValueError, IndexError):
+            scanner = FrameScanner(pack, names, settings, layout, threads)  # a half-restored scanner is not used
+            first, first_pts, rows = 0, None, []
+            ck.length = ck.nrows = ck.nread = 0
+    if first:
+        note = f"going on from {frame_reader.clock_text((start or 0.0) + first / float(settings['fps']))}"
+        if progress:
+            progress(f"detect: resumed, {first} frames already read; {note}")
+        if progress_line:
+            progress_line(first, max(total_frames or 0, first), note)
+    elif ck:
+        ck.drop()  # mismatched or corrupt: never read again
+    last_ck = time.monotonic()
+
+    def checkpoint_now():
+        nonlocal ck
+        if reader.ambiguous:
+            return  # which frame comes next is not known: the last good checkpoint stays as it is
+        try:
+            frames, pts = reader.position()
+            ck.save(frames, pts, rows, scanner)
+        except (OSError, TypeError, ValueError) as e:
+            if progress:
+                progress(f"detect: resume checkpoint off ({type(e).__name__})")
+            ck = None
+
+    def on_event(kind, info):
+        # watchdog and decoder changes (frame_reader): one plain line in the job log, and a progress line, so the
+        # Tasks panel sees the reader is being looked after (its stall warning counts silence between lines)
+        if progress:
+            progress(f"detect: {info['note']}")
+        if progress_line:
+            done = scanner.stats["frames"]
+            progress_line(done, max(total_frames or 0, done), info["note"])
+
+    reader = frame_reader.FrameReader(recording, float(settings["fps"]), crop=v, start=start, dur=duration,
+                                      decoders=frame_reader.decoders_for(settings.get("decode")), on_event=on_event,
+                                      first_index=first, first_pts=first_pts, **(reader_opts or {}))
+    try:
+        for t, img in reader:
+            rows.extend(scanner.scan(t, img))
+            if ck and time.monotonic() - last_ck >= CHECKPOINT_EVERY_SEC:
+                checkpoint_now()
+                last_ck = time.monotonic()
+            step(scanner.stats, t)
+    except ClipError:
+        if ck:
+            checkpoint_now()  # the watchdog gave up: a re-run goes on from here
+        raise
     if progress_line:
         progress_line(scanner.stats["frames"], scanner.stats["frames"])
     hits = merge_hits(rows, float(settings["mergeGapSec"]), settings.get("splitBySignal") or ())
     os.makedirs(out_dir, exist_ok=True)
+    # Publish order (review round 2): the summary (SUMMARY, written by cmd_detect last) is the completion marker that
+    # clipper._own_hits trusts. It is removed first, so a crash between the files below never pairs new hits with an
+    # old summary or old match stats; the checkpoint is dropped only after all are written.
+    try:
+        os.remove(os.path.join(out_dir, SUMMARY))
+    except FileNotFoundError:
+        pass
     tmp = os.path.join(out_dir, HITS + f".{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         for h in hits:
             f.write(json.dumps(h, ensure_ascii=False) + "\n")
     os.replace(tmp, os.path.join(out_dir, HITS))
+    out = _summary(recording, out_dir, pack, scanner, reader, hits, t0)
+    if checkpoint:
+        drop_checkpoint(os.path.join(out_dir, CHECKPOINT))  # complete: the next pass starts fresh
+    if first:
+        out["resumedAtFrame"] = first
+    return out
+
+
+def _progress_fn(progress, progress_line, total_frames, t0):
+    state = {"last": t0}
+
+    def step(st, t):
+        if progress and st["frames"] % 300 == 0:
+            progress(f"detect: {t:.0f} s, ocr {st['ocrFrames']}, skipped {st['diffGateSkips']}, "
+                     f"{time.monotonic() - t0:.0f} s elapsed")
+        if progress_line and time.monotonic() - state["last"] >= PROGRESS_EVERY_SEC:
+            state["last"] = time.monotonic()
+            progress_line(st["frames"], max(total_frames or 0, st["frames"]))
+    return step
+
+
+def _summary(recording, out_dir, pack, scanner, reader, hits, t0):
+    """Writes out_dir/match-stats.json; returns the run_pass summary."""
     ms = scanner.match_stats()
     write_json_atomic(os.path.join(out_dir, match_gate.STATS), {
         "tool": "detector_pass", "toolVersion": TOOL_VERSION, "recording": os.path.basename(recording),
@@ -755,7 +1050,9 @@ def run_pass(recording, out_dir, settings, pack, names, layout, threads=g1_scan.
            "matchStats": {"top3Frames": sum(1 for r in ms["readings"] if r["kind"] == "top3"),
                           "scoreboardFrames": sum(1 for r in ms["readings"] if r["kind"] == "scoreboard"),
                           "ownKills": len(ms["ownKills"]["times"])},
-           "ocrSeconds": round(st["ocrSeconds"], 2)}
+           "ocrSeconds": round(st["ocrSeconds"], 2),
+           "reader": {"decoders": reader.stats["decoders"], "restarts": reader.stats["restarts"],
+                      "stalls": reader.stats["stalls"], "fallbacks": reader.stats["fallbacks"]}}
     if scanner.regions == "rois":
         out.update(bands={m or "all": [{"px": list(b["px"]), "every": b["every"], "detectors": b["detectors"]}
                                       for b in bs] for m, bs in scanner.band_sets.items()},
