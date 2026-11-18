@@ -64,8 +64,17 @@ void on_hotkey(App &app, const std::string &name, const char *via);
 // One device hot-plug pass (D329): list (fake list with devices.testSet), list again after 1 s if a bound capture
 // device looks gone, then reconcile the capture layers. null when devices cannot be listed. Watcher thread or RPC.
 json::Value devices_pass(App &app, const char *why, const std::vector<std::string> &removed = {}, bool event = true);
-// The audio monitoring output (host config monitoringDevice; --allow-devices only). At the start, and again after every
-// device pass while it is not in use (A4, 2026-11-18: an output connected after the start was never chosen): chosen
-// once it is listed, and chosen again when it left and came back. Any thread; never with the studio lock held.
-// waiting_only: do nothing unless a listed output is waiting for CUE to be off everywhere (the CUE-off call).
-void apply_monitoring(App &app, bool waiting_only = false);
+// The audio monitoring output (host config monitoringDevice; --allow-devices only), the headphones CUE plays through.
+// Chosen once, at the start, before the studio exists: no libobs source exists then (Codex review round 2, 2026-11-18).
+// libobs 32.1.2 obs_set_audio_monitoring_device frees monitoring_device_id without a lock its readers take: a WASAPI
+// monitor's reconnect (wasapi-output.c audio_monitor_init_wasapi) and an Audio Output Capture source's self-monitor
+// check (obs-source.c obs_source_audio_output_capture_device_changed, also run from that source's "activate" signal
+// on the video thread). A released source is destroyed later (obs_source_destroy_defer), so it can still hold a monitor
+// after it left the studio's lists. Only "no source exists" excludes them all: the output never changes on a running
+// graph.
+void apply_monitoring(App &app);
+// After a device pass (watcher, Try again): reports only, never switches. When the wanted output was not in use at the
+// start and is listed now, monitoring_note() says the change applies on the next studio start. Any thread.
+void check_monitoring(App &app);
+// "" or the plain sentence above; mixer.list returns it as `headphones`.
+std::string monitoring_note();

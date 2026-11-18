@@ -114,6 +114,17 @@ describe('QML studio devices and mixer (headless probe)', { skip }, () => {
     assert.equal(r.s.mixer.find((m) => m.id === 'scene-1/cam').volumeDb, 12, 'B10: the strip keeps the volume the host took');
   });
 
+  // Codex review round 2 (P1): the host never switches the headphones on a running studio; mixer.list carries its sentence.
+  test('headphones plugged in after the start: the studio says the change applies on restart', async () => {
+    const said = 'Headphones "<headphones>" are connected now. The headphones change applies when you restart the studio.';
+    let fake = null;
+    const r = await probe([], { seed: (f) => { fake = f; }, hostCall: (m, p) => {
+      if (m !== 'mixer.list') return undefined;
+      return fake.call(m, p).then((x) => ({ ...x, headphones: said }));
+    } });
+    assert.equal(r.s.note, said);
+  });
+
   test('A3: a capture layer without a picture has Try again on its row; it asks the host to look again', async () => {
     const r = await probe(['layer-retry:game'], {
       ms: 5000,
