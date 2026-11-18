@@ -367,3 +367,41 @@ steps (studio open, off air):
 3. Expected: both previews show a moving picture again within a fraction of a second, no black or frozen preview,
    no flicker. Repeat with the preview panel hidden and shown again, if the layout allows it.
 4. If a preview stays black or frozen: press Ctrl+Alt+F (feedback) at once; the capture keeps the host log.
+
+## 7. Before / after (10 min each, 2026-11-18)
+
+`node tools/perf-idle.mjs --minutes 10 --warmup 60`, headless alpha stack, BelowNormal, studio closed, live-check
+off air, no python.exe or ffmpeg.exe running at the start. Before: `1bcb7de` (`claude/alpha0-d1` before the merge)
+with `tools/perf-idle.mjs` restored from `8abdf39`, host rebuilt; run in this worktree checked out detached (not a
+separate worktree). After: `claude/alpha0-d1` at `d4970ee` (idle-load merged), host rebuilt. Same machine.
+
+Other GPU users: both runs had VLC, Brave and the NVIDIA overlay (5 processes) open. During each window `others`
+saw a ujwalam-host.exe from another worktree for at least one sample (another agent's host tests). In the after run a
+ujwalam-studio.exe from another worktree also ran at the start (not the installed studio; gone after the run). GPU
+3D numbers are therefore the least reliable field; GPU 3D was about 25 % from desktop apps alone before either run.
+
+| Field | Before | After |
+| --- | --- | --- |
+| host CPU-s (10 min) | 208.3 | 137.9 |
+| host private / working set MB | 1380 / 938 | 609 / 465 |
+| host cpuPct (host.status) | 2.83 | 1.10 |
+| CEF pages CPU-s (21 processes) | 58.8 | 34.0 |
+| CEF private MB | 395 | 394 |
+| overlay child CPU-s | 0.91 | 0.17 |
+| event core CPU-s | 2.97 | 2.47 |
+| UI server CPU-s | 1.70 | 1.20 |
+| GPU 3D mean / max % | 15.8 / 24 | 26.1 / 62 |
+| GPU video encode mean / max % | 63.1 / 69 | 0 / 0 |
+| render lag (frames) | 0 of 36064 | 0 of 36060 |
+| skipped frames H / V | 0 / 0 | 0 / 0 |
+| avg frame time ms | 0.82 | 0.43 |
+
+Reading: off air, video encode fell from 63 % to 0 % (no replay encoders, item 1); host CPU fell by about a third and
+its private memory by 770 MB (no replay encoders and 60 s buffers); CEF CPU fell by 42 % (30 fps, item 2); the frame
+time halved. GPU 3D rose in the after run, but the other host and studio from another worktree ran during it, and
+the 62 % peak matches that, not the stack under test (its frame time halved). A clean GPU 3D comparison needs a
+rerun with no other agent's host running: UNVERIFIED.
+
+The 691-frame render lag of the earlier 1-minute check did not come back: 0 lagged frames in both 10-minute runs. It
+ran while the clip agent's ffmpeg used the GPU, so GPU contention from that job is the likely cause (UNVERIFIED: not
+reproduced).
