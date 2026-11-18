@@ -48,7 +48,7 @@ Branch `feat/capture-transitions-host`.
 - Project schema and validator:
   - The transition type enum gains the four types, with `allOf` if/then so each field appears only on its type.
   - `direction` is required for slide and swipe, `pattern` for wipe, `color` for fadeColor.
-- UI server `transitionSync` applies the four types from the project, through the existing `transitions` flag, which is off by default.
+- UI server `transitionSync` applies the four types from the project, through the existing `transitions` flag (off when this was written; on by default since D391).
   - A refused one cuts and is not asked for again, the same as a stinger.
   - A colour that differs only in case is not set again.
 - Not done (UI agent's job): the transition form endpoint `POST /ui/api/project/transition` (`transitionEditRun`) and its `transitionChoices` still offer cut, fade and stinger only. So do the QML picker, `data/transitions/easing.json` `types` and the Qt studio `main_window.cpp` combo.
