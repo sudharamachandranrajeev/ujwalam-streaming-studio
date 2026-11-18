@@ -13,20 +13,26 @@ Same frames as g1_scan.decode_frames (the first frame of each 1/fps bucket, crop
    (detector_pass.no_power_throttling). Priority stays below normal.
 3. Watchdog. A reader thread moves frames from the pipe into a small queue; the caller waits on the queue with a
    timeout. When no frame arrives for stall_sec (first_sec before the first frame of an ffmpeg run), ffmpeg is killed
-   and started again with -ss at the next frame not yet read. After max_restarts restarts without a frame in between
-   (or max_total restarts in all) the reader raises ClipError with a plain message. While on a GPU decoder the
-   reader checks every air_check_sec whether the studio went on air and then moves to the CPU at the next frame.
+   and started again with -ss at the next frame not yet read. An ffmpeg run that ends with an error is restarted the
+   same way (a GPU decoder is then dropped for the CPU). After max_restarts restarts without a frame in between (or
+   max_total restarts in all) the reader raises ClipError with a plain message. The GPU is checked before each run,
+   and while on a GPU decoder every air_check_sec: when the studio went on air the reader moves to the CPU at the
+   next frame.
 
-Frame times are recording times: start + i/fps for the i-th frame read, also across restarts. first_index (the
-detector pass's resume checkpoint) starts the count, and the first ffmpeg run, at a later frame: the same seek as a
-watchdog restart.
+Frame times are recording times: start + i/fps for the i-th frame read, also across restarts. A restart seeks to
+the 1/fps bucket after the last frame read, found from that frame's source timestamp (ffmpeg reports one per frame
+on stderr), so no frame is read twice even where a bucket is empty. first_index / first_pts (the detector pass's
+resume checkpoint) start the count and the first ffmpeg run at a later frame: the same seek as a watchdog restart.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import queue
+import re
 import subprocess
+import sys
 import threading
 import time
 
@@ -43,7 +49,7 @@ STALL_SEC = 90.0
 FIRST_FRAME_SEC = 120.0  # ffmpeg start, the input seek and the GPU set-up come before the first frame
 MAX_RESTARTS = 3         # restarts in a row without a frame in between
 MAX_TOTAL_RESTARTS = 10
-AIR_CHECK_SEC = 30.0
+AIR_CHECK_SEC = 5.0      # on_air reads only the new bytes of the host log: cheap enough to check this often
 POLL_SEC = 1.0
 
 
@@ -77,7 +83,12 @@ def decode_argv(path, fps, crop=None, start=None, dur=None, decoder="cpu"):
     cmd += ["-i", path]
     if dur is not None:
         cmd += ["-t", f"{dur:.3f}"]
-    return cmd + ["-an", "-vf", ",".join(vf), "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
+    # One "pts timebase" line per kept frame on stderr, in the demuxer's time base (exact source timestamps): a
+    # restart or resume seeks past the last frame read by its timestamp, not by its count (an empty 1/fps bucket
+    # would otherwise give one frame twice).
+    return cmd + ["-an", "-vf", ",".join(vf), "-fps_mode", "passthrough", "-enc_time_base:v", "demux",
+                  "-stats_enc_pre", "pipe:2", "-stats_enc_pre_fmt", "{pts} {tb}",
+                  "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
 
 
 def power_throttling_off(proc):
@@ -117,8 +128,10 @@ class FrameReader:
     def __init__(self, path, fps, crop=None, start=None, dur=None, decoders=("cpu",), size=None, gpu_ok=None,
                  on_event=None, stall_sec=STALL_SEC, first_sec=FIRST_FRAME_SEC, max_restarts=MAX_RESTARTS,
                  max_total=MAX_TOTAL_RESTARTS, air_check_sec=AIR_CHECK_SEC, poll_sec=POLL_SEC, popen=None,
-                 clock=time.monotonic, first_index=0):
-        self.first_index = int(first_index)  # frames already read (resume checkpoint): the first ffmpeg run seeks past them
+                 clock=time.monotonic, first_index=0, first_pts=None):
+        # frames already read and the last one's source timestamp (resume checkpoint): the first run seeks past them
+        self.first_index = self.i = int(first_index)
+        self.last_pts = None if first_pts is None else float(first_pts)
         self.path, self.fps, self.crop, self.start, self.dur = path, float(fps), crop, start, dur
         self.decoders = tuple(decoders)
         self.gpu_ok = gpu_ok if gpu_ok is not None else default_gpu_ok
@@ -126,7 +139,8 @@ class FrameReader:
         self.stall_sec, self.first_sec = float(stall_sec), float(first_sec)
         self.max_restarts, self.max_total = int(max_restarts), int(max_total)
         self.air_check_sec, self.poll_sec = float(air_check_sec), float(poll_sec)
-        self.popen = popen or (lambda argv: subprocess.Popen(argv, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        self.popen = popen or (lambda argv: subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                             stdin=subprocess.DEVNULL,
                                                              **g1_scan.child_kwargs(**g1_scan.NO_WINDOW)))
         self.clock = clock
         if size is None:
@@ -150,32 +164,51 @@ class FrameReader:
     def _event(self, kind, decoder, t, note):
         self.on_event(kind, {"decoder": decoder, "t": round(t, 3), "restarts": self.stats["restarts"], "note": note})
 
+    def _seek(self, base, i):
+        """Where the next ffmpeg run starts: the start of the 1/fps bucket after the last frame read, from its source
+        timestamp (self.last_pts, seconds from the file start); base + i/fps when that is not known (no frame read
+        yet, or a reader without timestamps). Bucket-aligned, so the run selects the same frames as one long run."""
+        if self.last_pts is None:
+            return base + i / self.fps
+        b = math.floor(max(self.last_pts - base, 0.0) * self.fps + 1e-6)
+        return base + (b + 1) / self.fps
+
+    def position(self):
+        """(frames read, source timestamp of the last one or None): what a resume checkpoint keeps."""
+        return self.i, self.last_pts
+
     def __iter__(self):
         import numpy as np
         n = self.w * self.h * 3
         base = self.start or 0.0
         end = base + self.dur if self.dur is not None else None
-        i = self.first_index  # frames read so far; the next one is at base + i / fps (restart and resume both seek there)
+        self.i = self.first_index  # frames read so far (resume: the checkpoint's count)
         in_a_row = 0    # restarts since the last frame
         while True:
-            t_next = base + i / self.fps
-            if end is not None and t_next >= end - 1e-9:
+            ss = self._seek(base, self.i)
+            if end is not None and ss >= end - 1e-9:
                 return
             decoder = self._pick()
-            argv = decode_argv(self.path, self.fps, self.crop, t_next or None, None if end is None else end - t_next,
-                               decoder)
+            argv = decode_argv(self.path, self.fps, self.crop, ss or None, None if end is None else end - ss, decoder)
+            ss = float(f"{ss:.3f}") if ss else 0.0  # the timestamps ffmpeg reports are from the -ss it was given
             self.stats["decoders"].append(decoder)
-            self._event("decoder", decoder, t_next, f"reading the video on the {'GPU' if decoder != 'cpu' else 'CPU'}")
+            self._event("decoder", decoder, ss, f"reading the video on the {'GPU' if decoder != 'cpu' else 'CPU'}")
             p = self.popen(argv)
-            power_throttling_off(p)
-            q = queue.Queue(maxsize=2)
+            pump = errs = None
             stop = threading.Event()
-            pump = threading.Thread(target=_pump, args=(p.stdout, n, q, stop), name="frame-pump", daemon=True)
-            pump.start()
+            pts = []  # source timestamps of this run's frames (seconds after ss), from ffmpeg's stderr
             got = 0
-            started = last = last_air = self.clock()
             outcome = None  # "eof" | "stalled" | "on-air"
+            rc = None
             try:
+                power_throttling_off(p)
+                q = queue.Queue(maxsize=2)
+                pump = threading.Thread(target=_pump, args=(p.stdout, n, q, stop), name="frame-pump", daemon=True)
+                pump.start()
+                if getattr(p, "stderr", None) is not None:
+                    errs = threading.Thread(target=_stamps, args=(p.stderr, pts), name="frame-pts", daemon=True)
+                    errs.start()
+                last = last_air = self.clock()
                 while outcome is None:
                     try:
                         buf = q.get(timeout=self.poll_sec)
@@ -183,11 +216,20 @@ class FrameReader:
                         buf = False
                     now = self.clock()
                     if buf is None:
-                        outcome = "eof"
+                        # stdout ended: wait for ffmpeg to exit on its own, so its exit code tells a clean end from
+                        # an error (never killed here: that would look like a failure)
+                        try:
+                            rc = p.wait(timeout=max(self.stall_sec, 10.0))
+                            outcome = "eof"
+                        except subprocess.TimeoutExpired:
+                            outcome = "stalled"
                         break
                     if buf is not False:
-                        t = base + i / self.fps
-                        i += 1
+                        t = base + self.i / self.fps
+                        if errs is not None:
+                            _wait_for(pts, got + 1, errs, 2.0)
+                        self.i += 1
+                        self.last_pts = ss + pts[got] if len(pts) > got else None
                         got += 1
                         in_a_row = 0
                         yield t, np.frombuffer(buf, np.uint8).reshape(self.h, self.w, 3)
@@ -200,34 +242,61 @@ class FrameReader:
                             outcome = "on-air"
             finally:
                 stop.set()
-                _end(p)
-                pump.join(timeout=5)
-            t_at = base + i / self.fps
+                _end(p, (pump, errs))
+            t_at = base + self.i / self.fps
             if outcome == "eof":
-                rc = p.returncode
-                if rc and decoder != "cpu":
+                if not rc:
+                    return  # clean end of the recording (or of the segment)
+                if decoder != "cpu":
                     self.failed.add(decoder)
                     self.stats["fallbacks"] += 1
                     self._event("fallback", decoder, t_at, f"the {decoder} decoder failed (exit {rc}); "
                                                            "going on with the next decoder")
                     continue
-                return  # the CPU decoder ending (also with an error) ends the pass, as before
-            if outcome == "on-air":
-                self._event("on-air", decoder, t_at, "the studio went on air; reading the video on the CPU")
-                continue
-            # stalled
-            self.stats["stalls"] += 1
+                # the CPU decoder failed: restarted at the next frame like a stall, then a plain error
+                why = f"ffmpeg ended with an error (exit {rc})"
+            else:
+                if outcome == "on-air":
+                    self._event("on-air", decoder, t_at, "the studio went on air; reading the video on the CPU")
+                    continue
+                self.stats["stalls"] += 1
+                if decoder != "cpu":
+                    self.failed.add(decoder)
+                why = f"no new frame for {self.stall_sec if got else max(self.stall_sec, self.first_sec):.0f} s"
             self.stats["restarts"] += 1
             in_a_row += 1
-            if decoder != "cpu":
-                self.failed.add(decoder)
-            waited = self.stall_sec if got else max(self.stall_sec, self.first_sec)
             if in_a_row > self.max_restarts or self.stats["restarts"] > self.max_total:
-                raise ClipError(f"The video reader stopped at {clock_text(t_at)} of the recording: no new frame for "
-                                f"{waited:.0f} s, {self.stats['restarts'] - 1} restart(s) did not help. "
+                raise ClipError(f"The video reader stopped at {clock_text(t_at)} of the recording: {why}, "
+                                f"{self.stats['restarts'] - 1} restart(s) did not help. "
                                 "Close other heavy programs and start the clip job again.")
-            self._event("stalled", decoder, t_at, f"no new frame for {waited:.0f} s; restarting the video reader "
+            self._event("stalled", decoder, t_at, f"{why}; restarting the video reader "
                                                   f"at {clock_text(t_at)} ({in_a_row} of {self.max_restarts})")
+
+
+_STAMP = re.compile(r"^(-?\d+) (\d+)/(\d+)$")
+
+
+def _stamps(stderr, out):
+    """stderr thread: "pts num/den" lines (decode_argv) appended to out as seconds; any other line (an ffmpeg error)
+    goes on to this process's stderr, the job log."""
+    try:
+        for raw in iter(stderr.readline, b""):
+            line = raw.decode("utf-8", "replace").strip()
+            m = _STAMP.match(line)
+            if m:
+                out.append(int(m.group(1)) * int(m.group(2)) / int(m.group(3)))
+            elif line:
+                print(line, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def _wait_for(pts, k, thread, limit):
+    """Wait (up to limit s) until pts holds k timestamps. ffmpeg writes a frame's line before the frame itself, so
+    this is at most a thread switch; a missing line leaves the timestamp unknown (seek by count then)."""
+    t0 = time.monotonic()
+    while len(pts) < k and thread.is_alive() and time.monotonic() - t0 < limit:
+        time.sleep(0.002)
 
 
 def _pump(stdout, n, q, stop):
@@ -253,9 +322,20 @@ def _pump(stdout, n, q, stop):
             pass
 
 
-def _end(p):
-    """Stop an ffmpeg run (no-op when it already ended) and reap it."""
+def _end(p, threads=()):
+    """Stop an ffmpeg run (no-op when it already ended), reap it, then close its pipes. A pipe is closed only after
+    its reader thread has ended: closing a pipe another thread is blocked reading would block here for good. A child
+    that is still running is ended with its whole tree (taskkill /T /F: a child of ffmpeg, or of a launcher, would
+    otherwise keep the pipe open), then killed; one that still lives keeps its pipes (a leak, not a hang)."""
     if p.poll() is None:
+        root = os.environ.get("SystemRoot", "")
+        exe = os.path.join(root, "System32", "taskkill.exe") if root else ""
+        if os.name == "nt" and exe and os.path.isfile(exe):
+            try:
+                subprocess.run([exe, "/T", "/F", "/PID", str(p.pid)], capture_output=True, timeout=30,
+                               creationflags=g1_scan.NO_WINDOW.get("creationflags", 0))
+            except (OSError, subprocess.SubprocessError):
+                pass
         try:
             p.kill()
         except OSError:
@@ -264,7 +344,14 @@ def _end(p):
         p.wait(timeout=10)
     except subprocess.TimeoutExpired:
         pass
-    try:
-        p.stdout.close()
-    except (OSError, ValueError):
-        pass
+    for t in threads:
+        if t is not None:
+            t.join(timeout=5)
+    for pipe, t in ((getattr(p, "stdout", None), threads[0] if threads else None),
+                    (getattr(p, "stderr", None), threads[1] if len(threads) > 1 else None)):
+        if pipe is None or (t is not None and t.is_alive()):
+            continue
+        try:
+            pipe.close()
+        except (OSError, ValueError):
+            pass

@@ -598,8 +598,9 @@ class FrameScanner:
                              "holdSec": self.kills.hold}}
 
     def get_state(self):
-        """(JSON-able dict, {name: ndarray}) of everything a later scan depends on (resume checkpoint). The live-only
-        fields (fresh, boxes) are left out."""
+        """(JSON-able dict, {name: ndarray}) of everything a later scan depends on (resume checkpoint), except the
+        S1 readings, which only grow (the checkpoint appends them). The live-only fields (fresh, boxes) are left
+        out."""
         arrays, bands = {}, []
         if self.last is not None:
             arrays["last"] = self.last
@@ -608,15 +609,15 @@ class FrameScanner:
                 arrays[f"band{k}"] = small
             bands.append({"px": list(key[0]), "every": key[1], "small": small is not None, "held": held, "seen": seen})
         st = {"n": self.n, "mode": self.mode, "stats": self.stats, "prev": self.prev, "prevKeys": self.prev_keys,
-              "prevFeeds": self.prev_feeds, "readings": self.readings, "bands": bands,
+              "prevFeeds": self.prev_feeds, "bands": bands,
               "kills": {"active": self.kills.active, "times": self.kills.times, "feeds": self.kills.feeds,
                         "frames": self.kills.frames}}
         return st, arrays
 
-    def set_state(self, st, arrays):
-        """Inverse of get_state."""
+    def set_state(self, st, arrays, readings):
+        """Inverse of get_state, with the S1 readings so far."""
         self.n, self.mode, self.stats = st["n"], st["mode"], st["stats"]
-        self.prev, self.prev_keys, self.prev_feeds, self.readings = st["prev"], st["prevKeys"], st["prevFeeds"], st["readings"]
+        self.prev, self.prev_keys, self.prev_feeds, self.readings = st["prev"], st["prevKeys"], st["prevFeeds"], readings
         self.last = arrays.get("last")
         self.band_state = {(tuple(b["px"]), b["every"]): (arrays[f"band{k}"] if b["small"] else None, b["held"], b["seen"])
                            for k, b in enumerate(st["bands"])}
@@ -628,53 +629,97 @@ class FrameScanner:
 # ---------------------------------------------------------------- resume checkpoint
 
 CHECKPOINT = "detector-pass.checkpoint.npz"
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 CHECKPOINT_EVERY_SEC = 30.0
+
+
+def _sha(obj):
+    import hashlib
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
 
 
 def checkpoint_key(recording, crop, settings, pack, names, layout, start, duration):
     """What a checkpoint is valid for: the recording (path, size, mtime), the crop, the sample rate and every other
-    detector setting, the pack version, the profile names (a hash only) and the segment. Any change: a fresh scan."""
-    import hashlib
+    detector setting, the pack's whole content (an in-place rule or ROI edit counts, not only its version), the
+    profile names (a hash only) and the segment. Any change: a fresh scan."""
     sst = os.stat(recording)
     sett = {k: v for k, v in settings.items() if k != "decode"}  # the decoder gives the same frames (evidence)
     return {"v": CHECKPOINT_VERSION, "tool": TOOL_VERSION, "recording": os.path.normcase(os.path.abspath(recording)),
             "size": sst.st_size, "mtimeNs": sst.st_mtime_ns, "crop": list(crop), "fps": float(settings["fps"]),
-            "settings": hashlib.sha256(json.dumps(sett, sort_keys=True).encode()).hexdigest(),
-            "pack": pack.get("version"), "names": hashlib.sha256("\n".join(names).encode("utf-8")).hexdigest(),
-            "layout": layout, "start": start, "duration": duration}
+            "settings": _sha(sett), "pack": _sha(pack), "names": _sha(list(names)), "layout": layout,
+            "start": start, "duration": duration}
 
 
-def save_checkpoint(path, key, frames, rows, scanner):
-    """Atomic write (temp file + rename) of the scan so far: key, frames read, hit rows and the scanner state. The
-    file sits in the job's output folder (local only; it can hold OCR text) and is deleted when the pass completes."""
-    import numpy as np
-    st, arrays = scanner.get_state()
-    meta = json.dumps({"key": key, "frames": frames, "rows": rows, "scanner": st}, ensure_ascii=False).encode("utf-8")
-    tmp = f"{path}.{os.getpid()}.tmp"
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(tmp, "wb") as f:
-        np.savez(f, meta=np.frombuffer(meta, np.uint8), **{f"a_{k}": v for k, v in arrays.items()})
-    os.replace(tmp, path)
+class Checkpoint:
+    """Resume checkpoint of one pass, in the job's output folder (local only; it can hold OCR text; deleted when the
+    pass completes). Two files, so a save costs what changed, not the whole history:
+    - CHECKPOINT + ".rows": append-only, one JSON line per save with the hit rows and S1 readings added since the
+      last save. Bytes past the committed length (a save cut short) are ignored and cut off on resume.
+    - CHECKPOINT: the key, frames read, the last frame's source timestamp, the committed length and counts of the
+      rows file, and the scanner state (npz: JSON meta plus the small band arrays; no pickles), replaced atomically
+      (temp file + rename) after the rows line is on disk."""
 
+    def __init__(self, path, key):
+        self.path, self.key, self.rows_path = path, key, path + ".rows"
+        self.length = self.nrows = self.nread = 0
 
-def load_checkpoint(path, key):
-    """(frames, rows, scanner state, arrays) from a checkpoint that matches key; None when there is none, it does not
-    match, or it cannot be read (a fresh scan then). No pickles: the arrays load with allow_pickle=False."""
-    import numpy as np
-    if not os.path.isfile(path):
-        return None
-    try:
-        with np.load(path, allow_pickle=False) as z:
-            doc = json.loads(bytes(z["meta"]).decode("utf-8"))
-            arrays = {k[2:]: z[k] for k in z.files if k.startswith("a_")}
-        if (not isinstance(doc, dict) or doc.get("key") != json.loads(json.dumps(key))
-                or not isinstance(doc.get("frames"), int) or doc["frames"] < 0 or not isinstance(doc.get("rows"), list)
-                or not isinstance(doc.get("scanner"), dict)):
+    def load(self):
+        """(frames, last pts, rows, readings, scanner state, arrays) when a checkpoint matches the key, else None
+        (none, other key, or unreadable: a fresh scan)."""
+        import numpy as np
+        if not os.path.isfile(self.path):
             return None
-        return doc["frames"], doc["rows"], doc["scanner"], arrays
-    except (OSError, ValueError, KeyError, TypeError, EOFError, AttributeError, zipfile.BadZipFile):  # corrupt: ignored
-        return None
+        try:
+            with np.load(self.path, allow_pickle=False) as z:
+                doc = json.loads(bytes(z["meta"]).decode("utf-8"))
+                arrays = {k[2:]: z[k] for k in z.files if k.startswith("a_")}
+            if (not isinstance(doc, dict) or doc.get("key") != json.loads(json.dumps(self.key, default=str))
+                    or not isinstance(doc.get("frames"), int) or doc["frames"] < 0
+                    or not isinstance(doc.get("scanner"), dict)):
+                return None
+            length, nrows, nread = int(doc["length"]), int(doc["rows"]), int(doc["readings"])
+            rows, readings = [], []
+            with open(self.rows_path, "rb") as f:
+                data = f.read(length)
+            if len(data) != length:
+                return None
+            for line in data.splitlines():
+                b = json.loads(line)
+                rows += b["rows"]
+                readings += b["readings"]
+            if len(rows) != nrows or len(readings) != nread:
+                return None
+            with open(self.rows_path, "r+b") as f:
+                f.truncate(length)  # a save cut short after its rows line: that line is not committed
+            self.length, self.nrows, self.nread = length, nrows, nread
+            pts = doc.get("pts")
+            return doc["frames"], (float(pts) if pts is not None else None), rows, readings, doc["scanner"], arrays
+        except (OSError, ValueError, KeyError, TypeError, EOFError, AttributeError, zipfile.BadZipFile):
+            return None
+
+    def save(self, frames, pts, rows, scanner):
+        import numpy as np
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        line = json.dumps({"rows": rows[self.nrows:], "readings": scanner.readings[self.nread:]},
+                          ensure_ascii=False).encode("utf-8") + b"\n"
+        with open(self.rows_path, "r+b" if self.length else "wb") as f:
+            f.seek(self.length)
+            f.write(line)
+            f.truncate()
+            f.flush()
+            os.fsync(f.fileno())
+        st, arrays = scanner.get_state()
+        length, nrows, nread = self.length + len(line), len(rows), len(scanner.readings)
+        meta = json.dumps({"key": self.key, "frames": frames, "pts": pts, "length": length, "rows": nrows,
+                           "readings": nread, "scanner": st}, ensure_ascii=False, default=str).encode("utf-8")
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as f:
+            np.savez(f, meta=np.frombuffer(meta, np.uint8), **{f"a_{k}": v for k, v in arrays.items()})
+        os.replace(tmp, self.path)
+        self.length, self.nrows, self.nread = length, nrows, nread
+
+    def drop(self):
+        drop_checkpoint(self.path)
 
 
 def drop_checkpoint(path):
@@ -821,38 +866,42 @@ def run_pass(recording, out_dir, settings, pack, names, layout, threads=g1_scan.
     rows = []
     t0 = time.monotonic()
     step = _progress_fn(progress, progress_line, total_frames, t0)
-    ck_path =os.path.join(out_dir, CHECKPOINT) if checkpoint else None
-    try:
-        key = checkpoint_key(recording, v, settings, pack, names, layout, start, duration) if ck_path else None
-    except OSError:  # no file to key on: no checkpoint
-        ck_path = key = None
-    first = 0
-    got = load_checkpoint(ck_path, key) if ck_path else None
+    ck = None
+    if checkpoint:
+        try:
+            ck = Checkpoint(os.path.join(out_dir, CHECKPOINT),
+                            checkpoint_key(recording, v, settings, pack, names, layout, start, duration))
+        except OSError:  # no file to key on: no checkpoint
+            ck = None
+    first, first_pts = 0, None
+    got = ck.load() if ck else None
     if got:
         try:
-            scanner.set_state(got[2], got[3])
-            first, rows = got[0], got[1]
+            scanner.set_state(got[4], got[5], got[3])
+            first, first_pts, rows = got[0], got[1], got[2]
         except (KeyError, TypeError, ValueError, IndexError):
             scanner = FrameScanner(pack, names, settings, layout, threads)  # a half-restored scanner is not used
-            first, rows = 0, []
+            first, first_pts, rows = 0, None, []
+            ck.length = ck.nrows = ck.nread = 0
     if first:
         note = f"going on from {frame_reader.clock_text((start or 0.0) + first / float(settings['fps']))}"
         if progress:
             progress(f"detect: resumed, {first} frames already read; {note}")
         if progress_line:
             progress_line(first, max(total_frames or 0, first), note)
-    elif ck_path:
-        drop_checkpoint(ck_path)  # mismatched or corrupt: never read again
+    elif ck:
+        ck.drop()  # mismatched or corrupt: never read again
     last_ck = time.monotonic()
 
     def checkpoint_now():
-        nonlocal ck_path
+        nonlocal ck
         try:
-            save_checkpoint(ck_path, key, scanner.stats["frames"], rows, scanner)
+            frames, pts = reader.position()
+            ck.save(frames, pts, rows, scanner)
         except (OSError, TypeError, ValueError) as e:
             if progress:
                 progress(f"detect: resume checkpoint off ({type(e).__name__})")
-            ck_path = None
+            ck = None
 
     def on_event(kind, info):
         # watchdog and decoder changes (frame_reader): one plain line in the job log, and a progress line, so the
@@ -865,16 +914,16 @@ def run_pass(recording, out_dir, settings, pack, names, layout, threads=g1_scan.
 
     reader = frame_reader.FrameReader(recording, float(settings["fps"]), crop=v, start=start, dur=duration,
                                       decoders=frame_reader.decoders_for(settings.get("decode")), on_event=on_event,
-                                      first_index=first, **(reader_opts or {}))
+                                      first_index=first, first_pts=first_pts, **(reader_opts or {}))
     try:
         for t, img in reader:
             rows.extend(scanner.scan(t, img))
-            if ck_path and time.monotonic() - last_ck >= CHECKPOINT_EVERY_SEC:
+            if ck and time.monotonic() - last_ck >= CHECKPOINT_EVERY_SEC:
                 checkpoint_now()
                 last_ck = time.monotonic()
             step(scanner.stats, t)
     except ClipError:
-        if ck_path:
+        if ck:
             checkpoint_now()  # the watchdog gave up: a re-run goes on from here
         raise
     if progress_line:

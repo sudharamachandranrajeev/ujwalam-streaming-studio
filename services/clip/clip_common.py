@@ -442,8 +442,8 @@ def host_running(name="ujwalam-host.exe"):
     return name.lower() in r.stdout.lower()
 
 
-_SINK_LINE = re.compile(r"\[host\] sink (\S+) (live|stopped|failed|dropped)\b")
-ON_AIR_LOG_FRESH_SEC = 120.0
+_SINK_LINE = re.compile(rb"\[host\] sink (\S+) (live|stopped|failed|dropped)\b")
+_EXIT_LINE = re.compile(rb"\[host\] exit\b")
 
 
 def host_logs_dir():
@@ -452,11 +452,69 @@ def host_logs_dir():
     return os.path.join(base, "Ujwalam", "data", "host", "logs") if base else None
 
 
-def on_air(logs_dir=None, now=None):
-    """Is the user's studio live or recording right now? Same rule as tools/live-check.mjs: the newest host log,
-    each sink's last live / stopped / failed / dropped line; a live or dropped sink in a log written in the last 120 s
-    means on air. True = on air, False = off air (also when there is no host log), None = unknown (log unreadable;
-    callers treat it as on air)."""
+def installed_host_running(base=None):
+    """True when an ujwalam-host.exe under %LOCALAPPDATA%\\Ujwalam runs (the user's installed studio; by path, never
+    by name alone: agents' test hosts run from the repo). False when none runs, None when it cannot be told."""
+    base = base or os.environ.get("LOCALAPPDATA")
+    if os.name != "nt" or not base:
+        return None
+    import ctypes
+    from ctypes import wintypes
+    root = os.path.normcase(os.path.join(base, "Ujwalam")) + os.sep
+    k, ps = ctypes.windll.kernel32, ctypes.windll.psapi
+    ps.EnumProcesses.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                             ctypes.POINTER(wintypes.DWORD)]
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    pids = (wintypes.DWORD * 8192)()
+    got = wintypes.DWORD()
+    if not ps.EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(got)):
+        return None
+    buf = ctypes.create_unicode_buffer(1024)
+    for pid in pids[:got.value // ctypes.sizeof(wintypes.DWORD)]:
+        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            continue
+        try:
+            n = wintypes.DWORD(len(buf))
+            if k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+                p = os.path.normcase(buf.value)
+                if p.startswith(root) and os.path.basename(p) == "ujwalam-host.exe":
+                    return True
+        finally:
+            k.CloseHandle(h)
+    return False
+
+
+_LOG_CACHE = {}  # path -> [bytes read, {sink: state}, exited, partial last line]; each poll reads only new bytes
+
+
+def _log_state(path):
+    st = _LOG_CACHE.get(path)
+    size = os.path.getsize(path)
+    if st is None or size < st[0]:
+        st = _LOG_CACHE[path] = [0, {}, False, b""]
+    if size > st[0]:
+        with open(path, "rb") as f:
+            f.seek(st[0])
+            data = st[3] + f.read(size - st[0])
+        st[0] = size
+        cut = data.rfind(b"\n") + 1
+        done, st[3] = data[:cut], data[cut:]
+        for m in _SINK_LINE.finditer(done):
+            st[1][m.group(1)] = m.group(2)
+        st[2] = st[2] or bool(_EXIT_LINE.search(done))
+    return st[1], st[2]
+
+
+def on_air(logs_dir=None, host_running=None):
+    """Is the user's studio live or recording right now? Same rule as tools/live-check.mjs: in the newest host log,
+    each sink's last live / stopped / failed / dropped line. A live or dropped sink counts however old the log is (a
+    long stream can log nothing for minutes) until the host's exit line, or until no installed host process runs (a
+    host that crashed while live). True = on air, False = off air (also when there is no host log), None = unknown
+    (callers treat it as on air). The log is read incrementally: each call reads only what was added."""
     d = host_logs_dir() if logs_dir is None else logs_dir
     if not d or not os.path.isdir(d):
         return False
@@ -464,16 +522,13 @@ def on_air(logs_dir=None, now=None):
         logs = [os.path.join(d, f) for f in os.listdir(d) if f.startswith("host-") and f.endswith(".log")]
         if not logs:
             return False
-        newest = max(logs, key=os.path.getmtime)
-        with open(newest, encoding="utf-8", errors="replace") as f:
-            text = f.read()
-        age = (time.time() if now is None else now) - os.path.getmtime(newest)
+        states, exited = _log_state(max(logs, key=os.path.getmtime))
     except OSError:
         return None
-    state = {}
-    for m in _SINK_LINE.finditer(text):
-        state[m.group(1)] = m.group(2)
-    return any(s in ("live", "dropped") for s in state.values()) and age < ON_AIR_LOG_FRESH_SEC
+    if not any(s in (b"live", b"dropped") for s in states.values()) or exited:
+        return False
+    run = (host_running or installed_host_running)()
+    return None if run is None else run
 
 
 def probe(ffprobe, path):

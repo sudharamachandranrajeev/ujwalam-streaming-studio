@@ -32,38 +32,44 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" el
 W, H = 4, 2
 N = W * H * 3
 
-# A fake ffmpeg run: writes `frames` frames (byte value = first + k), `delay` s apart, then hangs for `hang` s
-# (0: no hang) and exits with `rc`.
+# A fake ffmpeg run: writes `frames` frames (byte value = first + k), `delay` s apart, each after its "pts tb" line
+# on stderr (as decode_argv asks ffmpeg for), then hangs for `hang` s (0: no hang) and exits with `rc`. A plan with
+# a 5th value closes stdout first and exits that many seconds later (end of output before the exit).
 FAKE = r"""
 import sys, time
 first, frames, delay, hang, rc = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4]), int(sys.argv[5])
-size, div = int(sys.argv[6]), int(sys.argv[7])
+size, div, fps, late = int(sys.argv[6]), int(sys.argv[7]), float(sys.argv[8]), float(sys.argv[9])
 out = sys.stdout.buffer
 for k in range(frames):
+    sys.stderr.write(f"{round(k / fps * 1000)} 1/1000\n")
+    sys.stderr.flush()
     out.write(bytes([((first + k) // div) % 256]) * size)
     out.flush()
     time.sleep(delay)
 if hang:
     time.sleep(hang)
+if late:
+    out.close()
+    time.sleep(late)
 sys.exit(rc)
 """
 
 
 class FakeFfmpeg:
-    """popen for FrameReader: run k gets plans[k] = (frames, delay, hang, rc); every byte of frame i (counted from
-    the frame its -ss points at) is i // div, so the test sees which frames each run gave."""
+    """popen for FrameReader: run k gets plans[k] = (frames, delay, hang, rc[, late]); every byte of frame i (counted
+    from the frame its -ss points at) is i // div, so the test sees which frames each run gave."""
 
     def __init__(self, plans, fps=1.0, size=N, div=1):
         self.plans, self.fps, self.size, self.div, self.argvs = list(plans), fps, size, div, []
 
     def __call__(self, argv):
         self.argvs.append(argv)
-        frames, delay, hang, rc = self.plans.pop(0)
+        frames, delay, hang, rc, *late = self.plans.pop(0)
         ss = float(argv[argv.index("-ss") + 1]) if "-ss" in argv else 0.0
         first = int(round(ss * self.fps))
         return subprocess.Popen([PY, "-I", "-c", FAKE, str(first), str(frames), str(delay), str(hang), str(rc),
-                                 str(self.size), str(self.div)],
-                                stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, **NO_WINDOW)
+                                 str(self.size), str(self.div), str(self.fps), str(late[0] if late else 0)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, **NO_WINDOW)
 
 
 def reader(fake, **kw):
@@ -124,6 +130,34 @@ class WatchdogTests(unittest.TestCase):
             got.append(t)
         self.assertEqual(got, [0.0, 1.0, 2.0])
         self.assertEqual(len(fake.argvs), 1)
+
+    def test_a_cpu_run_that_fails_is_restarted_then_ends_in_a_plain_error(self):
+        # review 2026-11-18: a CPU ffmpeg error used to end the pass as if the recording had ended
+        fake = FakeFfmpeg([(2, 0, 0, 1), (1, 0, 0, 0)])
+        self.assertEqual(values(reader(fake)), [(0.0, 0), (1.0, 1), (2.0, 2)])
+        self.assertEqual(fake.argvs[1][fake.argvs[1].index("-ss") + 1], "2.000")
+        fake = FakeFfmpeg([(2, 0, 0, 1)] + [(0, 0, 0, 1)] * 3)
+        with self.assertRaises(cc.ClipError) as e:
+            list(reader(fake, max_restarts=2))
+        self.assertIn("ffmpeg ended with an error (exit 1)", str(e.exception))
+
+    def test_end_of_output_waits_for_the_exit_code(self):
+        # stdout closes 0.4 s before ffmpeg exits: not killed in between (a clean end is not a GPU failure)
+        fake = FakeFfmpeg([(2, 0, 0, 0, 0.4)])
+        r = reader(fake, decoders=fr.AUTO, gpu_ok=lambda: True)
+        self.assertEqual(len(list(r)), 2)
+        self.assertEqual((r.stats["decoders"], r.stats["fallbacks"]), (["cuda"], 0))
+
+    def test_the_reader_is_ended_and_reaped_after_a_stall(self):
+        procs = []
+        fake = FakeFfmpeg([(1, 0, 60, 0), (1, 0, 0, 0)])
+
+        def popen(argv):
+            procs.append(fake(argv))
+            return procs[-1]
+        self.assertEqual(len(list(reader(popen))), 2)
+        self.assertTrue(all(p.poll() is not None for p in procs))
+        self.assertTrue(procs[0].stdout.closed and procs[0].stderr.closed)
 
     def test_a_segment_keeps_recording_times_across_a_restart(self):
         fake = FakeFfmpeg([(2, 0, 60, 0), (5, 0, 0, 0)])
@@ -211,26 +245,35 @@ class OnAirTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def log(self, name, text, age=0):
+    def log(self, name, text, age=0, mode="w"):
         p = os.path.join(self.dir, name)
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, mode, encoding="utf-8") as f:
             f.write(text)
         t = time.time() - age
         os.utime(p, (t, t))
 
     def test_rules_match_live_check(self):
-        self.assertFalse(cc.on_air(os.path.join(self.dir, "missing")))
-        self.assertFalse(cc.on_air(self.dir))
+        up = lambda: True  # noqa: E731
+        self.assertFalse(cc.on_air(os.path.join(self.dir, "missing"), up))
+        self.assertFalse(cc.on_air(self.dir, up))
         self.log("host-a.log", "[host] sink yt-h live\n")
-        self.assertTrue(cc.on_air(self.dir))
-        self.log("host-a.log", "[host] sink yt-h live\n[host] sink yt-h stopped\n")
-        self.assertFalse(cc.on_air(self.dir))
-        self.log("host-a.log", "[host] sink rec live\n[host] sink rec dropped\n")
-        self.assertTrue(cc.on_air(self.dir), "dropped (retrying) stays on air")
-        self.log("host-a.log", "[host] sink rec live\n", age=600)
-        self.assertFalse(cc.on_air(self.dir), "a quiet old log: the host is closed")
+        self.assertTrue(cc.on_air(self.dir, up))
+        self.log("host-a.log", "[host] sink yt-h stopped\n", mode="a")
+        self.assertFalse(cc.on_air(self.dir, up), "read on from where the last call stopped")
+        self.log("host-a.log", "[host] sink rec live\n[host] sink rec dropped\n", mode="a")
+        self.assertTrue(cc.on_air(self.dir, up), "dropped (retrying) stays on air")
+        self.log("host-a.log", "[host] rpc host.alive\n", age=3600, mode="a")
+        self.assertTrue(cc.on_air(self.dir, up), "review 2026-11-18: a quiet log during a long stream is still live")
+        self.assertFalse(cc.on_air(self.dir, lambda: False), "no installed host runs: it crashed, nothing is on air")
+        self.assertIsNone(cc.on_air(self.dir, lambda: None), "the host cannot be checked: unknown")
+        self.log("host-a.log", "[host] exit 0\n", age=3600, mode="a")
+        self.assertFalse(cc.on_air(self.dir, up), "the host closed")
         self.log("host-b.log", "[host] sink twitch live\n")
-        self.assertTrue(cc.on_air(self.dir), "the newest log counts")
+        self.assertTrue(cc.on_air(self.dir, up), "the newest log counts")
+
+    @unittest.skipUnless(os.name == "nt", "Windows")
+    def test_the_installed_host_is_found_by_path(self):
+        self.assertFalse(cc.installed_host_running(self.dir), "no host under this folder")
 
 
 @unittest.skipUnless(HAVE_NP and shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs numpy and ffmpeg")
@@ -270,7 +313,8 @@ class RealFfmpegTests(unittest.TestCase):
         def popen(argv):
             argvs.append(argv)
             cmd = [PY, "-I", "-c", proxy] + argv if len(argvs) == 1 else argv
-            return subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, **NO_WINDOW)
+            return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                                    **NO_WINDOW)
 
         crop = (20, 10, 300, 170)
         ref = list(g1_scan.decode_frames(self.clip, 1.0, crop=crop))
@@ -280,6 +324,35 @@ class RealFfmpegTests(unittest.TestCase):
         self.assertEqual([t for t, _ in got], [t for t, _ in ref])
         for (t, a), (_, b) in zip(got, ref):
             self.assertLess(float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean()), 0.5, t)
+
+    def test_a_restart_after_an_empty_bucket_reads_no_frame_twice(self):
+        # review 2026-11-18: frames at 0.0 and 3.0 s (buckets 1 and 2 empty); after 2 frames a seek by count (-ss 2)
+        # gave the 3.0 s frame again. The restart now seeks past the last frame's own timestamp (-ss 4).
+        gap = os.path.join(self.dir, "gap.mkv")
+        subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:duration=8",
+                        "-vf", "select='not(between(t,1.0,2.99))'", "-fps_mode", "passthrough", "-c:v", "libopenh264",
+                        gap], check=True, **NO_WINDOW)
+        n = 160 * 90 * 3
+        proxy = ("import subprocess,sys,time\n"
+                 f"p=subprocess.Popen(sys.argv[1:],stdout=subprocess.PIPE,stdin=subprocess.DEVNULL,creationflags={NO_WINDOW.get('creationflags', 0)})\n"
+                 f"for _ in range(2):\n sys.stdout.buffer.write(p.stdout.read({n})); sys.stdout.buffer.flush()\n"
+                 "time.sleep(0.5)\np.kill()\ntime.sleep(60)\n")
+        argvs = []
+
+        def popen(argv):
+            argvs.append(argv)
+            cmd = [PY, "-I", "-c", proxy] + argv if len(argvs) == 1 else argv
+            return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                                    **NO_WINDOW)
+
+        ref = list(fr.FrameReader(gap, 1.0, decoders=("cpu",), gpu_ok=lambda: False))
+        self.assertEqual(len(ref), 6)
+        got = list(fr.FrameReader(gap, 1.0, decoders=("cpu",), gpu_ok=lambda: False, popen=popen, stall_sec=2,
+                                  first_sec=20, poll_sec=0.1))
+        self.assertEqual(argvs[1][argvs[1].index("-ss") + 1], "4.000")
+        self.assertEqual([t for t, _ in got], [t for t, _ in ref])
+        for (t, a), (_, b) in zip(got, ref):
+            self.assertTrue(np.array_equal(a, b), t)
 
 
 @unittest.skipUnless(HAVE_NP, "needs numpy")
@@ -404,7 +477,7 @@ class ResumeTests(unittest.TestCase):
             stats = json.load(f)
         return hits, stats
 
-    def check_resume(self, regions):
+    def check_resume(self, regions, torn=False):
         settings = dict(self.settings, ocrRegions=regions)
         full = os.path.join(self.dir, f"full-{regions}")
         whole, _ = self.run_pass(full, [(self.FRAMES, 0, 0, 0)], settings)
@@ -412,6 +485,11 @@ class ResumeTests(unittest.TestCase):
         with self.assertRaises(Killed):
             self.run_pass(cut, [(self.FRAMES, 0, 0, 0)], settings, kill_at=6)
         self.assertTrue(os.path.exists(os.path.join(cut, self.dp.CHECKPOINT)))
+        with open(os.path.join(cut, self.dp.CHECKPOINT + ".rows"), "rb") as f:
+            self.assertEqual(len(f.read().splitlines()), 6, "each save appends one line; nothing is rewritten")
+        if torn:
+            with open(os.path.join(cut, self.dp.CHECKPOINT + ".rows"), "ab") as f:
+                f.write(b'{"rows": [{"cut short')  # a save killed after part of its rows line: not committed
         lines = []
         summ, fake = self.run_pass(cut, [(self.FRAMES - 6, 0, 0, 0)], settings, lines=lines)  # the recording's rest
         self.assertEqual(fake.argvs[0][fake.argvs[0].index("-ss") + 1], "6.000", "ffmpeg starts at the next frame")
@@ -429,6 +507,15 @@ class ResumeTests(unittest.TestCase):
 
     def test_resume_gives_the_same_result_rois(self):
         self.check_resume("rois")
+
+    def test_a_save_cut_short_is_ignored_on_resume(self):
+        self.check_resume("rois", torn=True)
+
+    def test_an_edited_pack_starts_fresh(self):
+        # review 2026-11-18: a rule or ROI edited in place keeps the pack version; the key hashes the content
+        def edit(_):
+            self.pack["detectors"][0]["note"] = "edited in place"
+        self.cut_then(edit)
 
     def cut_then(self, change):
         out = os.path.join(self.dir, "cut")
@@ -470,11 +557,11 @@ class ResumeTests(unittest.TestCase):
             self.dp.run_pass(self.rec, out, self.settings, self.pack, [], self.layout, progress=None,
                              reader_opts={"popen": fake, "gpu_ok": lambda: False, "stall_sec": 0.4, "first_sec": 0.4,
                                           "poll_sec": 0.05, "max_restarts": 1})
-        got = self.dp.load_checkpoint(os.path.join(out, self.dp.CHECKPOINT),
-                                      self.dp.checkpoint_key(self.rec, [0, 0, self.FW, self.FH], self.settings, self.pack,
-                                                             [], self.layout, None, None))
+        got = self.dp.Checkpoint(os.path.join(out, self.dp.CHECKPOINT),
+                                 self.dp.checkpoint_key(self.rec, [0, 0, self.FW, self.FH], self.settings, self.pack,
+                                                        [], self.layout, None, None)).load()
         self.assertIsNotNone(got)
-        self.assertEqual(got[0], 4)
+        self.assertEqual(got[:2], (4, 3.0), "4 frames read, the last at 3.0 s")
 
 
 if __name__ == "__main__":
