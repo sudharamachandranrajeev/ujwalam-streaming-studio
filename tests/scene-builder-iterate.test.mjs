@@ -419,6 +419,26 @@ describe('SB5 CLI behind the scene-builder flag', () => {
     assert.equal(readFileSync(file, 'utf8'), bytes, 'export, edit and variants never write the project');
   });
 
+  test('D390: edit and variants never save or print a window title (a package holding one gets it taken out)', async () => {
+    const { buildScenario, listTemplates } = await import('../services/scene-builder/scenarios.mjs');
+    const pick = { create: { type: 'window', source: { window: 'Example Private Title:ExampleClass:example.exe', match: 'title', cursor: true } } };
+    const ss = listTemplates().find((x) => x.id === 'screen-share');
+    const withTitle = path.join(dir, 'win-full.json');
+    writeFileSync(withTitle, JSON.stringify(buildScenario(ss, loadProject(file).project, { rules: loadBuildRules(), bind: { screen: pick } }))); // as an older build would have saved it
+    const ed = path.join(dir, 'win-ed.json');
+    const r = await run(['edit', withTitle, '--project', file, '--out', ed, '--move', 'h:screen=0,0', '--json']);
+    assert.equal(r.code, 0, r.err);
+    assert.ok(!r.out.includes('Example Private Title'), 'printed package has no title');
+    const saved = readFileSync(ed, 'utf8');
+    assert.ok(!saved.includes('Example Private Title'), 'saved package has no title');
+    assert.ok(saved.includes(':ExampleClass:example.exe'), 'class and exe stay');
+    const vd = mkdtempSync(path.join(dir, 'win-var-'));
+    const v = await run(['variants', withTitle, '--project', file, '--count', '2', '--seed', 's', '--out-dir', vd, '--json']);
+    assert.equal(v.code, 0, v.err);
+    assert.ok(!v.out.includes('Example Private Title'));
+    for (const f of readdirSync(vd)) assert.ok(!readFileSync(path.join(vd, f), 'utf8').includes('Example Private Title'), f);
+  });
+
   test('bad arguments: exit 1', async () => {
     assert.equal((await run(['edit', pkgFile, '--project', file])).code, 1, 'needs --out and an edit');
     assert.equal((await run(['edit', pkgFile, '--project', file, '--out', path.join(dir, 'z.json'), '--move', 'h:chat=0.5'])).code, 1);

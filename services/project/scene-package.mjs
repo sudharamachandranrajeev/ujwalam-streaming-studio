@@ -30,6 +30,24 @@ export class ScenePackageError extends Error {
   constructor(message, details) { super(message); this.name = 'ScenePackageError'; if (details) this.details = details; }
 }
 
+/**
+ * A copy of a package that may leave this PC (a saved file, printed JSON): every window layer's target loses its window
+ * title (D390: titles are personal). The OBS spec "title:class:exe" keeps only ":class:exe"; the import
+ * (scene-preset.mjs) turns such a layer into a placeholder for the user to pick the window again, so a package never
+ * shows a guessed window. The input is not changed. Screen targets carry a display device id only and stay.
+ */
+export function shareablePackage(pkg) {
+  const out = structuredClone(pkg);
+  for (const pr of Array.isArray(out?.presets) ? out.presets : []) {
+    for (const l of Array.isArray(pr?.params?.layers) ? pr.params.layers : []) {
+      if (l?.type !== 'window' || typeof l.target?.window !== 'string') continue;
+      const parts = l.target.window.split(':');
+      l.target.window = parts.length === 3 ? `:${parts[1]}:${parts[2]}` : '::';
+    }
+  }
+  return out;
+}
+
 /** Problems with a package's shape (plain words; [] when it can be imported). */
 export function packageProblems(pkg) {
   const p = [];

@@ -72,6 +72,8 @@ test('bad screen and window specs: the whole plan is refused (-32602), whatever 
   const c = off.client;
   for (const [layer, re] of [
     [screenLayer(''), /display/],
+    [screenLayer('d'.repeat(128)), /display/], // OBS copies the id into a 128-byte buffer with strcpy_s
+    [screenLayer('dispé'), /display/],
     [screenLayer('d1', { window: WINDOW_SPEC }), /window/],
     [screenLayer('d1', { cursor: 'yes' }), /cursor/],
     [windowLayer('no-colons'), /window/],
@@ -109,7 +111,7 @@ test('with --allow-screen-capture: listTargets shape; a screen and a window laye
     console.log(`capture.listTargets: ${t.displays.length} displays, ${t.windows.length} windows`); // counts only (titles are personal)
     assert.ok(t.windows.length >= 1, 'at least one window to capture (the desktop session has some)');
 
-    const p = project([screenLayer(t.displays[0].id), windowLayer(t.windows[0].id, { match: 'exe', cursor: false })]);
+    const p = project([screenLayer(t.displays[0].id), windowLayer(t.windows[0].id, { cursor: false })]);
     const plan = await planInHost(c, p);
     assert.deepEqual(plan.unavailable, [], 'both buildable');
     const src = Object.fromEntries(plan.sources.map((s) => [s.layer, s]));

@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { createProject, validateProject } from '../services/project/index.mjs';
 import { loadScenePreset, mergeCanvasScenes } from '../services/project/scene-preset.mjs';
-import { planScenePackage, stateHash, withoutAdded } from '../services/project/scene-package.mjs';
+import { planScenePackage, shareablePackage, stateHash, withoutAdded } from '../services/project/scene-package.mjs';
 import { loadBuildRules } from '../services/scene-builder/build.mjs';
 import { buildScenario, listTemplates, templatePreview, templateProblems, templateRead } from '../services/scene-builder/scenarios.mjs';
 
@@ -288,6 +288,25 @@ describe('screen role', () => {
       const pkg = buildScenario(ss(), project(), { rules: RULES, bind: { screen: bad } });
       assert.match(pkg.placeholders.find((x) => x.role === 'screen').reason, /not usable/);
     }
+  });
+
+  test('D390: a package that leaves the PC has no window title; importing it gives a placeholder, never a window guess', () => {
+    const p = project();
+    const pkg = buildScenario(ss(), p, { rules: RULES, bind: { screen: PICK } });
+    const before = JSON.stringify(pkg);
+    const shared = shareablePackage(pkg);
+    assert.equal(JSON.stringify(pkg), before, 'the input package is not changed');
+    assert.ok(!JSON.stringify(shared).includes('Example App'), 'no title anywhere in the shared copy');
+    for (const c of ['h', 'v']) assert.equal(layerOf(shared, c, 'screen').target.window, ':ExampleClass:example.exe');
+    assert.ok(validatePkg(shared), JSON.stringify(validatePkg.errors?.slice(0, 3)));
+    const { project: out, diff } = planScenePackage(p, shared);
+    const added = out.scenes.find((s) => !p.scenes.some((x) => x.id === s.id));
+    assert.ok(!added.layers.some((l) => l.type === 'window'), 'no window layer is made from a title-less target');
+    assert.ok(added.layers.some((l) => l.type === 'color' && l.source.color === '#00000000'), 'a transparent placeholder holds its place');
+    assert.deepEqual(diff.unbound.filter((u) => u.endsWith(':screen')).sort(), ['h:screen', 'v:screen'], 'listed for the user to pick again');
+    // the full package (in memory, never saved) still makes the window layer
+    const full = planScenePackage(p, pkg).project.scenes.find((s) => !p.scenes.some((x) => x.id === s.id));
+    assert.ok(full.layers.some((l) => l.type === 'window' && l.source.window === 'Example App:ExampleClass:example.exe'));
   });
 
   test('the picked target never carries fields beyond the contract (no title text of the page is copied)', () => {

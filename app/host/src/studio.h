@@ -81,7 +81,7 @@ public:
 	//   swipe     (swipe_transition):         direction, swipe_in (the new scene swipes in over the old one)
 	//   wipe      (wipe_transition, luma):    pattern = a luma image id (data/transitions/luma-wipes.json; the file
 	//                                         <id>.png in obs-transitions' luma_wipes), softness 0..1, invert
-	//   fadeColor (fade_to_color_transition): color #RRGGBB, point_pct 0..100 (where the scene changes, % of ms)
+	//   fadeColor (fade_to_color_transition): color #RRGGBB, point_pct 1..99 (where the scene changes, % of ms)
 	// stinger and these four take the canvas's second transition object (st), swapped onto channel 0 like the stinger
 	// and released when the type goes back to cut or fade. A type whose libobs transition is missing is refused
 	// (UNAVAILABLE) and the canvas keeps what it had.

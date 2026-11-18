@@ -17,6 +17,16 @@ bool available()
 	       obs_source_get_display_name("window_capture") != nullptr;
 }
 
+bool valid_display_id(const std::string &s)
+{
+	if (s.empty() || s.size() > 127)
+		return false;
+	for (unsigned char ch : s)
+		if (ch < 0x20 || ch > 0x7e)
+			return false;
+	return true;
+}
+
 bool valid_window_spec(const std::string &s)
 {
 	if (s.empty() || s.size() > 1024)
@@ -70,7 +80,7 @@ json::Value list_targets()
 	obs_properties_t *mp = obs_get_source_properties("monitor_capture");
 	static const std::regex size_re("([0-9]{1,5})x([0-9]{1,5}) @ ");
 	each_item(mp, "monitor_id", [&](const std::string &label, const std::string &value) {
-		if (value == "DUMMY")
+		if (value == "DUMMY" || !valid_display_id(value)) // an id a screen layer could not take is not offered
 			return;
 		json::Value d = json::Value::object();
 		d.set("id", value);

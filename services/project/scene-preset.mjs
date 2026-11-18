@@ -202,6 +202,13 @@ export function loadScenePreset(project, preset, opts = {}) {
     } else if (l.type === 'window' || l.type === 'screen') {
       // D390 scenarios: a NEW window / screen layer for a target the user picked (the layer type contract of the capture branch)
       type = l.type; source = structuredClone(l.target); delete px.crop;
+      // A window target without its title (a shared package, scene-package.mjs shareablePackage) names no window: OBS
+      // would take any window of that app or one with an empty title. It stays a placeholder until the user picks one.
+      if (l.type === 'window' && !(typeof source?.window === 'string' && /^[^:]+:/.test(source.window))) {
+        unbound.push(l.role ?? 'screen');
+        type = 'color'; source = { color: '#00000000' };
+        placeholder.add(l.key);
+      }
     } else if (l.type === 'browser') {
       type = 'browser';
       source = { overlay: overlayFor(l.overlay), width: Math.max(1, Math.round(px.width)), height: Math.max(1, Math.round(px.height)) };

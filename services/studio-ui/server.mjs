@@ -214,6 +214,7 @@ export const TRANSITIONS_FLAG = 'transitions';
 // D391: the transition types with their own fields (as services/project/validate.mjs); the host reports colours in
 // upper case, so a colour compares without case.
 const TR_OWN = { slide: ['direction'], swipe: ['direction', 'swipeIn'], wipe: ['pattern', 'softness', 'invert'], fadeColor: ['color', 'pointPct'] };
+const trOwn = (type) => (typeof type === 'string' && Object.hasOwn(TR_OWN, type) ? TR_OWN[type] : null); // never an inherited key
 const TR_OWN_KEYS = [...new Set(Object.values(TR_OWN).flat())];
 const trSame = (a, b) => (typeof a === 'string' && typeof b === 'string' ? a.toLowerCase() === b.toLowerCase() : a === b);
 // Scene and layer structure edits (D240): add/remove scenes and layers from the control page, saved into the project.
@@ -1050,15 +1051,15 @@ export function createStudioServer(opts) {
       }
       // D391: slide, swipe, wipe, fadeColor pass through with their own fields (the project validator checked them;
       // the host checks them again and refuses a wipe image it does not ship). Host defaults fill absent fields.
-      else if (TR_OWN[t?.type] && Number.isInteger(t.durationMs)) {
+      else if (trOwn(t?.type) && Number.isInteger(t.durationMs)) {
         p = { type: t.type, durationMs: Math.min(10000, Math.max(0, t.durationMs)) };
-        for (const k of TR_OWN[t.type]) if (t[k] !== undefined) p[k] = t[k];
+        for (const k of trOwn(t.type)) if (t[k] !== undefined) p[k] = t[k];
       }
-      const ownKind = p.type === 'stinger' || !!TR_OWN[p.type];
+      const ownKind = p.type === 'stinger' || !!trOwn(p.type);
       if (ownKind && trRefused[hid] === trKey(p)) p = { type: 'cut', durationMs: 0 };
       const same = cur?.type === p.type && cur?.durationMs === p.durationMs && (cur?.easing ?? 'linear') === (p.easing ?? 'linear')
         && (p.type !== 'stinger' || (cur?.file === `${p.file.base}:${p.file.rel}` && cur?.pointMs === p.pointMs && (cur?.audio ?? true) === p.audio))
-        && (!TR_OWN[p.type] || TR_OWN[p.type].every((k) => p[k] === undefined || trSame(cur?.[k], p[k])));
+        && (!trOwn(p.type) || trOwn(p.type).every((k) => p[k] === undefined || trSame(cur?.[k], p[k])));
       if (same) continue;
       // A refused stinger, D391 type or easing (older host, unknown curve or wipe) is not asked for again until the
       // project changes it; the canvas cuts meanwhile.
@@ -1235,7 +1236,7 @@ export function createStudioServer(opts) {
     const file = projectSync?.status?.().file;
     if (typeof file !== 'string') return json(res, 409, { error: 'no-project-file' });
     if (!isPlain(body) || !STRUCTURE_OPS.includes(body.op) || Object.keys(body).some((k) => k !== 'op' && !STRUCTURE_KEYS[body.op].includes(k))) return json(res, 400, { error: 'bad-params' });
-    const maxLen = { text: 2000, file: 260, display: 512, window: 1024 }; // display, window: D390 (OBS ids are long)
+    const maxLen = { text: 2000, file: 260, display: 127, window: 1024 }; // display, window: D390 (display ids: OBS takes at most 127 bytes)
     for (const k of ['name', 'scene', 'kind', 'of', 'color', 'text', 'device', 'overlay', 'layer', 'file', 'canvas', 'direction', 'target', 'place', 'display', 'window', 'match']) {
       if (body[k] !== undefined && (typeof body[k] !== 'string' || body[k].length > (maxLen[k] ?? 120))) return json(res, 400, { error: 'bad-params' });
     }

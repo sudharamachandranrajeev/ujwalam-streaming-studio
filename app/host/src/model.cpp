@@ -825,8 +825,8 @@ Plan build(const json::Value &doc, const Options &o)
 				chk::only_keys(s, {"display", "cursor"}, what + ".source");
 				chk::require(s, {"display"}, what + ".source");
 				std::string disp = chk::get_str(s, "display", "", 512, what);
-				if (disp.empty() || std::any_of(disp.begin(), disp.end(), [](char c) { return (unsigned char)c < 0x20; }))
-					throw Error(rpc::INVALID_PARAMS, what + ": source.display must be a display id from capture.listTargets");
+				if (!screencap::valid_display_id(disp)) // <= 127 ASCII bytes: OBS strcpy_s into char[128] (screen_capture.h)
+					throw Error(rpc::INVALID_PARAMS, what + ": source.display must be a display id from capture.listTargets (1 to 127 ASCII characters)");
 				src.obs_type = "monitor_capture";
 				st.set("monitor_id", disp);
 				st.set("capture_cursor", chk::get_bool(s, "cursor", true, what));
@@ -838,7 +838,8 @@ Plan build(const json::Value &doc, const Options &o)
 				std::string win = chk::get_str(s, "window", "", 1024, what);
 				if (!screencap::valid_window_spec(win))
 					throw Error(rpc::INVALID_PARAMS, what + ": source.window must be a window from capture.listTargets (title:class:exe)");
-				int prio = screencap::window_priority(chk::get_str(s, "match", "exe", 8, what));
+				// Default title: only that exact window, never another window of the same app (screen_capture.h).
+				int prio = screencap::window_priority(chk::get_str(s, "match", "title", 8, what));
 				if (prio < 0)
 					throw Error(rpc::INVALID_PARAMS, what + ": source.match must be title, class or exe");
 				src.obs_type = "window_capture";

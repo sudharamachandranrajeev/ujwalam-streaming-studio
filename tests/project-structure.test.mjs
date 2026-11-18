@@ -73,7 +73,10 @@ test('addLayer: copy points at the real layer with its placements; colour, text,
   assert.deepEqual(scr.layer.placements.h, { visible: true, x: 0, y: 0, width: 1920, height: 1080 });
   const win = addLayer(doc, { scene: s, kind: 'window', window: 'Example Title:ExampleClass:example-app.exe', match: 'title' });
   assert.deepEqual([win.layer.type, win.layer.name, win.layer.source], ['window', 'example-app', { window: 'Example Title:ExampleClass:example-app.exe', match: 'title' }]);
-  assert.equal(addLayer(doc, { scene: s, kind: 'window', window: 'Title:Class:app.exe' }).layer.source.match, undefined, 'match absent = host default exe');
+  assert.equal(addLayer(doc, { scene: s, kind: 'window', window: 'Title:Class:app.exe' }).layer.source.match, undefined, 'match absent = host default title (that exact window only)');
+  assert.equal(addLayer(doc, { scene: s, kind: 'screen', display: 'd'.repeat(128) }).error, 'bad-display', 'OBS takes at most 127 bytes');
+  assert.equal(addLayer(doc, { scene: s, kind: 'screen', display: 'dispé' }).error, 'bad-display', 'ASCII only');
+  assert.equal(addLayer(doc, { scene: s, kind: 'screen', display: 'd'.repeat(127) }).layer.source.display.length, 127);
   assert.equal(addLayer(doc, { scene: s, kind: 'screen' }).error, 'bad-display');
   assert.equal(addLayer(doc, { scene: s, kind: 'window', window: 'no-colons' }).error, 'bad-window');
   assert.equal(addLayer(doc, { scene: s, kind: 'window', window: 'T:C:a.exe', match: 'pid' }).error, 'bad-window');

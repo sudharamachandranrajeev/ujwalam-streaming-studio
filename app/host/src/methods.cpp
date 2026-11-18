@@ -568,7 +568,7 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 		t.softness = q.num_or("softness", 0.03, 0, 1);
 		t.invert = q.bool_or("invert", false);
 		t.color = q.str_or("color", "", 8);
-		t.point_pct = q.int_or("pointPct", 50, 0, 100);
+		t.point_pct = q.int_or("pointPct", 50, 1, 99); // 0 and 100 give NaN audio in OBS (studio.cpp)
 		return a.studio->transition_set(q.str("canvas", 8), t);
 	});
 	add("transitions.get", [&a](const json::Value &) { return a.studio->transitions(); });

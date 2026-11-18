@@ -16,7 +16,7 @@
 //                                   source, so a duplicate's effects never reach the original and no device opens twice)
 //   screen layer (D390 proposed) -> monitor_capture {monitor_id = source.display, capture_cursor = source.cursor}
 //   window layer (D390 proposed) -> window_capture {window = source.window ("title:class:exe"), priority = source.match
-//                                   (title 1, class 0, exe 2; default exe), cursor = source.cursor, client_area}
+//                                   (title 1, class 0, exe 2; default title), cursor = source.cursor, client_area}
 //                                   both need --allow-screen-capture (forbidden) and the win-capture module (unavailable)
 //   browser layer                -> browser_source at the largest canvas fps, page control level 0 (no access to
 //                                   the studio), no audio reroute; source.overlay pages come from the host's overlay
