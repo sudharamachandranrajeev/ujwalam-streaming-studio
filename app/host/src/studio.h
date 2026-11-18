@@ -35,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -182,7 +183,14 @@ public:
 	// --test-hooks: the source-level settings the watchdog must carry over (sync offset, balance, flags, filters):
 	// set them on a test global (any field present) and read them back.
 	json::Value test_audio_config(const std::string &id, const json::Value &set);
+	// mixer.list: every metered sound, then (2026-11-18, A2) one row per project device sound the host could not build
+	// (its device was not connected at load, or never opened): {id: "audio:<id>", audioSource, name, waiting: true,
+	// message, active false, no meter}. The studio shows it as "Waiting for <device>".
 	json::Value mixer_list() const;
+	// mixer.levels (B9, 2026-11-18): the meters only, {busy, levels: [{id, peakDb, magnitudeDb}]} with the ids of
+	// mixer.list. Never waits for the model lock (busy true and no levels while a load holds it). peakDb is the highest
+	// peak of the last ~300 ms (B8: a short peak between two reads is not lost), so every reader sees it.
+	json::Value mixer_levels() const;
 	json::Value mixer_set_volume(const std::string &id, const double *mul, const double *db);
 	json::Value mixer_set_mute(const std::string &id, bool muted);
 	json::Value mixer_set_cue(const std::string &id, bool cue);
@@ -228,6 +236,17 @@ public:
 	// Where connect checks are asked for (the device watcher's check_after; null: none).
 	void set_check_scheduler(std::function<void(uint32_t)> f);
 	static constexpr uint32_t kConnectAttempts = 5;
+	// After the fast attempts a capture source without a picture is still tried, once a minute, for as long as it stays
+	// without one (2026-11-18, A3: before, it gave up after about 75 s until the device was plugged in again).
+	static constexpr uint32_t kSlowRetryMs = 60000;
+	// devices.rescan ("Try again", 2026-11-18): every capture source without a picture is activated again now (its attempts
+	// start over); device sounds that failed to open are tried again. Returns {retried}. The caller then runs a device
+	// pass (binds what arrived) and rebuild_missing_files.
+	json::Value devices_rescan();
+	// Image and media layers whose file was missing at load (skipped as unavailable) are built now when their file is
+	// there (layer_add_model with the host's model document; then the project order). Copies of them too. Returns the
+	// number built. The model document and its saved state are not changed.
+	uint32_t rebuild_missing_files();
 
 private:
 	struct Meter;
@@ -315,6 +334,19 @@ private:
 	void note_list(const devices::List &l) const;
 	std::vector<std::shared_ptr<Src>> capture_srcs() const;
 	const json::Value *model_device(const std::string &id) const;
+	// A2 (2026-11-18): project device sounds (microphone, audio-output) that are not built while their device is listed
+	// are built now (the audio_add_model build). At most kAudioTries tries per sound while its device stays listed (a
+	// device Windows will not open is not hammered); devices_rescan starts over. Studio mutex held.
+	static constexpr uint32_t kAudioTries = 3;
+	std::map<std::string, uint32_t> audio_tries_;
+	// Layers the last load_model skipped as unavailable (rebuild_missing_files looks at their files again).
+	std::set<std::string> unbuilt_layers_;
+	void bind_waiting_audio(const devices::List &l, json::Value &changes, const char *why);
+	// The project device sounds that are not built: {audio id, device id} (studio mutex held).
+	std::vector<std::pair<std::string, std::string>> unbuilt_device_audio() const;
+	// One mixer row per metered source, in mixer order (project device sounds, then layer sounds with a project entry,
+	// then the rest); f(src, id, scene or null, layer or null).
+	void each_mixer_src(const std::function<void(const Src &, const std::string &, const Scene *, const Layer *)> &f) const;
 	AudioHealthCfg health_;
 	std::vector<std::shared_ptr<Src>> parked_; // replaced device audio sources (released in ~Studio only)
 	std::vector<json::Value> audio_events_;    // newest last, at most kAudioEvents

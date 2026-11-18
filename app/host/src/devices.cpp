@@ -356,7 +356,11 @@ static std::string device_label(const json::Value &device)
 	const json::Value *k = device.find("kind");
 	const json::Value *n = device.find("name");
 	std::string kind = k && k->is_string() ? k->as_string() : "";
-	std::string what = kind == "camera" ? "camera" : kind == "capture-card" ? "capture card" : "device";
+	std::string what = kind == "camera"         ? "camera"
+			   : kind == "capture-card" ? "capture card"
+			   : kind == "microphone"   ? "audio input"
+			   : kind == "audio-output" ? "audio output"
+						    : "device";
 	std::string name = n && n->is_string() ? n->as_string() : "";
 	return what + (name.empty() ? "" : " \"" + name + "\"");
 }
@@ -364,8 +368,9 @@ static std::string device_label(const json::Value &device)
 std::string connecting_message(const json::Value &device, bool last)
 {
 	std::string label = device_label(device);
-	if (last)
-		return "No picture from " + label + ". Close any other app that uses it, then unplug it and plug it in again.";
+	if (last) // A3 (2026-11-18): the host keeps trying once a minute after the fast attempts
+		return "No picture from " + label + ". Close any other app that uses it; Ujwalam tries again every minute, or "
+		       "press Try again. If it stays dark, unplug it and plug it in again.";
 	return "Connecting to " + label + ": no picture yet. If another app is using it, close that app; Ujwalam tries "
 	       "again by itself.";
 }
@@ -376,7 +381,10 @@ std::string waiting_message(const json::Value &device, const std::string &proble
 	if (problem == "name matches more than one device")
 		return "Waiting for " + label + ": more than one connected device has this name, so Ujwalam cannot tell which "
 		       "one to use. Unplug the one you do not want; the layer connects by itself.";
-	return "Waiting for " + label + ": it is not connected. Plug it in; the layer connects by itself.";
+	const json::Value *k = device.find("kind");
+	const bool sound = k && k->is_string() && (k->as_string() == "microphone" || k->as_string() == "audio-output");
+	return "Waiting for " + label + ": it is not connected. Plug it in; the " + (sound ? "sound" : "layer") +
+	       " connects by itself.";
 }
 
 json::Value set_monitoring_output(const std::string &name, const List &l)

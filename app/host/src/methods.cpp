@@ -19,8 +19,10 @@
 #include <windows.h>
 
 #include <chrono>
+#include <cctype>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <regex>
 #include <set>
 
@@ -194,6 +196,45 @@ json::Value devices_pass(App &a, const char *why, const std::vector<std::string>
 			return json::Value();
 	}
 	return a.studio->devices_changed(l, why, removed, event);
+}
+
+void apply_monitoring(App &a)
+{
+	static std::mutex mu;
+	static bool in_use = false, said_missing = false;
+	std::lock_guard<std::mutex> lk(mu);
+	if (a.config.monitoring_device.empty() || !a.allow_devices || a.shutting_down)
+		return;
+	devices::List l = devices::enumerate();
+	auto low = [](std::string s) {
+		for (auto &c : s)
+			c = (char)std::tolower((unsigned char)c);
+		return s;
+	};
+	bool listed = false;
+	for (auto &e : l.entries)
+		if (e.kind == "audio-output" && low(e.name) == low(a.config.monitoring_device))
+			listed = true;
+	if (!listed) {
+		if (in_use || !said_missing)
+			hlog::warn("audio monitoring output \"%s\": not connected; using the Windows default output until it is",
+				   a.config.monitoring_device.c_str());
+		in_use = false;
+		said_missing = true;
+		return;
+	}
+	if (in_use)
+		return;
+	json::Value m = devices::set_monitoring_output(a.config.monitoring_device, l);
+	if (const json::Value *pr = m.find("problem")) {
+		hlog::warn("audio monitoring output \"%s\": %s; using the Windows default output", a.config.monitoring_device.c_str(),
+			   pr->as_string().c_str());
+		said_missing = true;
+		return;
+	}
+	in_use = true;
+	said_missing = false;
+	hlog::info("audio monitoring output: %s", m.find("device")->as_string().c_str());
 }
 
 void on_hotkey(App &a, const std::string &name, const char *via)
@@ -389,6 +430,28 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 		if (!a.allow_screen)
 			throw Error(rpc::FORBIDDEN, "screen and window capture are switched off (start the host with --allow-screen-capture)");
 		return screencap::list_targets();
+	});
+	// devices.rescan {} ("Try again", 2026-11-18, A3/A4): every capture layer without a picture is activated again now
+	// (a fresh set of attempts), device sounds that did not open are tried again, then one hot-plug pass binds what is
+	// listed (capture layers and device sounds), and image/media layers whose file was missing at load are built when
+	// the file is there. The monitoring output is chosen again when it was not connected. Returns {retried, audio,
+	// media, pass}. Opens devices: --allow-devices or --test-hooks.
+	add("devices.rescan", [&a](const json::Value &p) {
+		(void)Params(p, {});
+		if (!a.allow_devices && !a.test_hooks)
+			throw Error(rpc::FORBIDDEN, "devices are disabled (start the host with --allow-devices after the user says devices ready)");
+		json::Value r = a.studio->devices_rescan();
+		json::Value pass = devices_pass(a, "rescan", {}, true);
+		uint64_t audio = 0;
+		if (const json::Value *ch = pass.is_object() ? pass.find("changes") : nullptr; ch && ch->is_array())
+			for (auto &c : ch->as_array())
+				if (c.find("audio") && c.find("action") && c.find("action")->as_string() == "bound")
+					audio++;
+		r.set("audio", audio);
+		r.set("media", (uint64_t)a.studio->rebuild_missing_files());
+		apply_monitoring(a);
+		r.set("pass", std::move(pass));
+		return r;
 	});
 	// devices.testSet {devices: [{kind, name, path, fail?}] | null, removed?: [{kind?, name, path}], viaWatcher?, peek?}
 	// (--test-hooks only, D329): replaces the device list the host sees with a fake one (null: back to the real list)
@@ -952,12 +1015,18 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 		return a.studio->mixer_list();
 	});
 	m["mixer.list"].markers = true; // read-only meter for the F6 audio-peak producer (markers role)
+	// mixer.levels (B9, 2026-11-18): the meters only ({busy, levels: [{id, peakDb, magnitudeDb}]}); never waits for a load.
+	add("mixer.levels", [&a](const json::Value &p) {
+		(void)Params(p, {});
+		return a.studio->mixer_levels();
+	});
+	// db -100..+12 (B5, 2026-11-18: the project's own range; the fader goes above 0 dB for a quiet source).
 	add("mixer.setVolume", [&a](const json::Value &p) {
 		Params q(p, {"id", "volume", "db"});
 		bool hv = q.has("volume"), hd = q.has("db");
 		if (hv == hd)
-			throw Error(rpc::INVALID_PARAMS, "give exactly one of volume (0..1) or db (-100..0)");
-		double v = hv ? q.num("volume", 0.0, 1.0) : q.num("db", -100.0, 0.0);
+			throw Error(rpc::INVALID_PARAMS, "give exactly one of volume (0..1) or db (-100..12)");
+		double v = hv ? q.num("volume", 0.0, 1.0) : q.num("db", -100.0, 12.0);
 		return a.studio->mixer_set_volume(q.str("id", 130), hv ? &v : nullptr, hd ? &v : nullptr);
 	});
 	add("mixer.setMute", [&a](const json::Value &p) {

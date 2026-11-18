@@ -64,3 +64,7 @@ void on_hotkey(App &app, const std::string &name, const char *via);
 // One device hot-plug pass (D329): list (fake list with devices.testSet), list again after 1 s if a bound capture
 // device looks gone, then reconcile the capture layers. null when devices cannot be listed. Watcher thread or RPC.
 json::Value devices_pass(App &app, const char *why, const std::vector<std::string> &removed = {}, bool event = true);
+// The audio monitoring output (host config monitoringDevice; --allow-devices only). At the start, and again after every
+// device pass while it is not in use (A4, 2026-11-18: an output connected after the start was never chosen): chosen
+// once it is listed, and chosen again when it left and came back. Any thread.
+void apply_monitoring(App &app);

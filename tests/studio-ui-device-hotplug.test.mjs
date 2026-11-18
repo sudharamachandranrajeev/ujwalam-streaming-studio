@@ -118,7 +118,8 @@ test('a device plug or unplug (devices.seq moved) reaches the pages as SSE devic
     const dev = sse.events.find(([e]) => e === 'devices')[1];
     assert.deepEqual(dev, { seq: 1, waiting: 1 });
     const s = await raw(c.port, { url: '/ui/api/status', headers: { cookie: c.cookie } });
-    assert.deepEqual(s.body.host.devices, { seq: 1, waiting: 1 }, 'numbers only: no device names in the status snapshot');
+    // connectable (2026-11-18, A1): placeholder roles with layer ids only; this sample project has none.
+    assert.deepEqual(s.body.host.devices, { seq: 1, waiting: 1, connectable: [] }, 'numbers and ids only: no device names in the status snapshot');
     await sleep(100);
     assert.equal(sse.events.filter(([e]) => e === 'devices').length, 1, 'no repeat while the seq stands still');
     c.host.st.seq = 0; // host restart
