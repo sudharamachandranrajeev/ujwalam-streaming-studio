@@ -59,10 +59,14 @@ test('off by default: win-capture not loaded, listTargets refused, screen and wi
     assert.equal(why[id]?.code, 'forbidden', `${id} forbidden`);
     assert.match(why[id].reason, /--allow-screen-capture/);
   }
-  // The plan still names their OBS types (plan.sources lists every layer); the load skips unavailable layers.
-  const t = Object.fromEntries(plan.sources.map((x) => [x.layer, x.obsType]));
-  assert.deepEqual([t.scr, t.win], ['monitor_capture', 'window_capture']);
-  const r = await loadIntoHost(c, project([screenLayer('display-id-1'), windowLayer(WINDOW_SPEC)]));
+  // An unavailable layer is not built, so it is not in plan.sources (model.cpp drops it); `unavailable` names its type.
+  // The OBS types are checked in the live part below, where both are built.
+  assert.deepEqual([why.scr.type, why.win.type], ['screen', 'window']);
+  assert.ok(!plan.sources.some((x) => x.layer === 'scr' || x.layer === 'win'), 'not built while forbidden');
+  // A plain load refuses forbidden layers; with skipUnavailable the rest loads and the two layers are left out.
+  const both = project([screenLayer('display-id-1'), windowLayer(WINDOW_SPEC)]);
+  assert.equal((await loadIntoHost(c, both).then(() => null, (x) => x))?.code, -32001, 'refused without skipUnavailable');
+  const r = await loadIntoHost(c, both, { skipUnavailable: true });
   assert.ok(r, 'the project loads; the two layers are left out');
   const ls = await c.call('layers.list', { scene: 's' });
   assert.ok(!ls.layers.some((l) => (l.id === 'scr' || l.id === 'win') && l.source), 'no screen or window source is created');
@@ -82,7 +86,9 @@ test('bad screen and window specs: the whole plan is refused (-32602), whatever 
     [windowLayer(WINDOW_SPEC, { match: 'pid' }), /match/],
     [windowLayer(WINDOW_SPEC, { display: 'd1' }), /display/],
   ]) {
-    const e = await planInHost(c, project([layer])).then(() => null, (x) => x);
+    // The raw RPC: planInHost runs the project validator first, which refuses these too; here the host itself must.
+    await assert.rejects(planInHost(c, project([layer])), /failed validation/, `validator: ${JSON.stringify(layer.source)}`);
+    const e = await c.call('project.plan', { project: project([layer]) }).then(() => null, (x) => x);
     assert.equal(e?.code, -32602, `${JSON.stringify(layer.source)} refused`);
     assert.match(e.message, re, JSON.stringify(layer.source));
   }
