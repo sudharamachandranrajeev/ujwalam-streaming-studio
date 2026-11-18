@@ -157,3 +157,34 @@ test('adding a capture layer while its card is unplugged succeeds and returns th
     assert.ok(!('waiting' in r2.body), 'a connected device: no waiting sentence');
   } finally { await c.srv.close(); }
 });
+
+// Codex review round 2 (P3): a mixer read never waits for devices.list; the list is cached and read again when devices.seq moves.
+test('mixer.list answers at once from the cached device list; devices.list is read once per devices.seq', async () => {
+  const c = await setup();
+  let lists = 0;
+  let release = null;
+  const base = c.host.call;
+  c.host.call = async (m, p) => {
+    if (m === 'devices.list') { lists++; await new Promise((r) => { release = r; }); return { devices: [] }; }
+    if (m === 'mixer.list') return { sources: [{ id: 'scene-main/layer-game', layer: 'layer-game', name: 'Game', mixers: 0, tracks: [] }], tracks: [] };
+    return base(m, p);
+  };
+  try {
+    c.host.st.seq = 1; // (the first status read, before this stub, already fetched one)
+    await until(() => lists === 1, 'a moved seq fetches the device list');
+    const csrf = (await raw(c.port, { url: '/ui/api/session', headers: { cookie: c.cookie } })).body.csrf;
+    const post = () => raw(c.port, { method: 'POST', url: '/ui/api/host', body: JSON.stringify({ method: 'mixer.list', params: {} }),
+      headers: { cookie: c.cookie, origin: `http://127.0.0.1:${c.port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf } });
+    const r = await post(); // devices.list is still pending: the rows come back anyway
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.result.sources.length, 1);
+    release();
+    await sleep(50);
+    await post();
+    await post();
+    assert.equal(lists, 1, 'no devices.list per mixer read while the seq stands still');
+    c.host.st.seq = 2;
+    await until(() => lists === 2, 'a moved seq reads the list again');
+    release();
+  } finally { await c.srv.close(); }
+});

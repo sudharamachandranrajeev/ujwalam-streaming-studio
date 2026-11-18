@@ -9,9 +9,10 @@
 //                     ids and placements; nothing else changes). Allowed while live: a placeholder is transparent, and the
 //                     host already binds capture layers to arriving devices while live (D329). Order as for structure edits
 //                     (D240): pending edits written -> file read -> pure change -> host -> the same change on a fresh read
-//                     saved (projectSync.update). A host failure puts the placeholders back and saves nothing; a failed
-//                     save (or a project that changed meanwhile) puts them back too and says so (not-saved, changed, or
-//                     not-saved-live when the host would not take them back).
+//                     saved (projectSync.update), only when it gives the file exactly what the host built. A host failure
+//                     puts the placeholders back and saves nothing; a failed save (or a project that changed meanwhile)
+//                     puts them back too, as the file has them then, and says so (not-saved, changed, or not-saved-live
+//                     when the host would not take them back).
 //   POST /ui/api/devices/rescan {}         "Try again" (host devices.rescan): every capture layer without a picture is
 //                     activated again at once, device sounds whose device is back are built, missing media files are
 //                     looked for again. No project change.
@@ -99,13 +100,24 @@ export function createDeviceRoutes(opts) {
     // project order. Any failure puts the old placeholders back from the unchanged document.
     const removed = [];
     const added = [];
-    // Undo on the host: the new layers go, the placeholders come back from the unchanged document. true when every call
+    // Undo on the host: the new layers go, the placeholders come back as the file has them now (Codex review round 2,
+    // 2026-11-18, P2): a placement or order saved while Connect ran is kept, and a layer or scene removed meanwhile is
+    // not brought back. The document read at the click is used only when the file cannot be read. true when every call
     // was taken.
     async function undoHost() {
+      const nowRead = readDoc();
+      const now = nowRead.error ? doc : nowRead.doc;
+      const has = (scene, layer) => now.scenes.some((s) => s.id === scene && (layer === undefined || s.layers.some((l) => l.id === layer)));
       let ok = true;
       for (const a of [...added].reverse()) { try { await host.call('layers.remove', a); } catch { ok = false; } }
-      for (const m of removed) { try { await host.call('layers.addFromProject', { project: doc, scene: m.scene, layer: m.layer }); } catch { ok = false; } }
-      for (const scene of new Set(removed.map((m) => m.scene))) { try { await host.call('layers.orderFromProject', { project: doc, scene }); } catch { ok = false; } }
+      for (const m of removed) {
+        if (!has(m.scene, m.layer)) continue;
+        try { await host.call('layers.addFromProject', { project: now, scene: m.scene, layer: m.layer }); } catch { ok = false; }
+      }
+      for (const scene of new Set(removed.map((m) => m.scene))) {
+        if (!has(scene)) continue;
+        try { await host.call('layers.orderFromProject', { project: now, scene }); } catch { ok = false; }
+      }
       return ok;
     }
     try {
@@ -129,6 +141,16 @@ export function createDeviceRoutes(opts) {
     // would disagree: then the host change is undone.
     const same = (r) => r.rebound.length === x.rebound.length && r.rebound.every((a) => x.rebound.some((b) => b.role === a.role && b.real === a.real
       && b.device === a.device && b.layers.length === a.layers.length && a.layers.every((l) => b.layers.includes(l))));
+    // ... and give the file exactly what the host built (Codex review round 2, P2): in each scene Connect touched, the
+    // same layer order, and every rebound layer identical. A placement or order edit saved meanwhile makes it differ:
+    // then nothing is saved and the host is put back as the file has it (undoHost).
+    const sceneIn = (p, id) => p.scenes.find((s) => s.id === id);
+    const sameLive = (p) => [...new Set(removed.map((m) => m.scene))].every((sid) => {
+      const a = sceneIn(p, sid);
+      const b = sceneIn(x.project, sid);
+      if (!a || !b || a.layers.map((l) => l.id).join('\n') !== b.layers.map((l) => l.id).join('\n')) return false;
+      return removed.filter((m) => m.scene === sid).every((m) => JSON.stringify(a.layers.find((l) => l.id === m.layer)) === JSON.stringify(b.layers.find((l) => l.id === m.layer)));
+    });
     // the project devices the first change made, under the same ids (the host's new layers name them)
     const made = x.rebound.map((rb) => rb.device).filter((id) => !(doc.devices ?? []).some((d) => d.id === id));
     let k = 0;
@@ -136,7 +158,7 @@ export function createDeviceRoutes(opts) {
     const w = opts.projectSync.update((fresh) => {
       const r = rebindPlaceholders(fresh, { presets: P, bindings, flags: flagState(), idFn });
       if (r.error) return { error: 'changed' };
-      if (r.unchanged || !same(r)) return { error: 'changed' };
+      if (r.unchanged || !same(r) || !sameLive(r.project)) return { error: 'changed' };
       return r;
     });
     if (w.error) {
@@ -173,13 +195,16 @@ export function createDeviceRoutes(opts) {
      *  until the next event); the promise settles when no pass is wanted any more. */
     refresh() {
       if (refreshing) { again = true; return refreshing; }
+      // The in-flight marker is cleared in the same step that finds no pass wanted (Codex review round 2, P3): a
+      // .finally() cleared it one turn later, and a call in between was lost.
       const run = async () => {
-        do {
+        for (;;) {
           again = false;
           try { state = await compute(); } catch { /* keep the last state */ }
-        } while (again);
+          if (!again) { refreshing = null; return; }
+        }
       };
-      refreshing = run().finally(() => { refreshing = null; });
+      refreshing = run();
       return refreshing;
     },
     async handle(method, route, body, res) {

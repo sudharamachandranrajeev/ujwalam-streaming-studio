@@ -249,6 +249,91 @@ test('device routes: a device change during a refresh is not lost (one more pass
   assert.deepEqual(h.routes.connectable().map((x) => x.role), ['game-capture', 'facecam']);
 });
 
+// Codex review round 2 (2026-11-18)
+test('device routes (round 2, P3): a refresh asked for at any moment while one ends is never lost', async () => {
+  let cur = { devices: [] };
+  const h = harness({ list: () => cur });
+  for (let hops = 0; hops < 60; hops++) {
+    cur = { devices: [] };
+    await h.routes.refresh();
+    assert.deepEqual(h.routes.connectable(), []);
+    const p1 = h.routes.refresh();
+    let p2 = null;
+    const late = (async () => {
+      for (let i = 0; i < hops; i++) await null;
+      cur = DEV_LIST; // a device arrives, and its refresh is asked for
+      p2 = h.routes.refresh();
+    })();
+    await p1;
+    await late;
+    await p2;
+    assert.deepEqual(h.routes.connectable().map((x) => x.role), ['game-capture', 'facecam'], `asked after ${hops} turn(s)`);
+  }
+});
+
+test('device routes (round 2, P2): a placement saved while Connect ran: nothing saved, the host gets the placeholder back as the file has it', async () => {
+  const P = upgradePresets(PRESETS_DIR);
+  let h = null;
+  let edited = null;
+  const readds = [];
+  h = harness({ onCall: (m, p) => {
+    if (m === 'layers.addFromProject' && edited) readds.push(p);
+    if (m !== 'layers.orderFromProject' || edited) return;
+    const d = h.disk();
+    const lid = placeholderRoles(d, P).find((x) => x.role === 'facecam').layers[0].layer;
+    const l = d.scenes.flatMap((s) => s.layers).find((x) => x.id === lid);
+    for (const pl of Object.values(l.placements)) pl.x += 7; // the user moved the placeholder meanwhile
+    saveProject(h.file, d);
+    edited = { lid, d };
+  } });
+  const r = await h.post('/ui/api/devices/connect', { role: 'facecam' });
+  assert.deepEqual([r.status, r.body.error], [409, 'changed']);
+  const disk = h.disk();
+  assert.deepEqual(disk, edited.d, 'the file keeps the user\'s edit; Connect saved nothing');
+  const back = readds.find((p) => p.layer === edited.lid);
+  assert.ok(back, 'the placeholder is put back on the host');
+  const lay = (doc) => doc.scenes.flatMap((s) => s.layers).find((x) => x.id === edited.lid);
+  assert.deepEqual(lay(back.project), lay(edited.d), 'from the file as it is now, not from the copy read at the click');
+  assert.deepEqual(placeholderRoles(disk, P).map((x) => x.role), ['game-capture', 'facecam']);
+});
+
+test('device routes (round 2, P2): a layer order saved while Connect ran is the order the undo puts back', async () => {
+  let h = null;
+  let order = null;
+  let edited = false;
+  h = harness({ onCall: (m, p) => {
+    if (m === 'layers.orderFromProject' && edited) order = p.project.scenes.find((s) => s.id === p.scene).layers.map((l) => l.id);
+    if (m !== 'layers.orderFromProject' || edited) return;
+    edited = true;
+    const d = h.disk();
+    const s = d.scenes.find((x) => x.id === p.scene);
+    s.layers.reverse(); // the user reordered the scene meanwhile
+    saveProject(h.file, d);
+  } });
+  const r = await h.post('/ui/api/devices/connect', { role: 'facecam' });
+  assert.equal(r.body.error, 'changed');
+  const scene = h.disk().scenes.find((s) => s.layers.some((l) => order?.includes(l.id)));
+  assert.deepEqual(order, scene.layers.map((l) => l.id), 'the undo orders the scene as the file has it now');
+});
+
+test('B7 (round 2, P2): card A\'s saved sound with A unplugged and an identical card B listed is only a warning', () => {
+  const doc = cardDoc();
+  const a = addAudioSource(doc, { key: 'input|{in-card}', list: LIST }); // card A's input, saved by endpoint id
+  assert.ok(a.project);
+  const cardB = { devices: [
+    { kind: 'audio-input', name: 'HDMI/Line In (Card X-Audio)', path: '{in-card-b}', obsId: '{in-card-b}' },
+    { kind: 'video', name: 'Card X-Video', path: '\\\\?\\usb#cardb', obsId: 'b' }] };
+  assert.deepEqual([...pairedKeys(cardB)], ['card x'], 'card B alone is a certain pair');
+  assert.deepEqual(sameDeviceRows(a.project, rows(doc), cardB), rows(doc), 'B\'s layer sound is not "already in the mix"');
+  const c = audioChoices({ doc: a.project, list: cardB, mixer: rows(doc) });
+  assert.deepEqual(c.skipped, []);
+  assert.deepEqual(c.layers.map((l) => [l.key, l.maybeSameAs]), [['layer|game', a.audio.name]]);
+  const x = addAudioSource(a.project, { key: 'layer|game', list: cardB, mixer: rows(doc) });
+  assert.deepEqual([x.error, x.maybeSameAs], [undefined, a.audio.name]);
+  // card A back: certain again
+  assert.equal(sameDeviceRows(a.project, rows(doc), LIST)[0].sameAs, a.audio.name);
+});
+
 test('device routes: Try again calls devices.rescan and answers counts; devices off is said plainly', async () => {
   const h = harness();
   const r = await h.post('/ui/api/devices/rescan', {});

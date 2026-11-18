@@ -479,7 +479,7 @@ int wmain(int argc, wchar_t **wargv)
 		if (!app.allow_devices) {
 			hlog::info("audio monitoring output: Windows default (monitoringDevice applies only with --allow-devices)");
 		} else {
-			apply_monitoring(app); // again after device passes while it is not in use (A4, 2026-11-18)
+			apply_monitoring(app); // only here, before any source exists (Codex review round 2, 2026-11-18)
 		}
 	}
 	if (!ov.root.empty()) {
@@ -526,7 +526,7 @@ int wmain(int argc, wchar_t **wargv)
 				[&app](const std::vector<std::string> &removed, bool event) {
 					devices_pass(app, event ? "watcher" : "connect check", removed, event);
 					if (event)
-						apply_monitoring(app);
+						check_monitoring(app); // reports only; the output is chosen at the start
 				});
 			devwatch::Watcher *w = app.device_watch.get();
 			app.studio->set_check_scheduler([w](uint32_t ms) { w->check_after(ms); });

@@ -51,7 +51,7 @@ this pass, see "Not run").
 
 ## Codex review fixes (2026-11-18, after the rebase onto claude/alpha0-d1)
 
-- **P1, monitoring output switch (live path).** Checked against OBS 32.1.2 (`libobs/obs.c`
+- **P1, monitoring output switch (live path; superseded by round 2 below).** Checked against OBS 32.1.2 (`libobs/obs.c`
   `obs_set_audio_monitoring_device`, `libobs/audio-monitoring/win32/wasapi-output.c`). The finding is right: the id is
   freed under `monitoring_mutex`, but `on_audio_playback` calls `audio_monitor_init_wasapi` on its reconnect path and
   reads `obs->audio.monitoring_device_id` with only the monitor's own playback lock held. `audio_monitor_destroy` (CUE
@@ -102,11 +102,80 @@ this pass, see "Not run").
   four, but `data/flags.json` on claude/alpha0-d1 also has `transitions` on (D391). This branch changes neither file.
 - Builds: the host and the studio both build.
 
+## Codex review round 2 (2026-11-18, branch fix/devices-mixer-r2 from claude/alpha0-d1)
+
+Each finding was checked against the OBS 32.1.2 source (`out/obs-src/obs-studio/libobs`).
+
+- **P1 + P1, monitoring output switch.** Both findings are right, and the round-1 fix
+  (`Studio::when_no_monitors`) did not make the switch safe:
+  - `obs_set_audio_monitoring_device` (obs.c 2985-3009) frees `monitoring_device_id` under `monitoring_mutex`.
+  - The readers do not take that lock:
+    - `audio_monitor_init_wasapi` (wasapi-output.c 166 and 378), run on a monitor's reconnect;
+    - `obs_source_audio_output_capture_device_changed` (obs-source.c 385-433). It runs for every Audio Output Capture
+      source (OBS_SOURCE_DO_NOT_SELF_MONITOR) from `check_all_aoc_sources` and from that source's `activate` signal on
+      the video thread. That source can read the id with CUE off everywhere.
+  - A released source is destroyed later (`obs_source_destroy_defer`). It can still hold a monitor after it left the
+    studio's lists.
+
+  Fix: no libobs patch, and the output never changes on a running graph:
+  - `apply_monitoring` runs once, at host start, before the studio exists. No libobs source exists then, so nothing can
+    read the id.
+  - `Studio::when_no_monitors` and every later switch are removed: device watcher, Try again (`devices.rescan`), and
+    CUE off.
+  - When headphones that were missing at the start are listed later, `check_monitoring` only reports it. `mixer.list`
+    and `devices.rescan` return `headphones`: "Headphones "<name>" are connected now. The headphones change applies
+    when you restart the studio." The studio says it once.
+  - Headphones in use since the start that are unplugged and plugged back are reopened by libobs itself. The id is the
+    same, and nothing is freed.
+  - A full project reload is not used as a safe point. Proving that no source is left (deferred destroy, private
+    sources, the destroy thread) is harder than the restart, and the restart is the plain answer.
+  - Verified:
+    - host builds;
+    - host-devices-late 6/6, host-api 16/16, host-device-hotplug 7/7, host-audio-add 4/4;
+    - QML: the sentence is shown (studio-qml-devices-mixer, new test).
+  - UNVERIFIED: real headphones with `monitoringDevice` set (no host test sets it).
+- **P2 + P2 (pending switch forever, sources_mutex held through the callbacks).** Moot: the setter runs only at
+  start, with no sources and before the video tick has any source to render.
+- **P2, Connect live and on disk could differ.** The fresh-copy rebind must now give the file exactly what the host
+  built. In each scene Connect touched, the layer order must be the same and every rebound layer identical.
+  Otherwise nothing is saved (`changed`) and the host is put back. Verified: new test "a placement saved while
+  Connect ran".
+- **P2, the rollback wiped a newer edit.** `undoHost` now reads the file as it is at that moment (pending edits written
+  first). It puts the placeholders back from that copy, skips a layer or scene removed meanwhile, and orders each
+  scene as the file has it. The document read at the click is used only when the file cannot be read. Verified: new
+  tests (placement kept, order kept). The finding's "conditional on the revision Connect installed" is covered this
+  way: the undo makes the host equal to the file, so it cannot overwrite an edit the file holds.
+- **P2, B7 false merge (card A saved, A unplugged, identical card B listed).** The finding is right. A saved card
+  input now counts as "the same device" only when it is the listed input of a certain pair: same endpoint id, or the
+  same name when it has no id. Otherwise the sound is offered and added with the `maybeSameAs` warning. Verified:
+  new test. The Windows container id was not added. It needs SetupAPI on the dshow interface path and a CMake link
+  change, and it cannot be verified without two identical cards. Proposed as a follow-up.
+- **P3, a refresh lost between the last check and `.finally()`.** The in-flight marker is now cleared in the same
+  step that finds no pass wanted. Verified: a new test asks again after 0..59 microtask turns.
+- **P3, mixer reads waited on devices.list.** The UI server keeps the newest `devices.list`. It reads it again when
+  `devices.seq` moves (and at the first status read), and `mixer.list` answers at once from that copy. Verified: new
+  test in studio-ui-device-hotplug: the answer comes while devices.list is still pending, with one list per seq.
+- The four new device-route and B7 tests fail on the round-1 code (checked by swapping the two source files back)
+  and pass now.
+
+### Rerun after round 2 (off air, one file at a time)
+
+| Test file | Result |
+|---|---|
+| studio-devices-mixer | 18/18 |
+| studio-ui-device-hotplug | 4/4 |
+| mixer-audio-sources | 7/7 |
+| studio-ui-server | 40/40 |
+| studio-ui-mixer-routing | 3/3 |
+| studio-qml-devices-mixer | 5/5 |
+| host-devices-late | 6/6 |
+| host-api | 16/16 |
+| host-device-hotplug | 7/7 |
+| host-audio-add | 4/4 |
+
 ## Not run
 
-- `app/host/tests/host-devices-late.test.mjs` (new): starts the host. Late mic sound built on device change (A2),
-  `mixer.levels` and the +12 dB limit (B9/B5), `devices.rescan` (A3), the slow retry (A3), image rebuild on rescan (A4).
-  Run it off air on the laptop: `node --test --test-concurrency=1 app/host/tests/host-devices-late.test.mjs`.
+- (`app/host/tests/host-devices-late.test.mjs` ran after round 2: 6/6, see above.)
 - Full CI, GPU tests, any test that starts the host with NVENC.
 - The widget studio (`app/studio/src/main_window.cpp`) has none of the QML changes (slider range, waiting strip, Try
   again, Connect).

@@ -198,58 +198,73 @@ json::Value devices_pass(App &a, const char *why, const std::vector<std::string>
 	return a.studio->devices_changed(l, why, removed, event);
 }
 
-void apply_monitoring(App &a, bool waiting_only)
+namespace {
+std::mutex g_mon_mu;
+bool g_mon_in_use = false; // the wanted output was chosen at the start
+std::string g_mon_note;	   // monitoring_note()
+
+bool monitoring_listed(const App &a, const devices::List &l)
 {
-	static std::mutex mu;
-	static bool in_use = false, said_missing = false, said_waiting = false;
-	std::lock_guard<std::mutex> lk(mu);
-	if (a.config.monitoring_device.empty() || !a.allow_devices || a.shutting_down || (waiting_only && !said_waiting))
-		return;
-	devices::List l = devices::enumerate();
 	auto low = [](std::string s) {
 		for (auto &c : s)
 			c = (char)std::tolower((unsigned char)c);
 		return s;
 	};
-	bool listed = false;
 	for (auto &e : l.entries)
 		if (e.kind == "audio-output" && low(e.name) == low(a.config.monitoring_device))
-			listed = true;
-	if (!listed) {
-		if (in_use || !said_missing)
-			hlog::warn("audio monitoring output \"%s\": not connected; using the Windows default output until it is",
-				   a.config.monitoring_device.c_str());
-		in_use = false;
-		said_missing = true;
-		said_waiting = false;
+			return true;
+	return false;
+}
+} // namespace
+
+void apply_monitoring(App &a)
+{
+	std::lock_guard<std::mutex> lk(g_mon_mu);
+	if (a.config.monitoring_device.empty() || !a.allow_devices || a.studio) // a.studio: too late, sources may exist
+		return;
+	devices::List l = devices::enumerate();
+	if (!monitoring_listed(a, l)) {
+		hlog::warn("audio monitoring output \"%s\": not connected; using the Windows default output until the next start",
+			   a.config.monitoring_device.c_str());
 		return;
 	}
-	if (in_use)
-		return;
-	// Before the studio exists nothing monitors. After it, the device is changed only while no source has CUE on
-	// (when_no_monitors: libobs frees the device id that an active monitor can read). Otherwise it waits for the next
-	// safe point: the next device change, Try again, or a CUE switched off. Codex review 2026-11-18, P1.
-	json::Value m;
-	auto set = [&]() { m = devices::set_monitoring_output(a.config.monitoring_device, l); };
-	if (!a.studio)
-		set();
-	else if (!a.studio->when_no_monitors(set)) {
-		if (!said_waiting)
-			hlog::info("audio monitoring output \"%s\": connected; switching to it once no sound has CUE on",
-				   a.config.monitoring_device.c_str());
-		said_waiting = true;
-		return;
-	}
-	said_waiting = false;
+	json::Value m = devices::set_monitoring_output(a.config.monitoring_device, l);
 	if (const json::Value *pr = m.find("problem")) {
 		hlog::warn("audio monitoring output \"%s\": %s; using the Windows default output", a.config.monitoring_device.c_str(),
 			   pr->as_string().c_str());
-		said_missing = true;
 		return;
 	}
-	in_use = true;
-	said_missing = false;
+	g_mon_in_use = true;
 	hlog::info("audio monitoring output: %s", m.find("device")->as_string().c_str());
+}
+
+void check_monitoring(App &a)
+{
+	if (a.config.monitoring_device.empty() || !a.allow_devices || a.shutting_down)
+		return;
+	{
+		std::lock_guard<std::mutex> lk(g_mon_mu);
+		if (g_mon_in_use || !g_mon_note.empty())
+			return; // in use since the start (libobs reopens it when it comes back), or already said
+	}
+	bool has = false;
+	devices::List l = a.studio ? a.studio->list_devices(has) : devices::List();
+	if (!has || !monitoring_listed(a, l))
+		return;
+	std::lock_guard<std::mutex> lk(g_mon_mu);
+	if (!g_mon_note.empty())
+		return;
+	g_mon_note = "Headphones \"" + a.config.monitoring_device + "\" are connected now. The headphones change applies "
+		     "when you restart the studio.";
+	hlog::info("audio monitoring output \"%s\": connected after the start; used from the next start (never switched "
+		   "on a running studio)",
+		   a.config.monitoring_device.c_str());
+}
+
+std::string monitoring_note()
+{
+	std::lock_guard<std::mutex> lk(g_mon_mu);
+	return g_mon_note;
 }
 
 void on_hotkey(App &a, const std::string &name, const char *via)
@@ -449,8 +464,9 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 	// devices.rescan {} ("Try again", 2026-11-18, A3/A4): every capture layer without a picture is activated again now
 	// (a fresh set of attempts), device sounds that did not open are tried again, then one hot-plug pass binds what is
 	// listed (capture layers and device sounds), and image/media layers whose file was missing at load are built when
-	// the file is there. The monitoring output is chosen again when it was not connected. Returns {retried, audio,
-	// media, pass}. Opens devices: --allow-devices or --test-hooks.
+	// the file is there. The monitoring output is never switched here (apply_monitoring: start only); headphones that
+	// were missing at the start and are listed now give `headphones` (a plain sentence). Returns {retried, audio, media,
+	// pass, headphones?}. Opens devices: --allow-devices or --test-hooks.
 	add("devices.rescan", [&a](const json::Value &p) {
 		(void)Params(p, {});
 		if (!a.allow_devices && !a.test_hooks)
@@ -464,7 +480,9 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 					audio++;
 		r.set("audio", audio);
 		r.set("media", (uint64_t)a.studio->rebuild_missing_files());
-		apply_monitoring(a);
+		check_monitoring(a);
+		if (std::string n = monitoring_note(); !n.empty())
+			r.set("headphones", n);
 		r.set("pass", std::move(pass));
 		return r;
 	});
@@ -1027,7 +1045,10 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 	// ---- mixer
 	add("mixer.list", [&a](const json::Value &p) {
 		(void)Params(p, {});
-		return a.studio->mixer_list();
+		json::Value r = a.studio->mixer_list();
+		if (std::string n = monitoring_note(); !n.empty())
+			r.set("headphones", n); // headphones connected after the start: used from the next start (apply_monitoring)
+		return r;
 	});
 	m["mixer.list"].markers = true; // read-only meter for the F6 audio-peak producer (markers role)
 	// mixer.levels (B9, 2026-11-18): the meters only ({busy, levels: [{id, peakDb, magnitudeDb}]}); never waits for a load.
@@ -1050,11 +1071,7 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 	});
 	add("mixer.setCue", [&a](const json::Value &p) {
 		Params q(p, {"id", "cue"});
-		const bool cue = q.boolean("cue");
-		json::Value r = a.studio->mixer_set_cue(q.str("id", 130), cue);
-		if (!cue)
-			apply_monitoring(a, true); // a CUE off can be the safe point for a monitoring output that waits (Codex P1)
-		return r;
+		return a.studio->mixer_set_cue(q.str("id", 130), q.boolean("cue"));
 	});
 	// mixer.setTracks {id, tracks: [project track id]} (D273): the whole list; [] takes the source out of every track.
 	add("mixer.setTracks", [&a](const json::Value &p) {

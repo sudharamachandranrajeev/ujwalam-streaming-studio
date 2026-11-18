@@ -191,12 +191,6 @@ public:
 	// mixer.list. Never waits for the model lock (busy true and no levels while a load holds it). peakDb is the highest
 	// peak of the last ~300 ms (B8: a short peak between two reads is not lost), so every reader sees it.
 	json::Value mixer_levels() const;
-	// Runs fn under the model lock only while no source has a monitor (CUE off everywhere, private sources included);
-	// returns false without running it otherwise. libobs 32.1.2 frees the monitoring device id in
-	// obs_set_audio_monitoring_device while an active WASAPI monitor's reconnect path can read it, and a CUE change
-	// tears monitors down at the same time; with no monitor and the lock held (every CUE change takes it) neither can
-	// happen. Codex review 2026-11-18, P1.
-	bool when_no_monitors(const std::function<void()> &fn);
 	json::Value mixer_set_volume(const std::string &id, const double *mul, const double *db);
 	json::Value mixer_set_mute(const std::string &id, bool muted);
 	json::Value mixer_set_cue(const std::string &id, bool cue);

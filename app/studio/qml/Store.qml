@@ -316,7 +316,16 @@ QtObject {
             takeMixer(unwrap(b, "sources"));
             tracks = unwrap(b, "tracks");
             takePeaks(mixer);
+            sayHeadphones(b && b.result ? b.result.headphones : undefined);
         });
+    }
+    // Headphones plugged in after the start: the host never switches the monitoring output on a running studio (Codex
+    // review round 2, 2026-11-18); its plain sentence is said once.
+    property string headphonesSaid: ""
+    function sayHeadphones(text) {
+        if (typeof text !== "string" || !text || text === headphonesSaid) return;
+        headphonesSaid = text;
+        say(text);
     }
     function takeMixer(list) {
         const by = {};
