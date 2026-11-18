@@ -581,6 +581,19 @@ Outputs::~Outputs()
 void Outputs::supervise()
 {
 	while (!sup_stop_) {
+		// On-air-only replay buffer: a sink that ended on its own (record start failed, retries used up) leaves the
+		// replays bound with nothing wanted; detach them here (checked at least once a second).
+		if (replay_want_ && replay_on_air_ && !replay_manual_ && !any_sink_wanted()) {
+			bool have = false;
+			{
+				std::lock_guard<std::mutex> l(rp_m_);
+				have = !replays_.empty();
+			}
+			if (have) {
+				std::lock_guard<std::mutex> op(op_m_);
+				replay_sync_locked();
+			}
+		}
 		std::vector<std::string> due_start, due_stop;
 		{
 			std::unique_lock<std::mutex> l(m_);
@@ -704,6 +717,15 @@ bool Outputs::idle_soon(int wait_ms) const
 			return false;
 		Sleep(20);
 	}
+}
+
+bool Outputs::any_sink_wanted() const // the on-air-only replay gate (replay.cpp)
+{
+	std::lock_guard<std::mutex> l(m_);
+	for (auto &s : sinks_)
+		if (s->want)
+			return true;
+	return false;
 }
 
 bool Outputs::configured() const
@@ -1363,6 +1385,7 @@ json::Value Outputs::start(const std::vector<std::string> &ids, const std::strin
 		}
 		start_sink(*s);
 	}
+	replay_sync_locked(); // on-air-only replay buffer: starts with the first wanted stream or recording
 	json::Value r = json::Value::object();
 	json::Value a = json::Value::array();
 	{
@@ -1397,6 +1420,7 @@ json::Value Outputs::stop(const std::vector<std::string> &ids, const std::string
 		if (call_stop)
 			obs_output_stop(s->out);
 	}
+	replay_sync_locked(); // on-air-only replay buffer: stops when the last stream or recording ends
 	json::Value r = json::Value::object();
 	json::Value a = json::Value::array();
 	{

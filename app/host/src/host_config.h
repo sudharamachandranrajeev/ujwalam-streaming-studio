@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // ujwalam-host: the host config file (--host-config <file.json>; A0 day 2). Strict: unknown keys are refused.
 //
-//   { "replay":   { "seconds": 30, "autoStart": false, "fallbackKbps": { "H": 12000, "V": 8000 } },
+//   { "replay":   { "seconds": 30, "autoStart": false, "onAirOnly": false, "fallbackKbps": { "H": 12000, "V": 8000 } },
+//                 onAirOnly: the autostarted buffer runs only while a stream or recording is wanted (outputs.h)
 //     "hotkeys":  { "enabled": false, "panic": "Ctrl+Alt+P", "feedback": "Ctrl+Alt+F", "marker": "Ctrl+Alt+Shift+M" },
 //     "feedbackDir": "<absolute dir>",                 default <dataDir>/feedback
 //     "markersDir":  "<absolute dir>",                 default <dataDir>/markers

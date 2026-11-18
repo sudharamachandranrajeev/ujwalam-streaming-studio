@@ -28,7 +28,8 @@
 // it the device layers are placeholders. --profile names the profile (default data/profile.local.json).
 //
 // Alpha 0 day 2 wiring (D152 host config): at every alpha start the launcher writes <data dir>/host-config.json
-// (owner-only, atomic; edits are overwritten) with hotkeys on (Ctrl+Alt+P/F/M), replay autostart 30 s, feedbackDir
+// (owner-only, atomic; edits are overwritten) with hotkeys on (Ctrl+Alt+P/F/M), replay autostart 60 s while live or
+// recording only (onAirOnly), feedbackDir
 // = --feedback-dir (default <repo>/feedback, the same folder the UI server's feedback form reads) and
 // eventCore.systemFile = <data dir>/system.json (written by the event core), and passes --host-config. The event-core
 // system token goes to the host by environment only (UJWALAM_EVENT_CORE_SYSTEM_TOKEN; the host reads it, removes it
@@ -231,7 +232,8 @@ export function hostGraphicsWatch(load = loadHostWatchConfig) {
 export function alphaHostConfig({ dataDir, feedbackDir = DEFAULT_FEEDBACK_DIR, hotkeys = {}, monitoringOutput = null, audioHealth = loadAudioHealth(), graphicsWatch = hostGraphicsWatch() }) {
   return {
     $comment: 'Written by services/studio-ui/launch.mjs --alpha at every start (edits are overwritten; use --hotkey-panic/--hotkey-feedback/--hotkey-marker). Host defaults: panic Ctrl+Alt+P, feedback Ctrl+Alt+F, marker Ctrl+Alt+Shift+M.',
-    replay: { seconds: ALPHA_REPLAY_SECONDS, autoStart: true },
+    // Idle load (2026-11-18): the replay buffer runs only while a stream or recording runs (no encoder off air).
+    replay: { seconds: ALPHA_REPLAY_SECONDS, autoStart: true, onAirOnly: true },
     hotkeys: { enabled: true, ...hotkeys },
     feedbackDir: path.resolve(feedbackDir),
     eventCore: { systemFile: path.join(path.resolve(dataDir), SYSTEM_FILE) },
@@ -771,7 +773,8 @@ export async function alphaStatus(client) {
   try {
     const r = await client.call('replay.status');
     const c = (r.canvases ?? []).map((x) => `${x.canvas} ${x.state}${x.fallback ? ' (fallback rung)' : x.rung ? ` (rung ${x.rung})` : ''}`);
-    console.log(`[studio] replay buffer: ${r.wanted === true ? 'on' : 'off'}, ${r.seconds ?? '?'} s; ${c.join('; ')}`);
+    const when = r.onAirOnly === true ? `, only while live or recording${r.waiting === true ? ' (off air now: not running)' : ''}` : '';
+    console.log(`[studio] replay buffer: ${r.wanted === true ? 'on' : 'off'}, ${r.seconds ?? '?'} s${when}${c.length ? `; ${c.join('; ')}` : ''}`);
   } catch (e) { console.log(`[studio] replay status unavailable: ${e.message}`); }
 }
 

@@ -755,8 +755,13 @@ QWidget *MainWindow::buildControls()
 		api_->host(QStringLiteral("replay.save"), {}, [this](bool ok, const QJsonObject &b, const QString &err) {
 			if (!ok)
 				return note(QStringLiteral("Clip not saved: ") + err);
-			const int n = b.value(QStringLiteral("result")).toObject().value(QStringLiteral("saved")).toArray().size();
-			note(n ? QStringLiteral("Clip saved: %1 file(s) in the replay folder.").arg(n) : QStringLiteral("Clip not saved: the replay buffer is not running."));
+			const QJsonObject res = b.value(QStringLiteral("result")).toObject();
+			const int n = res.value(QStringLiteral("saved")).toArray().size();
+			// Off air the host says why (the replay buffer runs only while live or recording, 2026-11-18).
+			const QString why = res.value(QStringLiteral("errors")).toArray().at(0).toObject().value(QStringLiteral("error")).toString();
+			note(n ? QStringLiteral("Clip saved: %1 file(s) in the replay folder.").arg(n)
+			       : why.startsWith(QStringLiteral("off air")) ? QStringLiteral("Clip not saved: ") + why + QStringLiteral(".")
+								    : QStringLiteral("Clip not saved: the replay buffer is not running."));
 		});
 	});
 	connect(markBtn_, &QPushButton::clicked, this, [this]() {

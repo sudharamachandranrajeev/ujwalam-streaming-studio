@@ -379,11 +379,11 @@ test('launch spec: alpha mode wires previews, browser layers, overlay child and 
   assert.ok(live.argv.includes('--defer-outputs') && bad.argv.includes('--defer-outputs'));
 });
 
-test('host config: day-2 keys only (hotkeys on, replay 60 s autostart, feedback folder, event-core system file); written owner-only', () => {
+test('host config: day-2 keys only (hotkeys on, replay 60 s autostart on air only, feedback folder, event-core system file); written owner-only', () => {
   const d = tmp('hcfg');
   const c = alphaHostConfig({ dataDir: d });
   assert.deepEqual(Object.keys(c).sort(), ['$comment', 'audio', 'audioHealth', 'eventCore', 'feedbackDir', 'graphicsWatch', 'hotkeys', 'replay']);
-  assert.deepEqual(c.replay, { seconds: 60, autoStart: true });
+  assert.deepEqual(c.replay, { seconds: 60, autoStart: true, onAirOnly: true });
   assert.deepEqual(c.hotkeys, { enabled: true });
   assert.deepEqual(c.audio, { lowLatency: true });
   // audio health watchdog (D297 proposed): the numbers come from data/audio/health.json, never from code
@@ -496,7 +496,7 @@ test('launcher --alpha with a fake host: flags, tokens by env, host config, feed
     const after = (f) => h.argv[h.argv.indexOf(f) + 1];
     assert.equal(after('--host-config'), path.join(dataDir, 'host-config.json'));
     assert.deepEqual(h.hostConfig.hotkeys, { enabled: true });
-    assert.deepEqual(h.hostConfig.replay, { seconds: 60, autoStart: true });
+    assert.deepEqual(h.hostConfig.replay, { seconds: 60, autoStart: true, onAirOnly: true });
     assert.equal(h.hostConfig.feedbackDir, fb);
     assert.equal(h.hostConfig.eventCore.systemFile, path.join(dataDir, 'system.json'));
     assert.equal(h.systemTokenOk, true, 'the event-core system token reached the host by environment');
@@ -508,7 +508,7 @@ test('launcher --alpha with a fake host: flags, tokens by env, host config, feed
     assert.match(r.out, /\[studio\] record plan: data[\\/]outputs[\\/]alpha-practice\.json \(Record saves H and V \.mkv/);
     assert.match(r.out, /\[studio\] outputs: real targets off; 2 sink\(s\)/);
     assert.match(r.out, /\[studio\] hotkeys: on; panic Ctrl\+Alt\+P registered; feedback Ctrl\+Alt\+F registered; marker Ctrl\+Alt\+M registered/);
-    assert.match(r.out, /\[studio\] replay buffer: on, 60 s; H running \(fallback rung\); V running \(fallback rung\)/);
+    assert.match(r.out, /\[studio\] replay buffer: on, 60 s, only while live or recording \(off air now: not running\)$/m);
     assert.match(r.out, /\[studio\] feedback probe: moment \d{4}-\d{2}-\d{2}\/\d{6} listed by the UI server \(1 moment\(s\), HTTP 200\); replay files: replay-H\.mkv, replay-V\.mkv; scene: H: scene-default, V: scene-default; at: \d{4}-/);
     assert.ok(h.calls.includes('feedback.capture') && h.calls.includes('feedback.status'));
     assert.ok(!/[0-9a-f]{64}/.test(r.out), 'no token-shaped value printed');

@@ -217,6 +217,8 @@ const methods = {
   }),
   'replay.status': () => {
     const on = hostConfig?.replay?.autoStart === true;
+    // onAirOnly (2026-11-18): armed but off air, no replay output (the fake host never goes live by itself)
+    if (on && hostConfig?.replay?.onAirOnly === true) return { wanted: true, onAirOnly: true, waiting: true, seconds: hostConfig.replay.seconds ?? 30, canvases: [] };
     return { wanted: on, seconds: hostConfig?.replay?.seconds ?? 30, canvases: ['H', 'V'].map((canvas) => ({ canvas, state: on ? 'running' : 'stopped', fallback: true })) };
   },
   'feedback.capture': (p) => {

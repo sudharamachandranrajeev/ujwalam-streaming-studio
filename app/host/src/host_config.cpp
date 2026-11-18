@@ -105,7 +105,7 @@ bool parse_host_config(const json::Value &doc, HostConfig &cfg, std::string &err
 		ah.shutdown_guard_ms = (uint32_t)sg;
 	}
 	if (const json::Value *r = doc.find("replay")) {
-		if (!only(*r, {"seconds", "autoStart", "fallbackKbps"}, "replay", err))
+		if (!only(*r, {"seconds", "autoStart", "onAirOnly", "fallbackKbps"}, "replay", err))
 			return false;
 		int64_t s = cfg.replay.seconds;
 		if (!int_in(r->find("seconds"), 5, 600, s, "replay.seconds", err))
@@ -117,6 +117,13 @@ bool parse_host_config(const json::Value &doc, HostConfig &cfg, std::string &err
 				return false;
 			}
 			cfg.replay_autostart = a->as_bool();
+		}
+		if (const json::Value *a = r->find("onAirOnly")) {
+			if (!a->is_bool()) {
+				err = "replay.onAirOnly must be true or false";
+				return false;
+			}
+			cfg.replay.on_air_only = a->as_bool();
 		}
 		if (const json::Value *f = r->find("fallbackKbps")) {
 			if (!only(*f, {"H", "V"}, "replay.fallbackKbps", err))

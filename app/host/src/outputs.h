@@ -33,6 +33,10 @@
 // CBR encoder at the canvas size, plus one fallback AAC shared by the fallback replays. Every graph change
 // (configure, clear, project load) detaches the replays first and re-attaches them after, so a replay always
 // follows the current graph; the memory buffer restarts empty then. Saves write .mkv (crash-safe container).
+// On-air only (host config replay.onAirOnly, idle load 2026-11-18): an armed replay buffer (autoStart) attaches only
+// while some sink is wanted (a stream or a recording started and not stopped; a stream that is retrying counts) and
+// detaches when the last one ends, so off air no replay encoder or memory buffer runs. An explicit replay.start is a
+// manual start: it runs at once and stays on until replay.stop, whatever the sinks do.
 #pragma once
 
 #include "json.h"
@@ -85,9 +89,12 @@ public:
 		int seconds = 30;                // 5..600
 		uint32_t fallback_kbps_h = 12000; // fallback rung bitrate per canvas (local memory clip, not a platform limit)
 		uint32_t fallback_kbps_v = 8000;
+		bool on_air_only = false;         // autostart runs the buffer only while a stream or recording is wanted
 	};
 	void set_replay_config(const ReplayConfig &c); // before replay_start; seconds can also come with replay_start
-	json::Value replay_start(int seconds);          // 0 = keep the configured length
+	// 0 = keep the configured length. manual (replay.start): runs now and ignores on_air_only; false (autostart):
+	// armed, and with on_air_only it runs only while a stream or recording is wanted.
+	json::Value replay_start(int seconds, bool manual = true);
 	void replay_defer(); // --defer-outputs: the replay buffer is wanted; it attaches at the next graph change (project.load)
 	json::Value replay_stop();
 	void replay_resume(); // re-attaches after a failed project load (no-op unless wanted)
@@ -151,10 +158,16 @@ private:
 	mutable std::mutex rp_m_;
 	std::vector<std::shared_ptr<Replay>> replays_;
 	std::atomic<bool> replay_want_{false};
+	std::atomic<bool> replay_manual_{false};  // replay.start: on regardless of the sinks
+	std::atomic<bool> replay_on_air_{false};  // copy of rcfg_.on_air_only, read by the supervisor without op_m_
 	ReplayConfig rcfg_;
 	obs_encoder_t *replay_aac_ = nullptr; // fallback AAC, only while a fallback replay needs it
-	void replay_attach_locked();          // op_m_ held: one replay per existing canvas, if wanted
+	void replay_attach_locked();          // op_m_ held: one replay per existing canvas, if wanted and the gate is open
 	void replay_detach_locked();          // op_m_ held: stops and releases every replay (and fallback encoders)
+	bool replay_gate_open() const;        // manual, or not on-air-only, or some sink wanted
+	bool replay_waiting() const;          // armed, on-air-only and nothing wanted (off air)
+	void replay_sync_locked();            // op_m_ held: attach or detach to follow the gate
+	bool any_sink_wanted() const;
 
 	void update_clocks_locked(int64_t now); // m_ held
 	void supervise();
