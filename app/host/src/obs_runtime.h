@@ -15,6 +15,10 @@ struct Options {
 	std::string config_dir; // libobs module config (never %APPDATA%)
 	bool allow_devices = false; // win-dshow / win-wasapi; off by default (a device session needs the user's go)
 	bool allow_browser = false; // obs-browser (CEF)
+	// win-capture (screen and window capture layers, D390 proposed). Off by default: loading the module fetches
+	// compatibility.json from obsproject.com, copies its graphics-hook files under %ProgramData% and runs its
+	// get-graphics-offsets helpers (hidden). Only with --allow-screen-capture.
+	bool allow_screen = false;
 	uint32_t adapter = 0;
 	// Low-latency audio buffering (OBS "Low Latency Audio Buffering Mode"): fixed 20 ms instead of growing up to
 	// 960 ms when a source is late. Cuts the delay of everything heard through monitoring (headphones); a source that

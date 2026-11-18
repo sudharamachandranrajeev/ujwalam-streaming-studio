@@ -68,6 +68,8 @@ static std::string slash(const fs::path &p)
 //   frontend-tools, decklink-output-ui, aja-output-ui: need the Qt OBS frontend.
 //   obs-websocket: P15 (own API is used instead).
 //   rtmp-services, win-capture: contact obsproject.com at startup (P1a); the host registers its own loopback service.
+//     win-capture is loaded with --allow-screen-capture only (screen and window layers, D390 proposed); it then also
+//     copies graphics-hook files under %ProgramData%\obs-studio-hook and runs get-graphics-offsets (no window).
 //   obs-webrtc: WHIP output, not used in v1.
 //   decklink, decklink-captions, aja: capture hardware. win-dshow, win-wasapi: devices (only with --allow-devices).
 //   vlc-video: needs a VLC install. nv-filters: NVIDIA effects SDK, not used. obs-vst: not used.
@@ -75,9 +77,10 @@ static std::string slash(const fs::path &p)
 static std::vector<std::string> disabled_for(const Options &o)
 {
 	std::vector<std::string> d = {"frontend-tools", "decklink-output-ui", "aja-output-ui", "obs-websocket",
-				      "rtmp-services",  "win-capture",        "obs-webrtc",    "decklink",
-				      "decklink-captions", "aja",             "vlc-video",     "nv-filters",
-				      "obs-vst"};
+				      "rtmp-services",  "obs-webrtc",         "decklink",      "decklink-captions",
+				      "aja",            "vlc-video",          "nv-filters",    "obs-vst"};
+	if (!o.allow_screen)
+		d.push_back("win-capture");
 	if (!o.allow_devices) {
 		d.push_back("win-dshow");
 		d.push_back("win-wasapi");

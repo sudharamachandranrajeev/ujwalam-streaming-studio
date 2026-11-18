@@ -2,6 +2,7 @@
 // ujwalam-host: project v1 -> build plan. See model.h.
 #include "model.h"
 #include "checks.h"
+#include "screen_capture.h"
 
 #include <algorithm>
 #include <cctype>
@@ -817,6 +818,43 @@ Plan build(const json::Value &doc, const Options &o)
 			} else {
 				st.set("res_type", 0); // device default
 			}
+		} else if (ref.type == "screen" || ref.type == "window") {
+			// D390 proposed: whole display (monitor_capture) or one app window (window_capture), cursor shown by default.
+			bool screen = ref.type == "screen";
+			if (screen) {
+				chk::only_keys(s, {"display", "cursor"}, what + ".source");
+				chk::require(s, {"display"}, what + ".source");
+				std::string disp = chk::get_str(s, "display", "", 512, what);
+				if (disp.empty() || std::any_of(disp.begin(), disp.end(), [](char c) { return (unsigned char)c < 0x20; }))
+					throw Error(rpc::INVALID_PARAMS, what + ": source.display must be a display id from capture.listTargets");
+				src.obs_type = "monitor_capture";
+				st.set("monitor_id", disp);
+				st.set("capture_cursor", chk::get_bool(s, "cursor", true, what));
+				st.set("method", 0); // automatic (DXGI duplication or Windows Graphics Capture)
+				st.set("force_sdr", false);
+			} else {
+				chk::only_keys(s, {"window", "match", "cursor"}, what + ".source");
+				chk::require(s, {"window"}, what + ".source");
+				std::string win = chk::get_str(s, "window", "", 1024, what);
+				if (!screencap::valid_window_spec(win))
+					throw Error(rpc::INVALID_PARAMS, what + ": source.window must be a window from capture.listTargets (title:class:exe)");
+				int prio = screencap::window_priority(chk::get_str(s, "match", "exe", 8, what));
+				if (prio < 0)
+					throw Error(rpc::INVALID_PARAMS, what + ": source.match must be title, class or exe");
+				src.obs_type = "window_capture";
+				st.set("window", win);
+				st.set("priority", (int64_t)prio);
+				st.set("cursor", chk::get_bool(s, "cursor", true, what));
+				st.set("method", 0); // automatic (BitBlt or Windows Graphics Capture)
+				st.set("client_area", true);
+				st.set("compatibility", false);
+				st.set("capture_audio", false);
+				st.set("force_sdr", false);
+			}
+			if (!o.allow_screen)
+				u = {"forbidden", "screen and window capture are switched off (host started without --allow-screen-capture)"};
+			else if (!o.screen_types)
+				u = {"unavailable", "screen and window capture are not available (the win-capture module is not loaded)"};
 		} else {
 			throw Error(rpc::INVALID_PARAMS, what + ": unknown type");
 		}

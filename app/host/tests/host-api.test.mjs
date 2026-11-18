@@ -162,7 +162,8 @@ test('markers token: marker.add (chat/audio) and mixer.list only; every other me
     'preview.focus', 'preview.close', 'preview.list', 'mixer.setVolume', 'mixer.setMute', 'mixer.setCue', 'outputs.configure',
     'outputs.clear', 'outputs.status', 'outputs.start', 'outputs.stop', 'stream.start', 'stream.stop', 'record.start',
     'record.stop', 'replay.start', 'replay.stop', 'replay.status', 'replay.save', 'panic.now', 'panic.status',
-    'panic.clear', 'feedback.capture', 'feedback.status', 'hotkeys.status', 'hotkeys.trigger', 'encoders.probe', 'frames.grab'];
+    'panic.clear', 'feedback.capture', 'feedback.status', 'hotkeys.status', 'hotkeys.trigger', 'encoders.probe', 'frames.grab',
+    'capture.listTargets', 'transitions.types']; // D390/D391: window titles are personal; the markers role never reads them
   for (const method of others) {
     const e = await mk.call(method, {}).then(() => null, (x) => x);
     assert.equal(e?.code, -32001, `${method} forbidden for the markers role`);
@@ -210,7 +211,8 @@ test('clips token: frames.grab, replay.save, replay.status, marker.add (clip) an
     'preview.open', 'preview.focus', 'preview.close', 'preview.list', 'mixer.list', 'mixer.setVolume', 'mixer.setMute',
     'mixer.setCue', 'mixer.setTracks', 'outputs.configure', 'outputs.clear', 'outputs.status', 'outputs.start', 'outputs.stop', 'stream.start',
     'stream.stop', 'record.start', 'record.stop', 'replay.start', 'replay.stop', 'panic.now', 'panic.status', 'panic.clear',
-    'feedback.capture', 'feedback.status', 'hotkeys.status', 'hotkeys.trigger', 'encoders.probe'];
+    'feedback.capture', 'feedback.status', 'hotkeys.status', 'hotkeys.trigger', 'encoders.probe',
+    'capture.listTargets', 'transitions.types'];
   for (const method of others) {
     const e = await cl.call(method, {}).then(() => null, (x) => x);
     assert.equal(e?.code, -32001, `${method} forbidden for the clips role`);
@@ -239,6 +241,7 @@ test('a malformed markers token stops the host before it starts', async () => {
 test('host.info / host.status contract (UI fields)', async () => {
   const info = await c.call('host.info');
   assert.equal(info.flags.allowDevices, false);
+  assert.equal(info.flags.allowScreenCapture, false, 'D390: screen and window capture off unless --allow-screen-capture');
   for (const m of ['win-dshow', 'win-wasapi', 'obs-browser', 'rtmp-services', 'win-capture', 'obs-websocket'])
     assert.ok(info.disabledModules.includes(m), `${m} disabled`);
   assert.ok('gpuPreference' in info);
