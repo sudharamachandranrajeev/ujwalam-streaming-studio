@@ -248,3 +248,122 @@ Tests (each file alone, `--test-concurrency=1`, BelowNormal): `tests/stat-cache.
 `golive-routes` 35, `studio-ui-readiness` 39, `record-live` 12: all pass.
 
 Measure: `perf-idle` node.exe CPU seconds (UI server and launcher).
+
+## 6. Review fixes (Codex review, after the rebase onto `claude/alpha0-d1`)
+
+The branch was rebased onto `claude/alpha0-d1` (after the devices/mixer merge); git found no conflicts.
+
+### 6.1 Workers: no second process while the first one is stopping; no stale crash restart (items 4 + review P2)
+
+Found: switching a worker off closed its stdin and forgot the handle at once, but the process has up to 10 s to exit
+(the clipper may still be saving a replay). A switch back on at the next 5 s tick could start a second clipper (or face
+worker) next to it. A crash restart timer kept the old launch spec and fired after a switch-off, or after off and on.
+
+Change: new `services/studio-ui/worker-slot.mjs`, used for the clipper and the face worker in `launch.mjs`. The slot
+keeps the running process, a process that was told to stop and has not exited yet, and one pending crash restart.
+While any of them exists, nothing starts. stop() cancels the pending restart and starts a new generation; a restart
+callback runs only in the generation it was scheduled in. The clipper's restart callback checks again that the
+clipper is still wanted (flag and settings) and reads the scene spec again before it starts; the face restart checks
+the face-ai flag. A replacement starts only on a sync tick after the old process has exited.
+
+Tests: new `tests/worker-slot.test.mjs` 3 pass (a stopping worker blocks a relaunch until it exits; a switch-off
+cancels a pending crash restart and an old generation cannot schedule one; an exit after stop is not a crash).
+
+### 6.2 Clip tick: no host status from a dead or replaced host (review P3)
+
+Found: the clip tick reused the host watch loop's last `outputs.status` while it was at most 2.5 s old. After a host
+death that sample could renew the live-worker request from the dead host's state.
+
+Change: the sample is stored with the host process that answered it (the child object; a new host is a new object).
+It is kept only when that process is still the current one and has not exited, and only while no recovery or planned
+restart runs. Crash recovery and a planned restart drop it as their first step. `recentOutputs` returns nothing when
+the sample is from another process, that process has exited, a recovery or restart is running, or it is older than
+the limit; the clip tick then asks the host itself, as before the idle change.
+
+Tests: `studio-ui-crash-recovery`, `stream-recovery`, `studio-ui-alpha` (results in 6.6).
+
+### 6.3 Stat cache: bounded staleness; the scene spec cache uses the file id (review P3)
+
+Found: an in-place rewrite with the same size inside the file system's mtime granularity keeps the same stat, so the
+cached value stayed stale for as long as the file did not change again. The clipper's scene spec cache keyed on
+mtime (ms) and size only.
+
+Change: `createStatCache` reads a value again once it is `maxAgeMs` old (default 10 s), changed stat or not (the
+clock is injectable for tests). The clipper's scene spec now goes through the same cache (mtime ns, size, file id).
+
+Tests: `tests/stat-cache.test.mjs` 3 pass (new: same stat, read again at 10 s).
+
+### 6.4 Lock order in the host outputs (review item 5)
+
+Proved by reading every lock site in `app/host/src/outputs.cpp` and `app/host/src/replay.cpp` (the only files that
+take these mutexes). Rule: `op_m_` is outermost; `m_` and `rp_m_` are each taken only in short scopes and are never
+held at the same time; the per-replay `r->m` (and `r->save_m` before it) are innermost. So the order is
+`op_m_ -> m_` and `op_m_ -> rp_m_ -> r->m`, `r->save_m -> r->m`; no path takes `op_m_` while holding `m_` or `rp_m_`,
+and no path nests `m_` and `rp_m_` in either direction.
+
+Every path that takes `rp_m_` or `m_` and then another lock of the three:
+
+| Path | Locks, in order (indent = nested) | Nested? |
+| --- | --- | --- |
+| `supervise()` replay check | `any_sink_wanted` takes and drops `m_`; `rp_m_` taken and dropped; then `op_m_` -> `replay_sync_locked` | no: each dropped before the next |
+| `supervise()` retries | `m_` (unique_lock, wait) dropped; then `op_m_` -> `m_` per sink (short) -> `start_sink` (`m_` short, dropped before `obs_output_start`) | `op_m_ -> m_` only |
+| `replay_sync_locked` (op_m_ held) | `replay_gate_open` -> `any_sink_wanted` (`m_`, dropped); `rp_m_` (dropped); `replay_attach_locked` or `replay_detach_locked` | `op_m_ -> m_`, `op_m_ -> rp_m_` |
+| `replay_attach_locked` (op_m_ held) | per canvas: `rp_m_` scope (dropped); `m_` scope to pick the rung (dropped); `r->m` scope; `rp_m_` scope to push | never two of `m_`/`rp_m_` |
+| `replay_detach_locked` (op_m_ held) | `rp_m_` scope swaps the list (dropped); `r->m` per replay; then `obs_output_stop` (its stop signal takes `r->m` only) | no |
+| `replay_status` | `replay_waiting` -> `any_sink_wanted` (`m_`, dropped) **before** `rp_m_`; then `rp_m_` -> `r->m` | `rp_m_ -> r->m` |
+| `replay_save` | `replay_waiting` (`m_`, dropped) before `rp_m_` (dropped after copying the list); then per replay `r->save_m` -> `r->m` | `r->save_m -> r->m` |
+| `replay_running` | `rp_m_` only | no |
+| `replay_start` / `replay_stop` / `replay_resume` / `set_replay_config` / `replay_defer` | `op_m_` -> the above; `replay_start`/`replay_stop` return `replay_status()` with `op_m_` still held | `op_m_ -> m_`, `op_m_ -> rp_m_ -> r->m` |
+| `start` / `stop` | `op_m_` -> `m_` short scopes; `replay_sync_locked` after them | `op_m_ -> m_` |
+| `configure` / `clear` / `reconfigure` / `release_for_reload` | `op_m_` -> `idle_soon` (`m_`), `build` (`m_` scopes), `release_graph` (`replay_detach_locked`, then `m_` scope) | `op_m_ -> m_`, `op_m_ -> rp_m_` |
+| `stop_all` | `stop()` (as above, `op_m_` dropped on return); `m_` loop (dropped); then `op_m_` | no: `m_` dropped before `op_m_` |
+| `~Outputs` | `stop_all`; `m_` scope (notify, dropped); join the supervisor; then `op_m_` -> `release_graph` | no |
+| signal handlers `on_start` / `on_stop` | `m_` only (libobs threads, or inside `obs_output_start/stop` while `op_m_` is held and `m_` is not) | `op_m_ -> m_` at most |
+| `on_replay_saved` / `on_replay_stop` | `r->m` only | no |
+| status readers `status`, `clocks`, `any_active`, `idle_soon`, `configured`, `live`, `recording`, `totals`, `any_sink_wanted` | `m_` only | no |
+
+`m_` is never held across `obs_output_start`, `obs_output_stop` or `obs_output_release` (their signals take `m_`).
+`rp_m_` is held across `obs_output_active` and `obs_output_get_total_bytes` only (no signal, no lock of ours).
+
+### 6.5 A reconnecting stream keeps the replay attached (review item 6)
+
+From the code: the replay gate is `any_sink_wanted()`, which reads each sink's `want`. A stream sink that drops is
+retried (`schedule_retry_locked`: state `retrying`, `want` unchanged), and a retry start comes from the supervisor
+through `start_sink`, which never calls `replay_sync_locked`. The supervisor detaches only when no sink is wanted.
+So during reconnects the replay outputs and the rung encoder they hold are untouched; the gate closes only when the
+retries are used up (`retryMax`, then `want = false`) or the user stops the stream. A recording beside it keeps
+`want` true on its own.
+
+New host test in `app/host/tests/host-replay-onair.test.mjs`: a stream sink to `rtmp://127.0.0.1:19499` where nothing
+listens (connection refused; the test checks the port first; no real platform, no key), retry policy 300-600 ms. For
+8 s alone, then 8 s with a recording on the same rung, every 100 ms: both replay outputs `running` on rung `h1`,
+`bufferedForMs` never goes back (a re-attach would reset it), the shared rung encoder `active` in every sample. Then
+stream stop: the buffer stays (recording wanted); record stop: detached. Results in 6.6.
+
+### 6.6 Results
+
+After the rebase, host rebuilt (4 jobs, BelowNormal; exit 0). Every file alone, `--test-concurrency=1`, BelowNormal,
+headless, studio closed, live-check off air:
+
+- `tests/worker-slot.test.mjs` 3 pass; `tests/stat-cache.test.mjs` 3 pass; `studio-ui-alpha` 40 pass, 1 skipped;
+  `studio-ui-server` 40; `record-live` 12; `overlay-server` 23; `perf-idle` 4.
+- Every other test file that imports the launcher: `host-watch` 14, `instagram-live` 29, `live-install-launcher` 1,
+  `live-install` 12, `live-updates-launcher` 6, `live-updates` 27, `normal-windows` 5, `package-alpha` 20 (1
+  skipped), `posting-live-check` 8, `service-swap-launcher` 4, `stream-recovery` 17, `studio-devices-mixer` 14,
+  `studio-launch-d327` 5, `studio-swap-launcher` 9, `studio-ui-core-url` 2, `studio-ui-crash-recovery` 5,
+  `studio-ui-live-test` 8. 0 fail.
+- Host (real libobs, NVENC): `host-replay-onair` 4 pass. The new reconnect test: alone, 78 samples over 8 s, 3
+  retries (states `starting`, `retrying`; a refused connect on Windows takes about 2 s); beside the recording, 79
+  samples, retries 3 to 6. In every sample both replays ran on rung `h1`, `bufferedForMs` only grew, and the rung
+  encoder was active. `host-a0-day2` 10, `host-preview-edit` 19, `host-browser` 8 pass.
+
+### 6.7 Preview restore (review item 7): UNVERIFIED
+
+The preview restore after minimise cannot run headless (tests never show a window). Status: UNVERIFIED. User check
+steps (studio open, off air):
+
+1. Open the studio with both previews showing; note that the pictures move.
+2. Minimise the studio window for 10 s; restore it.
+3. Expected: both previews show a moving picture again within a fraction of a second, no black or frozen preview,
+   no flicker. Repeat with the preview panel hidden and shown again, if the layout allows it.
+4. If a preview stays black or frozen: press Ctrl+Alt+F (feedback) at once; the capture keeps the host log.
