@@ -29,6 +29,19 @@ UPanel {
             openMenu(false, 20, 20);
             return menu.trigger(a.slice(11));
         }
+        // layer-retry:<id> / layer-connect:<id>: the row's own Try again / Connect button (2026-11-18, A1/A3)
+        if (a.startsWith("layer-retry:") || a.startsWith("layer-connect:")) {
+            const id = a.slice(a.indexOf(":") + 1);
+            for (let k = 0; k < list.count; k++) {
+                const it = list.itemAtIndex(k);
+                if (!it || it.modelData.id !== id) continue;
+                const b = a.startsWith("layer-retry:") ? it.retryBtn : it.connectBtn;
+                if (!b.visible) return false;
+                b.clicked();
+                return true;
+            }
+            return false;
+        }
         if (a.startsWith("layer-key:")) return handleKey(a.slice(10));
         if (a.startsWith("layer-drag:")) {
             const p = a.slice(11).split(":").map(Number);
@@ -194,9 +207,14 @@ UPanel {
             readonly property var dev: modelData.device || {}
             readonly property bool waiting: dev.state === "waiting"
             readonly property bool connecting: dev.state === "connecting"
+            // A1 (2026-11-18): a preset placeholder (game capture, camera) whose device is connected now: Connect
+            readonly property string connectRole: panel.store.connectRoleOf(modelData.id)
+            readonly property bool twoLines: waiting || connecting || connectRole !== ""
+            property alias retryBtn: retry
+            property alias connectBtn: connect
             objectName: "layer:" + modelData.id
             width: ListView.view.width - 4
-            height: waiting || connecting ? 48 : 36
+            height: twoLines ? 48 : 36
             hoverEnabled: true
             Accessible.name: modelData.name + (modelData.visible ? "" : ", hidden") + (sel ? ", selected" : "")
             focusPolicy: Qt.StrongFocus
@@ -245,8 +263,8 @@ UPanel {
                 }
                 Text {
                     id: name
-                    anchors { left: eye.right; leftMargin: Theme.sp.s; right: parent.right; top: parent.top; topMargin: row.waiting || row.connecting ? 4 : 0 }
-                    height: row.waiting || row.connecting ? implicitHeight : parent.height
+                    anchors { left: eye.right; leftMargin: Theme.sp.s; right: retry.visible ? retry.left : connect.visible ? connect.left : parent.right; top: parent.top; topMargin: row.twoLines ? 4 : 0 }
+                    height: row.twoLines ? implicitHeight : parent.height
                     verticalAlignment: Text.AlignVCenter
                     text: row.modelData.name
                     elide: Text.ElideRight
@@ -255,13 +273,36 @@ UPanel {
                     font.pixelSize: Theme.ty.body
                 }
                 Text {
-                    visible: row.waiting || row.connecting
-                    anchors { left: name.left; right: parent.right; top: name.bottom; topMargin: 1 }
-                    text: row.waiting ? "Waiting for the device" : "Connecting to the device"
+                    visible: row.twoLines
+                    anchors { left: name.left; right: name.right; top: name.bottom; topMargin: 1 }
+                    text: row.waiting ? "Waiting for the device" : row.connecting ? "Connecting to the device" : "Its device is connected now"
                     elide: Text.ElideRight
                     color: row.waiting ? Theme.c.danger : Theme.c.muted
                     font.family: Theme.family
                     font.pixelSize: Theme.ty.caption
+                }
+                // A3 (2026-11-18): look for the device again now (Ujwalam also keeps trying by itself)
+                UButton {
+                    id: retry
+                    objectName: "layerRetry:" + row.modelData.id
+                    visible: row.waiting || row.connecting
+                    anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                    height: 26
+                    text: "Try again"
+                    tip: "Look for this device again now. Ujwalam also tries by itself, and when a device is plugged in."
+                    onClicked: panel.store.rescanDevices()
+                }
+                // A1: the placeholder becomes the capture of its device, in the same place (one click, also while live)
+                UButton {
+                    id: connect
+                    objectName: "layerConnect:" + row.modelData.id
+                    visible: row.connectRole !== "" && !retry.visible
+                    anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                    height: 26
+                    kind: "primary"
+                    text: "Connect"
+                    tip: row.connectRole === "facecam" ? "Show the camera in this layer's place" : "Show the game capture in this layer's place"
+                    onClicked: panel.store.connectRole(row.connectRole)
                 }
             }
         }

@@ -397,11 +397,12 @@ describe('QML studio editing (headless probe)', { skip }, () => {
 
   // ---------------------------------------------------------------- volume (D330)
   test('volume: a typed dB + Enter sends mixer.setVolume once; the wheel does nothing without focus and steps one dB a notch with it', async () => {
-    const r = await probe(['volume-type:scene-1/game:-6', 'wheel:3:nofocus:vol:scene-1/game:slider', 'wheel:-2:focus:vol:scene-1/game:slider']);
+    // -10: the fake's game is at -6 already, and the same value again sends nothing (B5, 2026-11-18)
+    const r = await probe(['volume-type:scene-1/game:-10', 'wheel:3:nofocus:vol:scene-1/game:slider', 'wheel:-2:focus:vol:scene-1/game:slider']);
     assert.deepEqual(r.done, [true, true, true]);
     const sent = r.calls.filter(([m, x]) => m === 'mixer.setVolume' && x.id === 'scene-1/game').map(([, x]) => x.db);
-    assert.equal(sent[0], -6, 'typed -6');
-    assert.equal(sent.at(-1), -8, 'two notches down from -6 with focus: ' + sent);
+    assert.equal(sent[0], -10, 'typed -10');
+    assert.equal(sent.at(-1), -12, 'two notches down from -10 with focus: ' + sent);
     assert.equal(sent.length, 2, 'the unfocused wheel sent nothing: ' + sent);
   });
   // Twins of studio-qt-shell's shared-slider tests (D330), with real mouse and key events (drag:, key:).
@@ -419,7 +420,8 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     const r = await probe([`drag:0.25:${S}`, `drag:0.25~0.75:${S}`], { ms: 7000 });
     assert.ok(r.done.every(Boolean), JSON.stringify(r.p.actions));
     const sent = r.calls.filter(([m, x]) => m === 'mixer.setVolume' && x.id === 'scene-1/game').map(([, x]) => x.db);
-    assert.deepEqual(sent, [-45, -15], `a quarter of -60..0 dB, then only the released value: ${sent}`);
+    // -60..+12 dB since B5 (2026-11-18): a quarter is -42, three quarters -6
+    assert.deepEqual(sent, [-42, -6], `a quarter of -60..+12 dB, then only the released value: ${sent}`);
   });
 
   // ---------------------------------------------------------------- layer menu

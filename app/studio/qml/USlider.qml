@@ -9,6 +9,8 @@ Slider {
     id: s
     signal committed(real value)
     property real meter: 0 // 0..1, drawn in the groove (the channel's level)
+    property real hold: 0  // 0..1, the peak-hold marker in the groove (B8, 2026-11-18); 0 = none
+    property real mark: -1 // 0..1, a fixed tick in the groove (the mixer's 0 dB); < 0 = none
     implicitHeight: 28
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
@@ -37,8 +39,25 @@ Slider {
             width: Math.max(0, Math.min(1, s.meter)) * parent.width
             height: parent.height
             radius: 3
-            color: s.meter > 0.95 ? Theme.c.danger : Theme.c.ok
+            color: s.mark >= 0 ? (s.meter >= s.mark ? Theme.c.danger : Theme.c.ok) : (s.meter > 0.95 ? Theme.c.danger : Theme.c.ok)
             opacity: 0.85
+        }
+        Rectangle { // peak hold: where the level reached in the last moment
+            objectName: s.objectName !== "" ? s.objectName + ":hold" : ""
+            visible: s.hold > 0
+            x: Math.max(0, Math.min(1, s.hold) * parent.width - width)
+            width: 2
+            height: parent.height
+            color: s.mark >= 0 && s.hold >= s.mark ? Theme.c.danger : Theme.c.text
+        }
+        Rectangle { // the fixed tick (0 dB): above it the sound is made louder than it comes in
+            objectName: s.objectName !== "" ? s.objectName + ":mark" : ""
+            visible: s.mark >= 0
+            x: s.mark * parent.width - width / 2 // the level's scale: a level at the tick is 0 dBFS
+            y: -3
+            width: 2
+            height: parent.height + 6
+            color: Theme.c.muted
         }
     }
     handle: Item {
