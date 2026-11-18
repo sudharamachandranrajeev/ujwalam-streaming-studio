@@ -6,6 +6,7 @@
 #include "log.h"
 #include "obs_runtime.h"
 #include "rpc_server.h"
+#include "screen_capture.h"
 
 #include <obs-audio-controls.h>
 #include <util/platform.h>
@@ -235,6 +236,46 @@ static void swap_to(const std::string &id, obs_canvas_t *vc, obs_source_t *&rout
 	routed = next;
 }
 
+// Types that run on the canvas's second transition object (st): the stinger (D242) and the D391 types.
+static bool uses_st(const std::string &t)
+{
+	return t == "stinger" || t == "slide" || t == "swipe" || t == "wipe" || t == "fadeColor";
+}
+
+// D391: project type -> libobs transition id (nullptr: not a type).
+static const char *obs_transition_id(const std::string &t)
+{
+	if (t == "stinger")
+		return "obs_stinger_transition";
+	if (t == "slide")
+		return "slide_transition";
+	if (t == "swipe")
+		return "swipe_transition";
+	if (t == "wipe")
+		return "wipe_transition";
+	if (t == "fadeColor")
+		return "fade_to_color_transition";
+	if (t == "fade" || t == "cut")
+		return "fade_transition";
+	return nullptr;
+}
+
+// D391: a luma wipe id (data/transitions/luma-wipes.json) is the image's file name without .png; true when
+// obs-transitions ships that file (luma_wipes/<id>.png).
+static bool luma_wipe_present(const std::string &id)
+{
+	static const std::regex re("^[a-z0-9]+(-[a-z0-9]+)*$");
+	if (id.empty() || id.size() > 48 || !std::regex_match(id, re))
+		return false;
+	obs_module_t *m = obs_get_module("obs-transitions");
+	if (!m)
+		return false;
+	char *f = obs_find_module_file(m, ("luma_wipes/" + id + ".png").c_str());
+	bool ok = f != nullptr;
+	bfree(f);
+	return ok;
+}
+
 void Studio::set_channel(Canvas &c, Scene *s, bool animate)
 {
 	obs_source_t *src = s ? obs_scene_get_source(s->scene) : nullptr;
@@ -251,13 +292,16 @@ void Studio::set_channel(Canvas &c, Scene *s, bool animate)
 		c.active = s ? s->id : "";
 		return;
 	}
-	obs_source_t *want = c.tr_type == "stinger" && c.st ? c.st : c.tr;
+	obs_source_t *want = uses_st(c.tr_type) && c.st ? c.st : c.tr;
 	swap_to(c.id, c.vc, c.routed, want);
 	bool change = animate && src && !c.active.empty() && (!s || c.active != s->id);
 	if (easer_)
 		easer_->end(c.id); // a new switch (or a cut) takes over from a running eased fade
-	if (change && want == c.st) {
-		if (!obs_transition_start(c.st, OBS_TRANSITION_MODE_AUTO, 0, src))
+	if (change && want == c.st && c.tr_type != "stinger" && c.tr_ms == 0) {
+		obs_transition_set(c.st, src); // a D391 type with no duration: a cut
+	} else if (change && want == c.st) {
+		// stinger: tr_ms is 0 and its own length is the duration (fixed); D391 types run over tr_ms
+		if (!obs_transition_start(c.st, OBS_TRANSITION_MODE_AUTO, c.tr_ms, src))
 			obs_transition_set(c.st, src);
 	} else if (change && c.tr_type == "fade" && c.tr_ms > 0 && c.tr_ease != "linear") {
 		// D327 TR1: eased fade = manual mode driven by the easer's tick callback (transition_ease.h).
@@ -277,19 +321,27 @@ void Studio::set_channel(Canvas &c, Scene *s, bool animate)
 	c.active = s ? s->id : "";
 }
 
-json::Value Studio::transition_set(const std::string &cv, const std::string &type, int64_t ms, const json::Value *file,
-				   int64_t point_ms, bool audio, const std::string &easing)
+json::Value Studio::transition_set(const std::string &cv, const TransitionSpec &t)
 {
 	std::lock_guard<std::recursive_mutex> lk(m_);
-	if (type != "cut" && type != "fade" && type != "stinger")
-		throw Error(rpc::INVALID_PARAMS, "type must be cut, fade or stinger");
+	const std::string &type = t.type;
+	const json::Value *file = t.file;
+	const int64_t point_ms = t.point_ms;
+	const bool audio = t.audio;
+	const std::string &easing = t.easing;
+	if (!obs_transition_id(type))
+		throw Error(rpc::INVALID_PARAMS, "type must be cut, fade, stinger, slide, swipe, wipe or fadeColor");
 	if (!ease::known(easing))
 		throw Error(rpc::INVALID_PARAMS, "unknown easing curve");
 	if (easing != "linear" && type != "fade")
 		throw Error(rpc::INVALID_PARAMS, "easing is for a fade only");
+	if (t.ms < 0 || t.ms > 10000)
+		throw Error(rpc::INVALID_PARAMS, "durationMs must be 0..10000");
 	Canvas *c = canvas(norm_canvas(cv));
 	if (!c)
 		throw Error(rpc::INVALID_PARAMS, "unknown canvas");
+	obs_source_t *old_st = c->st; // released below once it is off the channel (a type change, or back to cut/fade)
+	json::Value info;               // D391: the type's own fields as transitions() reports them
 	if (type == "stinger") {
 		if (!file || !file->is_object())
 			throw Error(rpc::INVALID_PARAMS, "a stinger needs file {base, rel}");
@@ -305,7 +357,7 @@ json::Value Studio::transition_set(const std::string &cv, const std::string &typ
 		obs_data_set_int(d, "transition_point", point_ms);
 		obs_data_set_int(d, "audio_monitoring", 0); // stinger audio goes to the stream mix only
 		obs_data_set_int(d, "audio_fade_style", 0); // scene audio fades out, then in
-		if (!c->st) {
+		if (!c->st || c->st_kind != "obs_stinger_transition") {
 			std::string name = "ujw:stinger:" + c->id;
 			c->st = obs_source_create_private("obs_stinger_transition", name.c_str(), d);
 			if (c->st)
@@ -314,31 +366,159 @@ json::Value Studio::transition_set(const std::string &cv, const std::string &typ
 			obs_source_update(c->st, d);
 		}
 		obs_data_release(d);
-		if (!c->st)
+		if (!c->st) {
+			c->st = old_st;
 			throw Error(rpc::UNAVAILABLE, "obs_stinger_transition unavailable (obs-transitions module)");
+		}
 		obs_source_set_muted(c->st, !audio); // muted: the video plays, its sound stays out of the mix
+		c->st_kind = "obs_stinger_transition";
 		c->st_ref = ref;
 		c->st_point = (uint32_t)point_ms;
 		c->st_audio = audio;
 		c->tr_ms = 0;
+	} else if (uses_st(type)) {
+		// D391: setting keys from OBS 32.1.2 plugins/obs-transitions (transition-slide.c, transition-swipe.c,
+		// transition-luma-wipe.c, transition-fade-to-color.c).
+		const char *kind = obs_transition_id(type);
+		info = json::Value::object();
+		obs_data_t *d = obs_data_create();
+		try {
+			if (type == "slide" || type == "swipe") {
+				if (t.direction != "left" && t.direction != "right" && t.direction != "up" && t.direction != "down")
+					throw Error(rpc::INVALID_PARAMS, "direction must be left, right, up or down");
+				obs_data_set_string(d, "direction", t.direction.c_str());
+				info.set("direction", t.direction);
+				if (type == "swipe") {
+					obs_data_set_bool(d, "swipe_in", t.swipe_in);
+					info.set("swipeIn", t.swipe_in);
+				}
+			} else if (type == "wipe") {
+				if (!(t.softness >= 0 && t.softness <= 1))
+					throw Error(rpc::INVALID_PARAMS, "softness must be 0..1");
+				static const std::regex id_re("^[a-z0-9]+(-[a-z0-9]+)*$");
+				if (t.pattern.empty() || t.pattern.size() > 48 || !std::regex_match(t.pattern, id_re))
+					throw Error(rpc::INVALID_PARAMS, "pattern must be a luma wipe id (data/transitions/luma-wipes.json)");
+				// With obs-transitions loaded the image must be there; without it the create below refuses anyway.
+				if (obs_get_module("obs-transitions") && !luma_wipe_present(t.pattern))
+					throw Error(rpc::INVALID_PARAMS, "unknown luma wipe pattern " + t.pattern);
+				obs_data_set_string(d, "luma_image", (t.pattern + ".png").c_str());
+				obs_data_set_double(d, "luma_softness", t.softness);
+				obs_data_set_bool(d, "luma_invert", t.invert);
+				info.set("pattern", t.pattern);
+				info.set("softness", t.softness);
+				info.set("invert", t.invert);
+			} else { // fadeColor
+				if (t.point_pct < 0 || t.point_pct > 100)
+					throw Error(rpc::INVALID_PARAMS, "pointPct must be 0..100");
+				static const std::regex col_re("^#[0-9A-Fa-f]{6}$");
+				if (!std::regex_match(t.color, col_re))
+					throw Error(rpc::INVALID_PARAMS, "color must be #RRGGBB");
+				obs_data_set_int(d, "color", parse_color(t.color)); // libobs ABGR; the plugin forces alpha FF
+				obs_data_set_int(d, "switch_point", t.point_pct);
+				std::string up = t.color;
+				std::transform(up.begin(), up.end(), up.begin(), [](unsigned char ch) { return (char)std::toupper(ch); });
+				info.set("color", up);
+				info.set("pointPct", t.point_pct);
+			}
+		} catch (...) {
+			obs_data_release(d);
+			throw;
+		}
+		if (c->st && c->st_kind == kind) {
+			obs_source_update(c->st, d);
+		} else {
+			std::string name = std::string("ujw:transition-") + type + ":" + c->id;
+			c->st = obs_source_create_private(kind, name.c_str(), d);
+			if (c->st)
+				obs_transition_set_size(c->st, c->w, c->h);
+		}
+		obs_data_release(d);
+		if (!c->st) {
+			c->st = old_st;
+			throw Error(rpc::UNAVAILABLE, std::string(kind) + " unavailable (obs-transitions module)");
+		}
+		c->st_kind = kind;
+		c->st_ref.clear();
+		c->st_point = 0;
+		c->st_audio = true;
+		c->tr_ms = (uint32_t)t.ms;
 	} else {
-		c->tr_ms = type == "fade" ? (uint32_t)ms : 0;
+		c->tr_ms = type == "fade" ? (uint32_t)t.ms : 0;
 	}
 	c->tr_type = type;
 	c->tr_ease = easing;
+	c->st_info = info;
 	if (c->tr && c->routed) { // put the right transition on the channel now, showing the same scene
 		Scene *cur = c->active.empty() ? nullptr : scene(c->active, c->id);
 		set_channel(*c, cur, false);
 	}
-	if (type != "stinger" && c->st) { // not needed any more (the call above took it off the channel)
+	// A replaced second transition (another D391 type, a stinger after a slide, ...) is off the channel now: the call
+	// above swapped the new one in, or it was never on it.
+	if (old_st && old_st != c->st)
+		obs_source_release(old_st);
+	if (!uses_st(type) && c->st) { // not needed any more (the call above took it off the channel)
 		obs_source_release(c->st);
 		c->st = nullptr;
+		c->st_kind.clear();
 		c->st_ref.clear();
 		c->st_point = 0;
 		c->st_audio = true;
 	}
 	hlog::info("transition %s: %s %u ms %s", c->id.c_str(), c->tr_type.c_str(), type == "stinger" ? c->st_point : c->tr_ms, c->tr_ease.c_str());
 	return transitions();
+}
+
+json::Value Studio::transition_types()
+{
+	struct T {
+		const char *type;
+		std::vector<const char *> fields;
+	};
+	static const std::vector<T> all = {
+		{"cut", {}},
+		{"fade", {"durationMs", "easing"}},
+		{"stinger", {"file", "pointMs", "audio"}},
+		{"slide", {"durationMs", "direction"}},
+		{"swipe", {"durationMs", "direction", "swipeIn"}},
+		{"wipe", {"durationMs", "pattern", "softness", "invert"}},
+		{"fadeColor", {"durationMs", "color", "pointPct"}},
+	};
+	json::Value types = json::Value::array();
+	for (auto &x : all) {
+		json::Value o = json::Value::object();
+		o.set("type", x.type);
+		json::Value f = json::Value::array();
+		for (auto *k : x.fields)
+			f.push(k);
+		o.set("fields", std::move(f));
+		// cut needs nothing: without fade_transition the canvas routes the scene directly
+		o.set("available", std::string(x.type) == "cut" || obs_source_get_display_name(obs_transition_id(x.type)) != nullptr);
+		types.push(std::move(o));
+	}
+	json::Value r = json::Value::object();
+	r.set("types", std::move(types));
+	// The luma images obs-transitions lists in luma_wipes/wipes.json whose file is there, as ids (file name without .png).
+	std::vector<std::string> ids;
+	if (obs_module_t *m = obs_get_module("obs-transitions")) {
+		char *list = obs_find_module_file(m, "luma_wipes/wipes.json");
+		obs_data_t *d = list ? obs_data_create_from_json_file(list) : nullptr;
+		bfree(list);
+		if (d) {
+			for (obs_data_item_t *it = obs_data_first(d); it; obs_data_item_next(&it)) {
+				const char *file = obs_data_item_get_string(it);
+				std::string f = file ? file : "";
+				if (f.size() > 4 && f.compare(f.size() - 4, 4, ".png") == 0 && luma_wipe_present(f.substr(0, f.size() - 4)))
+					ids.push_back(f.substr(0, f.size() - 4));
+			}
+			obs_data_release(d);
+		}
+	}
+	std::sort(ids.begin(), ids.end());
+	json::Value wipes = json::Value::array();
+	for (auto &i : ids)
+		wipes.push(i);
+	r.set("wipes", std::move(wipes));
+	return r;
 }
 
 json::Value Studio::transition_force_complete(const std::string &cv)
@@ -382,6 +562,9 @@ json::Value Studio::transitions() const
 			o.set("pointMs", (int64_t)c.st_point);
 			o.set("audio", c.st_audio);
 		}
+		if (c.st_info.is_object()) // D391 types: their own fields
+			for (auto &m : c.st_info.members())
+				o.set(m.first, m.second);
 		o.set("available", c.tr != nullptr); // false before the first scene, or without obs-transitions
 		r.set(c.id, std::move(o));
 	}
@@ -479,6 +662,7 @@ void Studio::teardown()
 			if (c.st)
 				obs_source_release(c.st);
 			c.tr = c.st = nullptr;
+			c.st_kind.clear();
 		}
 	}
 	for (auto &g : globals_)
@@ -920,6 +1104,8 @@ model::Options Studio::model_options(const json::Value &doc, const LoadOptions &
 	mo.browser_urls = o.browser_urls;
 	mo.overlay_port = o.overlay_port;
 	mo.test_capture = test_devices();
+	mo.allow_screen = flags_.allow_screen; // D390 proposed: screen and window layers
+	mo.screen_types = flags_.allow_screen && screencap::available();
 	const json::Value *d = doc.find("devices");
 	if ((list_devices || mo.test_capture) && d && d->is_array() && d->size() > 0) {
 		bool has = false;
@@ -1211,6 +1397,7 @@ json::Value Studio::plan(const json::Value &project, const LoadOptions &o) const
 		json::Value f = json::Value::object();
 		f.set("allowDevices", flags_.allow_devices);
 		f.set("allowBrowser", flags_.allow_browser);
+		f.set("allowScreenCapture", flags_.allow_screen);
 		return f;
 	}());
 	return r;
@@ -1391,6 +1578,9 @@ static std::string plain_unavailable(const json::Value &u)
 	if (u.find("code")->as_string() == "forbidden" && reason.find("capture devices are disabled") == 0)
 		return "Layer " + lid + " cannot be added: this start of Ujwalam has capture devices switched off. Start Ujwalam "
 		       "with devices allowed (the normal start does) and add the layer again. (" + reason + ")";
+	if (u.find("code")->as_string() == "forbidden" && reason.find("screen and window capture are switched off") == 0)
+		return "Layer " + lid + " cannot be added: this start of Ujwalam has screen and window capture switched off. "
+		       "Turn screen capture on and start Ujwalam again, then add the layer again. (" + reason + ")";
 	if (u.find("code")->as_string() == "forbidden")
 		return "Layer " + lid + " cannot be added: that feature is switched off in this start of Ujwalam (" + reason + ").";
 	return "Layer " + lid + " cannot be added: " + reason + ".";

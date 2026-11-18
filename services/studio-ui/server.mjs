@@ -161,6 +161,10 @@ export const HOST_CALLS = Object.freeze({
   'replay.save': { schema: { canvas: OPT_CANVAS } },
   'marker.add': { schema: { source: { type: 'enum', values: ['api'], required: true } } },
   'mixer.list': { schema: {} },
+  // Read-only lists for the add-layer and transition pickers (D390, D391 proposed): nothing is created or changed.
+  // capture.listTargets carries window titles (personal): the server passes it to the page, it never logs it.
+  'capture.listTargets': { schema: {} },
+  'transitions.types': { schema: {} },
   'mixer.setVolume': { schema: { id: { type: 'string', pattern: MIXER_ID, required: true }, db: { type: 'num', min: -100, max: 0, required: true } } },
   'mixer.setMute': { schema: { id: { type: 'string', pattern: MIXER_ID, required: true }, muted: { type: 'bool', required: true } } },
   // CUE (headphone monitoring, Meld's per-channel button): not a stream change, applied at once.
@@ -206,6 +210,11 @@ export const PREVIEW_EDIT_FLAG = 'preview-edit';
 // Scene transitions (D239): while on, the host's per-canvas transition follows the project's canvases[].transition
 // (Meld import: fade of Meld's duration); off (default) = cut.
 export const TRANSITIONS_FLAG = 'transitions';
+// D391: the transition types with their own fields (as services/project/validate.mjs); the host reports colours in
+// upper case, so a colour compares without case.
+const TR_OWN = { slide: ['direction'], swipe: ['direction', 'swipeIn'], wipe: ['pattern', 'softness', 'invert'], fadeColor: ['color', 'pointPct'] };
+const TR_OWN_KEYS = [...new Set(Object.values(TR_OWN).flat())];
+const trSame = (a, b) => (typeof a === 'string' && typeof b === 'string' ? a.toLowerCase() === b.toLowerCase() : a === b);
 // Scene and layer structure edits (D240): add/remove scenes and layers from the control page, saved into the project.
 export const SCENE_EDIT_FLAG = 'scene-edit';
 // D292 (proposed): adding, duplicating and renaming lose nothing, so they work without the scene-edit flag (still
@@ -218,7 +227,7 @@ const FREE_STRUCTURE_OPS = ['scene.add', 'layer.add', 'layer.duplicate', 'layer.
 const STRUCTURE_OPS = ['scene.add', 'scene.remove', 'layer.add', 'layer.remove', 'layer.move', ...FREE_STRUCTURE_OPS];
 /** Host calls that start a stream or a recording: refused while Ujwalam is closing (closing lock, D311 proposed). */
 const START_METHODS = new Set(['stream.start', 'record.start']);
-const STRUCTURE_KEYS = { 'scene.add': ['name'], 'scene.remove': ['scene'], 'layer.add': ['scene', 'kind', 'of', 'color', 'text', 'device', 'overlay', 'file'], 'layer.remove': ['scene', 'layer'], 'layer.move': ['scene', 'layer', 'canvas', 'direction', 'target', 'place'],
+const STRUCTURE_KEYS = { 'scene.add': ['name'], 'scene.remove': ['scene'], 'layer.add': ['scene', 'kind', 'of', 'color', 'text', 'device', 'overlay', 'file', 'display', 'window', 'match'], 'layer.remove': ['scene', 'layer'], 'layer.move': ['scene', 'layer', 'canvas', 'direction', 'target', 'place'],
   'layer.duplicate': ['scene', 'layer'], 'layer.rename': ['scene', 'layer', 'name'], 'scene.duplicate': ['scene'], 'scene.rename': ['scene', 'name'], 'scene.realism': ['scene'] };
 const BOT_SCHEMA = { bot: { type: 'enum', values: BOTS, required: true } };
 const POST_ERR = { 'unknown-post': 404, 'over-limit': 409, 'unresolved-placeholders': 409, 'empty-title': 409, 'video-changed': 409, 'already-uploaded': 409 };
@@ -1019,7 +1028,8 @@ export function createStudioServer(opts) {
   // A stinger the host refused (file missing, module absent) is not asked for again until the project changes it; the
   // canvas cuts meanwhile (D242).
   const trRefused = {};
-  const trKey = (t) => JSON.stringify([t.type, t.durationMs, t.file ?? null, t.pointMs ?? null, t.audio ?? null, t.easing ?? null]);
+  const trKey = (t) => JSON.stringify([t.type, t.durationMs, t.file ?? null, t.pointMs ?? null, t.audio ?? null, t.easing ?? null,
+    ...TR_OWN_KEYS.map((k) => t[k] ?? null)]);
   async function transitionSync(hs) {
     if (!isPlain(hs.transitions)) return; // older host or fake: nothing to sync
     const on = !!flags && flags.isOn(TRANSITIONS_FLAG);
@@ -1037,12 +1047,21 @@ export function createStudioServer(opts) {
       else if (t?.type === 'stinger' && isPlain(t.file) && typeof t.file.base === 'string' && typeof t.file.rel === 'string' && Number.isInteger(t.pointMs)) {
         p = { type: 'stinger', durationMs: 0, file: { base: t.file.base, rel: t.file.rel }, pointMs: Math.min(10000, Math.max(0, t.pointMs)), audio: t.audio !== false };
       }
-      if (p.type === 'stinger' && trRefused[hid] === trKey(p)) p = { type: 'cut', durationMs: 0 };
+      // D391: slide, swipe, wipe, fadeColor pass through with their own fields (the project validator checked them;
+      // the host checks them again and refuses a wipe image it does not ship). Host defaults fill absent fields.
+      else if (TR_OWN[t?.type] && Number.isInteger(t.durationMs)) {
+        p = { type: t.type, durationMs: Math.min(10000, Math.max(0, t.durationMs)) };
+        for (const k of TR_OWN[t.type]) if (t[k] !== undefined) p[k] = t[k];
+      }
+      const ownKind = p.type === 'stinger' || !!TR_OWN[p.type];
+      if (ownKind && trRefused[hid] === trKey(p)) p = { type: 'cut', durationMs: 0 };
       const same = cur?.type === p.type && cur?.durationMs === p.durationMs && (cur?.easing ?? 'linear') === (p.easing ?? 'linear')
-        && (p.type !== 'stinger' || (cur?.file === `${p.file.base}:${p.file.rel}` && cur?.pointMs === p.pointMs && (cur?.audio ?? true) === p.audio));
+        && (p.type !== 'stinger' || (cur?.file === `${p.file.base}:${p.file.rel}` && cur?.pointMs === p.pointMs && (cur?.audio ?? true) === p.audio))
+        && (!TR_OWN[p.type] || TR_OWN[p.type].every((k) => p[k] === undefined || trSame(cur?.[k], p[k])));
       if (same) continue;
-      // A refused stinger or easing (older host, unknown curve) is not asked for again until the project changes it.
-      try { await host.call('transitions.set', { canvas: hid, ...p }); } catch { if (p.type === 'stinger' || p.easing) trRefused[hid] = trKey(p); }
+      // A refused stinger, D391 type or easing (older host, unknown curve or wipe) is not asked for again until the
+      // project changes it; the canvas cuts meanwhile.
+      try { await host.call('transitions.set', { canvas: hid, ...p }); } catch { if (ownKind || p.easing) trRefused[hid] = trKey(p); }
     }
   }
   // Device hot-plug (D329). The host has no push channel: its device watcher bumps host.status devices.seq after each
@@ -1209,8 +1228,9 @@ export function createStudioServer(opts) {
     const file = projectSync?.status?.().file;
     if (typeof file !== 'string') return json(res, 409, { error: 'no-project-file' });
     if (!isPlain(body) || !STRUCTURE_OPS.includes(body.op) || Object.keys(body).some((k) => k !== 'op' && !STRUCTURE_KEYS[body.op].includes(k))) return json(res, 400, { error: 'bad-params' });
-    for (const k of ['name', 'scene', 'kind', 'of', 'color', 'text', 'device', 'overlay', 'layer', 'file', 'canvas', 'direction', 'target', 'place']) {
-      if (body[k] !== undefined && (typeof body[k] !== 'string' || body[k].length > (k === 'text' ? 2000 : k === 'file' ? 260 : 120))) return json(res, 400, { error: 'bad-params' });
+    const maxLen = { text: 2000, file: 260, display: 512, window: 1024 }; // display, window: D390 (OBS ids are long)
+    for (const k of ['name', 'scene', 'kind', 'of', 'color', 'text', 'device', 'overlay', 'layer', 'file', 'canvas', 'direction', 'target', 'place', 'display', 'window', 'match']) {
+      if (body[k] !== undefined && (typeof body[k] !== 'string' || body[k].length > (maxLen[k] ?? 120))) return json(res, 400, { error: 'bad-params' });
     }
     // An asset layer may only name a file the assets listing offers right now (never a path the page made up).
     if (body.kind === 'image' || body.kind === 'media') {

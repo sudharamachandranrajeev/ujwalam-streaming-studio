@@ -36,7 +36,7 @@ test('transitions: cut by default; set fade per canvas; bad values refused; host
   assert.deepEqual(r.V, { type: 'fade', durationMs: 1000, available: true });
   assert.equal(r.H.type, 'cut', 'per canvas');
   assert.deepEqual((await c.call('host.status')).transitions.V, { type: 'fade', durationMs: 1000, available: true });
-  assert.equal(await code('transitions.set', { canvas: 'H', type: 'wipe', durationMs: 300 }), -32602);
+  assert.equal(await code('transitions.set', { canvas: 'H', type: 'zoom', durationMs: 300 }), -32602); // wipe is a type since D391
   assert.equal(await code('transitions.set', { canvas: 'H', type: 'fade', durationMs: 20000 }), -32602);
   assert.equal(await code('transitions.set', { canvas: 'X', type: 'fade', durationMs: 300 }), -32602);
   await c.call('transitions.set', { canvas: 'V', type: 'cut', durationMs: 0 });

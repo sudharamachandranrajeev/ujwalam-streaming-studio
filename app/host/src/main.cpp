@@ -6,7 +6,8 @@
 // Usage:
 //   ujwalam-host --runtime <obs runtime dir> [--data-dir <dir>] [--discovery <file>] [--recordings <dir>]
 //                [--port <n>] [--project <file.json>] [--outputs <configure-params.json>] [--preview h,v]
-//                [--adapter <n>] [--allow-devices] [--allow-browser] [--allow-live] [--twitch-bandwidth-test]
+//                [--adapter <n>] [--allow-devices] [--allow-browser] [--allow-screen-capture] [--allow-live]
+//                [--twitch-bandwidth-test]
 //                [--defer-outputs] [--host-config <file.json>] [--test-hooks] [--headless]
 //                [--overlay-root <dir> --overlay-script <child.mjs> [--node <node.exe>] [--overlay-port <n>]
 //                 [--overlay-feed-port <n>] [--overlay-events-url http://127.0.0.1:<p>/<path>]]
@@ -18,6 +19,8 @@
 // before libobs starts (no GPU), to test the report (crash.h).
 // --headless (or UJWALAM_HEADLESS=1; every test run sets it): no preview window is ever created; preview.open fails
 // with CONFLICT, except an embedded one into a hidden parent window (LU4 studio-swap tests, D346). Otherwise previews are normal windows on the main display (D316).
+// --allow-screen-capture (D390 proposed): loads win-capture for screen and window layers (capture.listTargets). Off by
+// default: the module fetches compatibility.json from obsproject.com and copies graphics-hook files under %ProgramData%.
 // --twitch-bandwidth-test: keyed twitch sinks connect with "?bandwidthtest=true" appended to the stored key at connect
 // time (outputs.h); the credential is never changed.
 // Environment (the launcher's channel; values are never logged):
@@ -145,6 +148,7 @@ void usage()
 	fprintf(stderr, "usage: ujwalam-host --runtime <obs runtime dir> [--data-dir <dir>] [--discovery <file>]\n"
 			"         [--recordings <dir>] [--port <n>] [--project <file.json>] [--outputs <file.json>] [--defer-outputs]\n"
 			"         [--preview h,v] [--adapter <n>] [--allow-devices] [--allow-browser] [--allow-live]\n"
+			"         [--allow-screen-capture]\n"
 			"         [--twitch-bandwidth-test] [--host-config <file.json>] [--test-hooks [--test-crash <kind>]] [--headless]\n"
 			"         [--overlay-root <dir> --overlay-script <child.mjs> [--node <node.exe>] [--overlay-port <n>]\n"
 			"          [--overlay-feed-port <n>] [--overlay-events-url <url>]]\n");
@@ -202,6 +206,8 @@ int wmain(int argc, wchar_t **wargv)
 			app.allow_devices = true;
 		else if (a == "--allow-browser")
 			app.allow_browser = true;
+		else if (a == "--allow-screen-capture") // D390 proposed: win-capture (screen and window layers)
+			app.allow_screen = true;
 		else if (a == "--allow-live") // A0: real stream targets (outputs.h); never used by CI
 			app.allow_live = true;
 		else if (a == "--twitch-bandwidth-test") // runtime-only Twitch bandwidth-test suffix (outputs.h)
@@ -448,6 +454,7 @@ int wmain(int argc, wchar_t **wargv)
 	o.config_dir = (fs::u8path(app.data_dir) / "obs-config").generic_u8string();
 	o.allow_devices = app.allow_devices;
 	o.allow_browser = app.allow_browser;
+	o.allow_screen = app.allow_screen;
 	o.adapter = app.adapter;
 	o.low_latency_audio = app.config.low_latency_audio;
 	if (!obsrt::start(o, err)) {
@@ -466,7 +473,8 @@ int wmain(int argc, wchar_t **wargv)
 	json::Value pref = stats::gpu_preference(app.exe_path);
 	hlog::info("adapter %u: %s; windows graphics preference for this exe: %s", app.adapter,
 		   obsrt::adapter_name().c_str(), pref.dump().c_str());
-	hlog::info("devices %s, browser %s", app.allow_devices ? "ALLOWED" : "off", app.allow_browser ? "allowed" : "off");
+	hlog::info("devices %s, browser %s, screen capture %s", app.allow_devices ? "ALLOWED" : "off",
+		   app.allow_browser ? "allowed" : "off", app.allow_screen ? "allowed" : "off");
 	if (!app.config.monitoring_device.empty()) {
 		if (!app.allow_devices) {
 			hlog::info("audio monitoring output: Windows default (monitoringDevice applies only with --allow-devices)");
@@ -493,6 +501,7 @@ int wmain(int argc, wchar_t **wargv)
 		Studio::Flags f;
 		f.allow_devices = app.allow_devices;
 		f.allow_browser = app.allow_browser;
+		f.allow_screen = app.allow_screen;
 		app.studio = std::make_unique<Studio>(f);
 		{
 			const auto &ah = app.config.audio_health;

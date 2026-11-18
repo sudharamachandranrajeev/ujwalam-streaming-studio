@@ -30,6 +30,7 @@ struct App {
 	std::string data_dir, recordings_dir, discovery_path, log_path;
 	std::wstring exe_path;
 	bool allow_devices = false, allow_browser = false;
+	bool allow_screen = false; // --allow-screen-capture: win-capture, screen and window layers (D390 proposed)
 	bool allow_live = false; // --allow-live: real (non-loopback) stream targets (A0)
 	bool twitch_bandwidth_test = false; // --twitch-bandwidth-test: twitch sinks in bandwidth-test mode (outputs.h)
 	bool test_hooks = false; // --test-hooks: hotkeys.trigger (tests only; never passed by the launchers)

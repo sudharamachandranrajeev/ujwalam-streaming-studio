@@ -15,6 +15,9 @@
 //        "active": { "H": "main", "V": "main-v" } }
 //      Layer types: color, test_pattern, media, image; with --allow-devices also dshow_video, wasapi_input;
 //      with --allow-browser also browser.
+// Project v1 screen and window layers (D390 proposed) build only on a host started with --allow-screen-capture (which
+// loads win-capture); otherwise they are listed unavailable ("forbidden"). Their targets come from the read-only RPC
+// capture.listTargets -> { displays: [{id, name, width, height}], windows: [{id, title, exe}] } (screen_capture.h).
 // Layers are listed bottom to top. Canvas ids are H and V (case-insensitive on input). A scene id may exist on both
 // canvases; methods take an optional canvas and act on every canvas that has the scene when it is omitted (layers.list
 // and layers.add need it when the scene is on both).
@@ -40,6 +43,7 @@ public:
 	struct Flags {
 		bool allow_devices = false;
 		bool allow_browser = false;
+		bool allow_screen = false; // --allow-screen-capture: screen and window layers (D390 proposed)
 	};
 	struct LoadOptions {
 		std::map<std::string, std::string> bases; // project v1 pathRef bases -> absolute directories
@@ -72,9 +76,36 @@ public:
 	// bases; point_ms = when the scene changes under it; the stinger's own length is the duration; D242; audio = its own
 	// sound in the canvas mix, D244).
 	// easing (D327 TR1): a curve id of transition_ease.h for a fade ("linear" = the plain libobs fade).
-	json::Value transition_set(const std::string &canvas, const std::string &type, int64_t ms, const json::Value *file = nullptr,
-				   int64_t point_ms = 0, bool audio = true, const std::string &easing = "linear");
+	// D391 (proposed), each over ms (0 = the switch cuts), libobs obs-transitions:
+	//   slide     (slide_transition):         direction left|right|up|down
+	//   swipe     (swipe_transition):         direction, swipe_in (the new scene swipes in over the old one)
+	//   wipe      (wipe_transition, luma):    pattern = a luma image id (data/transitions/luma-wipes.json; the file
+	//                                         <id>.png in obs-transitions' luma_wipes), softness 0..1, invert
+	//   fadeColor (fade_to_color_transition): color #RRGGBB, point_pct 0..100 (where the scene changes, % of ms)
+	// stinger and these four take the canvas's second transition object (st), swapped onto channel 0 like the stinger
+	// and released when the type goes back to cut or fade. A type whose libobs transition is missing is refused
+	// (UNAVAILABLE) and the canvas keeps what it had.
+	struct TransitionSpec {
+		std::string type = "cut";
+		int64_t ms = 0;
+		const json::Value *file = nullptr; // stinger
+		int64_t point_ms = 0;              // stinger
+		bool audio = true;                 // stinger
+		std::string easing = "linear";     // fade
+		std::string direction;             // slide, swipe
+		bool swipe_in = false;             // swipe
+		std::string pattern;               // wipe
+		double softness = 0.03;            // wipe (OBS default)
+		bool invert = false;               // wipe
+		std::string color;                 // fadeColor
+		int64_t point_pct = 50;            // fadeColor (OBS default)
+	};
+	json::Value transition_set(const std::string &canvas, const TransitionSpec &t);
 	json::Value transitions() const;
+	// transitions.types (D391 proposed): every type transitions.set takes, its fields, and whether this host can run it
+	// now (its libobs transition is registered). { types: [{type, fields: [...], available}], wipes: [ids] } with the
+	// luma image ids whose file is present.
+	static json::Value transition_types();
 	// transitions.forceComplete (D327 TR1): a running fade or stinger on that canvas jumps to its end scene now.
 	// { canvas, completed } (completed false when nothing was running).
 	json::Value transition_force_complete(const std::string &canvas);
@@ -246,7 +277,7 @@ private:
 		// (default) switches at once; "fade" over ms. The UI server sets it (transitions.set) from the project file
 		// while flag `transitions` is on.
 		obs_source_t *tr = nullptr; // fade (also used for cuts)
-		obs_source_t *st = nullptr; // stinger, while the type is stinger
+		obs_source_t *st = nullptr; // stinger or a D391 type (slide, swipe, wipe, fadeColor), while the type is one of them
 		obs_source_t *routed = nullptr; // the transition on channel 0
 		std::string tr_type = "cut";
 		uint32_t tr_ms = 0;
@@ -254,6 +285,8 @@ private:
 		std::string st_ref; // "base:rel" of the stinger file
 		uint32_t st_point = 0;
 		bool st_audio = true; // the stinger's own sound in the canvas mix (Meld "audio" switch)
+		std::string st_kind;  // libobs id of st
+		json::Value st_info;  // D391: the type's own fields as transitions() reports them (object; null for a stinger)
 	};
 	struct Global { // project v1 audio device source on a main-canvas output channel
 		std::shared_ptr<Src> src;

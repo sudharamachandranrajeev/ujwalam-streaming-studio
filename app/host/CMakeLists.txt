@@ -92,6 +92,7 @@ add_executable(ujwalam-host
   src/obs_runtime.cpp
   src/studio.cpp
   src/transition_ease.cpp
+  src/screen_capture.cpp
   src/model.cpp
   src/devices.cpp
   src/device_watch.cpp

@@ -11,6 +11,7 @@
 #include "devices.h"
 #include "log.h"
 #include "obs_runtime.h"
+#include "screen_capture.h"
 #include "stats.h"
 
 #include <obs.h>
@@ -19,7 +20,9 @@
 
 #include <chrono>
 #include <filesystem>
+#include <map>
 #include <regex>
+#include <set>
 
 using rpc::Error;
 using rpc::Params;
@@ -227,6 +230,7 @@ json::Value host_info(App &a)
 	json::Value flags = json::Value::object();
 	flags.set("allowDevices", a.allow_devices);
 	flags.set("allowBrowser", a.allow_browser);
+	flags.set("allowScreenCapture", a.allow_screen);
 	flags.set("allowLive", a.allow_live);
 	flags.set("twitchBandwidthTest", a.twitch_bandwidth_test);
 	flags.set("testHooks", a.test_hooks);
@@ -378,6 +382,14 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 		r.set("devicesEnabled", a.allow_devices);
 		return r;
 	});
+	// capture.listTargets (D390 proposed; screen_capture.h): the displays and app windows a screen or window layer can
+	// show. Read-only: no source is created, nothing is captured. Window titles are personal: counts only in the log.
+	add("capture.listTargets", [&a](const json::Value &p) {
+		(void)Params(p, {});
+		if (!a.allow_screen)
+			throw Error(rpc::FORBIDDEN, "screen and window capture are switched off (start the host with --allow-screen-capture)");
+		return screencap::list_targets();
+	});
 	// devices.testSet {devices: [{kind, name, path, fail?}] | null, removed?: [{kind?, name, path}], viaWatcher?, peek?}
 	// (--test-hooks only, D329): replaces the device list the host sees with a fake one (null: back to the real list)
 	// and runs one hot-plug pass at once, as a plug-in or unplug would. Capture layers then build on ujw_test_capture
@@ -525,14 +537,46 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 	});
 	// Scene transitions (D239): per canvas, cut or fade (0-10000 ms). The UI server keeps them equal to flag
 	// `transitions` and the project's canvases[].transition; host.status reports them.
+	// D391 (proposed): slide {direction}, swipe {direction, swipeIn}, wipe {pattern, softness, invert}, fadeColor
+	// {color, pointPct}, each with durationMs. Their fields are refused on any other type, and the stinger's on them.
 	add("transitions.set", [&a](const json::Value &p) {
 		// easing (D327 TR1): a fade's curve id (transition_ease.h); absent = linear.
-		Params q(p, {"canvas", "type", "durationMs", "file", "pointMs", "audio", "easing"});
-		const json::Value *file = q.has("file") ? &q.obj("file") : nullptr;
-		return a.studio->transition_set(q.str("canvas", 8), q.str("type", 8), q.int_or("durationMs", 0, 0, 10000), file,
-						q.int_or("pointMs", 0, 0, 10000), q.bool_or("audio", true), q.str_or("easing", "linear", 32));
+		Params q(p, {"canvas", "type", "durationMs", "file", "pointMs", "audio", "easing", "direction", "swipeIn", "pattern",
+			     "softness", "invert", "color", "pointPct"});
+		Studio::TransitionSpec t;
+		t.type = q.str("type", 16);
+		static const std::map<std::string, std::set<std::string>> own = {
+			{"slide", {"direction"}}, {"swipe", {"direction", "swipeIn"}},
+			{"wipe", {"pattern", "softness", "invert"}}, {"fadeColor", {"color", "pointPct"}}};
+		for (const char *k : {"direction", "swipeIn", "pattern", "softness", "invert", "color", "pointPct"}) {
+			auto it = own.find(t.type);
+			if (q.has(k) && (it == own.end() || !it->second.count(k)))
+				throw Error(rpc::INVALID_PARAMS, std::string(k) + " is not a field of a " + t.type + " transition");
+		}
+		if (own.count(t.type))
+			for (const char *k : {"file", "pointMs", "audio"})
+				if (q.has(k))
+					throw Error(rpc::INVALID_PARAMS, std::string(k) + " is for a stinger only");
+		t.file = q.has("file") ? &q.obj("file") : nullptr;
+		t.ms = q.int_or("durationMs", 0, 0, 10000);
+		t.point_ms = q.int_or("pointMs", 0, 0, 10000);
+		t.audio = q.bool_or("audio", true);
+		t.easing = q.str_or("easing", "linear", 32);
+		t.direction = q.str_or("direction", "", 8);
+		t.swipe_in = q.bool_or("swipeIn", false);
+		t.pattern = q.str_or("pattern", "", 48);
+		t.softness = q.num_or("softness", 0.03, 0, 1);
+		t.invert = q.bool_or("invert", false);
+		t.color = q.str_or("color", "", 8);
+		t.point_pct = q.int_or("pointPct", 50, 0, 100);
+		return a.studio->transition_set(q.str("canvas", 8), t);
 	});
 	add("transitions.get", [&a](const json::Value &) { return a.studio->transitions(); });
+	// D391 (proposed): the types transitions.set takes, their fields, which this host can run, and the luma wipe ids.
+	add("transitions.types", [](const json::Value &p) {
+		(void)Params(p, {});
+		return Studio::transition_types();
+	});
 	// D327 TR1 "Force complete transition": a running transition on that canvas ends on its target scene now.
 	add("transitions.forceComplete", [&a](const json::Value &p) {
 		Params q(p, {"canvas"});

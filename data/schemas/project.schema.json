@@ -51,17 +51,36 @@
         "transition": {
           "type": "object", "additionalProperties": false, "required": ["type", "durationMs"],
           "properties": {
-            "type": { "enum": ["cut", "fade", "stinger"] },
+            "type": { "enum": ["cut", "fade", "stinger", "slide", "swipe", "wipe", "fadeColor"] },
             "durationMs": { "type": "integer", "minimum": 0, "maximum": 10000 },
             "file": { "$ref": "#/$defs/pathRef", "$comment": "stinger only (D242): the video played over the switch" },
             "pointMs": { "type": "integer", "minimum": 0, "maximum": 10000, "$comment": "stinger only: when the scene changes under it" },
             "audio": { "type": "boolean", "$comment": "stinger only (D244): its own sound in the canvas mix; absent = true" },
             "easing": { "type": "string", "pattern": "^[a-z]+(-[a-z]+)*$", "$comment": "fade only (D327 TR1): an id from data/transitions/easing.json; absent = linear" },
-            "mirror": { "type": "boolean", "$comment": "D327 TR1, portrait canvas only: true = use the main canvas transition; the own fields stay for when it is off" }
+            "mirror": { "type": "boolean", "$comment": "D327 TR1, portrait canvas only: true = use the main canvas transition; the own fields stay for when it is off" },
+            "direction": { "enum": ["left", "right", "up", "down"], "$comment": "slide and swipe only (D391): where the old scene goes" },
+            "swipeIn": { "type": "boolean", "$comment": "swipe only (D391): the new scene swipes in over the old one; absent = false (the old one swipes out)" },
+            "pattern": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 48, "$comment": "wipe only (D391): a luma image id from data/transitions/luma-wipes.json" },
+            "softness": { "type": "number", "minimum": 0, "maximum": 1, "$comment": "wipe only (D391): edge softness; absent = 0.03 (OBS default)" },
+            "invert": { "type": "boolean", "$comment": "wipe only (D391): run the luma image the other way; absent = false" },
+            "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "$comment": "fadeColor only (D391): the colour faded through" },
+            "pointPct": { "type": "integer", "minimum": 0, "maximum": 100, "$comment": "fadeColor only (D391): where the scene changes, % of durationMs; absent = 50" }
           },
-          "if": { "properties": { "type": { "const": "stinger" } } },
-          "then": { "properties": { "file": true, "pointMs": true, "easing": false }, "required": ["file", "pointMs"] },
-          "else": { "properties": { "file": false, "pointMs": false, "audio": false } }
+          "allOf": [
+            { "if": { "properties": { "type": { "const": "stinger" } } },
+              "then": { "properties": { "file": true, "pointMs": true, "easing": false }, "required": ["file", "pointMs"] },
+              "else": { "properties": { "file": false, "pointMs": false, "audio": false } } },
+            { "if": { "properties": { "type": { "enum": ["slide", "swipe", "wipe", "fadeColor"] } } },
+              "then": { "properties": { "easing": false } } },
+            { "if": { "properties": { "type": { "enum": ["slide", "swipe"] } } },
+              "then": { "properties": { "direction": true }, "required": ["direction"] }, "else": { "properties": { "direction": false } } },
+            { "if": { "properties": { "type": { "const": "swipe" } } },
+              "else": { "properties": { "swipeIn": false } } },
+            { "if": { "properties": { "type": { "const": "wipe" } } },
+              "then": { "properties": { "pattern": true }, "required": ["pattern"] }, "else": { "properties": { "pattern": false, "softness": false, "invert": false } } },
+            { "if": { "properties": { "type": { "const": "fadeColor" } } },
+              "then": { "properties": { "color": true }, "required": ["color"] }, "else": { "properties": { "color": false, "pointPct": false } } }
+          ]
         }
       }
     },
@@ -200,7 +219,7 @@
       "required": ["id", "type", "name", "source", "placements"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "type": { "enum": ["capture", "browser", "image", "media", "text", "color", "duplicate"] },
+        "type": { "enum": ["capture", "browser", "image", "media", "text", "color", "duplicate", "screen", "window"] },
         "name": { "$ref": "#/$defs/label" },
         "visible": { "type": "boolean" },
         "locked": { "type": "boolean" },
@@ -243,7 +262,20 @@
           "properties": { "layer": { "$ref": "#/$defs/id" } } } } } },
         { "if": { "properties": { "type": { "const": "color" } } }, "then": { "properties": { "source": {
           "type": "object", "additionalProperties": false, "required": ["color"],
-          "properties": { "color": { "$ref": "#/$defs/color" } } } } } }
+          "properties": { "color": { "$ref": "#/$defs/color" } } } } } },
+        { "$comment": "D390: a whole display (libobs monitor_capture). display = an id the host lists (capture.listTargets); cursor absent = true.",
+          "if": { "properties": { "type": { "const": "screen" } } }, "then": { "properties": { "source": {
+          "type": "object", "additionalProperties": false, "required": ["display"],
+          "properties": {
+            "display": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\u0000-\u001f\u007f]+$" },
+            "cursor": { "type": "boolean" } } } } } },
+        { "$comment": "D390: one app window (libobs window_capture). window = the OBS window spec title:class:exe as the host lists it (capture.listTargets; ':' and '#' inside a part are encoded #3A / #22); match = OBS window match priority, absent = exe; cursor absent = true.",
+          "if": { "properties": { "type": { "const": "window" } } }, "then": { "properties": { "source": {
+          "type": "object", "additionalProperties": false, "required": ["window"],
+          "properties": {
+            "window": { "type": "string", "maxLength": 1024, "pattern": "^[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]+$" },
+            "match": { "enum": ["title", "class", "exe"] },
+            "cursor": { "type": "boolean" } } } } } }
       ]
     },
     "audio": {

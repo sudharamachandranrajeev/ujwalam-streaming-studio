@@ -151,3 +151,45 @@ test('stinger (D242): the transition form saves the project; the poll applies it
     assert.equal((await post({ canvas: 'h', type: 'cut' })).body.error, 'live-locked');
   } finally { await srv.close(); }
 });
+
+test('D391: slide, wipe and fadeColor in the project reach the host with their own fields; a refused one cuts and is not retried', async () => {
+  const { createProject, saveProject } = await import('../services/project/index.mjs');
+  const { createProjectSync } = await import('../services/studio-ui/project-sync.mjs');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ujw-d391-'));
+  const file = path.join(dir, 'p.project.json');
+  const doc = createProject({ name: 'T', fps: 30 });
+  doc.canvases.find((c) => c.id === 'h').transition = { type: 'fadeColor', durationMs: 900, color: '#1a2b3c', pointPct: 40 };
+  doc.canvases.find((c) => c.id === 'v').transition = { type: 'wipe', durationMs: 700, pattern: 'clock', softness: 0.2 };
+  saveProject(file, doc);
+  const tr = { H: { type: 'cut', durationMs: 0, available: true }, V: { type: 'cut', durationMs: 0, available: true } };
+  const sets = [];
+  const host = {
+    describe: () => ({ kind: 'host', available: true }),
+    call: async (m, p) => {
+      if (m === 'host.status') return { live: false, recording: false, transitions: structuredClone(tr) };
+      if (m === 'transitions.set') {
+        sets.push(p);
+        if (p.type === 'wipe') throw Object.assign(new Error('wipe pattern unknown'), { code: 'RPC_-32602' });
+        const { canvas, ...rest } = p;
+        tr[canvas] = { ...rest, available: true, ...(p.color ? { color: p.color.toUpperCase() } : {}) }; // the host reports colours upper case
+        return tr;
+      }
+      return {};
+    },
+  };
+  const flags = createFlags({ dataDir: dir });
+  flags.set(TRANSITIONS_FLAG, true);
+  const core = { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } };
+  const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: 'k'.repeat(48), flags, projectSync: createProjectSync({ file }), limits: { statusPollMs: 20 } });
+  await srv.listen();
+  try {
+    await until(() => tr.H.type === 'fadeColor', 'fadeColor applied to H');
+    assert.deepEqual(sets.find((p) => p.canvas === 'H'), { canvas: 'H', type: 'fadeColor', durationMs: 900, color: '#1a2b3c', pointPct: 40 });
+    await until(() => sets.some((p) => p.canvas === 'V' && p.type === 'wipe'), 'wipe asked for on V');
+    assert.deepEqual(sets.find((p) => p.canvas === 'V'), { canvas: 'V', type: 'wipe', durationMs: 700, pattern: 'clock', softness: 0.2 });
+    await sleep(150);
+    assert.equal(sets.filter((p) => p.canvas === 'V' && p.type === 'wipe').length, 1, 'a refused wipe is not asked for again');
+    assert.equal(tr.V.type, 'cut');
+    assert.equal(sets.filter((p) => p.canvas === 'H').length, 1, 'an applied colour that only differs in case is not set again');
+  } finally { await srv.close(); }
+});

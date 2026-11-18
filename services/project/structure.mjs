@@ -14,6 +14,9 @@
 //       overlay { overlay }  an overlay of the project, a browser layer the size of each canvas
 //       image   { file }     a still image under pathRef base "media" (the user's stream assets, D241), full canvas
 //       media   { file }     a video under base "media", looping, full canvas
+//       screen  { display }  a whole display (D390): an id from the host's capture.listTargets, full canvas
+//       window  { window, match? }  one app window (D390): a window spec from capture.listTargets, full canvas; named
+//                            after its exe, never its title (titles are personal)
 //     New layers go on top, on every canvas of the project.
 //   removeLayer(doc, { scene, layer })           -> { project }      refused while a copy or an audio source uses it
 //   moveLayer(doc, { scene, layer, canvas, direction }) -> { project } (D243) direction up|down, as seen on canvas h|v:
@@ -25,9 +28,10 @@
 // Layer ids are unique across the project (validateProject), new ids come from newId.
 
 import { newId, relPathProblem, validateProject } from './index.mjs';
+import { WINDOW_SPEC_RE } from './validate.mjs';
 
 const COLOR = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
-const KINDS = ['copy', 'color', 'text', 'capture', 'overlay', 'image', 'media'];
+const KINDS = ['copy', 'color', 'text', 'capture', 'overlay', 'image', 'media', 'screen', 'window'];
 
 const label = (v) => (typeof v === 'string' && v.trim().length >= 1 && v.trim().length <= 120 ? v.trim() : null);
 
@@ -103,6 +107,14 @@ export function addLayer(doc, p = {}) {
     const d = (doc.devices ?? []).find((x) => x.id === p.device);
     if (!d || d.kind === 'microphone' || d.kind === 'audio-output') return { error: 'unknown-device' };
     layer = { id: newId('capture'), type: 'capture', name: d.name, source: { device: d.id }, placements };
+  } else if (p.kind === 'screen') {
+    if (typeof p.display !== 'string' || p.display.length < 1 || p.display.length > 512) return { error: 'bad-display' };
+    layer = { id: newId('screen'), type: 'screen', name: 'Screen', source: { display: p.display }, placements };
+  } else if (p.kind === 'window') {
+    if (typeof p.window !== 'string' || p.window.length > 1024 || !WINDOW_SPEC_RE.test(p.window)) return { error: 'bad-window' };
+    if (p.match !== undefined && !['title', 'class', 'exe'].includes(p.match)) return { error: 'bad-window' };
+    const exe = label(p.window.split(':')[2].replace(/#3A/g, ':').replace(/#22/g, '#').replace(/\.exe$/i, '').slice(0, 120)) ?? 'Window';
+    layer = { id: newId('window'), type: 'window', name: exe, source: { window: p.window, ...(p.match ? { match: p.match } : {}) }, placements };
   } else if (p.kind === 'image' || p.kind === 'media') {
     if (relPathProblem(p.file)) return { error: 'bad-file' };
     const name = label(p.file.split('/').pop().replace(/\.[^.]+$/, '').slice(0, 120)) ?? (p.kind === 'image' ? 'Image' : 'Video');

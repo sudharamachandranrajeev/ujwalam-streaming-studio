@@ -169,6 +169,12 @@ describe('mutating API', () => {
     for (const bad of [{}, { width: 0 }, { x: 1e6 }, { opacity: 0.5 }, { crop: { left: -1 } }, { crop: { inner: 1 } }, { crop: {} }, { rotation: '5' }, []]) assert.equal((await sp(bad)).status, 400, JSON.stringify(bad));
     assert.equal((await post(port, a, route, { method: 'layers.setPlacement', params: { scene: 's', layer: 'l' } })).status, 400, 'placement required');
     assert.ok(Object.keys(HOST_CALLS).every((k) => !/^(host|project|outputs|encoders)\./.test(k)));
+    // D390/D391: the capture target and transition type lists are allowed, read-only, without parameters
+    for (const method of ['capture.listTargets', 'transitions.types']) {
+      assert.deepEqual(Object.keys(HOST_CALLS[method].schema), [], method);
+      assert.ok(!HOST_CALLS[method].liveConfirm && !HOST_CALLS[method].confirm, method);
+      assert.equal((await post(port, a, route, { method, params: { x: 1 } })).status, 400, `${method} takes no params`);
+    }
   });
   test('stream start acts on the click (D332): no phrase, no pending entry; the host is called once', async () => {
     const before = ctx.calls.host.filter((m) => m === 'stream.start').length;

@@ -15,6 +15,8 @@ const readJson = (...p) => JSON.parse(fs.readFileSync(path.join(repo, ...p), 'ut
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 const schemaCheck = ajv.compile(readJson('data', 'schemas', 'project.schema.json'));
 const sample = () => readJson('tests', 'fixtures', 'project', 'sample.project.json');
+// D390: a screen or window layer (placeholder window spec, never a real title)
+const capLayer = (type, source, id = `layer-${type}`) => ({ id, type, name: type, source, placements: { h: { visible: true, x: 0, y: 0, width: 1920, height: 1080 } } });
 const dupLayer = (id, target) => ({ id, type: 'duplicate', name: 'Mirror', source: { layer: target }, placements: { h: { visible: true, x: 0, y: 0, width: 100, height: 100 } } });
 
 // Each case: [name, mutate(doc), structuralAgreement] ; structural=true means the schema must also reject it.
@@ -29,6 +31,35 @@ const BAD = [
   ['transition easing not an id', (d) => { d.canvases[0].transition = { type: 'fade', durationMs: 500, easing: 'In Out' }; }, true],
   ['transition mirror not a boolean', (d) => { d.canvases.find((c) => c.id === 'v').transition = { type: 'cut', durationMs: 0, mirror: 'yes' }; }, true],
   ['transition mirror on the main canvas', (d) => { d.canvases.find((c) => c.id === 'h').transition = { type: 'cut', durationMs: 0, mirror: true }; }, false],
+  // D391: slide, swipe, wipe, fadeColor; each type's own fields only on that type
+  ['transition type zoom', (d) => { d.canvases[0].transition = { type: 'zoom', durationMs: 500 }; }, true],
+  ['slide without direction', (d) => { d.canvases[0].transition = { type: 'slide', durationMs: 500 }; }, true],
+  ['slide direction diagonal', (d) => { d.canvases[0].transition = { type: 'slide', durationMs: 500, direction: 'upleft' }; }, true],
+  ['slide with swipeIn', (d) => { d.canvases[0].transition = { type: 'slide', durationMs: 500, direction: 'left', swipeIn: true }; }, true],
+  ['fade with direction', (d) => { d.canvases[0].transition = { type: 'fade', durationMs: 500, direction: 'left' }; }, true],
+  ['swipe swipeIn not a boolean', (d) => { d.canvases[0].transition = { type: 'swipe', durationMs: 500, direction: 'up', swipeIn: 'yes' }; }, true],
+  ['wipe without pattern', (d) => { d.canvases[0].transition = { type: 'wipe', durationMs: 500 }; }, true],
+  ['wipe pattern a file name', (d) => { d.canvases[0].transition = { type: 'wipe', durationMs: 500, pattern: 'clock.png' }; }, true],
+  ['wipe softness above 1', (d) => { d.canvases[0].transition = { type: 'wipe', durationMs: 500, pattern: 'clock', softness: 1.5 }; }, true],
+  ['wipe with easing', (d) => { d.canvases[0].transition = { type: 'wipe', durationMs: 500, pattern: 'clock', easing: 'in-quad' }; }, true],
+  ['stinger with softness', (d) => { d.canvases[0].transition = { type: 'stinger', durationMs: 0, file: { base: 'media', rel: 's.webm' }, pointMs: 300, softness: 0.1 }; }, true],
+  ['slide with a stinger file', (d) => { d.canvases[0].transition = { type: 'slide', durationMs: 500, direction: 'left', file: { base: 'media', rel: 's.webm' } }; }, true],
+  ['fadeColor without colour', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500 }; }, true],
+  ['fadeColor colour with alpha', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000ff' }; }, true],
+  ['fadeColor pointPct 101', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 101 }; }, true],
+  ['fadeColor pointPct 50.5', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 50.5 }; }, true],
+  ['wipe pattern on fadeColor', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000', pattern: 'clock' }; }, true],
+  // D390: screen and window layers
+  ['screen without display', (d) => { d.scenes[0].layers.push(capLayer('screen', {})); }, true],
+  ['screen display empty', (d) => { d.scenes[0].layers.push(capLayer('screen', { display: '' })); }, true],
+  ['screen with a window key', (d) => { d.scenes[0].layers.push(capLayer('screen', { display: 'd1', window: 'a:b:c.exe' })); }, true],
+  ['screen cursor not a boolean', (d) => { d.scenes[0].layers.push(capLayer('screen', { display: 'd1', cursor: 1 })); }, true],
+  ['window without window', (d) => { d.scenes[0].layers.push(capLayer('window', { match: 'exe' })); }, true],
+  ['window spec of two parts', (d) => { d.scenes[0].layers.push(capLayer('window', { window: 'Title:example.exe' })); }, true],
+  ['window spec without exe', (d) => { d.scenes[0].layers.push(capLayer('window', { window: 'Title:Class:' })); }, true],
+  ['window spec with a control character', (d) => { d.scenes[0].layers.push(capLayer('window', { window: 'Ti\u0007tle:Class:example.exe' })); }, true],
+  ['window match pid', (d) => { d.scenes[0].layers.push(capLayer('window', { window: 'Title:Class:example.exe', match: 'pid' })); }, true],
+  ['window with a display key', (d) => { d.scenes[0].layers.push(capLayer('window', { window: 'Title:Class:example.exe', display: 'd1' })); }, true],
   ['width as string', (d) => { d.canvases[0].width = '1920'; }, true],
   ['device kind unknown', (d) => { d.devices[0].kind = 'toaster'; }, true],
   ['device match empty', (d) => { d.devices[0].match = {}; }, true],
@@ -139,6 +170,54 @@ test('D327 TR1: a fade with an easing curve and a mirrored portrait transition a
   d.canvases.find((c) => c.id === 'v').transition = { type: 'cut', durationMs: 0, mirror: true };
   assert.equal(schemaCheck(d), true, JSON.stringify(schemaCheck.errors));
   assert.deepEqual(validateProject(d).errors, []);
+});
+
+test('D391: slide, swipe, wipe and fadeColor transitions with their own fields are accepted', () => {
+  for (const t of [
+    { type: 'slide', durationMs: 600, direction: 'left' },
+    { type: 'swipe', durationMs: 600, direction: 'down', swipeIn: true },
+    { type: 'swipe', durationMs: 0, direction: 'up' },
+    { type: 'wipe', durationMs: 800, pattern: 'barndoor-botleft', softness: 0.2, invert: true },
+    { type: 'wipe', durationMs: 800, pattern: 'clock' },
+    { type: 'fadeColor', durationMs: 1000, color: '#1A2b3C', pointPct: 40 },
+    { type: 'fadeColor', durationMs: 1000, color: '#000000' },
+  ]) {
+    const d = sample();
+    d.canvases.find((c) => c.id === 'h').transition = t;
+    d.canvases.find((c) => c.id === 'v').transition = { ...t, mirror: true };
+    assert.equal(schemaCheck(d), true, `${JSON.stringify(t)}: ${JSON.stringify(schemaCheck.errors)}`);
+    assert.deepEqual(validateProject(d).errors, [], JSON.stringify(t));
+  }
+});
+
+test('D390: screen and window layers are accepted (schema and validator)', () => {
+  const d = sample();
+  d.scenes[0].layers.push(capLayer('screen', { display: '\\\\?\\DISPLAY#EXAMPLE#1&2&3#{guid}' }, 'layer-s1'));
+  d.scenes[0].layers.push(capLayer('screen', { display: 'd2', cursor: false }, 'layer-s2'));
+  d.scenes[0].layers.push(capLayer('window', { window: 'Example Title:ExampleClass:example.exe' }, 'layer-w1'));
+  d.scenes[0].layers.push(capLayer('window', { window: ':Class#3AWith#3AColons:example.exe', match: 'title', cursor: false }, 'layer-w2'));
+  assert.equal(schemaCheck(d), true, JSON.stringify(schemaCheck.errors));
+  assert.deepEqual(validateProject(d).errors, []);
+});
+
+test('the luma wipe list names only shipped images: id = file name without .png, plain labels, no repeats', () => {
+  const w = readJson('data', 'transitions', 'luma-wipes.json');
+  assert.ok(Array.isArray(w.wipes) && w.wipes.length >= 1);
+  const ids = new Set();
+  for (const x of w.wipes) {
+    assert.deepEqual(Object.keys(x).sort(), ['file', 'id', 'label']);
+    assert.match(x.id, /^[a-z0-9]+(-[a-z0-9]+)*$/);
+    assert.equal(x.file, `${x.id}.png`);
+    assert.ok(typeof x.label === 'string' && x.label.length >= 1 && x.label.length <= 40);
+    assert.ok(!ids.has(x.id), x.id);
+    ids.add(x.id);
+  }
+  // every id passes the schema's pattern on a wipe transition
+  for (const id of ids) {
+    const d = sample();
+    d.canvases[0].transition = { type: 'wipe', durationMs: 500, pattern: id };
+    assert.equal(schemaCheck(d), true, id);
+  }
 });
 
 test('overlay query and device directShowId are accepted', () => {
