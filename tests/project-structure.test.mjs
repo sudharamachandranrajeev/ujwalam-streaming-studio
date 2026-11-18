@@ -67,6 +67,16 @@ test('addLayer: copy points at the real layer with its placements; colour, text,
   assert.equal(addLayer(doc, { scene: s, kind: 'image', file: 'C:/x.png' }).error, 'bad-file');
   assert.equal(addLayer(doc, { scene: s, kind: 'color', color: 'red' }).error, 'bad-color');
   assert.equal(addLayer(doc, { scene: s, kind: 'wipe' }).error, 'bad-kind');
+  // D390: screen and window layers, full canvas; a window layer is named after its exe, never its title
+  const scr = addLayer(doc, { scene: s, kind: 'screen', display: 'display-id-1' });
+  assert.deepEqual([scr.layer.type, scr.layer.name, scr.layer.source], ['screen', 'Screen', { display: 'display-id-1' }]);
+  assert.deepEqual(scr.layer.placements.h, { visible: true, x: 0, y: 0, width: 1920, height: 1080 });
+  const win = addLayer(doc, { scene: s, kind: 'window', window: 'Example Title:ExampleClass:example-app.exe', match: 'title' });
+  assert.deepEqual([win.layer.type, win.layer.name, win.layer.source], ['window', 'example-app', { window: 'Example Title:ExampleClass:example-app.exe', match: 'title' }]);
+  assert.equal(addLayer(doc, { scene: s, kind: 'window', window: 'Title:Class:app.exe' }).layer.source.match, undefined, 'match absent = host default exe');
+  assert.equal(addLayer(doc, { scene: s, kind: 'screen' }).error, 'bad-display');
+  assert.equal(addLayer(doc, { scene: s, kind: 'window', window: 'no-colons' }).error, 'bad-window');
+  assert.equal(addLayer(doc, { scene: s, kind: 'window', window: 'T:C:a.exe', match: 'pid' }).error, 'bad-window');
   assert.equal(addLayer(doc, { scene: s, kind: 'image' }).error, 'bad-file');
   assert.equal(addLayer(doc, { scene: s, kind: 'copy', of: 'zz' }).error, 'unknown-layer');
 });

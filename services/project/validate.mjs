@@ -11,7 +11,12 @@ const COLOR_RE = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
 const IMPORTER_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 const CANVAS_IDS = ['h', 'v'];
 const DEVICE_KINDS = ['capture-card', 'camera', 'microphone', 'audio-output'];
-const LAYER_TYPES = ['capture', 'browser', 'image', 'media', 'text', 'color', 'duplicate'];
+const LAYER_TYPES = ['capture', 'browser', 'image', 'media', 'text', 'color', 'duplicate', 'screen', 'window']; // screen, window: D390
+// Scene transition types (D239, D242 stinger, D391 slide/swipe/wipe/fadeColor) and the fields only that type takes.
+export const TRANSITION_TYPES = ['cut', 'fade', 'stinger', 'slide', 'swipe', 'wipe', 'fadeColor'];
+const TRANSITION_OWN = { slide: ['direction'], swipe: ['direction', 'swipeIn'], wipe: ['pattern', 'softness', 'invert'], fadeColor: ['color', 'pointPct'] };
+// D390: OBS window spec "title:class:exe" (':' and '#' inside a part encoded by OBS), exe not empty.
+export const WINDOW_SPEC_RE = /^[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]+$/;
 const MONITORING = ['off', 'monitor-only', 'monitor-and-output'];
 const PATH_BASES = ['data', 'luts', 'media', 'overlays', 'profile']; // luts: the app's shipped LUTs (D381)
 // D291 layer effects: key -> [min, max] or [min, max, 'int'], 'color' (#RRGGBB), 'file' (pathRef), 'bool', or
@@ -145,14 +150,30 @@ export function validateProject(doc) {
         const t = c.transition; const tp = `${p}.transition`;
         if (!isObj(t)) err(tp, 'must be an object');
         else {
-          noExtra(t, ['type', 'durationMs', 'file', 'pointMs', 'audio', 'easing', 'mirror'], tp); req(t, ['type', 'durationMs'], tp);
+          noExtra(t, ['type', 'durationMs', 'file', 'pointMs', 'audio', 'easing', 'mirror', 'direction', 'swipeIn', 'pattern', 'softness', 'invert', 'color', 'pointPct'], tp);
+          req(t, ['type', 'durationMs'], tp);
           // D327 TR1: easing = a curve id (data/transitions/easing.json; the host refuses an id it does not know), not for
           // a stinger; mirror = the portrait canvas uses the main canvas transition.
           if ('easing' in t && (typeof t.easing !== 'string' || !/^[a-z]+(-[a-z]+)*$/.test(t.easing))) err(`${tp}.easing`, 'must be an easing id');
           if ('easing' in t && t.type === 'stinger') err(`${tp}.easing`, 'is not for a stinger');
           if ('mirror' in t && typeof t.mirror !== 'boolean') err(`${tp}.mirror`, 'must be true or false');
           if ('mirror' in t && c.id !== 'v') err(`${tp}.mirror`, 'is for the portrait canvas (v) only');
-          if ('type' in t && !['cut', 'fade', 'stinger'].includes(t.type)) err(`${tp}.type`, 'must be "cut", "fade" or "stinger"');
+          if ('type' in t && !TRANSITION_TYPES.includes(t.type)) err(`${tp}.type`, `must be one of ${TRANSITION_TYPES.join(', ')}`);
+          // D391: each type's own fields only on that type; slide/swipe need direction, wipe a pattern, fadeColor a colour.
+          for (const k of new Set(Object.values(TRANSITION_OWN).flat())) {
+            if (k in t && !(TRANSITION_OWN[t.type] ?? []).includes(k)) err(`${tp}.${k}`, `is not a field of a ${t.type} transition`);
+          }
+          if ('easing' in t && TRANSITION_OWN[t.type]) err(`${tp}.easing`, 'is for a fade only');
+          if (t.type === 'slide' || t.type === 'swipe') req(t, ['direction'], tp);
+          if (t.type === 'wipe') req(t, ['pattern'], tp);
+          if (t.type === 'fadeColor') req(t, ['color'], tp);
+          if ('direction' in t && !['left', 'right', 'up', 'down'].includes(t.direction)) err(`${tp}.direction`, 'must be left, right, up or down');
+          if ('swipeIn' in t && typeof t.swipeIn !== 'boolean') err(`${tp}.swipeIn`, 'must be true or false');
+          if ('pattern' in t && (typeof t.pattern !== 'string' || t.pattern.length > 48 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(t.pattern))) err(`${tp}.pattern`, 'must be a luma wipe id');
+          if ('softness' in t) num(t.softness, `${tp}.softness`, 0, 1);
+          if ('invert' in t && typeof t.invert !== 'boolean') err(`${tp}.invert`, 'must be true or false');
+          if ('color' in t && (typeof t.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(t.color))) err(`${tp}.color`, 'must be #rrggbb');
+          if ('pointPct' in t) num(t.pointPct, `${tp}.pointPct`, 0, 100, true);
           if ('durationMs' in t) num(t.durationMs, `${tp}.durationMs`, 0, 10000, true);
           if (t.type === 'stinger') { req(t, ['file', 'pointMs'], tp); if ('file' in t) pathRefOk(t.file, `${tp}.file`); }
           else if ('file' in t || 'pointMs' in t || 'audio' in t) err(tp, 'file, pointMs and audio are for a stinger only');
@@ -332,6 +353,8 @@ export function validateProject(doc) {
       text: [['text', 'font', 'size', 'color'], ['text']],
       color: [['color'], ['color']],
       duplicate: [['layer'], ['layer']],
+      screen: [['display', 'cursor'], ['display']], // D390
+      window: [['window', 'match', 'cursor'], ['window']], // D390
     }[type];
     if (!spec) return;
     noExtra(s, spec[0], p); req(s, spec[1], p);
@@ -364,6 +387,13 @@ export function validateProject(doc) {
       if ('color' in s && (typeof s.color !== 'string' || !COLOR_RE.test(s.color))) err(`${p}.color`, 'must be #rrggbb or #rrggbbaa');
     }
     if (type === 'color' && 'color' in s && (typeof s.color !== 'string' || !COLOR_RE.test(s.color))) err(`${p}.color`, 'must be #rrggbb or #rrggbbaa');
+    // D390: screen = a display id the host lists; window = the OBS window spec; both show the cursor unless cursor false.
+    if (type === 'screen' && 'display' in s && (typeof s.display !== 'string' || s.display.length < 1 || s.display.length > 512 || /[\u0000-\u001f\u007f]/.test(s.display))) err(`${p}.display`, 'must be a display id of 1 to 512 characters');
+    if (type === 'window') {
+      if ('window' in s && (typeof s.window !== 'string' || s.window.length > 1024 || !WINDOW_SPEC_RE.test(s.window))) err(`${p}.window`, 'must be a window spec title:class:exe');
+      if ('match' in s && !['title', 'class', 'exe'].includes(s.match)) err(`${p}.match`, 'must be title, class or exe');
+    }
+    if ((type === 'screen' || type === 'window') && 'cursor' in s && typeof s.cursor !== 'boolean') err(`${p}.cursor`, 'must be a boolean');
   };
   if ('scenes' in doc && arr(doc.scenes, '.scenes', 256)) {
     uniq(doc.scenes, '.scenes', 'scene', sceneIds);

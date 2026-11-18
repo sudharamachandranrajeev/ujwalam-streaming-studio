@@ -169,6 +169,9 @@ export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'yo
         case 'preview.select': return { layer: p.layer ?? null, fake: true }; // D335: no preview mouse editing in the fake
         case 'replay.save': return { saved: [], fake: true, note: 'BLOCKED-ON-HOST: the fake backend has no replay buffer' };
         case 'marker.add': return { ok: true, fake: true };
+        // D390/D391: the fake has no displays, windows or OBS transitions; it lists none (never invented titles).
+        case 'capture.listTargets': return { displays: [], windows: [], fake: true };
+        case 'transitions.types': return { types: [{ type: 'cut', fields: [], available: true }, { type: 'fade', fields: ['durationMs', 'easing'], available: true }], wipes: [], fake: true };
         case 'mixer.list': return { sources: mixer.map((m) => ({ ...m, mixers: TRACKS.reduce((b, t, n) => (m.tracks.includes(t.id) ? b | (1 << n) : b), 0), peakDb: null })), tracks: TRACKS };
         case 'mixer.setTracks': {
           const m = need(mixer.find((x) => x.id === p.id), 'source');
