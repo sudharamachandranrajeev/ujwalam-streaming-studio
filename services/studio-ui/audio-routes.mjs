@@ -163,7 +163,10 @@ export function createAudioRoutes(opts) {
     if (x.error) return refuse(res, x.error, 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
     return commit(res, file, x.project, () => host.call('audio.addFromProject', { project: x.project, audio: x.audio.id }),
       () => host.call('audio.removeFromProject', { project: doc, audio: x.audio.id }),
-      (out) => ({ op: 'add', audio: { id: x.audio.id, name: x.audio.name, kind: x.audio.device ? 'device' : 'layer', cueDelayed: out?.cueDelayed === true } }), `[studio-ui] mixer: sound added (${x.audio.device ? 'device' : 'layer'})`);
+      (out) => ({ op: 'add', audio: { id: x.audio.id, name: x.audio.name, kind: x.audio.device ? 'device' : 'layer', cueDelayed: out?.cueDelayed === true },
+        // B7: maybe the same card as a sound in the mix (another card of the same model is possible): added, with a warning
+        ...(x.maybeSameAs ? { warning: `This may be the same device as ${x.maybeSameAs}, which is in the mix already. If you hear it twice, remove one.` } : {}) }),
+      `[studio-ui] mixer: sound added (${x.audio.device ? 'device' : 'layer'})`);
   }
 
   return {

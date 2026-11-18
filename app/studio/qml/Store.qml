@@ -452,6 +452,7 @@ QtObject {
             const late = b.audio && b.audio.cueDelayed === true;
             say("Added " + (b.audio ? b.audio.name : "the sound") + " to the stream." +
                 (late ? " Its headphone sound (CUE) comes a little late, because it comes with video. For game sound, the capture card's audio input is heard at once." : "") +
+                (typeof b.warning === "string" ? " " + b.warning : "") +
                 (b.saved ? "" : " Not saved to the project file: the change is live only."));
             if (then) then(true, "");
             loadMixer();

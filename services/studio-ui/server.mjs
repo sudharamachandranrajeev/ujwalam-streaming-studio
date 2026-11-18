@@ -1298,10 +1298,13 @@ export function createStudioServer(opts) {
   }
   // B7 (2026-11-18): a capture layer's own sound whose card's audio input is in the mix already carries sameAs (the name
   // of that sound), so the studio shows it once instead of offering it twice. The project file is read only for this.
-  function withSameDevice(result) {
+  // Only a pair that is certain in the device list counts (two cards of one model are never merged; Codex review P2).
+  async function withSameDevice(result) {
     const file = projectSync?.status?.().file;
     if (!isPlain(result) || !Array.isArray(result.sources) || typeof file !== 'string') return result;
-    try { return { ...result, sources: sameDeviceRows(loadProject(file).project, result.sources) }; } catch { return result; }
+    let list = null;
+    try { list = await host.call('devices.list', {}); } catch { list = null; }
+    try { return { ...result, sources: sameDeviceRows(loadProject(file).project, result.sources, list) }; } catch { return result; }
   }
   function withRenames(method, result) {
     if (!renamed.size || !isPlain(result)) return result;
@@ -1692,7 +1695,7 @@ export function createStudioServer(opts) {
       try { result = await host.call(body.method, params) ?? null; } catch (e) { pt?.fail('Could not open'); return json(res, 502, { error: 'host-error', detail: String(e?.code ?? e?.message ?? 'error').slice(0, 80) }); }
       pt?.done();
       result = withRenames(body.method, result);
-      if (body.method === 'mixer.list') result = withSameDevice(result);
+      if (body.method === 'mixer.list') result = await withSameDevice(result);
       remember(body.method, params, before);
       // P5b autosave: only after the host accepted the edit; the real host only (the fake has no project file).
       const saved = projectSync && host.describe().kind === 'host' ? projectSync.record(body.method, syncParams(body.method, params, result)) : false;
