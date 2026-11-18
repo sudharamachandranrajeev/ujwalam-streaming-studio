@@ -64,7 +64,7 @@
             "softness": { "type": "number", "minimum": 0, "maximum": 1, "$comment": "wipe only (D391): edge softness; absent = 0.03 (OBS default)" },
             "invert": { "type": "boolean", "$comment": "wipe only (D391): run the luma image the other way; absent = false" },
             "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "$comment": "fadeColor only (D391): the colour faded through" },
-            "pointPct": { "type": "integer", "minimum": 0, "maximum": 100, "$comment": "fadeColor only (D391): where the scene changes, % of durationMs; absent = 50" }
+            "pointPct": { "type": "integer", "minimum": 1, "maximum": 99, "$comment": "fadeColor only (D391): where the scene changes, % of durationMs; absent = 50. Not 0 or 100: OBS fade-to-colour audio curve gives NaN there" }
           },
           "allOf": [
             { "if": { "properties": { "type": { "const": "stinger" } } },
@@ -267,9 +267,9 @@
           "if": { "properties": { "type": { "const": "screen" } } }, "then": { "properties": { "source": {
           "type": "object", "additionalProperties": false, "required": ["display"],
           "properties": {
-            "display": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\u0000-\u001f\u007f]+$" },
+            "display": { "type": "string", "minLength": 1, "maxLength": 127, "pattern": "^[ -~]+$", "$comment": "printable ASCII, at most 127 bytes: OBS copies it into a 128-byte buffer with strcpy_s, which ends the process on a longer id" },
             "cursor": { "type": "boolean" } } } } } },
-        { "$comment": "D390: one app window (libobs window_capture). window = the OBS window spec title:class:exe as the host lists it (capture.listTargets; ':' and '#' inside a part are encoded #3A / #22); match = OBS window match priority, absent = exe; cursor absent = true.",
+        { "$comment": "D390: one app window (libobs window_capture). window = the OBS window spec title:class:exe as the host lists it (capture.listTargets; ':' and '#' inside a part are encoded #3A / #22); match = OBS window match priority, absent = title (only that exact window; exe and class can show another window of the same app after it closes); cursor absent = true.",
           "if": { "properties": { "type": { "const": "window" } } }, "then": { "properties": { "source": {
           "type": "object", "additionalProperties": false, "required": ["window"],
           "properties": {

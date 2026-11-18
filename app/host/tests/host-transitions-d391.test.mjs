@@ -91,6 +91,8 @@ test('bad values refused (-32602) and the canvas left as it was', async () => {
     { type: 'fadeColor', durationMs: 500 },                               // no colour
     { type: 'fadeColor', durationMs: 500, color: 'red' },
     { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 101 },
+    { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 0 },   // 0 and 100: NaN audio in OBS
+    { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 100 },
     { type: 'fadeColor', durationMs: 500, color: '#000000', file: { base: 'media', rel: 's.webm' } }, // a stinger's field
     { type: 'fade', durationMs: 500, direction: 'left' },
     { type: 'cut', color: '#000000' },

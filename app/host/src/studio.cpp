@@ -237,6 +237,21 @@ static void swap_to(const std::string &id, obs_canvas_t *vc, obs_source_t *&rout
 }
 
 // Types that run on the canvas's second transition object (st): the stinger (D242) and the D391 types.
+// A private transition source of `kind`, sized to the canvas; nullptr when it cannot run. libobs returns a source even
+// for an unknown id or a failed create (obs-source.c obs_source_create_internal keeps it for the user's data, without
+// plugin data); obs_obj_invalid tells those apart, and such a candidate is released before any canvas state changes.
+static obs_source_t *create_transition(const char *kind, const std::string &name, obs_data_t *settings, uint32_t w, uint32_t h)
+{
+	obs_source_t *cand = obs_source_create_private(kind, name.c_str(), settings);
+	if (cand && obs_obj_invalid(cand)) {
+		obs_source_release(cand);
+		cand = nullptr;
+	}
+	if (cand)
+		obs_transition_set_size(cand, w, h);
+	return cand;
+}
+
 static bool uses_st(const std::string &t)
 {
 	return t == "stinger" || t == "slide" || t == "swipe" || t == "wipe" || t == "fadeColor";
@@ -359,17 +374,16 @@ json::Value Studio::transition_set(const std::string &cv, const TransitionSpec &
 		obs_data_set_int(d, "audio_fade_style", 0); // scene audio fades out, then in
 		if (!c->st || c->st_kind != "obs_stinger_transition") {
 			std::string name = "ujw:stinger:" + c->id;
-			c->st = obs_source_create_private("obs_stinger_transition", name.c_str(), d);
-			if (c->st)
-				obs_transition_set_size(c->st, c->w, c->h);
+			obs_source_t *cand = create_transition("obs_stinger_transition", name, d, c->w, c->h);
+			if (!cand) {
+				obs_data_release(d);
+				throw Error(rpc::UNAVAILABLE, "obs_stinger_transition unavailable (obs-transitions module)");
+			}
+			c->st = cand;
 		} else if (ref != c->st_ref || (uint32_t)point_ms != c->st_point) {
 			obs_source_update(c->st, d);
 		}
 		obs_data_release(d);
-		if (!c->st) {
-			c->st = old_st;
-			throw Error(rpc::UNAVAILABLE, "obs_stinger_transition unavailable (obs-transitions module)");
-		}
 		obs_source_set_muted(c->st, !audio); // muted: the video plays, its sound stays out of the mix
 		c->st_kind = "obs_stinger_transition";
 		c->st_ref = ref;
@@ -408,8 +422,10 @@ json::Value Studio::transition_set(const std::string &cv, const TransitionSpec &
 				info.set("softness", t.softness);
 				info.set("invert", t.invert);
 			} else { // fadeColor
-				if (t.point_pct < 0 || t.point_pct > 100)
-					throw Error(rpc::INVALID_PARAMS, "pointPct must be 0..100");
+				// 1..99: at 0 or 100 OBS's fade-to-colour audio curve divides 0 by 0 (smoothstep over an empty
+				// range in transition-fade-to-color.c mix_a/mix_b) and the mix gets NaN samples.
+				if (t.point_pct < 1 || t.point_pct > 99)
+					throw Error(rpc::INVALID_PARAMS, "pointPct must be 1..99");
 				static const std::regex col_re("^#[0-9A-Fa-f]{6}$");
 				if (!std::regex_match(t.color, col_re))
 					throw Error(rpc::INVALID_PARAMS, "color must be #RRGGBB");
@@ -424,19 +440,15 @@ json::Value Studio::transition_set(const std::string &cv, const TransitionSpec &
 			obs_data_release(d);
 			throw;
 		}
-		if (c->st && c->st_kind == kind) {
-			obs_source_update(c->st, d);
-		} else {
-			std::string name = std::string("ujw:transition-") + type + ":" + c->id;
-			c->st = obs_source_create_private(kind, name.c_str(), d);
-			if (c->st)
-				obs_transition_set_size(c->st, c->w, c->h);
-		}
+		// Always a fresh object, never obs_source_update on the one in use: the plugin's update runs on the video
+		// thread while the audio mixer reads the same fields (fade_to_color switch_point in mix_a/mix_b). The new one
+		// is swapped onto the channel below and the old one released once it is off it.
+		std::string name = std::string("ujw:transition-") + type + ":" + c->id;
+		obs_source_t *cand = create_transition(kind, name, d, c->w, c->h);
 		obs_data_release(d);
-		if (!c->st) {
-			c->st = old_st;
+		if (!cand)
 			throw Error(rpc::UNAVAILABLE, std::string(kind) + " unavailable (obs-transitions module)");
-		}
+		c->st = cand;
 		c->st_kind = kind;
 		c->st_ref.clear();
 		c->st_point = 0;

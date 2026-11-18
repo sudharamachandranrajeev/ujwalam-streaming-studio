@@ -28,7 +28,7 @@
 // Layer ids are unique across the project (validateProject), new ids come from newId.
 
 import { newId, relPathProblem, validateProject } from './index.mjs';
-import { WINDOW_SPEC_RE } from './validate.mjs';
+import { DISPLAY_ID_RE, WINDOW_SPEC_RE } from './validate.mjs';
 
 const COLOR = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
 const KINDS = ['copy', 'color', 'text', 'capture', 'overlay', 'image', 'media', 'screen', 'window'];
@@ -108,7 +108,7 @@ export function addLayer(doc, p = {}) {
     if (!d || d.kind === 'microphone' || d.kind === 'audio-output') return { error: 'unknown-device' };
     layer = { id: newId('capture'), type: 'capture', name: d.name, source: { device: d.id }, placements };
   } else if (p.kind === 'screen') {
-    if (typeof p.display !== 'string' || p.display.length < 1 || p.display.length > 512) return { error: 'bad-display' };
+    if (typeof p.display !== 'string' || !DISPLAY_ID_RE.test(p.display)) return { error: 'bad-display' };
     layer = { id: newId('screen'), type: 'screen', name: 'Screen', source: { display: p.display }, placements };
   } else if (p.kind === 'window') {
     if (typeof p.window !== 'string' || p.window.length > 1024 || !WINDOW_SPEC_RE.test(p.window)) return { error: 'bad-window' };

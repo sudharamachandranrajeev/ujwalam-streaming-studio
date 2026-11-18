@@ -46,11 +46,17 @@ const BAD = [
   ['slide with a stinger file', (d) => { d.canvases[0].transition = { type: 'slide', durationMs: 500, direction: 'left', file: { base: 'media', rel: 's.webm' } }; }, true],
   ['fadeColor without colour', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500 }; }, true],
   ['fadeColor colour with alpha', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000ff' }; }, true],
+  ['fadeColor pointPct 0 (NaN audio in OBS)', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 0 }; }, true],
+  ['fadeColor pointPct 100 (NaN audio in OBS)', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 100 }; }, true],
+  ['transition type constructor (an inherited name, reported, never thrown)', (d) => { d.canvases[0].transition = { type: 'constructor', durationMs: 500, direction: 'left' }; }, true],
+  ['transition type __proto__', (d) => { d.canvases[0].transition = JSON.parse('{"type":"__proto__","durationMs":500,"easing":"linear"}'); }, true],
   ['fadeColor pointPct 101', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 101 }; }, true],
   ['fadeColor pointPct 50.5', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000', pointPct: 50.5 }; }, true],
   ['wipe pattern on fadeColor', (d) => { d.canvases[0].transition = { type: 'fadeColor', durationMs: 500, color: '#000000', pattern: 'clock' }; }, true],
   // D390: screen and window layers
   ['screen without display', (d) => { d.scenes[0].layers.push(capLayer('screen', {})); }, true],
+  ['screen display of 128 characters (OBS takes 127)', (d) => { d.scenes[0].layers.push(capLayer('screen', { display: 'd'.repeat(128) })); }, true],
+  ['screen display not ASCII', (d) => { d.scenes[0].layers.push(capLayer('screen', { display: 'dispé' })); }, true],
   ['screen display empty', (d) => { d.scenes[0].layers.push(capLayer('screen', { display: '' })); }, true],
   ['screen with a window key', (d) => { d.scenes[0].layers.push(capLayer('screen', { display: 'd1', window: 'a:b:c.exe' })); }, true],
   ['screen cursor not a boolean', (d) => { d.scenes[0].layers.push(capLayer('screen', { display: 'd1', cursor: 1 })); }, true],
@@ -194,6 +200,7 @@ test('D390: screen and window layers are accepted (schema and validator)', () =>
   const d = sample();
   d.scenes[0].layers.push(capLayer('screen', { display: '\\\\?\\DISPLAY#EXAMPLE#1&2&3#{guid}' }, 'layer-s1'));
   d.scenes[0].layers.push(capLayer('screen', { display: 'd2', cursor: false }, 'layer-s2'));
+  d.scenes[0].layers.push(capLayer('screen', { display: 'd'.repeat(127) }, 'layer-s3')); // the longest OBS takes
   d.scenes[0].layers.push(capLayer('window', { window: 'Example Title:ExampleClass:example.exe' }, 'layer-w1'));
   d.scenes[0].layers.push(capLayer('window', { window: ':Class#3AWith#3AColons:example.exe', match: 'title', cursor: false }, 'layer-w2'));
   assert.equal(schemaCheck(d), true, JSON.stringify(schemaCheck.errors));

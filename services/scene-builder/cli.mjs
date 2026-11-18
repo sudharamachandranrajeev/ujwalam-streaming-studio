@@ -47,7 +47,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveCliDataDir } from '../event-core/config.mjs';
 import { createFlags } from '../flags/index.mjs';
-import { applyScenePackageFile, diffText, packageProblems } from '../project/scene-package.mjs';
+import { applyScenePackageFile, diffText, packageProblems, shareablePackage } from '../project/scene-package.mjs';
 import { loadProject } from '../project/index.mjs';
 import { buildPackage } from './build.mjs';
 import { packageFromScene } from './export.mjs';
@@ -160,7 +160,8 @@ ${USAGE}`); return 1; }
       const read = await readReference(args._[1], { frames, longSide, model: aiModel(args, deps) });
       const { project } = loadProject(args.project);
       pkg = buildPackage(read, project, { bind: args.bind, theme: args.theme ?? null });
-      if (args.out) writeFileSync(args.out, `${JSON.stringify(pkg, null, 2)}\n`, { flag: 'wx' });
+      // A saved package can leave this PC: window titles are taken out (D390); the import below uses the full one.
+      if (args.out) writeFileSync(args.out, `${JSON.stringify(shareablePackage(pkg), null, 2)}\n`, { flag: 'wx' });
     } else {
       pkg = JSON.parse(readFileSync(args._[1], 'utf8'));
       const bad = packageProblems(pkg);
@@ -182,7 +183,8 @@ function summary(pkg) {
 function iterateCommand(cmd, args, out, deps) {
   const { project } = loadProject(args.project);
   const canvases = Object.fromEntries(project.canvases.map((c) => [c.id, { width: c.width, height: c.height }]));
-  const save = (file, pkg) => writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`, { flag: 'wx' });
+  // Saved and printed packages can leave this PC: window titles are always taken out (D390, shareablePackage).
+  const save = (file, pkg) => writeFileSync(file, `${JSON.stringify(shareablePackage(pkg), null, 2)}\n`, { flag: 'wx' });
   const readPackage = () => {
     const pkg = JSON.parse(readFileSync(args._[1], 'utf8'));
     const bad = packageProblems(pkg);
@@ -193,14 +195,14 @@ function iterateCommand(cmd, args, out, deps) {
   if (cmd === 'export') {
     const { package: pkg, skipped } = packageFromScene(project, args._[1], { now });
     if (args.out) save(args.out, pkg);
-    out(args.json ? JSON.stringify({ saved: args.out ?? null, package: pkg, skipped }, null, 2)
+    out(args.json ? JSON.stringify({ saved: args.out ?? null, package: shareablePackage(pkg), skipped }, null, 2)
       : [`${args.out ? `Saved ${args.out}: ` : 'Not saved (no --out): '}${summary(pkg)}`, ...skipped.map((s) => `  - not carried: ${s.canvas.toUpperCase()} ${s.name}: ${s.reason}`)].join('\n'));
     return 0;
   }
   if (cmd === 'edit') {
     const r = editPackage(readPackage(), args.edits, { canvases, now });
     save(args.out, r.package);
-    out(args.json ? JSON.stringify({ saved: args.out, changes: r.changes, warnings: r.warnings, package: r.package }, null, 2)
+    out(args.json ? JSON.stringify({ saved: args.out, changes: r.changes, warnings: r.warnings, package: shareablePackage(r.package) }, null, 2)
       : [`Saved ${args.out}: ${summary(r.package)}`, ...r.changes.map((c) => `  * ${c}`), ...r.warnings.map((w) => `  ! ${w}`)].join('\n'));
     return 0;
   }
@@ -212,7 +214,7 @@ function iterateCommand(cmd, args, out, deps) {
     for (const f of files) if (existsSync(f)) throw new Error(`${f} already exists; nothing was saved`);
     list.forEach((v, i) => save(files[i], v.package));
   }
-  out(args.json ? JSON.stringify(list.map((v, i) => ({ file: files[i], kind: v.kind, distance: v.distance, package: v.package })), null, 2)
+  out(args.json ? JSON.stringify(list.map((v, i) => ({ file: files[i], kind: v.kind, distance: v.distance, package: shareablePackage(v.package) })), null, 2)
     : [`${list.length} similar variant(s)${dir ? ' saved' : ' (not saved: no --out-dir)'}`, ...list.map((v, i) => `  ${i + 1}. ${v.kind}, largest edge move ${v.distance}: ${files[i] ?? summary(v.package)}`)].join('\n'));
   return 0;
 }

@@ -15,6 +15,11 @@ const LAYER_TYPES = ['capture', 'browser', 'image', 'media', 'text', 'color', 'd
 // Scene transition types (D239, D242 stinger, D391 slide/swipe/wipe/fadeColor) and the fields only that type takes.
 export const TRANSITION_TYPES = ['cut', 'fade', 'stinger', 'slide', 'swipe', 'wipe', 'fadeColor'];
 const TRANSITION_OWN = { slide: ['direction'], swipe: ['direction', 'swipeIn'], wipe: ['pattern', 'softness', 'invert'], fadeColor: ['color', 'pointPct'] };
+// Own fields of a transition type; [] for cut, fade, stinger and anything else. Object.hasOwn: a type such as
+// 'constructor' must not resolve to an inherited property (the validator reports, it never throws).
+export const ownFields = (type) => (typeof type === 'string' && Object.hasOwn(TRANSITION_OWN, type) ? TRANSITION_OWN[type] : []);
+// D390: display id, printable ASCII, at most 127 bytes (OBS strcpy_s into a 128-byte buffer ends the process on more).
+export const DISPLAY_ID_RE = /^[ -~]{1,127}$/;
 // D390: OBS window spec "title:class:exe" (':' and '#' inside a part encoded by OBS), exe not empty.
 export const WINDOW_SPEC_RE = /^[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]+$/;
 const MONITORING = ['off', 'monitor-only', 'monitor-and-output'];
@@ -161,9 +166,9 @@ export function validateProject(doc) {
           if ('type' in t && !TRANSITION_TYPES.includes(t.type)) err(`${tp}.type`, `must be one of ${TRANSITION_TYPES.join(', ')}`);
           // D391: each type's own fields only on that type; slide/swipe need direction, wipe a pattern, fadeColor a colour.
           for (const k of new Set(Object.values(TRANSITION_OWN).flat())) {
-            if (k in t && !(TRANSITION_OWN[t.type] ?? []).includes(k)) err(`${tp}.${k}`, `is not a field of a ${t.type} transition`);
+            if (k in t && !ownFields(t.type).includes(k)) err(`${tp}.${k}`, `is not a field of a ${t.type} transition`);
           }
-          if ('easing' in t && TRANSITION_OWN[t.type]) err(`${tp}.easing`, 'is for a fade only');
+          if ('easing' in t && ownFields(t.type).length) err(`${tp}.easing`, 'is for a fade only');
           if (t.type === 'slide' || t.type === 'swipe') req(t, ['direction'], tp);
           if (t.type === 'wipe') req(t, ['pattern'], tp);
           if (t.type === 'fadeColor') req(t, ['color'], tp);
@@ -173,7 +178,7 @@ export function validateProject(doc) {
           if ('softness' in t) num(t.softness, `${tp}.softness`, 0, 1);
           if ('invert' in t && typeof t.invert !== 'boolean') err(`${tp}.invert`, 'must be true or false');
           if ('color' in t && (typeof t.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(t.color))) err(`${tp}.color`, 'must be #rrggbb');
-          if ('pointPct' in t) num(t.pointPct, `${tp}.pointPct`, 0, 100, true);
+          if ('pointPct' in t) num(t.pointPct, `${tp}.pointPct`, 1, 99, true); // 0 and 100: NaN audio in OBS fade-to-colour
           if ('durationMs' in t) num(t.durationMs, `${tp}.durationMs`, 0, 10000, true);
           if (t.type === 'stinger') { req(t, ['file', 'pointMs'], tp); if ('file' in t) pathRefOk(t.file, `${tp}.file`); }
           else if ('file' in t || 'pointMs' in t || 'audio' in t) err(tp, 'file, pointMs and audio are for a stinger only');
@@ -388,7 +393,7 @@ export function validateProject(doc) {
     }
     if (type === 'color' && 'color' in s && (typeof s.color !== 'string' || !COLOR_RE.test(s.color))) err(`${p}.color`, 'must be #rrggbb or #rrggbbaa');
     // D390: screen = a display id the host lists; window = the OBS window spec; both show the cursor unless cursor false.
-    if (type === 'screen' && 'display' in s && (typeof s.display !== 'string' || s.display.length < 1 || s.display.length > 512 || /[\u0000-\u001f\u007f]/.test(s.display))) err(`${p}.display`, 'must be a display id of 1 to 512 characters');
+    if (type === 'screen' && 'display' in s && (typeof s.display !== 'string' || !DISPLAY_ID_RE.test(s.display))) err(`${p}.display`, 'must be a display id of 1 to 127 printable ASCII characters');
     if (type === 'window') {
       if ('window' in s && (typeof s.window !== 'string' || s.window.length > 1024 || !WINDOW_SPEC_RE.test(s.window))) err(`${p}.window`, 'must be a window spec title:class:exe');
       if ('match' in s && !['title', 'class', 'exe'].includes(s.match)) err(`${p}.match`, 'must be title, class or exe');
