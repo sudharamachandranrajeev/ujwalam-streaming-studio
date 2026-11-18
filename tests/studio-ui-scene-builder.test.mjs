@@ -84,7 +84,8 @@ test('scene builder routes: flag gate, dry-run build, live lock, apply adds one 
     const get = () => raw(port, { url: '/ui/api/scene-builder', headers: { cookie } });
     const disk = () => JSON.parse(readFileSync(file, 'utf8'));
 
-    // off by default: every route 404, nothing read
+    // flag off: every route 404, nothing read (the flag is on by default since D390)
+    flags.set(SCENE_BUILDER_FLAG, false);
     assert.equal(flags.isOn(SCENE_BUILDER_FLAG), false);
     assert.deepEqual([(await get()).status, (await get()).body.error], [404, 'scene-builder-off']);
     assert.equal((await post('/build', { file: 'ref layout.png' })).body.error, 'scene-builder-off');

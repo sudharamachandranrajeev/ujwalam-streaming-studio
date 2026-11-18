@@ -1,0 +1,88 @@
+{
+  "id": "screen-share",
+  "version": "0.1.0",
+  "status": "unverified",
+  "label": "Screen or app share",
+  "description": "Your screen or one app big, with your camera in a corner and chat beside it. For showing things off.",
+  "sceneName": "Screen share",
+  "order": 3,
+  "needsScreen": true,
+  "slots": {
+    "h": [
+      {
+        "role": "screen",
+        "box": {
+          "x": 0.01,
+          "y": 0.01,
+          "w": 0.72,
+          "h": 0.72
+        }
+      },
+      {
+        "role": "camera",
+        "box": {
+          "x": 0.74,
+          "y": 0.01,
+          "w": 0.25,
+          "h": 0.25
+        }
+      },
+      {
+        "role": "chat",
+        "box": {
+          "x": 0.74,
+          "y": 0.28,
+          "w": 0.25,
+          "h": 0.71
+        }
+      },
+      {
+        "role": "alerts",
+        "box": {
+          "x": 0.01,
+          "y": 0.75,
+          "w": 0.72,
+          "h": 0.1
+        }
+      }
+    ],
+    "v": [
+      {
+        "role": "camera",
+        "box": {
+          "x": 0.0556,
+          "y": 0.0834,
+          "w": 0.5,
+          "h": 0.1582
+        }
+      },
+      {
+        "role": "alerts",
+        "box": {
+          "x": 0.5656,
+          "y": 0.0834,
+          "w": 0.3047,
+          "h": 0.09
+        }
+      },
+      {
+        "role": "screen",
+        "box": {
+          "x": 0.0556,
+          "y": 0.26,
+          "w": 0.8147,
+          "h": 0.2578
+        }
+      },
+      {
+        "role": "chat",
+        "box": {
+          "x": 0.0556,
+          "y": 0.53,
+          "w": 0.8147,
+          "h": 0.26
+        }
+      }
+    ]
+  }
+}

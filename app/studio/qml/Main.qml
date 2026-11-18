@@ -49,6 +49,7 @@ ApplicationWindow {
         s["import"] = importDlg.probe();
         s.posts = postsDlg.probe();
         s.sceneBuilder = sceneBuilderDlg.probe();
+        s.scenarios = scenarioDlg.probe();
         s.more = bar.moreProbe();
         s.youtube = ytWin.probe();
         s.goLive = goLiveDlg.probe();
@@ -89,6 +90,8 @@ ApplicationWindow {
         if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
         if (String(action).startsWith("posts-")) return postsDlg.probeAction(String(action));
         if (String(action).startsWith("sb-")) return sceneBuilderDlg.probeAction(String(action));
+        if (action === "scn-from-add-scene") { addSceneDlg.ask(["h", "v"]); addSceneDlg.openScenarios(); return true }
+        if (String(action).startsWith("scn-")) return scenarioDlg.probeAction(String(action));
         if (String(action).startsWith("volume-type:") || String(action).startsWith("mixer-")) return mixer.probeAction(String(action));
         if (action === "add-audio-open") { studioStore.openAddAudio(); return true }
         if (String(action).startsWith("add-audio-")) return addAudioDlg.probeAction(String(action));
@@ -298,7 +301,8 @@ ApplicationWindow {
 
     ConfirmDialog { id: confirm; store: studioStore }
     AddLayerDialog { id: addLayerDlg; store: studioStore }
-    AddSceneDialog { id: addSceneDlg; store: studioStore }
+    AddSceneDialog { id: addSceneDlg; store: studioStore; onScenarioRequested: scenarioDlg.show() }
+    ScenarioWindow { id: scenarioDlg; store: studioStore }
     AddAudioDialog { id: addAudioDlg; store: studioStore }
     NameDialog { id: renameDlg; store: studioStore }
     SettingsDialog {

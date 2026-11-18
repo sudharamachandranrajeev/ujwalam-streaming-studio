@@ -2039,6 +2039,13 @@ Growth plan ED2. Decided:
   user allowed it on 2026-11-18: the launcher passes the switch and the package ships win-capture.
 - **Privacy.** Window titles are personal data: never logged by Ujwalam, never committed; a window layer is named after
   its program (exe). Evidence `docs/evidence/2026-11-18-capture-layers-and-transitions-host.md`.
+- **Scenario templates.** Six templates in `data/scene-templates/` (gameplay, lobby / just chatting, screen share,
+  starting soon, BRB, ending) with explicit H and V boxes; V boxes sit inside the V safe zone and the game is never
+  cropped. Slot role `screen` links a project `window` layer (first choice) or `screen` layer, or creates one from a
+  target picked from `capture.listTargets` (the id is looked up again; no target = placeholder). Holding screens are a
+  message panel (`ujwalam-panel ?text=`) plus chat; no countdown yet. Studio: Add scene > "From a scenario…", a plain
+  dry run, one-click Add (D332), off air only. Flag `scene-builder` is ON by default (a requested feature). Evidence
+  `docs/evidence/2026-11-18-scenario-scenes.md`. UNVERIFIED: template boxes on a real stream; the target id format.
 
 ## D391 — More transitions and cyberpunk stingers; transitions ON by default (user, 2026-11-18)
 

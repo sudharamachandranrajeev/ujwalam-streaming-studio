@@ -140,6 +140,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/ReportDialog.qml
 		qml/ImportWindow.qml
 		qml/SceneBuilderWindow.qml
+		qml/ScenarioWindow.qml
 		qml/PostsWindow.qml
 		qml/ClipsAsk.qml
 		qml/YoutubeWindow.qml

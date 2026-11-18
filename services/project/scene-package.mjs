@@ -121,6 +121,7 @@ export function planScenePackage(project, pkg, { idFn = newId, flags = {} } = {}
     if (pl.crop) row.crop = pl.crop;
     if (l.type === 'duplicate') { const t = byId.get(l.source.layer); row.shows = t ? { layer: t.id, name: t.name, existing: true } : { layer: l.source.layer, existing: false }; }
     if (l.type === 'capture') row.shows = { device: l.source.device, existing: deviceIds.has(l.source.device) };
+    if (l.type === 'window' || l.type === 'screen') row.shows = { capture: l.type, existing: false };
     if (l.type === 'browser') row.shows = { overlay: l.source.overlay, existing: !addedOverlays.includes(l.source.overlay) };
     if (src.slot) row.slot = src.slot;
     if (l.type === 'color' && /00$/i.test(l.source.color)) row.placeholder = src.placeholder ?? 'its source is not in the project';

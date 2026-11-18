@@ -199,6 +199,9 @@ export function loadScenePreset(project, preset, opts = {}) {
         type = 'color'; source = { color: '#00000000' }; delete px.crop;
         placeholder.add(l.key);
       }
+    } else if (l.type === 'window' || l.type === 'screen') {
+      // D390 scenarios: a NEW window / screen layer for a target the user picked (the layer type contract of the capture branch)
+      type = l.type; source = structuredClone(l.target); delete px.crop;
     } else if (l.type === 'browser') {
       type = 'browser';
       source = { overlay: overlayFor(l.overlay), width: Math.max(1, Math.round(px.width)), height: Math.max(1, Math.round(px.height)) };

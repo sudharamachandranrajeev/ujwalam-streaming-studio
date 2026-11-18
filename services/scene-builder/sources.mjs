@@ -95,8 +95,55 @@ function overlayFor(project, role, bind, rules) {
   return answer(hits[0], hits.length > 1 ? `the ${role} overlay (settings of the first of ${hits.length} layers)` : `the ${role} overlay`);
 }
 
-export function findSources(project, { bind = {}, rules }) {
+// D390 scenarios: role "screen" shows a project layer of type window (first choice) or screen. Contract of those layer
+// types (schema owned by the capture branch): { type: 'window', source: { window, match, cursor } } and
+// { type: 'screen', source: { display, cursor } }.
+//     screen: { layer, name, content, why }                      an existing window / screen layer is shown (a duplicate)
+//             { create: { type, source }, name, content, why }    a NEW window / screen layer the user picked a target for
+//             { missing: reason }
+//   bind.screen: a layer id (an existing window / screen layer, or a duplicate of one), or
+//                { create: { type: 'window'|'screen', source, content?: { width, height } } } for a picked target.
+const SCREEN_TYPES = ['window', 'screen'];
+const CREATE_OK = {
+  window: (s) => s && typeof s.window === 'string' && s.window.length > 0 && s.window.length <= 512 && ['title', 'class', 'exe'].includes(s.match) && typeof s.cursor === 'boolean',
+  screen: (s) => s && typeof s.display === 'string' && s.display.length > 0 && s.display.length <= 128 && typeof s.cursor === 'boolean',
+};
+const KEEP = { window: ['window', 'match', 'cursor'], screen: ['display', 'cursor'] };
+
+function screenFor(project, bind, rules) {
+  const layers = allLayers(project).map((x) => x.layer);
+  const size = (c) => ({ width: c?.width ?? rules.sourceSize.width, height: c?.height ?? rules.sourceSize.height, crop: null, sized: Boolean(c?.width && c?.height) });
+  const want = bind.screen;
+  if (want && typeof want === 'object') {
+    const c = want.create;
+    if (!c || !SCREEN_TYPES.includes(c.type) || !CREATE_OK[c.type](c.source)) return { missing: 'the window or screen you picked is not usable' };
+    const source = Object.fromEntries(KEEP[c.type].map((k) => [k, c.source[k]]));
+    return { create: { type: c.type, source }, name: c.type === 'window' ? 'Window' : 'Screen', content: size(c.content), why: c.type === 'window' ? 'a window you picked' : 'a screen you picked' };
+  }
+  const realOf = (l) => {
+    let real = l;
+    const seen = new Set();
+    while (real?.type === 'duplicate' && !seen.has(real.id)) { seen.add(real.id); real = layers.find((x) => x.id === real.source?.layer); }
+    return real;
+  };
+  const answer = (l, why) => ({ layer: l.id, name: l.name, content: size(null), why });
+  if (typeof want === 'string') {
+    const l = layers.find((x) => x.id === want);
+    const real = l && realOf(l);
+    if (!real || !SCREEN_TYPES.includes(real.type)) return { missing: `--bind screen=${want}: that layer does not show a window or a screen` };
+    return answer(real, `bound by the user (layer ${want})`);
+  }
+  for (const t of rules.screen.layerTypes) {
+    const hits = layers.filter((l) => l.type === t);
+    if (hits.length === 1) return answer(hits[0], `the only ${t} layer in the project`);
+    if (hits.length > 1) return { missing: `${hits.length} ${t} layers; pick the one to show` };
+  }
+  return { missing: 'no window or screen to show chosen yet' };
+}
+
+export function findSources(project, { bind = {}, rules, screen = false }) {
   return {
+    ...(screen ? { screen: screenFor(project, bind, rules) } : {}),
     game: captureFor(project, 'game', bind, rules),
     camera: captureFor(project, 'camera', bind, rules),
     chat: overlayFor(project, 'chat', bind, rules),
