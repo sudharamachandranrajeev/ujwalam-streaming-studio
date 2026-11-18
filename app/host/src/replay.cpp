@@ -115,11 +115,41 @@ void Outputs::set_replay_config(const ReplayConfig &c)
 {
 	std::lock_guard<std::mutex> op(op_m_);
 	rcfg_ = c;
+	replay_on_air_ = c.on_air_only;
+}
+
+bool Outputs::replay_gate_open() const
+{
+	return replay_manual_ || !replay_on_air_ || any_sink_wanted();
+}
+
+bool Outputs::replay_waiting() const
+{
+	return replay_want_ && !replay_gate_open();
+}
+
+void Outputs::replay_sync_locked()
+{
+	if (!replay_want_)
+		return;
+	if (replay_gate_open()) {
+		replay_attach_locked();
+		return;
+	}
+	bool have = false;
+	{
+		std::lock_guard<std::mutex> l(rp_m_);
+		have = !replays_.empty();
+	}
+	if (have) {
+		hlog::info("replay buffer: off air (no stream or recording wanted), detaching");
+		replay_detach_locked();
+	}
 }
 
 void Outputs::replay_attach_locked()
 {
-	if (!replay_want_)
+	if (!replay_want_ || !replay_gate_open())
 		return;
 	for (const char *cv : {"H", "V"}) {
 		std::string canvas = cv;
@@ -292,7 +322,7 @@ void Outputs::replay_detach_locked()
 	}
 }
 
-json::Value Outputs::replay_start(int seconds)
+json::Value Outputs::replay_start(int seconds, bool manual)
 {
 	std::lock_guard<std::mutex> op(op_m_);
 	if (seconds && (seconds < 5 || seconds > 600))
@@ -303,7 +333,9 @@ json::Value Outputs::replay_start(int seconds)
 	if (changed || !replay_want_)
 		replay_detach_locked(); // max_time_sec is read at start: restart for a new length
 	replay_want_ = true;
-	replay_attach_locked();
+	if (manual)
+		replay_manual_ = true;
+	replay_sync_locked();
 	return replay_status();
 }
 
@@ -317,6 +349,7 @@ json::Value Outputs::replay_stop()
 {
 	std::lock_guard<std::mutex> op(op_m_);
 	replay_want_ = false;
+	replay_manual_ = false;
 	replay_detach_locked();
 	return replay_status();
 }
@@ -338,9 +371,12 @@ bool Outputs::replay_running(const std::string &canvas) const
 
 json::Value Outputs::replay_status() const
 {
+	bool waiting = replay_waiting(); // takes m_: before rp_m_
 	std::lock_guard<std::mutex> l(rp_m_);
 	json::Value o = json::Value::object();
 	o.set("wanted", replay_want_.load());
+	o.set("onAirOnly", replay_on_air_.load() && !replay_manual_.load());
+	o.set("waiting", waiting); // armed but off air: no encoder, no memory buffer
 	o.set("seconds", rcfg_.seconds);
 	o.set("dir", replay_dir());
 	json::Value fb = json::Value::object();
@@ -376,6 +412,7 @@ json::Value Outputs::replay_save(const std::string &canvas, const std::string &d
 				 int timeout_ms)
 {
 	std::vector<std::shared_ptr<Replay>> sel;
+	bool waiting = replay_waiting(); // takes m_: before rp_m_
 	{
 		std::lock_guard<std::mutex> l(rp_m_);
 		for (auto &r : replays_)
@@ -390,7 +427,9 @@ json::Value Outputs::replay_save(const std::string &canvas, const std::string &d
 		errors.push(std::move(x));
 	};
 	if (sel.empty())
-		err(canvas.empty() ? "*" : canvas, "replay buffer not running (replay.start)");
+		err(canvas.empty() ? "*" : canvas,
+		    waiting ? "off air: the replay buffer runs only while you are live or recording"
+				     : "replay buffer not running (replay.start)");
 
 	struct Pending {
 		std::shared_ptr<Replay> r;

@@ -36,6 +36,10 @@
 
 namespace model {
 
+// Browser layer frame rate unless the layer's source asks for more with "fps" (idle load, 2026-11-18): overlays animate
+// smoothly at 30 and cost half the CEF paints of 60.
+constexpr int64_t kBrowserFps = 30;
+
 struct Options {
 	std::map<std::string, std::string> bases; // pathRef base -> absolute directory (media, overlays, data, profile, luts)
 	bool allow_devices = false;

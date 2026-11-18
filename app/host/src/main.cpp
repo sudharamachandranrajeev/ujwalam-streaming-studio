@@ -642,7 +642,7 @@ int wmain(int argc, wchar_t **wargv)
 				if (defer_outputs)
 					app.outputs->replay_defer();
 				else
-					app.outputs->replay_start(0);
+					app.outputs->replay_start(0, false); // armed; with onAirOnly it waits for a stream or recording
 			} catch (const std::exception &e) {
 				hlog::warn("replay buffer: %s", e.what());
 			}

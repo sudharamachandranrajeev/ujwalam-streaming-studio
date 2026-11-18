@@ -280,6 +280,9 @@ export function appendRecoveryEvent(dataDir, ev) {
 }
 
 /** UI server: the newest recovery event of this session for the status snapshot, or null. Strings capped. */
+/** The file readRecoveryStatus reads (the UI server re-reads it only when it changed). */
+export const recoveryStatusFile = (dataDir) => path.join(liveDir(dataDir), STATUS_FILE);
+
 export function readRecoveryStatus(dataDir, session) {
   if (typeof dataDir !== 'string' || typeof session !== 'string') return null;
   try {

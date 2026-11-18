@@ -56,13 +56,14 @@ import { listStingerPresets, stingerTransition } from '../project/stinger-preset
 import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
-import { clipsFolder, guideOnly, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, settingsProblems, writeSettings } from './user-settings.mjs';
+import { clipsFolder, guideOnly, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
 import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
 import { READINESS_FLAG, createReadiness, diskFreeBytes, lastCiPass, listProcessNames, loadReadinessConfig, logOverride, planTargets, readinessSummary } from './readiness.mjs';
 import { STOP_TASKS_FILE, clipTools } from './record-clips.mjs';
 import { createRecordLive } from './record-live.mjs';
-import { authorityClient, readRecoveryStatus, SESSION_ENV, SESSION_RE } from './stream-recovery.mjs';
+import { authorityClient, readRecoveryStatus, recoveryStatusFile, SESSION_ENV, SESSION_RE } from './stream-recovery.mjs';
+import { createStatCache } from '../common/stat-cache.mjs';
 import { readUpdatesStatus, updatesClient } from '../supervisor/updates.mjs';
 import { TEST_KIT_FLAG, createFeedbackAutoCollect, liveAlerts, loadTestKitConfig } from './live-test-kit.mjs';
 import { createCredentialStore } from '../event-core/streamerbot/credential.mjs';
@@ -389,7 +390,11 @@ export function createStudioServer(opts) {
   const updatesLink = opts.updates !== undefined ? opts.updates
     : liveSession && process.env.UJWALAM_PARENT_PIPE === '1' ? updatesClient() : null;
   const updatesState = () => (opts.updatesStatus ? opts.updatesStatus() : typeof opts.dataDir === 'string' ? readUpdatesStatus(opts.dataDir, liveSession) : null);
-  const log = typeof opts.log === 'function' ? opts.log : (m) => console.log(m);
+  // Idle load (2026-11-18): the status tick reads settings.json, clips/status.json and the recovery status again only
+  // when the file changed (services/common/stat-cache.mjs); dataDir must be a string to call these.
+  const statCache = createStatCache();
+  const settingsNow = () => statCache(path.join(opts.dataDir, SETTINGS_FILE), () => readSettings(opts.dataDir));
+  const log =typeof opts.log === 'function' ? opts.log : (m) => console.log(m);
   // Test only (race tests): a pause right before a confirmed stream.start goes to the host. 0 = none.
   const startPauseMs = Math.min(10_000, Math.max(0, Number(opts.startPauseMs ?? process.env.UJWALAM_TEST_START_PAUSE_MS ?? 0) || 0));
   const feedback = opts.feedback ?? createFeedback({ feedbackDir: opts.feedbackDir ?? DEFAULT_FEEDBACK_DIR, now: () => new Date(now()) });
@@ -539,10 +544,11 @@ export function createStudioServer(opts) {
   const flagList = () => (flags ? flags.list().map((f) => (f.id === INSTAGRAM_FLAG && !!f.on !== instagramOn()
     ? { ...f, effective: instagramOn(), note: 'applies at next start (this start runs ' + (instagramOn() ? 'with' : 'without') + ' Instagram)' } : f)) : []);
   // Reads outputs.status and brings the Instagram key state up to date (a start on its way is not judged as ended).
-  async function instagramReconcile() {
+  // outputs: the status tick's shared outputs.status read (one per tick); without it a fresh one is read.
+  async function instagramReconcile(outputs = () => host.call('outputs.status', {})) {
     if (!instagramOn()) return;
     igWatcher ??= createInstagramWatcher({ dataDir: opts.dataDir, now });
-    igWatcher.observe(await host.call('outputs.status', {}), { startInFlight: startsInFlight > 0 || now() - lastStartAt < RECENT_START_MS });
+    igWatcher.observe(await outputs(), { startInFlight: startsInFlight > 0 || now() - lastStartAt < RECENT_START_MS });
   }
   function connectOutputs() {
     // IG1 (D351): with instagram-live on (or in the running plan), the Instagram output is listed even before a --live
@@ -787,10 +793,12 @@ export function createStudioServer(opts) {
   // clips folder only.
   function clipStatus() {
     if (typeof opts.dataDir !== 'string') return null;
-    const st = readSettings(opts.dataDir);
+    const st = settingsNow();
     const base = { settings: st.clips, settingsSaved: st.exists, folder: clipsFolder(opts.dataDir, st), available: null, reason: null, fix: null, missing: null, state: 'idle', running: null, queued: 0, asks: [], last: null };
     try {
-      const s = JSON.parse(readFileSync(path.join(opts.dataDir, 'clips', 'status.json'), 'utf8'));
+      const file = path.join(opts.dataDir, 'clips', 'status.json');
+      const s = statCache(file, () => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } });
+      if (!s || typeof s !== 'object') return base;
       const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : null);
       const l = s.last && typeof s.last === 'object' ? s.last : null;
       return { ...base, available: s.available === true, reason: str(s.reason, 200), fix: str(s.fix, 200), missing: ['root', 'python', 'script'].includes(s.missing) ? s.missing : null, state: str(s.state, 16) ?? 'idle',
@@ -927,7 +935,7 @@ export function createStudioServer(opts) {
   // stops when the stream ends, when Settings > Clips "Record while live" is on (default). Needs the data folder.
   const recordLive = createRecordLive({
     call: (m, p) => host.call(m, p), epoch: () => stopEpoch, closing: () => !!closing, tasks, log, now,
-    enabled: () => typeof opts.dataDir === 'string' && readSettings(opts.dataDir).clips.recordLive === true,
+    enabled: () => typeof opts.dataDir === 'string' && settingsNow().clips.recordLive === true,
   });
   const CLOSING_REFUSAL = { error: 'closing', detail: 'Ujwalam is closing' };
   const bounded = (p) => Promise.race([Promise.resolve(p), new Promise((_, rej) => { const t = setTimeout(() => rej(new Error('timeout')), QUIT_WAIT_MS); t.unref?.(); })]);
@@ -977,7 +985,8 @@ export function createStudioServer(opts) {
   }
 
   // ---- status snapshot (text-free: counts, flags and numbers only; never chat text) ----
-  async function snapshot() {
+  // outputs: the status tick's shared outputs.status read (idle load, 2026-11-18); without it a fresh one is read.
+  async function snapshot(outputs = () => host.call('outputs.status', {})) {
     const h = host.describe();
     let hs = null; let cs = null;
     try { hs = await host.call('host.status', {}); } catch { hs = null; }
@@ -991,7 +1000,7 @@ export function createStudioServer(opts) {
     // The on-air bar's timers and bitrate (D355 Q2), read only while something runs.
     let onAir = null;
     if (hs && (hs.live === true || hs.recording === true)) {
-      try { onAir = onAirSummary(await host.call('outputs.status', {})); } catch { onAir = null; }
+      try { onAir = onAirSummary(await outputs()); } catch { onAir = null; }
     }
     const pick = (o, ks) => Object.fromEntries(ks.filter((k) => o && Object.hasOwn(o, k)).map((k) => [k, o[k]]));
     const snap = {
@@ -1004,7 +1013,7 @@ export function createStudioServer(opts) {
         ...(onAir ? { onAir } : {}),
         effectEditing: !!flags && flags.isOn('effect-editor') },
       clips: clipStatus(),
-      recovery: typeof opts.dataDir === 'string' ? readRecoveryStatus(opts.dataDir, liveSession) : null,
+      recovery: typeof opts.dataDir === 'string' ? statCache(recoveryStatusFile(opts.dataDir), () => readRecoveryStatus(opts.dataDir, liveSession)) : null,
       updates: updatesState(),
       tasks: tasks.list(),
       core: { available: cs !== null, ...(cs ? { liveState: typeof cs.live?.liveState === 'string' ? cs.live.liveState : null, panic: cs.live?.panic === true } : {}) },
@@ -1108,7 +1117,7 @@ export function createStudioServer(opts) {
         }
         // D335 F10: snapping follows settings.json ui.snap (off unless the user turned it on in Settings).
         if (typeof hs.previewSnap === 'boolean') {
-          const snapWant = typeof opts.dataDir === 'string' && readSettings(opts.dataDir).ui?.snap === true;
+          const snapWant = typeof opts.dataDir === 'string' && settingsNow().ui?.snap === true;
           if (hs.previewSnap !== snapWant) {
             try { await host.call('preview.setSnap', { enabled: snapWant }); } catch { /* older host or busy: next poll */ }
           }
@@ -1138,14 +1147,24 @@ export function createStudioServer(opts) {
     const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const c of sseClients) { if (!c.write(frame)) { /* slow client: dropped by the stall timer below */ } }
   }
+  // Idle load (2026-11-18): one outputs.status per tick, shared by the on-air bar, record while live and Instagram
+  // (it was up to three). Off air, with no event-stream page open and no recording owned, every second interval is
+  // skipped: the Qt shell polls /ui/api/status every 2 s, so it still gets a fresh snapshot each time.
+  let lastTickAt = -Infinity;
   async function tick() {
-    try { lastSnapshot = await snapshot(); broadcast('status', lastSnapshot); } catch { /* keep polling */ }
+    const idle = sseClients.size === 0 && live !== true && lastSnapshot?.host?.recording !== true && !recordLive.owner();
+    const t = performance.now(); // not opts.now: a test clock may stand still
+    if (idle && t - lastTickAt < limits.statusPollMs * 1.5) return;
+    lastTickAt = t;
     // Record while live (LC2): a recording started with the stream stops once no stream sink runs any more.
     // The owner is taken before the status is read, so an older status never judges a newer recording (Codex review).
     const owner = recordLive.owner();
-    if (owner) { try { await recordLive.observe(await host.call('outputs.status', {}), owner); } catch { /* next poll */ } }
+    let outs = null;
+    const outputs = () => (outs ??= host.call('outputs.status', {}));
+    try { lastSnapshot = await snapshot(outputs); broadcast('status', lastSnapshot); } catch { /* keep polling */ }
+    if (owner) { try { await recordLive.observe(await outputs(), owner); } catch { /* next poll */ } }
     // IG1 (D351): the Instagram key counts as used once the broadcast it started has ended (ids, states, start counts).
-    try { await instagramReconcile(); } catch { /* next poll */ }
+    try { await instagramReconcile(outputs); } catch { /* next poll */ }
   }
   let igWatcher = null;
 

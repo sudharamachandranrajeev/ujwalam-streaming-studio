@@ -717,7 +717,7 @@ Plan build(const json::Value &doc, const Options &o)
 			st.set("color", (int64_t)(abgr & 0xFFFFFF));
 			st.set("opacity", (int64_t)std::lround(((abgr >> 24) & 0xFF) * 100.0 / 255.0));
 		} else if (ref.type == "browser") {
-			chk::only_keys(s, {"overlay", "query", "url", "width", "height"}, what + ".source");
+			chk::only_keys(s, {"overlay", "query", "url", "width", "height", "fps"}, what + ".source");
 			chk::require(s, {"width", "height"}, what + ".source");
 			src.obs_type = "browser_source";
 			std::string url = chk::get_str(s, "url", "", 2048, what);
@@ -754,8 +754,15 @@ Plan build(const json::Value &doc, const Options &o)
 			}
 			st.set("url", url.empty() ? std::string("about:blank") : url); // obs-browser's default is a web page
 			st.set("is_local_file", false);
+			// Idle load (2026-11-18): a page renders at kBrowserFps unless its spec asks for more (never above the
+			// fastest canvas). shutdown stays false: obs-browser already pauses a page that is not shown (measured: no
+			// CPU while hidden), while shutdown reloads it on every show (a later first frame on a cut, and an alert
+			// that arrived while hidden is lost; docs/evidence/2026-11-18-idle-performance.md).
+			int64_t bfps = std::min<int64_t>((int64_t)max_fps, kBrowserFps);
+			if (s.find("fps"))
+				bfps = std::min<int64_t>((int64_t)max_fps, chk::get_int(s, "fps", 0, 1, 240, what));
 			st.set("fps_custom", true);
-			st.set("fps", (int64_t)max_fps);
+			st.set("fps", bfps);
 			st.set("webpage_control_level", 0); // no studio access from the page
 			st.set("reroute_audio", false);
 			st.set("shutdown", false);
@@ -1134,6 +1141,7 @@ json::Value to_json(const Plan &p)
 		if (s.obs_type == "browser_source") { // page URLs carry ports and the feed query only, never a token
 			o.set("url", *s.settings.find("url"));
 			o.set("overlay", s.overlay);
+			o.set("fps", *s.settings.find("fps"));           // idle load (2026-11-18): 30 unless the source asks
 		}
 		src.push(std::move(o));
 	}

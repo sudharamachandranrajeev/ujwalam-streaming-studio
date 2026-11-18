@@ -451,6 +451,8 @@ test('crash 2026-11-11: effects switched on and off while the selection box is d
     }
     await sleep(500);
     assert.ok((await draws()) > first + 10, 'the selection box was drawn while the effects changed');
+    // Idle load (2026-11-18): a preview that cannot be seen stops drawing, except a headless embedded one (this test).
+    assert.equal((await c.call('preview.list')).previews.find((p) => p.canvas === 'H').drawing, true);
     assert.equal(h.child.exitCode, null, 'the host is still running');
     assert.ok(await c.call('host.status'));
     assert.doesNotMatch(h.log.join(''), /requires a point buffer/, 'no draw ran with a destroyed vertex buffer');

@@ -821,7 +821,8 @@ obs_source_t *Studio::create_source(const Scene &s, const std::string &layer_id,
 			obs_data_set_int(d, "width", get_int(st, "width", cw, 1, 8192, what));
 			obs_data_set_int(d, "height", get_int(st, "height", ch, 1, 8192, what));
 			obs_data_set_bool(d, "fps_custom", true);
-			obs_data_set_int(d, "fps", get_int(st, "fps", cfps, 1, 240, what));
+			// Idle load (2026-11-18): model::kBrowserFps unless "fps" asks for more (shutdown false: see model.cpp).
+			obs_data_set_int(d, "fps", get_int(st, "fps", std::min<int64_t>(cfps, model::kBrowserFps), 1, 240, what));
 			obs_data_set_bool(d, "reroute_audio", false);
 			obs_data_set_bool(d, "shutdown", false);
 			obs_data_set_bool(d, "restart_when_active", false);

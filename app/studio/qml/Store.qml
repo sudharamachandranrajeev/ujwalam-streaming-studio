@@ -537,7 +537,9 @@ QtObject {
             if (!ok) return say("Clip not saved: " + err);
             const r = b ? b.result : null;
             const n = r && Array.isArray(r.saved) ? r.saved.length : 0;
-            say(n ? "Clip saved: " + n + " file(s) in the replay folder." : "Clip not saved: the replay buffer is not running.");
+            // Off air the host says why (the replay buffer runs only while live or recording, 2026-11-18).
+            const why = r && Array.isArray(r.errors) && r.errors.length && r.errors[0].error ? String(r.errors[0].error) : "";
+            say(n ? "Clip saved: " + n + " file(s) in the replay folder." : why.indexOf("off air") === 0 ? "Clip not saved: " + why + "." : "Clip not saved: the replay buffer is not running.");
         });
     }
     function markMoment() {
