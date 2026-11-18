@@ -755,8 +755,9 @@ Plan build(const json::Value &doc, const Options &o)
 			st.set("url", url.empty() ? std::string("about:blank") : url); // obs-browser's default is a web page
 			st.set("is_local_file", false);
 			// Idle load (2026-11-18): a page renders at kBrowserFps unless its spec asks for more (never above the
-			// fastest canvas), and is shut down while not shown in any view (hidden layer, scene not on air or in a
-			// preview); it reloads when shown again. browserKeep layers stay running (their page holds state).
+			// fastest canvas). shutdown stays false: obs-browser already pauses a page that is not shown (measured: no
+			// CPU while hidden), while shutdown reloads it on every show (a later first frame on a cut, and an alert
+			// that arrived while hidden is lost; docs/evidence/2026-11-18-idle-performance.md).
 			int64_t bfps = std::min<int64_t>((int64_t)max_fps, kBrowserFps);
 			if (s.find("fps"))
 				bfps = std::min<int64_t>((int64_t)max_fps, chk::get_int(s, "fps", 0, 1, 240, what));
@@ -764,7 +765,7 @@ Plan build(const json::Value &doc, const Options &o)
 			st.set("fps", bfps);
 			st.set("webpage_control_level", 0); // no studio access from the page
 			st.set("reroute_audio", false);
-			st.set("shutdown", o.browser_keep.count(lid) == 0);
+			st.set("shutdown", false);
 			st.set("restart_when_active", false);
 		} else if (ref.type == "capture") {
 			chk::only_keys(s, {"device"}, what + ".source");
@@ -1141,7 +1142,6 @@ json::Value to_json(const Plan &p)
 			o.set("url", *s.settings.find("url"));
 			o.set("overlay", s.overlay);
 			o.set("fps", *s.settings.find("fps"));           // idle load (2026-11-18): 30 unless the source asks
-			o.set("shutdown", *s.settings.find("shutdown")); // false only for browserKeep layers
 		}
 		src.push(std::move(o));
 	}

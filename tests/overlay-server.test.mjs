@@ -429,22 +429,6 @@ describe('bridge: unit', () => {
     assert.equal(relayScope, 'display');
   });
 
-  test('browser-render.json: only keepWhenHidden folders run while hidden (browserKeep, idle load 2026-11-18)', async () => {
-    const { overlayUrls, keepWhenHidden, BROWSER_RENDER_FILE } = await import('../app/host/lib/project.mjs');
-    assert.deepEqual([...keepWhenHidden()], ['chat-list']);
-    const ov = (id, rel) => ({ id, file: { base: 'overlays', rel } });
-    const layer = (id, overlay) => ({ id, type: 'browser', source: { overlay } });
-    const project = {
-      overlays: [ov('o1', 'chat-charge/index.html'), ov('o2', 'chat-list/index.html'), ov('o3', 'atmos-frame/index.html')],
-      scenes: [{ layers: [layer('l1', 'o1'), layer('l2', 'o2'), layer('l3', 'o3')] }, { layers: [layer('l4', 'o2')] }],
-    };
-    assert.deepEqual(overlayUrls(project, { staticPort: 50101, feedPort: 50102 }).browserKeep, ['l2', 'l4']);
-    const bad = path.join(mkdtempSync(path.join(tmpdir(), 'ujw-render-')), 'r.json');
-    writeFileSync(bad, JSON.stringify({ keepWhenHidden: 'chat-list' }));
-    assert.throws(() => keepWhenHidden(bad), /keepWhenHidden must be a list/);
-    assert.ok(BROWSER_RENDER_FILE.endsWith(path.join('data', 'overlays', 'browser-render.json')));
-  });
-
   test('the frame parser demands masked client frames and bounds the payload', () => {
     assert.equal(createParser()(Buffer.from([0x81, 0x01, 0x41])).error, 1002);
     const ok = createParser()(maskedFrame('{"a":1}'));

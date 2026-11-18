@@ -164,12 +164,11 @@ test('project v1 overlay layer: URL via feedQuery, relay page, gg-burst draws on
   assert.ok(url.startsWith(`http://127.0.0.1:${st.staticPort}/overlays/gg-burst/index.html?`), 'page on the host overlay server');
   assert.match(url, new RegExp(`[?&]sbPort=${st.feedPort}(&|$)`), 'feedQuery points at the bridge feed');
   assert.ok(!url.includes(h.token) && !/token/i.test(url), 'no token in the layer URL');
-  // Idle load (2026-11-18): 30 fps by default and shut down while not shown, unless browserKeep names the layer.
+  // Idle load (2026-11-18): 30 fps unless the source asks for more (never above the canvas rate).
   assert.equal(src.fps, 30);
-  assert.equal(src.shutdown, true);
-  const kept = await c.call('project.plan', { project: PROJECT, browserUrls: { gg: url }, browserKeep: ['gg'] });
-  assert.equal(kept.sources.find((s) => s.layer === 'gg').shutdown, false);
-  assert.equal((await rpcErr('project.plan', { project: PROJECT, browserKeep: 'gg' })).code, -32602);
+  const fast = await c.call('project.plan', { project: { ...PROJECT, canvases: [{ id: 'h', width: W, height: H, fps: 60 }],
+    scenes: [{ ...PROJECT.scenes[0], layers: [PROJECT.scenes[0].layers[0], { ...PROJECT.scenes[0].layers[1], source: { ...PROJECT.scenes[0].layers[1].source, fps: 60 } }] }] }, browserUrls: { gg: url } });
+  assert.equal(fast.sources.find((s) => s.layer === 'gg').fps, 60);
 
   // A URL that does not belong to the layer's overlay is not loaded.
   const forged = await c.call('project.plan', { project: PROJECT, browserUrls: { gg: `http://127.0.0.1:${st.staticPort}/overlays/other/index.html` } });
@@ -208,6 +207,32 @@ test('project v1 overlay layer: URL via feedQuery, relay page, gg-burst draws on
   assert.ok(last < ch.length - 15, 'the effect clears');
   const stats = await (async () => { try { return await c.call('overlay.status'); } catch { return null; } })();
   assert.equal(stats.state, 'running');
+});
+
+// Idle load (2026-11-18): pages are not shut down while hidden (obs-browser pauses them), so an effect that starts while
+// its scene is not on air is still on screen when the scene is shown during its run, and a page is never reloaded on a
+// switch (a reload would replay nothing: the bridge sends no backlog, so the effect would be lost).
+test('an effect fired while its scene is hidden shows when the scene comes on air during it', { skip: !haveRoot && 'no overlay root' }, async () => {
+  const bg = PROJECT.scenes[0].layers[0];
+  const two = { ...PROJECT, activeScene: 'empty', scenes: [{ id: 'empty', name: 'Empty', layers: [{ ...bg, id: 'bg0' }] }, PROJECT.scenes[0]] };
+  await loadIntoHost(c, two);
+  await c.call('transitions.set', { canvas: 'H', type: 'cut' });
+  await sleep(3000); // the hidden page loads and its relay connects
+  const rec = await record('browser-hidden-fire.mkv', async (now) => {
+    await sleep(1500);
+    assert.deepEqual(await c.call('effect.fire', { name: 'gg' }), { ok: true });
+    await sleep(400);
+    const shown = now();
+    await c.call('scenes.activate', { scene: 'main' });
+    await sleep(3000);
+    return { shown };
+  });
+  const t0 = Math.max(0.2, rec.marks.shown - 0.5);
+  const ch = changed(rec.file, t0, 2.5);
+  const peak = Math.max(...ch.slice(Math.round(0.5 * 30)));
+  console.log(`# hidden fire: peak ${(peak * 100).toFixed(1)} % of pixels after the scene came on air 400 ms into the effect`);
+  assert.ok(peak > 0.01, 'the effect that started while hidden is drawn once the scene is shown');
+  await loadIntoHost(c, PROJECT);
 });
 
 test('overlay child restart: new pid, same ports, effect.fire UNAVAILABLE while down, recording unaffected, pages reconnect', { skip: !haveRoot && 'no overlay root' }, async () => {

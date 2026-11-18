@@ -54,7 +54,6 @@ public:
 		// source (ujw:overlay-relay) that re-posts the overlay feed on BroadcastChannel 'rp-events' for pages such
 		// as gg-burst. The ports are the host's own overlay server (set by the RPC layer, never by the caller).
 		std::map<std::string, std::string> browser_urls;
-		std::set<std::string> browser_keep; // layer ids whose page runs while not shown (model::Options::browser_keep)
 		std::string relay_scope;
 		uint16_t overlay_port = 0, overlay_feed_port = 0;
 	};

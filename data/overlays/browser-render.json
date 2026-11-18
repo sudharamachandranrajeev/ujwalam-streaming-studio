@@ -1,7 +1,0 @@
-{
-  "version": 1,
-  "source": "idle load audit 2026-11-18 (docs/evidence/2026-11-18-idle-performance.md)",
-  "checked": "2026-11-18",
-  "note": "Browser layers render at 30 fps unless the layer's source asks for more (source.fps) and are shut down while not shown in any view (hidden layer, scene not on air or in a preview); they reload when shown again. Overlay folders (first segment of the overlay rel) listed in keepWhenHidden keep running while hidden, because their page holds state a reload would lose. chat-list: its message list has no history replay, so a reload would show it empty.",
-  "keepWhenHidden": ["chat-list"]
-}

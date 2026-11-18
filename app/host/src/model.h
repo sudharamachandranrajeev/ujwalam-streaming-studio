@@ -31,7 +31,6 @@
 #include "json.h"
 
 #include <map>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -50,10 +49,6 @@ struct Options {
 	// services/overlay-server feedQuery (app/host/lib/project.mjs), and the overlay server's static port (0: the
 	// server is not running). A URL is used only if it is http://127.0.0.1:<port>/overlays/<that overlay's rel>[?...].
 	std::map<std::string, std::string> browser_urls;
-	// Browser layers that keep running while not shown (data/overlays/browser-render.json keepWhenHidden, sent by
-	// app/host/lib/project.mjs as browserKeep): their page holds state a reload would lose (chat-list). Every other
-	// browser layer is shut down while not shown in any view and reloads when shown again.
-	std::set<std::string> browser_keep;
 	uint16_t overlay_port = 0;
 	// --test-hooks fake devices (devices.testSet, D329): capture layers are built on the host's test source type
 	// ujw_test_capture (opens nothing) instead of dshow_input, and are allowed without --allow-devices.
