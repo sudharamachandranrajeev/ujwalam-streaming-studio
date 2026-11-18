@@ -123,3 +123,43 @@ Tests:
   `drawing: true` within 200 ms and the picture continues.
 
 Measure: `perf-idle` with the studio shell minimised versus shown (`gpu.gpu3dPct`).
+
+## 4. Python workers only while wanted
+
+Before: the launcher started the live clipper (`services/clip/live_worker.py`) and the face worker
+(`services/face/face_worker.py`) with every alpha session, whatever the flags; each idled in its own loop while off.
+
+Why live_worker used about 3054 CPU seconds off air (2026-11-18): it scans (frames.grab + detector scan + OCR, once
+per second) whenever `flag_on('live-clips') or worker_wanted()`. `worker_wanted()` reads
+`<data>/clips/live-worker.json`, which the launcher (record-clips.mjs) keeps fresh only while live (clips "while
+live") or recording (clips "while recording"), and which is ignored when older than 30 s. So off air the only way to
+scan is the live-clips flag: with it on, the worker scanned all day with nothing live. (Read from the code; the user's
+local flags file was not read, so which day the flag was switched on is UNVERIFIED.)
+
+Change:
+
+- `live_worker.py` `wanted()`: the launcher's request (live-worker.json) as before; the live-clips flag counts only
+  while `host.status` says live or recording (the clips token allows host.status). A host that does not answer counts
+  as off air. Checked every 5 s as before.
+- Launcher: the clipper process runs only while `liveClipperWanted` (live-clips flag on, or clips set to "while live"
+  or "while recording"); the face worker only while the face-ai flag is on. Both are re-checked on the 5 s clip tick,
+  so a switch made while live applies within 5 s. A worker no longer wanted gets its parent pipe closed (it ends
+  itself, D234) and is ended with its tree after 10 s; that exit is not counted as a crash. The task panel shows the
+  clipper as not started with the plain reason (`LIVE_CLIPPER_OFF_REASON`). Switching off and on again starts fresh
+  (restart count 0).
+- The scene file for the clipper spec is read again only when it changed (mtime and size), and the flags are read
+  through one instance (re-read only on change) instead of a new instance per check.
+
+Expected effect: off air with default settings (flags off, clips "ask"): no clipper and no face worker process (two
+Python processes with onnxruntime fewer: CPU near 0 and a few hundred MB of RAM). With the flag on, the clipper process
+waits off air (one host.status call every 5 s) instead of scanning.
+
+Tests:
+
+- `python -I -m unittest discover -s tests/py -t tests/py -p test_live_worker.py`: 11 run, OK (2 skipped: no numpy);
+  new `OnAirTests` (flag counts only while live or recording, a dead host is off air, flag off never calls the host,
+  the launcher request wins).
+- `tests/studio-ui-alpha.test.mjs`: 40 pass, 1 skipped (new: `liveClipperWanted`, `clipperStoppedView`).
+- NOT RUN: a full alpha session with the real workers switching on and off (needs the studio closed and the venvs).
+
+Measure: `perf-idle` per-process CPU seconds for python.exe (before: live_worker scanning when the flag is on).

@@ -13,7 +13,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import { loadDevicePresets, matchRoles, overrideProblems } from '../services/project/device-roles.mjs';
 import { validateProject } from '../services/project/index.mjs';
 import { LUTS_DIR, alphaBases, alphaFile, buildAlphaProject, prepareAlphaProject } from '../services/studio-ui/alpha.mjs';
-import { ALPHA_LIVE_PLAN, alphaHostConfig, loadAudioHealth, clipperExited, clipsEnv, LIVE_CLIPPER_MAX_RESTARTS, coreEnv, faceControlLine, faceEnv, faceSpec, liveClipsSpec, releaseVersion, shellChoice, shellExitRecord, shellRelaunchAllowed, shellSpawnSpec, studioShellPaths, startCommandLine, DEFAULT_FEEDBACK_DIR, headlessLoginScript, hostLaunchSpec, hotkeyOverrides, main as launchMain, openHostLog, writeHostConfig } from '../services/studio-ui/launch.mjs';
+import { ALPHA_LIVE_PLAN, alphaHostConfig, loadAudioHealth, clipperExited, clipperStoppedView, clipsEnv, LIVE_CLIPPER_MAX_RESTARTS, LIVE_CLIPPER_OFF_REASON, liveClipperWanted, coreEnv, faceControlLine, faceEnv, faceSpec, liveClipsSpec, releaseVersion, shellChoice, shellExitRecord, shellRelaunchAllowed, shellSpawnSpec, studioShellPaths, startCommandLine, DEFAULT_FEEDBACK_DIR, headlessLoginScript, hostLaunchSpec, hotkeyOverrides, main as launchMain, openHostLog, writeHostConfig } from '../services/studio-ui/launch.mjs';
 import { closeSync } from 'node:fs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -736,4 +736,16 @@ test('live clipper exit (Codex review of LC1): restarting while a restart is sch
   assert.equal(last.restart, false);
   assert.deepEqual([last.view.state, last.view.restarts], ['gave-up', 5]);
   assert.equal(last.view.reason, 'it stopped (exit 3) and was restarted 5 times; restart Ujwalam to try again');
+});
+
+test('idle load (2026-11-18): the live clipper runs only while the live-clips flag is on or clips are set to "while"', () => {
+  assert.equal(liveClipperWanted({ flagOn: false, clips: { live: 'ask', recording: 'ask' } }), false);
+  assert.equal(liveClipperWanted({ flagOn: false, clips: { live: 'after', recording: 'off' } }), false);
+  assert.equal(liveClipperWanted({ flagOn: false, clips: undefined }), false);
+  assert.equal(liveClipperWanted({ flagOn: true, clips: { live: 'ask', recording: 'ask' } }), true);
+  assert.equal(liveClipperWanted({ flagOn: false, clips: { live: 'while', recording: 'ask' } }), true);
+  assert.equal(liveClipperWanted({ flagOn: false, clips: { live: 'ask', recording: 'while' } }), true);
+  // Stopped on purpose: not-started with the plain reason, restarts from 0 (a gave-up clipper starts fresh later).
+  const v = clipperStoppedView({ state: 'gave-up', reason: 'x', restarts: 5, maxRestarts: LIVE_CLIPPER_MAX_RESTARTS });
+  assert.deepEqual(v, { state: 'not-started', reason: LIVE_CLIPPER_OFF_REASON, restarts: 0, maxRestarts: LIVE_CLIPPER_MAX_RESTARTS });
 });

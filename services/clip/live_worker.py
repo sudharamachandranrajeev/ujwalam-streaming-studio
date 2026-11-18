@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """F6 live clipping worker (D226): kill chains -> replay buffer saves, while streaming.
 
-Started by the studio launcher when the feature flag 'live-clips' is on (it re-reads the flag about every 5 s and
-idles while it is off, so the control page switches it live). Once per second it asks the host for the game layer's
+Started by the studio launcher while the feature flag 'live-clips' is on or clips are set to "while live" / "while
+recording", and stopped when neither holds (idle load, 2026-11-18). It re-checks about every 5 s and scans only while
+the host is live or recording (the flag) or the launcher asks (live-worker.json); otherwise it idles. Once per
+second while it scans it asks the host for the game layer's
 picture (frames.grab: the shared capture source, never the composed canvas), runs the detector scan
 (detector_pass.FrameScanner, ROI bands; OCR on the GPU through DirectML when the GPU runtime is present) and feeds
 the hits to the kill-chain rules (live_chain.LiveChain). On a save it calls replay.save (H and V) and marker.add
@@ -78,6 +80,25 @@ class HostLink:
         if "error" in doc:
             raise cc.ClipError(f"host {method}: {doc['error'].get('code')} {str(doc['error'].get('message'))[:120]}")
         return doc.get("result")
+
+
+def on_air(host):
+    """True while the host streams or records (host.status live / recording). A host that does not answer counts as
+    off air; the next check (FLAG_EVERY_SEC) asks again."""
+    try:
+        s = host.call("host.status")
+    except cc.ClipError:
+        return False
+    return isinstance(s, dict) and (s.get("live") is True or s.get("recording") is True)
+
+
+def wanted(data_dir, host):
+    """Scan only while on air (idle load 2026-11-18: with the flag on, the worker scanned frames off air too, about
+    3000 CPU seconds in one day). The launcher's live-worker.json is on only while live or recording; the live-clips
+    flag counts only while the host is live or recording."""
+    if cc.worker_wanted(data_dir):
+        return True
+    return cc.flag_on(data_dir, FLAG) and on_air(host)
 
 
 def read_bmp(path):
@@ -245,7 +266,7 @@ def main(argv=None):
     while not gone.is_set():  # a save in progress finishes first
         start = time.monotonic()
         if start >= next_flag:
-            was, on = on, cc.flag_on(a.data_dir, FLAG) or cc.worker_wanted(a.data_dir)
+            was, on = on, wanted(a.data_dir, w.host)
             next_flag = start + FLAG_EVERY_SEC
             if was != on:
                 cc.eprint(f"live-clips: {'on' if on else 'off'}")

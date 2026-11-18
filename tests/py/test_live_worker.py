@@ -130,6 +130,51 @@ class LiveWorkerTests(unittest.TestCase):
             os.environ.update(env)
 
 
+class OnAirTests(unittest.TestCase):
+    """Idle load (2026-11-18): with the live-clips flag on, the worker scans only while the host is live or recording."""
+
+    class Host:
+        def __init__(self, status=None, fail=False):
+            self.status, self.fail, self.calls = status, fail, 0
+
+        def call(self, method, params=None):
+            self.calls += 1
+            if self.fail:
+                raise cc.ClipError("host host.status: URLError")
+            return self.status
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def flag(self, on):
+        with open(os.path.join(self.tmp.name, cc.LOCAL_FLAGS), "w", encoding="utf-8") as f:
+            json.dump({"flags": {"live-clips": on}}, f)
+
+    def test_flag_counts_only_while_live_or_recording(self):
+        self.flag(True)
+        H = OnAirTests.Host
+        self.assertFalse(lw.wanted(self.tmp.name, H({"live": False, "recording": False})))
+        self.assertTrue(lw.wanted(self.tmp.name, H({"live": True, "recording": False})))
+        self.assertTrue(lw.wanted(self.tmp.name, H({"live": False, "recording": True})))
+        self.assertFalse(lw.wanted(self.tmp.name, H(fail=True)), "a host that does not answer is off air")
+
+    def test_flag_off_never_asks_the_host(self):
+        self.flag(False)
+        h = OnAirTests.Host({"live": True})
+        self.assertFalse(lw.wanted(self.tmp.name, h))
+        self.assertEqual(h.calls, 0)
+
+    def test_launcher_request_wins_without_a_host_call(self):
+        os.makedirs(os.path.join(self.tmp.name, "clips"))
+        import time
+        with open(os.path.join(self.tmp.name, cc.WORKER_FILE), "w", encoding="utf-8") as f:
+            json.dump({"on": True, "atMs": time.time() * 1000}, f)
+        h = OnAirTests.Host({"live": False})
+        self.assertTrue(lw.wanted(self.tmp.name, h))
+        self.assertEqual(h.calls, 0)
+
+
 class ParentPipeTests(unittest.TestCase):
     """D234: the worker stops when the launcher's stdin pipe closes."""
 
