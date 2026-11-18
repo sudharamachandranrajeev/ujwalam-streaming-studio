@@ -27,7 +27,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_AI_URL, localAiUrl } from '../local-ai.mjs';
+import { DEFAULT_AI_URL, localAiUrl } from '../common/local-ai.mjs';
 import { ERROR_TEXT } from '../platform-connect/index.mjs';
 import { ID_RE, MODES, cleanDescription, cleanFields, cleanTags, cleanTitle, readAutoEvent, readChoices, readMode, writeChoices } from '../platform-connect/youtube-events.mjs';
 import { readThumbnailFile } from '../platform-connect/youtube-control.mjs';

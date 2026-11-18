@@ -87,7 +87,9 @@ test('repo file set: no tests, docs, Python or local files; every relative impor
   assert.deepEqual(allowProblems(files), []);
   assert.deepEqual(forbiddenProblems(files, { fontNames: ['Corbel', 'Consolas'] }), []);
   const dis = disabledModules(REPO);
-  for (const m of ['obs-websocket', 'win-capture', 'rtmp-services', 'obs-vst', 'nv-filters']) assert.ok(dis.includes(m), m);
+  for (const m of ['obs-websocket', 'rtmp-services', 'obs-vst', 'nv-filters']) assert.ok(dis.includes(m), m);
+  // win-capture loads with --allow-screen-capture only (D390, allowed by the user 2026-11-18), so the package ships it
+  assert.ok(!dis.includes('win-capture'), 'win-capture ships');
 });
 
 test('forbidden paths: legacy, local files, Microsoft fonts, any font, private evidence, feedback, out/, user data, secrets', () => {

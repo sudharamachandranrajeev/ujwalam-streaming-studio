@@ -332,6 +332,7 @@ test('launch spec: studio mode keeps the test card and adds nothing', () => {
 test('launch spec: headless (UJWALAM_HEADLESS=1) starts the alpha host without previews (D191)', () => {
   const s = hostLaunchSpec({ hostCfg: CFG, hostDiscovery: 'C:/d/host.json', args: {}, alpha: true, corePort: 1234, coreApiToken: TOKEN, hostConfigFile: HCF, coreSystemToken: SYS, headless: true });
   assert.ok(!s.argv.includes('--preview'));
+  assert.ok(!s.argv.includes('--allow-screen-capture'), 'headless never loads win-capture (network, ProgramData; D390)');
   assert.ok(s.argv.includes('--allow-browser'), 'everything else is as in a normal start');
   assert.ok(s.notes.some((n) => /headless/.test(n)));
 });
@@ -352,6 +353,7 @@ test('launch spec: alpha mode wires previews, browser layers, overlay child and 
   assert.ok(!emb.argv.includes('--preview'), 'Qt shell: previews inside its window, no separate preview windows (D280)');
   assert.ok(s.argv.includes('--allow-browser'));
   assert.ok(s.argv.includes('--allow-devices'));
+  assert.ok(s.argv.includes('--allow-screen-capture') && emb.argv.includes('--allow-screen-capture'), 'screen and window layers (D390, user yes 2026-11-18)');
   assert.equal(after('--overlay-root'), OV_ROOT);
   assert.match(after('--overlay-script'), /app[\\/]host[\\/]overlay[\\/]child\.mjs$/);
   assert.equal(after('--node'), process.execPath);

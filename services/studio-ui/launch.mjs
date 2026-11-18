@@ -530,6 +530,9 @@ export function hostLaunchSpec({ hostCfg, hostDiscovery, args, alpha = false, co
     if (headless) notes.push('headless (UJWALAM_HEADLESS=1): no preview windows');
     else if (embedded) { /* D280: the Qt shell shows the previews inside its window */ }
     else argv.push('--preview', 'h,v');
+    // D390 (user yes 2026-11-18): screen and window layers. Loading win-capture fetches the OBS compatibility list and
+    // copies hook files to ProgramData, so headless runs (tests, CI) never pass it.
+    if (!headless) argv.push('--allow-screen-capture');
     const overlayProblem = overlayRootProblem(hostCfg.overlayRoot);
     if (!overlayProblem) {
       argv.push('--allow-browser', '--overlay-root', hostCfg.overlayRoot, '--overlay-script', hostCfg.overlayScript, '--node', process.execPath);

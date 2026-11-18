@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Scene builder SB6 (D392): a local vision model as the adapter of the read hook (read.mjs `opts.model`). The model runs
 // in LM Studio on this PC (OpenAI-compatible server, `qwen/qwen3-vl-4b` by default); the address must be local
-// (services/local-ai.mjs), nothing else is ever called. One picture goes out: the middle sampled frame of the reference,
+// (services/common/local-ai.mjs), nothing else is ever called. One picture goes out: the middle sampled frame of the reference,
 // as a PNG, plus the rules' slot list as plain text. The answer is parsed here into the hook's shape; read.mjs checks the
 // shape again and merges it (a model slot replaces a rules slot only with a higher confidence).
 //
@@ -13,7 +13,7 @@
 // Privacy: the picture is the user's own reference file and goes to the local server only; nothing is logged.
 
 import { crc32, deflateSync } from 'node:zlib';
-import { DEFAULT_AI_URL, localAiUrl } from '../local-ai.mjs';
+import { DEFAULT_AI_URL, localAiUrl } from '../common/local-ai.mjs';
 
 export const DEFAULT_VISION_MODEL = 'qwen/qwen3-vl-4b';
 export const VISION_TTL_S = 120;

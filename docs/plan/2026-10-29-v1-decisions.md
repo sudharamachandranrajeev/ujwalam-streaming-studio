@@ -2026,3 +2026,40 @@ Growth plan ED2. Decided:
   in-memory under `UJWALAM_HEADLESS=1`.
 - UNVERIFIED until a real stream: `existing` mode sending contentDetails back whole with auto-start keeps the user's
   other event settings; LM Studio honours `ttl`; real-screen look of the new themes at the user's display scaling.
+
+## D390 — Scenario scenes and screen/window capture layers (user, 2026-11-18)
+
+- **Decision.** User request: scenes per scenario (gameplay, lobby / just chatting, screen share, starting soon / BRB /
+  ending), each an H + V pair built from data templates through the SB3 builder; new scenes only. Project layer types
+  `screen` (libobs `monitor_capture`; source `{display, cursor?}`) and `window` (`window_capture`; source
+  `{window: "title:class:exe", match?: title|class|exe (default exe), cursor?}`). One app window is the default for the
+  screen-share scene; the whole screen stays available. Targets come from the read-only host RPC `capture.listTargets`.
+- **Screen capture allowed.** win-capture loads only when the host starts with `--allow-screen-capture`, because loading
+  it fetches the OBS compatibility list from obsproject.com and copies hook files into ProgramData (D28 kept it off). The
+  user allowed it on 2026-11-18: the launcher passes the switch and the package ships win-capture.
+- **Privacy.** Window titles are personal data: never logged by Ujwalam, never committed; a window layer is named after
+  its program (exe). Evidence `docs/evidence/2026-11-18-capture-layers-and-transitions-host.md`.
+
+## D391 — More transitions and cyberpunk stingers; transitions ON by default (user, 2026-11-18)
+
+- **Decision.** "Fancy transitions, default one cyberpunk colourful." Flag `transitions` is ON by default (a requested
+  feature). Host types `slide {direction}`, `swipe {direction, swipeIn}`, `wipe {pattern, softness, invert}` (patterns
+  from `data/transitions/luma-wipes.json`, the luma images OBS ships) and `fadeColor {color, pointPct}`, each with
+  `durationMs` and fields allowed only on their type; `transitions.types` lists them for the UI.
+- **Stingers.** Three stingers drawn locally by `tools/make-stingers.mjs` (plain JS rasterizer, VP9 WebM with alpha,
+  60 fps, 900 ms, silent): `neon-glitch` (default), `synthwave-sweep`, `cyan-grid`, data in
+  `data/transitions/stingers/`, committed H and V files, packaged. Read with pathRef base `data`; the studio picks a
+  built-in stinger by preset id only. Fully opaque at pointMs; measured at 2 flashes/s or fewer (limit 3).
+- **Existing project.** A canvas whose transition is unset or still the Meld-imported fade is switched to neon-glitch
+  once at the next start (copy in `projects/_old`, marker `projects/transition-defaults.json`, so a later choice is never
+  overwritten). UNVERIFIED: the look on a real stream; alpha decode of VP9 in the host's stinger source.
+
+## D392 — Scene builder reads references with a local vision model (user, 2026-11-18)
+
+- **Decision.** The user approved installing a small vision model: `qwen/qwen3-vl-4b` in LM Studio (3.33 GB, downloaded
+  2026-11-18). `services/scene-builder/vision.mjs` is the read hook's adapter: local address only (shared check
+  `services/common/local-ai.mjs`), the middle frame as a PNG plus the rules' slots as text, boxes on a 0-1000 scale, model
+  confidence capped at 0.85 so a sure rules slot is not replaced on a guess; LM Studio loads the model on demand and
+  unloads it after 120 s idle (UNVERIFIED for every version). Never while live or recording (6 GB VRAM, D1). The rules
+  result stands when the model is off, fails or answers out of shape. CLI `--ai`; the studio window follows.
+  UNVERIFIED: a real read on the user's references.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Scene builder SB6 (D392): the local vision model adapter (services/scene-builder/vision.mjs) and the shared local
-// address check (services/local-ai.mjs). No model runs here: a fake fetch answers like LM Studio's OpenAI-compatible
+// address check (services/common/local-ai.mjs). No model runs here: a fake fetch answers like LM Studio's OpenAI-compatible
 // server. The real model read is checked by hand on the user's references (evidence file).
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { inflateSync } from 'node:zlib';
-import { localAiUrl } from '../services/local-ai.mjs';
+import { localAiUrl } from '../services/common/local-ai.mjs';
 import { loadReference } from '../services/scene-builder/frames.mjs';
 import { readFrames } from '../services/scene-builder/read.mjs';
 import { answerToRead, DEFAULT_VISION_MODEL, jsonIn, MODEL_CONFIDENCE_CAP, rgbPng, visionAdapter, VISION_TTL_S } from '../services/scene-builder/vision.mjs';

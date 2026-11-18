@@ -7,6 +7,8 @@
 *.wav
 *.m4a
 *.webm
+# generated stinger transitions (D391): our own drawings, packaged with the app
+!data/transitions/stingers/*.webm
 
 # analysis caches
 cache/
