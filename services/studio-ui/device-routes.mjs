@@ -8,15 +8,17 @@
 //   POST /ui/api/devices/connect {role?}   one click (D332): those placeholders become the capture layers (in place, same
 //                     ids and placements; nothing else changes). Allowed while live: a placeholder is transparent, and the
 //                     host already binds capture layers to arriving devices while live (D329). Order as for structure edits
-//                     (D240): pending edits written -> file read -> pure change -> host -> file saved. A host failure puts
-//                     the placeholders back and saves nothing.
+//                     (D240): pending edits written -> file read -> pure change -> host -> the same change on a fresh read
+//                     saved (projectSync.update). A host failure puts the placeholders back and saves nothing; a failed
+//                     save (or a project that changed meanwhile) puts them back too and says so (not-saved, changed, or
+//                     not-saved-live when the host would not take them back).
 //   POST /ui/api/devices/rescan {}         "Try again" (host devices.rescan): every capture layer without a picture is
 //                     activated again at once, device sounds whose device is back are built, missing media files are
 //                     looked for again. No project change.
 // Device names and endpoint ids are never logged.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { loadProject, saveProject } from '../project/store.mjs';
+import { loadProject } from '../project/store.mjs';
 import { loadDevicePresets, matchRoles } from '../project/device-roles.mjs';
 import { placeholderRoles, rebindPlaceholders } from '../project/rebind-roles.mjs';
 import { upgradePresets } from './alpha.mjs';
@@ -33,6 +35,9 @@ export const DEVICE_ERROR_TEXT = Object.freeze({
   'bad-params': 'That request was not understood.',
   busy: 'A device change is still on its way; try again in a moment.',
   invalid: 'The project would not be valid with that change.',
+  changed: 'The project changed while connecting, so nothing was connected. Try again.',
+  'not-saved': 'The project file could not be saved, so the change was undone. Nothing changed.',
+  'not-saved-live': 'The project file could not be saved and the change could not be undone: it is live until Ujwalam restarts.',
 });
 
 /** opts: { host, json, projectSync, profileFile?, presetsDir, flags?, afterEdit?(), log? } */
@@ -42,6 +47,7 @@ export function createDeviceRoutes(opts) {
   let busy = false;
   let state = { roles: [] };
   let refreshing = null;
+  let again = false; // a refresh was asked for while one ran
 
   const presets = () => upgradePresets(opts.presetsDir);
   const flagState = () => {
@@ -93,6 +99,15 @@ export function createDeviceRoutes(opts) {
     // project order. Any failure puts the old placeholders back from the unchanged document.
     const removed = [];
     const added = [];
+    // Undo on the host: the new layers go, the placeholders come back from the unchanged document. true when every call
+    // was taken.
+    async function undoHost() {
+      let ok = true;
+      for (const a of [...added].reverse()) { try { await host.call('layers.remove', a); } catch { ok = false; } }
+      for (const m of removed) { try { await host.call('layers.addFromProject', { project: doc, scene: m.scene, layer: m.layer }); } catch { ok = false; } }
+      for (const scene of new Set(removed.map((m) => m.scene))) { try { await host.call('layers.orderFromProject', { project: doc, scene }); } catch { ok = false; } }
+      return ok;
+    }
     try {
       for (const rb of x.rebound) for (const lid of rb.layers) {
         const scene = doc.scenes.find((s) => s.layers.some((l) => l.id === lid)).id;
@@ -106,18 +121,34 @@ export function createDeviceRoutes(opts) {
       }
       for (const scene of new Set(removed.map((m) => m.scene))) await host.call('layers.orderFromProject', { project: x.project, scene });
     } catch (e) {
-      for (const a of added.reverse()) { try { await host.call('layers.remove', a); } catch { /* best effort */ } }
-      for (const m of removed) { try { await host.call('layers.addFromProject', { project: doc, scene: m.scene, layer: m.layer }); } catch { /* best effort */ } }
-      for (const scene of new Set(removed.map((m) => m.scene))) { try { await host.call('layers.orderFromProject', { project: doc, scene }); } catch { /* best effort */ } }
+      await undoHost();
       return json(res, 502, { error: 'host-error', detail: String(e?.message ?? e?.code ?? 'error').slice(0, 200) });
     }
-    let saved = true;
-    try { saveProject(file, x.project); } catch { saved = false; }
-    opts.projectSync.reload();
+    // The file: the same change made again on a fresh copy (Codex review 2026-11-18, P2), so a mixer or structure edit
+    // saved while the host calls ran is kept. The fresh copy must rebind exactly the same layers, or the host and the file
+    // would disagree: then the host change is undone.
+    const same = (r) => r.rebound.length === x.rebound.length && r.rebound.every((a) => x.rebound.some((b) => b.role === a.role && b.real === a.real
+      && b.device === a.device && b.layers.length === a.layers.length && a.layers.every((l) => b.layers.includes(l))));
+    // the project devices the first change made, under the same ids (the host's new layers name them)
+    const made = x.rebound.map((rb) => rb.device).filter((id) => !(doc.devices ?? []).some((d) => d.id === id));
+    let k = 0;
+    const idFn = (prefix) => made[k++] ?? `${prefix}-again-${k}`;
+    const w = opts.projectSync.update((fresh) => {
+      const r = rebindPlaceholders(fresh, { presets: P, bindings, flags: flagState(), idFn });
+      if (r.error) return { error: 'changed' };
+      if (r.unchanged || !same(r)) return { error: 'changed' };
+      return r;
+    });
+    if (w.error) {
+      const undone = await undoHost();
+      opts.afterEdit?.();
+      state = await compute().catch(() => ({ roles: [] }));
+      return refuse(res, !undone ? 'not-saved-live' : w.error === 'changed' ? 'changed' : 'not-saved', w.error === 'changed' && undone ? 409 : 500);
+    }
     log(`[studio-ui] devices: connected ${x.rebound.map((rb) => `${rb.role} (${rb.layers.length} layer(s))`).join(', ')}`);
     opts.afterEdit?.();
     state = await compute().catch(() => ({ roles: [] }));
-    return json(res, 200, { ok: true, connected: x.rebound.map((rb) => ({ role: rb.role, layers: rb.layers })), saved });
+    return json(res, 200, { ok: true, connected: x.rebound.map((rb) => ({ role: rb.role, layers: rb.layers })), saved: true });
   }
 
   async function rescan(res, body) {
@@ -137,10 +168,18 @@ export function createDeviceRoutes(opts) {
 
   return {
     connectable: () => state.roles,
-    /** Recompute the connectable roles (a device came or went, or the start). One at a time; never throws. */
+    /** Recompute the connectable roles (a device came or went, or the start). One at a time; never throws. A call while
+     *  one runs asks for one more pass after it (Codex review 2026-11-18, P3: a device that arrived mid-pass was missed
+     *  until the next event); the promise settles when no pass is wanted any more. */
     refresh() {
-      if (refreshing) return refreshing;
-      refreshing = compute().then((s) => { state = s; }, () => {}).finally(() => { refreshing = null; });
+      if (refreshing) { again = true; return refreshing; }
+      const run = async () => {
+        do {
+          again = false;
+          try { state = await compute(); } catch { /* keep the last state */ }
+        } while (again);
+      };
+      refreshing = run().finally(() => { refreshing = null; });
       return refreshing;
     },
     async handle(method, route, body, res) {
