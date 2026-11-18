@@ -198,12 +198,12 @@ json::Value devices_pass(App &a, const char *why, const std::vector<std::string>
 	return a.studio->devices_changed(l, why, removed, event);
 }
 
-void apply_monitoring(App &a)
+void apply_monitoring(App &a, bool waiting_only)
 {
 	static std::mutex mu;
-	static bool in_use = false, said_missing = false;
+	static bool in_use = false, said_missing = false, said_waiting = false;
 	std::lock_guard<std::mutex> lk(mu);
-	if (a.config.monitoring_device.empty() || !a.allow_devices || a.shutting_down)
+	if (a.config.monitoring_device.empty() || !a.allow_devices || a.shutting_down || (waiting_only && !said_waiting))
 		return;
 	devices::List l = devices::enumerate();
 	auto low = [](std::string s) {
@@ -221,11 +221,26 @@ void apply_monitoring(App &a)
 				   a.config.monitoring_device.c_str());
 		in_use = false;
 		said_missing = true;
+		said_waiting = false;
 		return;
 	}
 	if (in_use)
 		return;
-	json::Value m = devices::set_monitoring_output(a.config.monitoring_device, l);
+	// Before the studio exists nothing monitors. After it, the device is changed only while no source has CUE on
+	// (when_no_monitors: libobs frees the device id that an active monitor can read). Otherwise it waits for the next
+	// safe point: the next device change, Try again, or a CUE switched off. Codex review 2026-11-18, P1.
+	json::Value m;
+	auto set = [&]() { m = devices::set_monitoring_output(a.config.monitoring_device, l); };
+	if (!a.studio)
+		set();
+	else if (!a.studio->when_no_monitors(set)) {
+		if (!said_waiting)
+			hlog::info("audio monitoring output \"%s\": connected; switching to it once no sound has CUE on",
+				   a.config.monitoring_device.c_str());
+		said_waiting = true;
+		return;
+	}
+	said_waiting = false;
 	if (const json::Value *pr = m.find("problem")) {
 		hlog::warn("audio monitoring output \"%s\": %s; using the Windows default output", a.config.monitoring_device.c_str(),
 			   pr->as_string().c_str());
@@ -1035,7 +1050,11 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 	});
 	add("mixer.setCue", [&a](const json::Value &p) {
 		Params q(p, {"id", "cue"});
-		return a.studio->mixer_set_cue(q.str("id", 130), q.boolean("cue"));
+		const bool cue = q.boolean("cue");
+		json::Value r = a.studio->mixer_set_cue(q.str("id", 130), cue);
+		if (!cue)
+			apply_monitoring(a, true); // a CUE off can be the safe point for a monitoring output that waits (Codex P1)
+		return r;
 	});
 	// mixer.setTracks {id, tracks: [project track id]} (D273): the whole list; [] takes the source out of every track.
 	add("mixer.setTracks", [&a](const json::Value &p) {

@@ -3177,6 +3177,24 @@ void Studio::each_mixer_src(const std::function<void(const Src &, const std::str
 					f(*l.src, s.id + "/" + l.id, &s, &l);
 }
 
+bool Studio::when_no_monitors(const std::function<void()> &fn)
+{
+	std::lock_guard<std::recursive_mutex> lk(m_);
+	bool any = false;
+	obs_enum_all_sources(
+		[](void *p, obs_source_t *s) {
+			if (obs_source_get_monitoring_type(s) == OBS_MONITORING_TYPE_NONE)
+				return true;
+			*static_cast<bool *>(p) = true;
+			return false;
+		},
+		&any);
+	if (any)
+		return false;
+	fn();
+	return true;
+}
+
 json::Value Studio::mixer_levels() const
 {
 	json::Value r = json::Value::object();
