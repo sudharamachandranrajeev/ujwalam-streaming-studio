@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ujwalam-Setup.exe resources: the app icon (id 1, the lowest group icon id: Explorer and shortcuts use it) and a full
+// version resource. An unsigned exe without version information scores worse with Microsoft Defender's
+// machine-learning detection (docs/evidence/2026-11-08-defender-host.md); this names the product, its purpose and
+// its licence. It is not a guarantee: see docs/evidence/2026-11-18-setup-installer.md.
+#include <winver.h>
+
+1 ICON "../../studio/res/ujwalam.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     0,1,0,0
+PRODUCTVERSION  0,1,0,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName",      "Ujwalam project"
+      VALUE "FileDescription",  "Ujwalam setup: installs, updates, repairs and removes Ujwalam for the current user"
+      VALUE "FileVersion",      "0.1.0.0"
+      VALUE "InternalName",     "ujwalam-setup"
+      VALUE "LegalCopyright",   "GPL-3.0-or-later"
+      VALUE "OriginalFilename", "Ujwalam-Setup.exe"
+      VALUE "ProductName",      "Ujwalam"
+      VALUE "ProductVersion",   "0.1.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

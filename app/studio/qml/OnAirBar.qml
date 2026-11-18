@@ -70,6 +70,11 @@ Rectangle {
         id: chips
         anchors { right: controls.left; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
         spacing: Theme.sp.s
+        // Update available (setup installer, 2026-11-18): only when the build folder has a newer verified package.
+        UpdateButton {
+            id: updateBtn
+            store: bar.store
+        }
         TaskChip {
             objectName: "taskChip"
             visible: bar.taskCenter !== null && bar.taskCenter.listed > 0
@@ -210,6 +215,9 @@ Rectangle {
                 UMenuItem { objectName: "moreMenu:report"; text: "Report a problem…"; visible: moreMenu.f["report-button"] === true; height: visible ? implicitHeight : 0
                             tip: "Opens a prefilled GitHub issue in your browser; you review it before submitting."
                             onTriggered: bar.windows.report.show() }
+                UMenuItem { objectName: "moreMenu:updates"; text: "Check for updates"
+                            tip: "Looks in the build folder for a newer Ujwalam package. Nothing is installed until you click Update available."
+                            onTriggered: updateBtn.check(true) }
             }
         }
         // Help (the widget's ? button): how clips are made, how posting works, and the welcome tour.

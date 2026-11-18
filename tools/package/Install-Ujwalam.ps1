@@ -39,6 +39,28 @@
 .PARAMETER SettingsOnly  Only apply the settings above; install nothing.
   The settings are the same ones as Settings in the studio window (data\core\settings.json, D284). Only the settings
   you pass are changed; everything else in the data folder is left as it is.
+.PARAMETER UpdateFolder  The build folder the studio looks in for a newer package ("Update available"); written to
+                         data\ujwalam.json as updateFolder ('' removes it). Ujwalam-Setup.exe passes its own folder.
+.PARAMETER Repair        Same version as installed: check its files against SHA256SUMS.txt; when they match only the
+                         launcher files and shortcuts are put back, otherwise the version is reinstalled (as -Force).
+.PARAMETER Uninstall     Remove the program: every version folder, the launcher files, the pointers and the shortcuts.
+                         Your data folder (settings, projects, recordings, clips) is kept unless -DeleteData is given.
+                         Refused while Ujwalam runs. Folders this installer did not make are left in place.
+.PARAMETER DeleteData    With -Uninstall: also delete <InstallRoot>\data. Stream keys in Windows Credential Manager are
+                         never touched.
+.PARAMETER AdoptPackage  Used by Ujwalam-Setup.exe: the unzipped build sits in <InstallRoot>\.setup-*\ and is moved into
+                         place after its checksums pass, instead of being copied a second time.
+.PARAMETER NoHandOver    Live install: do not hand the new version to the running Ujwalam; it runs from the next start
+                         (the studio's Update button uses this).
+
+  Settings safety (2026-11-18): before an install changes an existing install, a backup of the settings and project
+  files (not media) is taken with tools\package\settings-backup.mjs into data\backups\settings\ (the newest 10 are
+  kept); without it the install stops before current.txt changes. -Rollback puts the backup from that update back
+  (the newer files are kept in a before-rollback backup first) and is refused while Ujwalam runs.
+
+  Exit codes: 0 done, 2 bad arguments or no package, 4 already installed (or running), 5 no previous version,
+  6 prerequisites missing, 7 checksum problem, 8 cannot list running programs, 10 a file could not be replaced,
+  11 uninstall refused (Ujwalam runs), 12 rollback refused (Ujwalam runs), 13 settings backup failed.
 #>
 [CmdletBinding()]
 param(
@@ -53,7 +75,13 @@ param(
   [string]$RecordingsFolder,
   [string]$ClipsFolder,
   [string]$ClipMaker,
-  [switch]$SettingsOnly
+  [switch]$SettingsOnly,
+  [string]$UpdateFolder,
+  [switch]$Repair,
+  [switch]$Uninstall,
+  [switch]$DeleteData,
+  [switch]$AdoptPackage,
+  [switch]$NoHandOver
 )
 
 Set-StrictMode -Version 2
@@ -65,6 +93,8 @@ $ShortcutName = 'Ujwalam (alpha).lnk'
 $PracticeShortcutName = 'Ujwalam (alpha, practice).lnk'
 # Shortcut from earlier installs, replaced by the default one.
 $OldLiveShortcutName = 'Ujwalam (alpha, LIVE).lnk'
+# Start menu only (2026-11-18): Ujwalam-Setup.exe in the install root: update, repair, roll back, uninstall.
+$SetupShortcutName = 'Ujwalam setup (update, repair, uninstall).lnk'
 
 function Say([string]$m) { Write-Host "[install] $m" }
 function Fail([string]$m, [int]$code) { Write-Host "[install] STOP: $m"; exit $code }
@@ -102,15 +132,21 @@ function Norm-Path([string]$s) {
   if (-not $s) { return '' }
   return [regex]::Replace($s.Replace('/', '\'), '(?<=.)\\{2,}', '\')
 }
+# The program that started this installer (Ujwalam-Setup.exe, whose command line names the install folder, or a
+# terminal) is never "Ujwalam running": only this process's own parent is left out, so the studio that started
+# Ujwalam-Setup.exe still counts.
 function Get-RunningUnder([string]$dir) {
   $d = Norm-Path ([System.IO.Path]::GetFullPath($dir).TrimEnd('\') + '\')
   $found = @()
   try {
     Add-Type -AssemblyName System.Management
-    $q = New-Object System.Management.ManagementObjectSearcher('SELECT ProcessId, Name, ExecutablePath, CommandLine FROM Win32_Process')
-    foreach ($p in $q.Get()) {
+    $q = New-Object System.Management.ManagementObjectSearcher('SELECT ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine FROM Win32_Process')
+    $all = @($q.Get())
+    $parent = -1
+    foreach ($p in $all) { if ([int]$p['ProcessId'] -eq $PID) { $parent = [int]$p['ParentProcessId'] } }
+    foreach ($p in $all) {
       $id = [int]$p['ProcessId']
-      if ($id -eq $PID) { continue }
+      if ($id -eq $PID -or $id -eq $parent) { continue }
       $exe = Norm-Path ([string]$p['ExecutablePath']); $cmd = Norm-Path ([string]$p['CommandLine'])
       if ($exe.StartsWith($d, [StringComparison]::OrdinalIgnoreCase) -or $cmd.IndexOf($d, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
         $found += [pscustomobject]@{ Id = $id; Name = [string]$p['Name']; Exe = $exe; Cmd = $cmd }
@@ -186,7 +222,10 @@ function Test-Folder([string]$name, [string]$dir) {
 # welcome still asks how to make clips).
 $appSettingsGiven = $PSBoundParameters.ContainsKey('ClipsWhenRecording') -or $PSBoundParameters.ContainsKey('ClipsWhenLive') -or
   $PSBoundParameters.ContainsKey('RecordingsFolder') -or $PSBoundParameters.ContainsKey('ClipsFolder')
-$settingsGiven = $appSettingsGiven -or $PSBoundParameters.ContainsKey('ClipMaker')
+$settingsGiven = $appSettingsGiven -or $PSBoundParameters.ContainsKey('ClipMaker') -or $PSBoundParameters.ContainsKey('UpdateFolder')
+if ($Uninstall -and ($Rollback -or $Repair -or $SettingsOnly -or $settingsGiven)) { Fail '-Uninstall cannot be combined with other actions or settings' 2 }
+if ($DeleteData -and -not $Uninstall) { Fail '-DeleteData only goes with -Uninstall' 2 }
+if ($Repair -and $Rollback) { Fail '-Repair and -Rollback cannot be combined' 2 }
 if ($appSettingsGiven) {
   Test-Folder 'RecordingsFolder' $RecordingsFolder
   Test-Folder 'ClipsFolder' $ClipsFolder
@@ -214,8 +253,77 @@ if ($PSBoundParameters.ContainsKey('ClipMaker')) {
   Write-JsonFile $uf $u
   Say "clip maker: $(if ($ClipMaker) { $ClipMaker } else { 'not set' })"
 }
+if ($PSBoundParameters.ContainsKey('UpdateFolder')) {
+  if ($UpdateFolder -and (-not [IO.Path]::IsPathRooted($UpdateFolder) -or -not (Test-Path -LiteralPath $UpdateFolder -PathType Container))) { Fail "UpdateFolder must be an existing folder given as a full path: $UpdateFolder" 2 }
+  $uf = Join-Path $InstallRoot 'data\ujwalam.json'
+  $u = Read-JsonFile $uf
+  if ($UpdateFolder) { $u['updateFolder'] = [IO.Path]::GetFullPath($UpdateFolder).TrimEnd('\') } elseif ($u.Contains('updateFolder')) { $u.Remove('updateFolder') }
+  Write-JsonFile $uf $u
+  Say "update folder: $(if ($UpdateFolder) { $u['updateFolder'] } else { 'not set' })"
+}
 if ($SettingsOnly) {
   if (-not $settingsGiven) { Fail 'SettingsOnly needs at least one setting' 2 }
+  exit 0
+}
+$dataRoot = Join-Path $InstallRoot 'data'
+
+# The settings helper (tools\package\settings-backup.mjs) of the first of these folders that has it.
+function Find-Helper([string[]]$dirs) {
+  foreach ($d in $dirs) { if ($d) { $h = Join-Path $d 'tools\package\settings-backup.mjs'; if (Test-Path -LiteralPath $h -PathType Leaf) { return $h } } }
+  return $null
+}
+function Find-Node {
+  $n = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($n) { return $n.Source } else { return $null }
+}
+# Runs the helper; its lines are shown, a "backup-dir=" line is returned. $null and the exit code in $script:helperCode.
+function Invoke-Helper([string]$nodeExe, [string]$helper, [string[]]$helperArgs) {
+  # Windows PowerShell 5.1 turns a native program's stderr line into an error record; with 'Stop' that would end the
+  # install, so this call alone runs with 'Continue' (the exit code decides). --no-warnings: no SQLite notice.
+  $ErrorActionPreference = 'Continue'
+  $out = & $nodeExe --no-warnings $helper @helperArgs 2>&1
+  $script:helperCode = $LASTEXITCODE
+  $dir = $null
+  foreach ($l in @($out)) { $s = [string]$l; if ($s -match '^backup-dir=(.+)$') { $dir = $Matches[1] } elseif ($s.Trim()) { Say $s } }
+  return $dir
+}
+
+# ---- uninstall (2026-11-18) ---------------------------------------------------------------------------------------
+if ($Uninstall) {
+  if (-not (Test-Path -LiteralPath $InstallRoot -PathType Container)) { Say "nothing to remove: $InstallRoot does not exist"; exit 0 }
+  $verRe = '^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+(\.replaced-[0-9]{8}-[0-9]{6})?$'
+  $ours = @(Get-ChildItem -LiteralPath $InstallRoot -Directory -Force | Where-Object { $_.Name -match $verRe -or $_.Name -match '^\.(staging|setup)-' })
+  if (-not (Test-Path -LiteralPath $currentFile) -and $ours.Count -eq 0) { Fail "no Ujwalam install found in $InstallRoot; nothing was removed" 2 }
+  $running = @(Get-RunningUnder $InstallRoot)
+  if ($running.Count) { Fail "Ujwalam is running from $InstallRoot ($($running.Count) program(s)): close the studio window first; nothing was removed" 11 }
+  if (-not $NoShortcuts) {
+    if (-not $StartMenuDir) { $StartMenuDir = [Environment]::GetFolderPath('Programs') }
+    if (-not $DesktopDir) { $DesktopDir = [Environment]::GetFolderPath('Desktop') }
+    foreach ($dir in @($StartMenuDir, $DesktopDir)) {
+      foreach ($n in @($ShortcutName, $PracticeShortcutName, $OldLiveShortcutName, $SetupShortcutName)) {
+        $l = Join-Path $dir $n
+        if (Test-Path -LiteralPath $l -PathType Leaf) { Remove-Item -LiteralPath $l -Force; Say "removed shortcut: $l" }
+      }
+    }
+  }
+  foreach ($d in $ours) { Remove-Item -LiteralPath $d.FullName -Recurse -Force; Say "removed $($d.Name)" }
+  $keptFiles = @()
+  foreach ($n in @('current.txt', 'previous.txt', 'Ujwalam.cmd', 'ujwalam-start.exe', 'ujwalam.ico', 'Ujwalam-Setup.exe')) {
+    $f = Join-Path $InstallRoot $n
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+    try { Remove-Item -LiteralPath $f -Force -ErrorAction Stop } catch { $keptFiles += $n }
+  }
+  if ($keptFiles.Count) { Say "could not remove $($keptFiles -join ', ') (in use); delete them by hand later" }
+  if ($DeleteData) {
+    if (Test-Path -LiteralPath $dataRoot) { Remove-Item -LiteralPath $dataRoot -Recurse -Force; Say "deleted your data folder $dataRoot" }
+  } elseif (Test-Path -LiteralPath $dataRoot) {
+    Say "kept your data folder $dataRoot (settings, projects, recordings, clips, logs); installing Ujwalam again uses it"
+  }
+  $left = @(Get-ChildItem -LiteralPath $InstallRoot -Force)
+  if ($left.Count -eq 0) { Remove-Item -LiteralPath $InstallRoot -Force; Say "removed $InstallRoot" }
+  else { Say "left in $InstallRoot`: $(($left | ForEach-Object { $_.Name }) -join ', ')" }
+  Say 'stream keys and sign-ins stay in Windows Credential Manager (entries named Ujwalam/...): remove them there by hand if you want.'
+  Say 'Ujwalam is removed.'
   exit 0
 }
 
@@ -224,6 +332,17 @@ if ($Rollback) {
   $prev = Read-Pointer $previousFile
   if (-not $prev) { Fail "no previous version recorded in $previousFile" 5 }
   if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $InstallRoot $prev) 'Ujwalam.cmd'))) { Fail "previous version folder $prev is missing" 5 }
+  # A rollback puts settings back too: never while Ujwalam runs (it would write them again).
+  if (@(Get-RunningUnder $InstallRoot).Count) { Fail 'Ujwalam is running: close the studio window first, then roll back; nothing was changed' 12 }
+  if ($cur) {
+    $nodeExe = Find-Node
+    $helper = Find-Helper @((Join-Path $InstallRoot $cur), (Join-Path $InstallRoot $prev), $PSScriptRoot)
+    if (-not $nodeExe -or -not $helper) { Say 'settings: not restored (Node.js or the settings helper was not found); your current settings stay as they are' }
+    else {
+      [void](Invoke-Helper $nodeExe $helper @('restore', '--data', $dataRoot, '--from', $cur, '--to', $prev))
+      if ($script:helperCode -ne 0) { Fail 'settings could not be put back (see above); the version was not changed' 13 }
+    }
+  }
   Write-Pointer $currentFile $prev
   if ($cur) { Write-Pointer $previousFile $cur }
   Say "rolled back: current $prev (was $cur); run Install-Ujwalam.ps1 -Rollback again to switch back"
@@ -307,18 +426,38 @@ if ($pkgFull -ieq $target.TrimEnd('\')) { Fail 'run this from the unzipped build
 $running = @(Get-RunningUnder $InstallRoot | Where-Object { -not ($_.Cmd -and $_.Cmd.IndexOf((Norm-Path ($pkgFull + '\')), [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.Cmd -match 'Install-Ujwalam\.ps1') })
 $live = $running.Count -gt 0
 if ($live) { Say "Ujwalam is running from $InstallRoot ($($running.Count) program(s)): live install. Nothing the running copy uses is replaced; $version goes next to it." }
-if (Test-Path -LiteralPath $target) {
+if ($AdoptPackage) {
+  # Only a build Ujwalam-Setup.exe unpacked into <InstallRoot>\.setup-*\ (same disk: one rename, no second copy).
+  $adoptParent = Split-Path -Parent $pkgFull
+  if (-not ((Split-Path -Leaf $adoptParent) -like '.setup-*') -or -not ((Split-Path -Parent $adoptParent).TrimEnd('\') -ieq $InstallRoot.TrimEnd('\'))) { Fail '-AdoptPackage is only for a build that Ujwalam-Setup.exe unpacked into the install folder' 2 }
+}
+# Repair (2026-11-18): an intact copy of the same version is kept; only the launcher files and shortcuts are put back.
+# Files that the running program adds (a log in bin\) are not damage: only missing or changed files count.
+$intact = $false
+if ($Repair -and (Test-Path -LiteralPath $target)) {
+  $damage = @(Test-Sums $target | Where-Object { $_ -notlike 'extra file *' })
+  if ($damage.Count -eq 0) { $intact = $true; Say "repair: $version is intact (every file matches SHA256SUMS.txt); the launcher files and shortcuts are put back" }
+  else { Say "repair: $($damage.Count) problem(s) in $version ($($damage[0])): reinstalling it"; $Force = $true }
+}
+if ((Test-Path -LiteralPath $target) -and -not $intact) {
   if ($live -and @(Get-RunningUnder $target).Count -gt 0) { Fail "$version is the version that is running now; nothing was changed (close Ujwalam first to reinstall it)" 4 }
   if (-not $Force) { Fail "$version is already installed in $target (use -Force to reinstall it; the old folder is kept, renamed)" 4 }
   $kept = "$target.replaced-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
   Move-Item -LiteralPath $target -Destination $kept
   Say "old $version folder kept as $kept"
 }
-$staging = Join-Path $InstallRoot ".staging-$version-$PID"
-Copy-Item -LiteralPath $pkg -Destination $staging -Recurse
-$bad = @(Test-Sums $staging)
-if ($bad.Count) { Fail "the copy in $staging failed verification ($($bad[0])); it was left there for inspection" 7 }
-Move-Item -LiteralPath $staging -Destination $target
+if ($intact) {
+  # nothing to copy
+} elseif ($AdoptPackage) {
+  Move-Item -LiteralPath $pkgFull -Destination $target
+  $pkg = $target # the launcher files below come from the moved folder
+} else {
+  $staging = Join-Path $InstallRoot ".staging-$version-$PID"
+  Copy-Item -LiteralPath $pkg -Destination $staging -Recurse
+  $bad = @(Test-Sums $staging)
+  if ($bad.Count) { Fail "the copy in $staging failed verification ($($bad[0])); it was left there for inspection" 7 }
+  Move-Item -LiteralPath $staging -Destination $target
+}
 
 # Top-level launcher files, BEFORE current.txt changes (Codex review of D349): a failure stops the install with
 # current.txt still naming the version that worked. Live install: a file the running copy uses (ujwalam-start.exe it
@@ -327,7 +466,7 @@ Move-Item -LiteralPath $staging -Destination $target
 # violation. Any other failure (disk full, access denied, a missing file) stops with an error. A replacement goes
 # through a temp file in the same folder and one rename, so a half-written launcher never takes the old one's place.
 $keptTop = @()
-function Copy-Top([string]$name, [bool]$required) {
+function Copy-Top([string]$name, [bool]$required, [bool]$soft = $false) {
   $src = Join-Path $pkg $name
   $dst = Join-Path $InstallRoot $name
   if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
@@ -348,6 +487,8 @@ function Copy-Top([string]$name, [bool]$required) {
     $code = $e.HResult -band 0xFFFF
     # ERROR_SHARING_VIOLATION (32) or ERROR_LOCK_VIOLATION (33): another program has it open; certain to be in use.
     if ($live -and ($e -is [System.IO.IOException]) -and ($code -eq 32 -or $code -eq 33)) { $script:keptTop += $name; return }
+    # Ujwalam-Setup.exe may be the program running this install (started from the install folder): keep the old one.
+    if ($soft) { Say "kept the current $name ($($e.Message.Trim())); the next install replaces it"; return }
     Fail "could not replace $dst ($($e.Message.Trim())); current.txt was not changed, the new version folder $version stays for a retry" 10
   }
 }
@@ -356,15 +497,37 @@ Copy-Top 'Ujwalam.cmd' $true
 Copy-Top 'ujwalam-start.exe' $true
 # The shortcuts' icon (app/studio/res/ujwalam.ico), kept in the install root so it survives version switches.
 Copy-Top 'ujwalam.ico' $false
+# Setup (2026-11-18): update, repair, roll back and uninstall from the Start menu without the build folder.
+Copy-Top 'Ujwalam-Setup.exe' $false $true
 $cur = Read-Pointer $currentFile
+
+# ---- settings backup (2026-11-18), BEFORE current.txt changes ------------------------------------------------------
+# An install that changes an existing install (an update, a repair, a reinstall over kept data) never goes ahead
+# without a backup of the settings and project files; a failed backup stops here with current.txt unchanged.
+$backupDir = $null
+$hasData = (Test-Path -LiteralPath $dataRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $dataRoot -Force | Select-Object -First 1).Count -gt 0
+if ($hasData) {
+  $helper = Find-Helper @($target)
+  if (-not $helper) { Fail "tools\package\settings-backup.mjs is missing from $version; current.txt was not changed" 10 }
+  $reason = if (-not $cur) { 'install' } elseif ($cur -eq $version) { 'repair' } else { 'update' }
+  $backupDir = Invoke-Helper $node.Source $helper @('backup', '--data', $dataRoot, '--from', $(if ($cur) { $cur } else { 'none' }), '--to', $version, '--reason', $reason)
+  if ($script:helperCode -ne 0 -or -not $backupDir) { Fail "the settings backup failed (see above); current.txt was not changed, nothing in your data folder was touched" 13 }
+}
+
 if ($cur -and $cur -ne $version) { Write-Pointer $previousFile $cur }
 Write-Pointer $currentFile $version
 New-Item -ItemType Directory -Force -Path (Join-Path $InstallRoot 'data') | Out-Null
 Say "installed: current $version$(if ($cur -and $cur -ne $version) { ", previous $cur (Install-Ujwalam.ps1 -Rollback switches back)" })"
 foreach ($k in $keptTop) { Say "kept $k in $InstallRoot`: the running Ujwalam uses it (it still starts the version in current.txt); run this installer again after Ujwalam has closed to replace it" }
+if ($backupDir) {
+  [void](Invoke-Helper $node.Source $helper @('verify', '--data', $dataRoot, '--backup', $backupDir))
+  if ($script:helperCode -ne 0) { Say "WARNING: see the line above; the backup in $backupDir has every file as it was before the install" }
+}
 
 # ---- hand-over to the running Ujwalam (LU6, D349) -----------------------------------------------------------------
-if ($live) {
+if ($live -and $NoHandOver) {
+  Say 'Ujwalam is running: the new version runs from the next start (close the studio window and open Ujwalam again).'
+} elseif ($live) {
   Say "handing $version to the running Ujwalam's update queue ..."
   $reply = Send-LiveInstall $target 600000
   if ($null -eq $reply) {
@@ -405,6 +568,17 @@ if (-not $NoShortcuts) {
     Say "shortcut: $(Join-Path $dir $PracticeShortcutName)"
     $old = Join-Path $dir $OldLiveShortcutName
     if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force; Say "removed old shortcut: $old" }
+  }
+  $setupExe = Join-Path $InstallRoot 'Ujwalam-Setup.exe'
+  if (Test-Path -LiteralPath $setupExe -PathType Leaf) {
+    $lnk = $shell.CreateShortcut((Join-Path $StartMenuDir $SetupShortcutName))
+    $lnk.TargetPath = $setupExe
+    $lnk.Arguments = ''
+    $lnk.WorkingDirectory = $InstallRoot
+    $lnk.IconLocation = $iconLoc
+    $lnk.Description = 'Update, repair, roll back or remove Ujwalam (your data is kept)'
+    $lnk.Save()
+    Say "shortcut: $(Join-Path $StartMenuDir $SetupShortcutName)"
   }
 }
 

@@ -12,7 +12,8 @@
 //             without a profile.
 // Contents (tools/package/manifest.mjs): the host exe and its helper exes in bin/, the OBS runtime subset in obs/
 // (import closure, listed in notices/OBS-RUNTIME-FILES.txt), the Node services, UI, registry and runtime data at their
-// repo paths, Install-Ujwalam.ps1, Ujwalam.cmd, ujwalam-start.exe (the shortcuts' windowless start), README.txt, HOW-TO.md (docs/how-to.md), release.json, CHANGELOG-alpha.md (this build's section),
+// repo paths, Install-Ujwalam.ps1, Ujwalam.cmd, ujwalam-start.exe (the shortcuts' windowless start), Ujwalam-Setup.exe
+// (app/setup: install, update, repair, roll back, uninstall; also copied next to the zips in out/dist), README.txt, HOW-TO.md (docs/how-to.md), release.json, CHANGELOG-alpha.md (this build's section),
 // notices/ (GPL-3.0 and LGPL-3.0 text, source offer, third-party list) and SHA256SUMS.txt. Node.js is not bundled: the installer
 // and the launcher require Node >= release nodeMin on PATH.
 // Checks, any failure stops the build and nothing is written to out/dist: allowlist, forbidden paths (legacy/,
@@ -28,6 +29,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveConfig } from '../../app/host/lib/config.mjs';
 import { EXE as STUDIO_EXE, START_EXE, qtDir as studioQtDir } from '../../app/studio/tools/build.mjs';
+import { SETUP_EXE } from '../../app/setup/tools/build.mjs';
 
 // The studio shell ships self-contained in studio/ (D277): its exe, the Qt 6.8.3 kit DLLs it imports and the platform
 // plugins (qwindows for the window, qoffscreen for headless probes). Qt finds <exe dir>/platforms by itself; the
@@ -167,7 +169,8 @@ function readme({ version, nodeMin }) {
   return [
     `Ujwalam ${version} (alpha, Windows 11 x64)`,
     '',
-    'Install (no admin rights):',
+    'Install or update (no admin rights): double-click Ujwalam-Setup.exe next to this zip (in the build folder).',
+    '  It checks the zip, keeps your settings (a backup is taken first) and adds the shortcuts. By hand instead:',
     '  1. Unzip this folder anywhere.',
     '  2. In it run:  powershell -ExecutionPolicy Bypass -File .\\Install-Ujwalam.ps1',
     `     It checks Node.js ${nodeMin}+ on PATH and the Microsoft Visual C++ 2015-2022 x64 runtime, verifies`,
@@ -192,6 +195,27 @@ function readme({ version, nodeMin }) {
     'Licences: LICENSE (Ujwalam), notices\\ (GPL-3.0 and LGPL-3.0 text, source offer, third-party components).',
     '',
   ].join('\r\n');
+}
+
+/**
+ * Puts Ujwalam-Setup.exe next to the zips (out/dist) with its .sha256: a temp copy and one rename. When the one there
+ * is running (a setup window is open), it is kept and the build says so; the zip carries the new one either way.
+ */
+export function placeSetup(setupExe, outDir, log = () => {}) {
+  const dest = path.join(outDir, 'Ujwalam-Setup.exe');
+  const tmp = `${dest}.${process.pid}.new`;
+  const sha = sha256(readFileSync(setupExe));
+  try {
+    copyFileSync(setupExe, tmp);
+    renameSync(tmp, dest);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    log(`Ujwalam-Setup.exe in ${outDir} was not replaced (${e.code ?? e.message}: is a setup window open?); the zip has the new one`);
+    return { file: dest, replaced: false };
+  }
+  writeFileSync(`${dest}.sha256`, `${sha}  Ujwalam-Setup.exe\n`);
+  log(`wrote ${dest} (sha256 ${sha})`);
+  return { file: dest, replaced: true, sha256: sha };
 }
 
 function git(args) {
@@ -233,6 +257,10 @@ export async function buildAlpha(opts = {}) {
   // The shortcuts' windowless start stub (app/studio/src/start_stub.cpp), built with the studio; beside studioExe.
   const startExe = path.resolve(opts.startExe ?? (opts.studioExe ? path.join(path.dirname(studioExe), 'ujwalam-start.exe') : START_EXE));
   if (!existsSync(startExe)) throw new Error(`start stub not found: ${startExe} (build it: npm run build:studio)`);
+  // Ujwalam-Setup.exe (app/setup, 2026-11-18): in the zip (the install root gets a copy for update, repair, uninstall)
+  // and next to the zips in out/dist (double-click to install or update from the build folder).
+  const setupExe = path.resolve(opts.setupExe ?? SETUP_EXE);
+  if (!existsSync(setupExe)) throw new Error(`setup exe not found: ${setupExe} (build it: npm run build:setup)`);
   const qtKit = opts.qtDir ? path.resolve(opts.qtDir) : studioQtDir();
   const studioQt = STUDIO_QT.map(([dest, rel]) => ({ dest, src: qtKit ? path.join(qtKit, ...rel.split('/')) : null }));
   const noQt = studioQt.filter((f) => !f.src || !existsSync(f.src)).map((f) => f.dest);
@@ -294,6 +322,7 @@ export async function buildAlpha(opts = {}) {
     put('Ujwalam.cmd', 'repo', { src: path.join(REPO, 'tools', 'package', 'Ujwalam.cmd') });
     put('ujwalam-start.exe', 'host', { src: startExe }); // the shortcuts run it: no console window (D191)
     put('ujwalam.ico', 'repo', { src: path.join(REPO, 'app', 'studio', 'res', 'ujwalam.ico') }); // the shortcuts' icon (IconLocation)
+    put('Ujwalam-Setup.exe', 'host', { src: setupExe }); // update, repair, roll back, uninstall (2026-11-18)
     const hostSha = sha256(readFileSync(hostExe));
     const release = {
       product: rel.product, version, n, date: build.date, title: build.title, nodeMin: rel.nodeMin,
@@ -380,6 +409,7 @@ export async function buildAlpha(opts = {}) {
       obsModules: obs.modules.shipped, systemDlls: obs.systemDlls, skipped: obs.skipped, commit,
     };
     writeFileSync(path.join(outDir, `${name}.files.txt`), `${sums.join('\n')}\n`);
+    summary.setup = placeSetup(setupExe, outDir, log);
     log(`wrote ${zipFile} (${(z.bytes / 1048576).toFixed(1)} MiB, ${z.entries} files, ${(unpacked / 1048576).toFixed(1)} MiB unpacked) sha256 ${zipSha}`);
     if (opts.keepStaging) log(`staging kept: ${stage}`);
     return summary;
@@ -392,7 +422,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     const a = parseArgs(process.argv.slice(2));
     const s = await buildAlpha({
-      n: a.n !== undefined ? Number(a.n) : undefined, hostExe: a['host-exe'], studioExe: a['studio-exe'], startExe: a['start-exe'], qtDir: a['qt-dir'], runtime: a.runtime, outDir: a['out-dir'],
+      n: a.n !== undefined ? Number(a.n) : undefined, hostExe: a['host-exe'], studioExe: a['studio-exe'], startExe: a['start-exe'], setupExe: a['setup-exe'], qtDir: a['qt-dir'], runtime: a.runtime, outDir: a['out-dir'],
       profile: a.profile, force: a.force === true, keepStaging: a['keep-staging'] === true,
     });
     console.log(JSON.stringify({ ...s, zip: path.basename(s.zip) }, null, 2));

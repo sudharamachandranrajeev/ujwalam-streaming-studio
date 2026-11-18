@@ -76,6 +76,7 @@ export const REPO_FILES = Object.freeze([
   ...Object.keys(OFL_FONTS), ...OFL_FONT_LICENCES, // bundled theme fonts, the studio loads them from data/fonts (D344)
   'data/release/alpha.json',
   'tools/package/run-installed.mjs', 'tools/package/zip.mjs',
+  'tools/package/settings-backup.mjs', // settings backup before an update, restore on rollback (Install-Ujwalam.ps1)
   // Qt shell exe path (services/studio-ui/launch.mjs imports EXE and qtDir)
   'app/studio/tools/build.mjs',
   // --mock (event core without Streamer.bot): imported by services/event-core/api/service.mjs
@@ -293,7 +294,8 @@ export function selectObsRuntime(runtime, { hostExe, disabled, cefLocales = ['en
 }
 
 // ujwalam-start.exe: the shortcuts' windowless start (app/studio/src/start_stub.cpp; 2026-11-08, no console window).
-export const TOP_FILES = Object.freeze(['Install-Ujwalam.ps1', 'Ujwalam.cmd', 'ujwalam-start.exe', 'ujwalam.ico', 'README.txt', 'HOW-TO.md', 'CHANGELOG-alpha.md', 'SHA256SUMS.txt', 'release.json', 'package.json', 'LICENSE']);
+// Ujwalam-Setup.exe: install, update, repair, roll back, uninstall (app/setup/src/setup.cpp; 2026-11-18).
+export const TOP_FILES = Object.freeze(['Install-Ujwalam.ps1', 'Ujwalam.cmd', 'ujwalam-start.exe', 'Ujwalam-Setup.exe', 'ujwalam.ico', 'README.txt', 'HOW-TO.md', 'CHANGELOG-alpha.md', 'SHA256SUMS.txt', 'release.json', 'package.json', 'LICENSE']);
 
 /** Every packaged path must match the allowlist (package-relative, '/' separators). */
 export function allowProblems(paths) {

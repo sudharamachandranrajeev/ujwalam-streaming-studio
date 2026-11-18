@@ -263,7 +263,9 @@ function fakePackage(root, version) {
   copyFileSync(ICO, path.join(pkg, 'ujwalam.ico'));
   writeFileSync(path.join(pkg, 'release.json'), JSON.stringify({ version, nodeMin: '22.13.0' }));
   writeFileSync(path.join(pkg, 'tools', 'package', 'run-installed.mjs'), `// ${version}\nconsole.log('fake ${version}');\n`);
-  const rels = ['Install-Ujwalam.ps1', 'Ujwalam.cmd', 'ujwalam-start.exe', 'ujwalam.ico', 'release.json', 'tools/package/run-installed.mjs'];
+  // The real settings helper: the installer backs the data folder up with it before an update (2026-11-18).
+  copyFileSync(path.join(REPO, 'tools', 'package', 'settings-backup.mjs'), path.join(pkg, 'tools', 'package', 'settings-backup.mjs'));
+  const rels = ['Install-Ujwalam.ps1', 'Ujwalam.cmd', 'ujwalam-start.exe', 'ujwalam.ico', 'release.json', 'tools/package/run-installed.mjs', 'tools/package/settings-backup.mjs'];
   writeFileSync(path.join(pkg, 'SHA256SUMS.txt'), rels.map((r) => `${sha(readFileSync(path.join(pkg, r)))}  ${r}\n`).join(''));
   return pkg;
 }
@@ -492,7 +494,7 @@ test('app icon: .ico has all sizes as PNG entries, matches the generator, and sh
   assert.match(readFileSync(path.join(REPO, 'ui', 'index.html'), 'utf8'), /<link rel="icon"[^>]*href="\/favicon\.svg"/);
   assert.deepEqual(allowProblems(['ujwalam.ico', 'ui/favicon.svg']), []);
   const ps = readFileSync(path.join(REPO, 'tools', 'package', 'Install-Ujwalam.ps1'), 'utf8');
-  assert.equal((ps.match(/\.IconLocation = \$iconLoc/g) ?? []).length, 2, 'both shortcuts set IconLocation');
+  assert.equal((ps.match(/\.IconLocation = \$iconLoc/g) ?? []).length, 3, 'the two start shortcuts and the setup shortcut (2026-11-18) set IconLocation');
   assert.match(readFileSync(path.join(REPO, 'tools', 'package', 'build-alpha.mjs'), 'utf8'), /put\('ujwalam\.ico'/);
   const cm = readFileSync(path.join(REPO, 'app', 'studio', 'CMakeLists.txt'), 'utf8');
   assert.equal((cm.match(/res\/ujwalam\.rc/g) ?? []).length, 2, 'both exes get the .rc');

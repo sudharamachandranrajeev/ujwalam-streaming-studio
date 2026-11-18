@@ -71,6 +71,7 @@ import { CONNECT_FLAG, ERROR_TEXT as CONNECT_ERROR_TEXT, PROBLEM_TEXT as CONNECT
 import { ID_RE as YT_ID_RE, cleanCategoryId as ytCleanCategoryId, cleanDescription as ytCleanDescription, cleanPrivacy as ytCleanPrivacy, cleanTags as ytCleanTags, cleanTitle as ytCleanTitle, createYoutubeEvents, readAutoEvent as readYtAuto, readChoices as readYtChoices, readMode as readYtMode, withoutTemplate as ytWithoutTemplate, writeAutoEvent as writeYtAuto, writeChoices as writeYtChoices } from '../platform-connect/youtube-events.mjs';
 import { createYoutubeControl, setLive as setYtLive } from '../platform-connect/youtube-control.mjs';
 import { GET_ROUTES as YT_GET_ROUTES, POST_ROUTES as YT_POST_ROUTES, createYoutubeRoutes } from './youtube-routes.mjs';
+import { createSetupUpdate } from './setup-update.mjs';
 import { connectRow as instagramRow, createUseWatcher as createInstagramWatcher, freshnessText as instagramText, INSTAGRAM_FLAG, keyFreshness as instagramFreshness, loadAddon as instagramAddon, noteKeyStarted as instagramStarted } from '../outputs/instagram.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG, createSettingsRoutes } from './settings-routes.mjs';
 import { createYoutubePresets } from './youtube-presets.mjs';
@@ -1445,6 +1446,16 @@ export function createStudioServer(opts) {
     ...(opts.golive?.aiFetch ? { aiFetch: opts.golive.aiFetch } : {}), ...(opts.golive?.aiTimeoutMs ? { aiTimeoutMs: opts.golive.aiTimeoutMs } : {}),
   });
 
+  // Update available (setup installer, 2026-11-18): a newer verified package in the build folder, installed with one
+  // click through Ujwalam-Setup.exe; never while live or recording. opts.setupUpdate = { installDir, updateDir,
+  // hostStatus, spawnImpl } are test seams.
+  const setupUpdate = createSetupUpdate({
+    json, log, now, updateDir: opts.setupUpdate?.updateDir ?? process.env.UJWALAM_UPDATE_DIR ?? null,
+    ...(opts.setupUpdate?.installDir ? { installDir: opts.setupUpdate.installDir } : {}),
+    ...(opts.setupUpdate?.spawnImpl ? { spawnImpl: opts.setupUpdate.spawnImpl } : {}),
+    hostStatus: opts.setupUpdate?.hostStatus ?? (() => host.call('host.status', {})),
+  });
+
   async function handleCoreOutcome(r, summary) {
     // r: { verdict, reason, confirm?, dispatch? } from the event core. The page gets verdict/reason and, when the core
     // asks for an approval (a rule / remote / system write), a pending id for one Allow click. confirmId and actionHash
@@ -1507,6 +1518,7 @@ export function createStudioServer(opts) {
       try { const c = connect(); return json(res, 200, { ...(await c.status({ fresh: url.searchParams.get('fresh') === '1' })), job: c.currentJob() }); } catch (e) { return connectFail(res, e); }
     }
     if (req.method === 'GET' && route === '/ui/api/youtube/events') return ytEventsRoute(req, res, route, null); // D386
+    if (req.method === 'GET' && await setupUpdate.handle('GET', route, res, url)) return undefined; // Update available (2026-11-18)
     if (req.method === 'GET' && await ytPresets.handle('GET', route, null, res)) return undefined; // D388
     if (req.method === 'GET' && await goLive.handle('GET', route, null, res, url)) return undefined; // D389
     if (req.method === 'GET' && YT_GET_ROUTES.includes(route)) return ytRoutes.handle(req, res, route, null, url); // D388
@@ -1758,6 +1770,7 @@ export function createStudioServer(opts) {
     }
     if (route.startsWith('/ui/api/connect/')) return connectRoute(res, route, body);
     if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set' || route === '/ui/api/youtube/event/auto') return ytEventsRoute(req, res, route, body); // D386, D388
+    if (await setupUpdate.handle('POST', route, res, null)) return undefined; // Update available (2026-11-18)
     if (await ytPresets.handle('POST', route, body, res)) return undefined; // D388
     if (await goLive.handle('POST', route, body, res, null)) return undefined; // D389
     if (YT_POST_ROUTES.includes(route)) return ytRoutes.handle(req, res, route, body, null); // D388
