@@ -26,6 +26,9 @@ Dialog {
         name.forceActiveFocus();
     }
     onClosed: store.addOpen = false
+    signal scenarioRequested()
+    // "From a scenario...": this window closes and the scenario window (ScenarioWindow.qml) opens
+    function openScenarios() { close(); scenarioRequested() }
 
     function send() {
         const n = name.text.trim();
@@ -79,6 +82,13 @@ Dialog {
     }
     footer: Item {
         implicitHeight: 64
+        UButton {
+            anchors { left: parent.left; leftMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+            objectName: "addSceneScenario"
+            text: "From a scenario…"
+            tip: "Gameplay, lobby, screen share, starting soon, BRB or ending: a ready layout for H and V."
+            onClicked: dlg.openScenarios()
+        }
         Row {
             anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
             spacing: Theme.sp.m

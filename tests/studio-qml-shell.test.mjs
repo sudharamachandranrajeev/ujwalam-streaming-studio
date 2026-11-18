@@ -111,7 +111,7 @@ describe('QML studio window (headless probe)', { skip }, () => {
     assert.equal(far.code, 64);
   });
 
-  test('defaults: every flag listed and off but preview-edit, reel-thumbnail and outputs-panel; flag-gated boxes hidden; clips ready, clip choices "ask"', async () => {
+  test('defaults: every flag listed and off but preview-edit, reel-thumbnail, outputs-panel and scene-builder; flag-gated boxes hidden; clips ready, clip choices "ask"', async () => {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-def-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
     const fake = createFakeHost({});
@@ -127,7 +127,7 @@ describe('QML studio window (headless probe)', { skip }, () => {
     } finally { srv.close(); }
     const ids = JSON.parse(readFileSync(path.join(UI, '..', 'data', 'flags.json'), 'utf8')).flags.map((f) => f.id);
     assert.deepEqual(p.state.flags.map((f) => f.id), ids);
-    assert.ok(p.state.flags.every((f) => f.on === (f.id === 'preview-edit' || f.id === 'reel-thumbnail' || f.id === 'outputs-panel')), 'all off but preview-edit (D330), reel-thumbnail (D368) and outputs-panel (D389)');
+    assert.ok(p.state.flags.every((f) => f.on === (f.id === 'preview-edit' || f.id === 'reel-thumbnail' || f.id === 'outputs-panel' || f.id === 'scene-builder')), 'all off but preview-edit (D330), reel-thumbnail (D368), outputs-panel (D389) and scene-builder (D390)');
     for (const n of ['botsPanel', 'transitionsPanel', 'lookAdvanced', 'alertBar', 'reviewBtn'])
       assert.notEqual(node(p, n)?.visible, true, `${n} hidden with its flag off`);
     assert.ok(!p.tree.some((n) => n.name.startsWith('track:')), 'no track routing buttons while mixer-routing is off');
