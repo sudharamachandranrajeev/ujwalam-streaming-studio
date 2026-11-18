@@ -67,7 +67,7 @@ before(async () => {
   media = mkdtempSync(path.join(OUT, 'late-media-'));
   h = await launchHost({ dataDir: mkdtempSync(path.join(OUT, 'late-')), extraArgs: ['--test-hooks', '--headless'], env: { UJWALAM_HEADLESS: '1' }, timeoutMs: 60000 });
   c = h.client;
-  await c.call('devices.testSet', { devices: [{ kind: 'video', name: CARD, path: CARD_PATH, fail: 1000 }] }); // no mic; the card sends nothing
+  await c.call('devices.testSet', { devices: [{ kind: 'video', name: CARD, path: CARD_PATH, fail: 100 }] }); // no mic; the card sends nothing
   await loadIntoHost(c, doc(), { bases: { media }, skipUnavailable: true });
 });
 
@@ -90,14 +90,14 @@ test('A2: a microphone missing at load is a waiting mixer row and a host.status 
 
 test('A2: plugged in later, the next device pass builds it at its project volume on its track; seq moves', async () => {
   const seq = (await c.call('host.status')).devices.seq;
-  const r = await c.call('devices.testSet', { devices: [{ kind: 'video', name: CARD, path: CARD_PATH, fail: 1000 }, { kind: 'audio-input', name: MIC, path: MIC_PATH }] });
+  const r = await c.call('devices.testSet', { devices: [{ kind: 'video', name: CARD, path: CARD_PATH, fail: 100 }, { kind: 'audio-input', name: MIC, path: MIC_PATH }] });
   assert.ok(r.changes.some((x) => x.audio === 'aud-mic' && x.action === 'bound'), JSON.stringify(r.changes));
   const mic = (await rows()).find((x) => x.id === 'audio:aud-mic');
   assert.deepEqual([mic.waiting, mic.mixers, mic.tracks, Math.round(mic.volumeDb)], [undefined, 1, ['t1'], -6]);
   assert.ok((await c.call('host.status')).devices.seq > seq);
   assert.ok(!(await c.call('host.status')).devices.waiting.some((w) => w.audio === 'aud-mic'));
   // unplugged again: the source stays (the audio health watchdog owns a dead device sound); no second copy on replug
-  await c.call('devices.testSet', { devices: [{ kind: 'video', name: CARD, path: CARD_PATH, fail: 1000 }, { kind: 'audio-input', name: MIC, path: MIC_PATH }] });
+  await c.call('devices.testSet', { devices: [{ kind: 'video', name: CARD, path: CARD_PATH, fail: 100 }, { kind: 'audio-input', name: MIC, path: MIC_PATH }] });
   assert.equal((await rows()).filter((x) => x.id === 'audio:aud-mic').length, 1);
 });
 
