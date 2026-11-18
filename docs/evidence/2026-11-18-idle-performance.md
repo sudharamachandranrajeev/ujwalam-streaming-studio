@@ -53,3 +53,47 @@ Tests:
 
 Measure: `perf-idle` field `gpu.videoEncodePct` (before about 65 %), host private working set, NVENC sessions
 (`host.status` `gpu.encoderSessions`).
+
+## 2. Browser layers: 30 fps, shut down while not shown
+
+Before: every browser layer (project layers in `model.cpp`, `layers.add` in `studio.cpp`) rendered at the fastest
+canvas rate (60 fps) with `shutdown: false`, so pages in scenes that are not on air, and hidden layers (the goal bar,
+`atmos-frame`), kept painting full-canvas CEF frames all the time.
+
+Change:
+
+- Frame rate: `model::kBrowserFps` = 30 unless the layer's source asks for more with the new optional `fps` key
+  (project schema, 1..240; never above the fastest canvas). `layers.add` uses 30 unless its `fps` asks otherwise.
+- `shutdown: true` for every browser layer: obs-browser closes the page while the source is not shown in any view
+  (hidden layer, scene not on air and not in a preview) and loads it again when shown. `restart_when_active` stays
+  false (no extra reload on activation).
+- Overlays that hold state keep running: new data file `data/overlays/browser-render.json` `keepWhenHidden`
+  (`["chat-list"]`: its message list has no history replay, so a reload would show it empty).
+  `app/host/lib/project.mjs` turns it into `browserKeep` (layer ids) on `project.load` / `project.plan`; the host
+  keeps `shutdown: false` for those layers.
+- How events reach hidden scenes: overlay pages connect to the overlay bridge feed themselves (WebSocket, sbHost/sbPort
+  in the page URL); the relay page `ujw:overlay-relay` is a private source and is unchanged. A page that is shut down
+  is not connected and misses events while hidden. A layer on a scene that is not shown cannot be seen, so that is
+  only a loss for pages that keep a history: chat-list, kept running above. Alerts that arrive while a scene is hidden
+  are not queued for later (as before: a hidden page never showed them).
+- `project.plan` lists `fps` and `shutdown` per browser source (for the host test).
+- `atmos-frame`: it is a hidden layer (`visible: false`) in the default scenes, so with shutdown it no longer renders
+  at all. No lighter port is needed now. If it is switched on, it renders at 30 fps; a lighter port under the
+  project's own overlay folder is a follow-up only if it then measures heavy. `legacy/` is not touched.
+
+Expected effect: browser (CEF) paint work about halved for the layers on air, and none for hidden layers and for
+scenes not shown. Less GPU 3D load and less CPU in the host and the CEF subprocesses. Side effect: a layer shown
+again (scene switch, layer switched on) loads its page again, which takes a moment; during a transition into a scene
+its pages may appear a little after the scene.
+
+Tests:
+
+- `tests/overlay-server.test.mjs`: 24 pass (new: browserKeep from browser-render.json, malformed file refused).
+- `tests/project-schema.test.mjs`: 142 pass. `tests/studio-ui-alpha.test.mjs`: 39 pass, 1 skipped.
+- Host build: built.
+- `app/host/tests/host-browser.test.mjs` (real host, CEF): extended (plan fps 30, shutdown true, browserKeep gives
+  false, bad browserKeep refused). NOT RUN (studio open).
+- UNVERIFIED: that obs-browser in this build honours `shutdown` for sources on our libobs canvases (the obs-browser
+  source is not in `_vendor`; behaviour taken from upstream obs-browser, where `shutdown` closes the browser on hide).
+
+Measure: `perf-idle` `gpu.gpu3dPct`, host CPU seconds, the CEF subprocess (obs-browser-page.exe) CPU and memory.

@@ -821,9 +821,10 @@ obs_source_t *Studio::create_source(const Scene &s, const std::string &layer_id,
 			obs_data_set_int(d, "width", get_int(st, "width", cw, 1, 8192, what));
 			obs_data_set_int(d, "height", get_int(st, "height", ch, 1, 8192, what));
 			obs_data_set_bool(d, "fps_custom", true);
-			obs_data_set_int(d, "fps", get_int(st, "fps", cfps, 1, 240, what));
+			// Idle load (2026-11-18): model::kBrowserFps unless "fps" asks for more; shut down while not shown.
+			obs_data_set_int(d, "fps", get_int(st, "fps", std::min<int64_t>(cfps, model::kBrowserFps), 1, 240, what));
 			obs_data_set_bool(d, "reroute_audio", false);
-			obs_data_set_bool(d, "shutdown", false);
+			obs_data_set_bool(d, "shutdown", true);
 			obs_data_set_bool(d, "restart_when_active", false);
 			obs_data_set_int(d, "webpage_control_level", 0); // no studio access from the page
 		} else {
@@ -1131,6 +1132,7 @@ model::Options Studio::model_options(const json::Value &doc, const LoadOptions &
 	mo.allow_devices = flags_.allow_devices;
 	mo.allow_browser = flags_.allow_browser;
 	mo.browser_urls = o.browser_urls;
+	mo.browser_keep = o.browser_keep;
 	mo.overlay_port = o.overlay_port;
 	mo.test_capture = test_devices();
 	mo.allow_screen = flags_.allow_screen; // D390 proposed: screen and window layers

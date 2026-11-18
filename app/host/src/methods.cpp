@@ -74,6 +74,16 @@ Studio::LoadOptions load_options(App &a, const Params &q)
 			o.browser_urls[m.first] = m.second.as_string();
 		}
 	}
+	// browserKeep: layer ids whose browser page keeps running while not shown (data/overlays/browser-render.json).
+	if (const json::Value *k = q.arr_opt("browserKeep")) {
+		if (k->size() > 256)
+			throw Error(rpc::INVALID_PARAMS, "browserKeep: a list of layer ids (max 256)");
+		for (const auto &v : k->as_array()) {
+			if (!v.is_string() || v.as_string().empty() || v.as_string().size() > 64)
+				throw Error(rpc::INVALID_PARAMS, "browserKeep: layer ids are strings (max 64)");
+			o.browser_keep.insert(v.as_string());
+		}
+	}
 	o.relay_scope = q.str_or("relayScope", "", 16);
 	if (!o.relay_scope.empty() && o.relay_scope != "effects" && o.relay_scope != "display")
 		throw Error(rpc::INVALID_PARAMS, "relayScope must be effects or display");
@@ -393,7 +403,7 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 
 	// ---- project
 	add("project.load", [&a](const json::Value &p) {
-		Params q(p, {"project", "bases", "skipUnavailable", "browserUrls", "relayScope"});
+		Params q(p, {"project", "bases", "skipUnavailable", "browserUrls", "browserKeep", "relayScope"});
 		const json::Value &proj = q.obj("project");
 		Studio::LoadOptions lo = load_options(a, q);
 		if (!a.outputs->release_for_reload())
@@ -424,7 +434,7 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 		return a.studio->get();
 	});
 	add("project.plan", [&a](const json::Value &p) {
-		Params q(p, {"project", "bases", "skipUnavailable", "browserUrls", "relayScope"});
+		Params q(p, {"project", "bases", "skipUnavailable", "browserUrls", "browserKeep", "relayScope"});
 		return a.studio->plan(q.obj("project"), load_options(a, q));
 	});
 

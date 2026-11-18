@@ -164,6 +164,12 @@ test('project v1 overlay layer: URL via feedQuery, relay page, gg-burst draws on
   assert.ok(url.startsWith(`http://127.0.0.1:${st.staticPort}/overlays/gg-burst/index.html?`), 'page on the host overlay server');
   assert.match(url, new RegExp(`[?&]sbPort=${st.feedPort}(&|$)`), 'feedQuery points at the bridge feed');
   assert.ok(!url.includes(h.token) && !/token/i.test(url), 'no token in the layer URL');
+  // Idle load (2026-11-18): 30 fps by default and shut down while not shown, unless browserKeep names the layer.
+  assert.equal(src.fps, 30);
+  assert.equal(src.shutdown, true);
+  const kept = await c.call('project.plan', { project: PROJECT, browserUrls: { gg: url }, browserKeep: ['gg'] });
+  assert.equal(kept.sources.find((s) => s.layer === 'gg').shutdown, false);
+  assert.equal((await rpcErr('project.plan', { project: PROJECT, browserKeep: 'gg' })).code, -32602);
 
   // A URL that does not belong to the layer's overlay is not loaded.
   const forged = await c.call('project.plan', { project: PROJECT, browserUrls: { gg: `http://127.0.0.1:${st.staticPort}/overlays/other/index.html` } });

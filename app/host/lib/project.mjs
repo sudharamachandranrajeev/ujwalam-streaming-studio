@@ -21,6 +21,8 @@ import { loadProject } from '../../../services/project/store.mjs';
 import { REPO_ROOT } from './config.mjs';
 
 export const FEED_SCOPES_FILE = path.join(REPO_ROOT, 'data', 'overlays', 'feed-scopes.json');
+// Overlay folders whose browser page keeps running while not shown (the host shuts every other one down then).
+export const BROWSER_RENDER_FILE = path.join(REPO_ROOT, 'data', 'overlays', 'browser-render.json');
 
 export class ProjectRefused extends Error {
   constructor(message, errors = []) {
@@ -55,16 +57,26 @@ function overlayLayers(project) {
   return out;
 }
 
+/** Overlay folders that keep running while hidden (data/overlays/browser-render.json keepWhenHidden). */
+export function keepWhenHidden(file = BROWSER_RENDER_FILE) {
+  const j = JSON.parse(readFileSync(file, 'utf8'));
+  if (!Array.isArray(j?.keepWhenHidden) || j.keepWhenHidden.some((f) => typeof f !== 'string' || !f)) throw new Error(`${path.basename(file)}: keepWhenHidden must be a list of overlay folder names`);
+  return new Set(j.keepWhenHidden);
+}
+
 /** Page URLs for the project's overlay layers on the host's overlay server.
- *  ports: { staticPort, feedPort } (overlay.status). Returns { browserUrls: { layerId: url }, relayScope }. */
-export function overlayUrls(project, ports, { scopesFile = FEED_SCOPES_FILE } = {}) {
+ *  ports: { staticPort, feedPort } (overlay.status). Returns { browserUrls: { layerId: url }, relayScope, browserKeep:
+ *  [layerId] } (browserKeep: the layers whose page keeps running while not shown). */
+export function overlayUrls(project, ports, { scopesFile = FEED_SCOPES_FILE, renderFile = BROWSER_RENDER_FILE } = {}) {
   const { staticPort, feedPort } = ports ?? {};
   if (!Number.isInteger(staticPort) || staticPort < 1 || staticPort > 65535) throw new RangeError('bad overlay static port');
   const scopes = JSON.parse(readFileSync(scopesFile, 'utf8'));
   const display = new Set(scopes.display ?? []);
   const effectPages = scopes.effectPages ?? {}; // folder -> effect name: chat-fired plays pass the guards (D204)
+  const keep = keepWhenHidden(renderFile);
   const byId = new Map((project.overlays ?? []).map((o) => [o.id, o]));
   const browserUrls = {};
+  const browserKeep = [];
   let relayScope = '';
   for (const l of overlayLayers(project)) {
     const ov = byId.get(l.source.overlay);
@@ -74,8 +86,9 @@ export function overlayUrls(project, ports, { scopesFile = FEED_SCOPES_FILE } = 
     if (scope === 'display' || !relayScope) relayScope = scope;
     const q = typeof l.source.query === 'string' && l.source.query ? l.source.query + '&' : '';
     browserUrls[l.id] = `http://127.0.0.1:${staticPort}/overlays/${segs.map(encodeURIComponent).join('/')}?${q}${feedQuery(feedPort, scope, scope === 'effects' && Object.hasOwn(effectPages, segs[0]) ? effectPages[segs[0]] : '')}`;
+    if (keep.has(segs[0])) browserKeep.push(l.id);
   }
-  return { browserUrls, relayScope };
+  return { browserUrls, relayScope, browserKeep };
 }
 
 async function params(client, project, opts = {}) {
@@ -86,8 +99,9 @@ async function params(client, project, opts = {}) {
   if (opts.overlays !== false && overlayLayers(project).length) {
     const st = await client.call('overlay.status');
     if (st.staticPort && st.feedPort) {
-      const { browserUrls, relayScope } = overlayUrls(project, st, opts);
+      const { browserUrls, relayScope, browserKeep } = overlayUrls(project, st, opts);
       p.browserUrls = browserUrls;
+      if (browserKeep.length) p.browserKeep = browserKeep;
       if (relayScope) p.relayScope = relayScope;
     }
   }
