@@ -442,6 +442,40 @@ def host_running(name="ujwalam-host.exe"):
     return name.lower() in r.stdout.lower()
 
 
+_SINK_LINE = re.compile(r"\[host\] sink (\S+) (live|stopped|failed|dropped)\b")
+ON_AIR_LOG_FRESH_SEC = 120.0
+
+
+def host_logs_dir():
+    """The installed app's host log folder (%LOCALAPPDATA%\\Ujwalam\\data\\host\\logs), or None off Windows."""
+    base = os.environ.get("LOCALAPPDATA")
+    return os.path.join(base, "Ujwalam", "data", "host", "logs") if base else None
+
+
+def on_air(logs_dir=None, now=None):
+    """Is the user's studio live or recording right now? Same rule as tools/live-check.mjs: the newest host log,
+    each sink's last live / stopped / failed / dropped line; a live or dropped sink in a log written in the last 120 s
+    means on air. True = on air, False = off air (also when there is no host log), None = unknown (log unreadable;
+    callers treat it as on air)."""
+    d = host_logs_dir() if logs_dir is None else logs_dir
+    if not d or not os.path.isdir(d):
+        return False
+    try:
+        logs = [os.path.join(d, f) for f in os.listdir(d) if f.startswith("host-") and f.endswith(".log")]
+        if not logs:
+            return False
+        newest = max(logs, key=os.path.getmtime)
+        with open(newest, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        age = (time.time() if now is None else now) - os.path.getmtime(newest)
+    except OSError:
+        return None
+    state = {}
+    for m in _SINK_LINE.finditer(text):
+        state[m.group(1)] = m.group(2)
+    return any(s in ("live", "dropped") for s in state.values()) and age < ON_AIR_LOG_FRESH_SEC
+
+
 def probe(ffprobe, path):
     """ffprobe JSON (format + streams). Raises ClipError on failure."""
     r = run_tool([ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path], timeout=120)
