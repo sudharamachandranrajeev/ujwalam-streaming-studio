@@ -111,7 +111,7 @@ describe('QML studio window (headless probe)', { skip }, () => {
     assert.equal(far.code, 64);
   });
 
-  test('defaults: every flag listed and off but preview-edit, reel-thumbnail, outputs-panel and scene-builder; flag-gated boxes hidden; clips ready, clip choices "ask"', async () => {
+  test('defaults: every flag listed and off but preview-edit, reel-thumbnail, outputs-panel, transitions and scene-builder; flag-gated boxes hidden; clips ready, clip choices "ask"', async () => {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-def-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
     const fake = createFakeHost({});
@@ -127,9 +127,10 @@ describe('QML studio window (headless probe)', { skip }, () => {
     } finally { srv.close(); }
     const ids = JSON.parse(readFileSync(path.join(UI, '..', 'data', 'flags.json'), 'utf8')).flags.map((f) => f.id);
     assert.deepEqual(p.state.flags.map((f) => f.id), ids);
-    assert.ok(p.state.flags.every((f) => f.on === (f.id === 'preview-edit' || f.id === 'reel-thumbnail' || f.id === 'outputs-panel' || f.id === 'scene-builder')), 'all off but preview-edit (D330), reel-thumbnail (D368), outputs-panel (D389) and scene-builder (D390)');
-    for (const n of ['botsPanel', 'transitionsPanel', 'lookAdvanced', 'alertBar', 'reviewBtn'])
+    assert.ok(p.state.flags.every((f) => f.on === (f.id === 'preview-edit' || f.id === 'reel-thumbnail' || f.id === 'outputs-panel' || f.id === 'transitions' || f.id === 'scene-builder')), 'all off but preview-edit (D330), reel-thumbnail (D368), outputs-panel (D389), transitions (D391) and scene-builder (D390)');
+    for (const n of ['botsPanel', 'lookAdvanced', 'alertBar', 'reviewBtn'])
       assert.notEqual(node(p, n)?.visible, true, `${n} hidden with its flag off`);
+    assert.equal(node(p, 'transitionsPanel')?.visible, true, 'Transitions box shown: its flag is on by default (D391)');
     assert.ok(!p.tree.some((n) => n.name.startsWith('track:')), 'no track routing buttons while mixer-routing is off');
     assert.equal(p.state.clips.text, 'Clips: ready', 'no clip runs yet, the default choice is "ask me"');
     assert.equal(node(p, 'settingsTop3').checked, true, 'match filter default: top 3 on');
