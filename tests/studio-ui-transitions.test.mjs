@@ -63,6 +63,7 @@ test('flag off: cut on both canvases; on: the project fades; a host that drifts 
     },
   };
   const flags = createFlags({ dataDir: mkdtempSync(path.join(os.tmpdir(), 'ujw-tr-')) });
+  flags.set(TRANSITIONS_FLAG, false); // D391: on by default now; this test starts from off
   const core = { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } };
   const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: 'k'.repeat(48), flags, transitions: { h: { type: 'fade', durationMs: 2006 }, v: { type: 'fade', durationMs: 1000 } }, limits: { statusPollMs: 20 } });
   await srv.listen();

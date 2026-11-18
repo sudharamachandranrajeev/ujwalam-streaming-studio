@@ -91,7 +91,7 @@ import { createFlags } from '../flags/index.mjs';
 import { loadDevicePresets, matchRoles, overrideProblems } from '../project/device-roles.mjs';
 import { hudCoverage, loadHudZones } from '../project/hud-zones.mjs';
 import { loadProject } from '../project/store.mjs';
-import { alphaBases, alphaFile, buildAlphaProject, prepareAlphaProject, readProfile, stampOf, upgradePresets } from './alpha.mjs';
+import { APP_DATA_DIR, alphaBases, alphaFile, buildAlphaProject, prepareAlphaProject, readProfile, stampOf, upgradePresets } from './alpha.mjs';
 import { upgradeScenes } from '../project/scene-upgrades.mjs';
 import { createRecordClips, isLive } from './record-clips.mjs';
 import { hasExited, killChildTree } from '../common/kill-tree.mjs';
@@ -663,10 +663,14 @@ export async function alphaProject({ client, dataDir, args, hostCfg, embedded = 
     // one-time scene upgrades of an existing project (D331: the blurred game backdrop replaces the browser background);
     // applied at start, before the host load, so a running stream is never touched
     upgrade: (project) => upgradeScenes(project, { presets: upgradePresets(path.join(REPO, 'registry', 'presets')) }),
+    stingerDir: true, // D391: one-time default neon-glitch stinger for a project still on the imported fade
   });
   console.log(`[studio] alpha project ${r.action}: ${path.basename(r.file)}${r.moved ? ' (old one moved to projects/_old/)' : ''}`);
   for (const c of r.upgraded ?? []) console.log(`[studio] scene upgrade ${c.upgrade}: ${c.canvas.toUpperCase()} ${c.action} (background ${c.background})`);
   if (r.backup) console.log(`[studio] project before the upgrade kept in projects/_old/${path.basename(r.backup)}`);
+  for (const c of r.transitions ?? []) console.log(`[studio] default transition: ${c.canvas.toUpperCase()} ${c.from} -> stinger ${c.to} (one time)`);
+  if (r.transitionBackup) console.log(`[studio] project before the default transition kept in projects/_old/${path.basename(r.transitionBackup)}`);
+  if (r.transitionError) console.log(`[studio] WARNING: default transition not applied: ${r.transitionError}`);
   if (r.upgradeError) console.log(`[studio] WARNING: scene upgrade not applied (project loaded as it is): ${r.upgradeError}`);
   if (report) {
     for (const w of report.warnings) console.log(`[studio] WARNING: ${w}`);
@@ -674,7 +678,7 @@ export async function alphaProject({ client, dataDir, args, hostCfg, embedded = 
     for (const u of report.unavailableRoles) console.log(`[studio] role ${u.role}: not bound: ${u.reason}`);
     if (args['allow-devices'] !== true) console.log('[studio] devices off: game capture and facecam are placeholders (run with --allow-devices --rebuild-alpha after "devices ready")');
   }
-  const bases = alphaBases({ profile, overlayRoot: hostCfg.overlayRoot });
+  const bases = alphaBases({ profile, overlayRoot: hostCfg.overlayRoot, appDataDir: APP_DATA_DIR });
   const loaded = await loadFileIntoHost(client, r.file, { bases, skipUnavailable: true });
   console.log(`[studio] alpha project loaded into the host: ${JSON.stringify(loaded.built ?? {})}; not built: ${loaded.unavailable?.length ?? 0}`);
   for (const u of loaded.unavailable ?? []) console.log(`[studio]   not built: ${u.layer ?? u.audio}: ${u.code}: ${u.reason}`);

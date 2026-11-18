@@ -47,6 +47,7 @@ describe('QML studio Settings > Transitions (headless probe)', { skip }, () => {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-tr-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
     for (const id of flagsOn) flags.set(id, true);
+    if (!flagsOn.includes('transitions')) flags.set('transitions', false); // D391: on by default now
     const file = path.join(dataDir, 'p.project.json');
     const assetsDir = path.join(dataDir, 'assets'); mkdirSync(assetsDir);
     for (const v of videos) writeFileSync(path.join(assetsDir, v), '');

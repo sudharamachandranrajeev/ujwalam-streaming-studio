@@ -16,10 +16,11 @@
 //     layer's own audio too; monitoring off.
 //   alphaBases({ profile, overlayRoot }) -> pathRef bases for project.load (profile: image files of the presets;
 //     media: the user's stream assets folder, streamAssetsDir, when it exists, D241; luts: the shipped data/luts, D381).
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createProject, loadProject, newId, projectFile, saveProject, validateProject } from '../project/index.mjs';
+import { defaultStingerId, isImportedFade, stingerTransition } from '../project/stinger-presets.mjs';
 import { loadScenePreset, mergeCanvasScenes as mergeInto, ScenePresetError } from '../project/scene-preset.mjs';
 
 export const ALPHA_ID = 'alpha';
@@ -40,12 +41,16 @@ export function readProfile(file) {
 // lists the image layers as unavailable).
 // luts (D381): the app's own shipped LUTs, <app root>/data/luts (read only; the host keeps every file inside it).
 export const LUTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'luts');
-export function alphaBases({ profile = {}, overlayRoot, assetsDefault, lutsDir = LUTS_DIR } = {}) {
+// data (D391): the app's own data folder, read only (the built-in cyberpunk stingers, data/transitions/stingers/). Only given
+// by the studio start (appDataDir); the host refuses a stinger that is not a video file and any path leaving the base.
+export const APP_DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data');
+export function alphaBases({ profile = {}, overlayRoot, assetsDefault, lutsDir = LUTS_DIR, appDataDir = null } = {}) {
   const pa = profile?.paths?.profile_assets;
   const dir = typeof pa === 'string' && path.isAbsolute(pa) ? pa : overlayRoot;
   const out = dir && path.isAbsolute(dir) && existsSync(dir) ? { profile: path.resolve(dir) } : {};
   const media = streamAssetsDir(profile, assetsDefault);
   if (media) out.media = media;
+  try { if (appDataDir && path.isAbsolute(appDataDir) && statSync(appDataDir).isDirectory()) out.data = path.resolve(appDataDir); } catch { /* no app data folder: built-in stingers are refused by the host */ }
   try { if (lutsDir && path.isAbsolute(lutsDir) && statSync(lutsDir).isDirectory()) out.luts = path.resolve(lutsDir); } catch { /* no LUT folder: lut effects on base luts are listed unavailable */ }
   return out;
 }
@@ -61,14 +66,17 @@ export function streamAssetsDir(profile, fallback = STREAM_ASSETS_DEFAULT) {
   return null;
 }
 
-export function buildAlphaProject({ presetsDir, profile = {}, bindings = { bound: {}, unavailable: [] }, devicesListed = false, idFn = newId, flags = {}, mediaInfo = null } = {}) {
+export function buildAlphaProject({ presetsDir, profile = {}, bindings = { bound: {}, unavailable: [] }, devicesListed = false, idFn = newId, flags = {}, mediaInfo = null, stingerDir } = {}) {
   const warnings = [];
   const hFile = path.join(presetsDir, H_PRESET);
   if (!existsSync(hFile)) throw new ScenePresetError(`${H_PRESET} not found in the registry presets`);
   const base = createProject({ name: 'Alpha' });
-  // Scene transitions (D239), the Meld session's values (legacy/meld session backups 2026-09-29: sceneTransition 2006 ms,
-  // verticalSceneTransition 1000 ms; their stinger effects disabled, so Meld fades). Used only while flag `transitions` is on.
-  for (const c of base.canvases) c.transition = { type: 'fade', durationMs: c.id === 'h' ? 2006 : 1000 };
+  // Scene transitions (D239). The Meld session's values (legacy/meld session backups 2026-09-29: sceneTransition 2006 ms,
+  // verticalSceneTransition 1000 ms; their stinger effects disabled, so Meld fades) are the fallback. Used only while flag `transitions` is on.
+  // D391 (user request 2026-11-18): the default is the neon-glitch cyberpunk stinger on both canvases; without the stinger
+  // files (or an unknown preset) it stays the Meld fade.
+  const stingerId = stingerDir === undefined ? defaultStingerId() : stingerDir && defaultStingerId(stingerDir);
+  for (const c of base.canvases) c.transition = stingerId ? stingerTransition(stingerId, c.id, stingerDir || undefined) : { type: 'fade', durationMs: c.id === 'h' ? 2006 : 1000 };
   const emptyScene = base.scenes[0].id;
   base.origin = { importer: 'alpha', id: devicesListed ? 'devices-listed' : 'no-devices' };
 
@@ -173,13 +181,57 @@ export function upgradePresets(presetsDir) {
   return out;
 }
 
-export async function prepareAlphaProject({ dataDir, rebuild = false, build, upgrade = null, now = new Date() }) {
+// One-time default transition (D391): a project whose transition on a canvas is unset or still the Meld-imported plain fade
+// (H 2006 ms, V 1000 ms, no easing) gets the default cyberpunk stinger on that canvas. A marker file
+// <dataDir>/projects/transition-defaults.json is written whether or not anything changed, so a later choice of the user
+// (even the same fade) is never overwritten. The project schema and the host take no extra keys, hence the sidecar.
+// A copy of the project goes to projects/_old/ first. An unreadable project is left alone and gets no marker.
+//   applyTransitionDefaults({ file, dataDir, stingerDir, now }) -> { changes: [{ canvas, from, to }], backup } | null (null: already done)
+export const TRANSITION_DEFAULTS_ID = 'tr-stinger-default';
+export const transitionMarkerFile = (dataDir) => path.join(dataDir, 'projects', 'transition-defaults.json');
+export function writeTransitionMarker(dataDir, info = {}, now = new Date()) {
+  mkdirSync(path.dirname(transitionMarkerFile(dataDir)), { recursive: true });
+  writeFileSync(transitionMarkerFile(dataDir), JSON.stringify({ id: TRANSITION_DEFAULTS_ID, at: now.toISOString(), ...info }, null, 2).concat(String.fromCharCode(10)));
+}
+export function applyTransitionDefaults({ file, dataDir, stingerDir, now = new Date() }) {
+  if (existsSync(transitionMarkerFile(dataDir))) return null;
+  const id = defaultStingerId(stingerDir);
+  if (!id) return null; // no stinger files: try again on a later start
+  let loaded;
+  try { loaded = loadProject(file); } catch { return null; }
+  if (loaded.recoveredFrom) return null;
+  const project = structuredClone(loaded.project);
+  const changes = [];
+  for (const c of project.canvases) {
+    if (!isImportedFade(c.transition, c.id)) continue;
+    const to = stingerTransition(id, c.id, stingerDir);
+    changes.push({ canvas: c.id, from: c.transition?.type ?? 'unset', to: id });
+    c.transition = to;
+  }
+  let backup = null;
+  if (changes.length) {
+    const oldDir = path.join(path.dirname(file), '_old');
+    mkdirSync(oldDir, { recursive: true });
+    backup = path.join(oldDir, `alpha-${stampOf(now)}.before-tr1.project.json`);
+    if (existsSync(backup)) throw new Error('a project backup with this time stamp already exists; try again');
+    copyFileSync(file, backup);
+    saveProject(file, project);
+  }
+  writeTransitionMarker(dataDir, { stinger: id, changed: changes.map((c) => c.canvas) }, now);
+  return { changes, backup };
+}
+
+export async function prepareAlphaProject({ dataDir, rebuild = false, build, upgrade = null, stingerDir = null, now = new Date() }) {
   const file = alphaFile(dataDir);
   if (existsSync(file) && !rebuild) {
     // a failed upgrade never blocks the start: the project loads as it is and the reason is reported
     let up = null;
     try { up = upgrade ? upgradeAlphaFile({ file, upgrade, now }) : null; } catch (e) { return { file, action: 'loaded', upgradeError: e.message }; }
-    return up ? { file, action: 'upgraded', upgraded: up.changes, backup: up.backup } : { file, action: 'loaded' };
+    // D391: the one-time default stinger (only when the studio start asks for it with stingerDir); never blocks the start
+    let tr = null, transitionError = null;
+    if (stingerDir) { try { tr = applyTransitionDefaults({ file, dataDir, stingerDir: stingerDir === true ? undefined : stingerDir, now }); } catch (e) { transitionError = e.message; } }
+    const extra = { ...(tr?.changes?.length ? { transitions: tr.changes, transitionBackup: tr.backup } : {}), ...(transitionError ? { transitionError } : {}) };
+    return up ? { file, action: 'upgraded', upgraded: up.changes, backup: up.backup, ...extra } : { file, action: 'loaded', ...extra };
   }
   const project = await build(); // a failed build leaves the old file where it is
   let moved = null;
@@ -192,5 +244,7 @@ export async function prepareAlphaProject({ dataDir, rebuild = false, build, upg
     if (existsSync(`${file}.bak`)) renameSync(`${file}.bak`, `${moved}.bak`);
   }
   saveProject(file, project);
+  // a project built with the stinger default has nothing to migrate; the marker keeps a later fade choice safe
+  if (stingerDir && project.canvases.every((c) => c.transition?.type === 'stinger')) writeTransitionMarker(dataDir, { stinger: 'built', changed: [] }, now);
   return { file, action: moved ? 'rebuilt' : 'built', moved };
 }

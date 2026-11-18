@@ -521,3 +521,16 @@ test('bundled OFL fonts (D344): the repo files are the pinned bytes, each family
   for (const rel of [...Object.keys(OFL_FONTS), ...OFL_FONT_LICENCES]) assert.ok(all.includes(rel), `${rel} is packaged`);
   assert.deepEqual(allowProblems([...Object.keys(OFL_FONTS), ...OFL_FONT_LICENCES]), []);
 });
+
+test('D391: the generated cyberpunk stingers ship (presets and per-canvas WebM), no other media does', () => {
+  const all = repoFiles(REPO);
+  for (const id of ['neon-glitch', 'synthwave-sweep', 'cyan-grid']) {
+    for (const rel of [`data/transitions/stingers/${id}.json`, `data/transitions/stingers/${id}-h.webm`, `data/transitions/stingers/${id}-v.webm`]) {
+      assert.ok(all.includes(rel), `${rel} is packaged`);
+      assert.deepEqual(allowProblems([rel]), [], rel);
+      assert.deepEqual(forbiddenProblems([rel], { fontNames: [] }), [], rel);
+    }
+  }
+  assert.ok(all.includes('data/transitions/easing.json'));
+  for (const p of ['data/transitions/stingers/x.mp4', 'data/transitions/other/a-h.webm', 'data/media/neon-glitch-h.webm', 'data/transitions/stingers/Bad-h.webm']) assert.ok(forbiddenProblems([p], { fontNames: [] }).length > 0, p);
+});

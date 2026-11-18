@@ -529,7 +529,7 @@ test('launcher --alpha with a fake host: flags, tokens by env, host config, feed
     assert.equal(h.load.skipUnavailable, true);
     assert.equal(h.load.captureLayers, 0);
     assert.ok(h.load.browserLayers > 0 && h.load.browserUrls === h.load.browserLayers && h.load.urlsOk, JSON.stringify(h.load));
-    assert.deepEqual(h.load.bases, ['luts', 'media', 'profile'], 'the stream assets folder from the profile is the media base; the shipped LUTs are base luts (D381)');
+    assert.deepEqual(h.load.bases, ['data', 'luts', 'media', 'profile'], 'the stream assets folder from the profile is the media base; the shipped LUTs are base luts (D381); the app data folder is base data (D391, built-in stingers)');
     assert.match(r.out, /alpha project built/);
     assert.match(r.out, /overlay server: ready; event feed: on; child has the event token: yes; browser layers allowed/);
     assert.match(r.out, /overlay feed after 0 s: 3 overlay page\(s\) connected, 7 chat and 2 event frame\(s\) delivered, 0 effect\(s\)/);

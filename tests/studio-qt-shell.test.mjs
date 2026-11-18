@@ -98,6 +98,7 @@ describe('Qt studio shell panels (headless probe)', { skip }, () => {
     if (prepare) prepare(dataDir);
     const flags = createFlags({ dataDir });
     for (const id of on) flags.set(id, true);
+    if (!on.includes('transitions')) flags.set('transitions', false); // D391: on by default now; these tests start from off
     const fake = createFakeHost({ outputsReady: !!opts.live });
     if (opts.live) await fake.call('stream.start', {}); // the window sees a live stream
     const calls = [];
