@@ -2127,3 +2127,54 @@ Growth plan ED2. Decided:
   studio-devices-mixer 14/14.
 - **UNVERIFIED.** The runtime check of the monitoring gate; a real late-plugged capture card and microphone on the
   user's laptop.
+## D396 — Ujwalam-Setup.exe and in-app update before P17 (D3 amendment; user, 2026-11-18)
+
+- **Decision.** One per-user `Ujwalam-Setup.exe` installs, updates, repairs, rolls back and uninstalls from the build
+  folder (`out\dist`). It is Win32 only, needs no admin rights and carries no payload: the verified zip sits next to
+  it, is copied into a private work folder, hashed, and unpacked there with the system's tar. `Install-Ujwalam.ps1`
+  runs hidden, and only if it matches the package's `SHA256SUMS.txt`.
+- **Settings survive.** Every switch of the version pointer is preceded by a settings backup: every `*.json`/`*.key`
+  under data, plus a consistent event-database snapshot. The newest 10 are kept, plus always the one that a rollback
+  of the current version needs. A rollback restores it all or nothing:
+  - the whole snapshot is checked first;
+  - the database WAL is folded in;
+  - the newer files go to a before-rollback backup;
+  - files are swapped through a journal that undoes itself on any failure.
+
+  Without a backup a rollback is refused; `-Force` keeps the current settings.
+- **Safety.** One setup at a time (`install.lock`), and Ujwalam does not start while it is held. Rollback, repair
+  over the running version and uninstall are refused while Ujwalam runs (found by path). An update while Ujwalam runs
+  touches nothing it uses, and the new version runs from the next start. Uninstall keeps the user's data unless the
+  box is ticked.
+- **Update available.** The studio checks on start and on demand only. It never installs while live or recording, and
+  asks again right before Setup starts.
+- **Accepted risk until P17.** The package and Setup are unsigned and trusted as the user's own build folder;
+  checksums catch damage only. Signing, MSI/MSIX and an Apps & features entry stay P17 work.
+- **Evidence.** `docs/evidence/2026-11-18-setup-installer.md` (Codex: 6 P1 + 5 P2 + 1 P3, all fixed or argued).
+
+## D397 — Idle load cuts (user, 2026-11-18: "focus on speed and efficiency without compromising quality")
+
+- **Replay on air only.** The alpha replay buffer (60 s) runs only while a stream or recording is wanted (host config
+  `replay.onAirOnly`, set by the launcher). Off air there is no replay encoder. Save clip and the feedback hotkey say
+  "off air: the replay buffer runs only while you are live or recording". A stream sink that reconnects keeps the
+  buffer attached, proven by a host test against a refused loopback port. A clip saved in the first 60 s of a stream
+  covers only the time since going live.
+- **Browser layers.** They render at 30 fps unless the layer's source asks for more (`fps` 1..240, never above the
+  fastest canvas). Pages are not shut down while hidden: obs-browser already pauses hidden pages, and shutdown made
+  pages 2-3 frames late on a cut and lost events that arrived while hidden (measured 2026-11-18).
+- **Other cuts.** Previews stop drawing while hidden, minimised or zero size. Restore is UNVERIFIED: the user checks
+  it by hand. The live clipper and face worker run only while wanted, through generation-bound worker slots. Polling
+  is cut: a stat cache revalidated at least every 10 s, one `outputs.status` per tick, a 2 s idle tick.
+- **Lock order.** In host outputs, `op_m_` is outermost; `m_` and `rp_m_` are never nested.
+- **Evidence.** `docs/evidence/2026-11-18-idle-performance.md`. The perf-idle before/after numbers are pending a quiet
+  GPU.
+
+## D395 amendment — headphones output chosen at start only (2026-11-18)
+
+- The audio monitoring output (`monitoringDevice`, headphones) is chosen once at host start, before any source
+  exists. It is never switched on a running studio, because libobs 32.1.2 frees the device id without a lock its
+  readers take (Codex round 2, checked against the OBS source). Headphones connected after the start are used from the
+  next start, and the studio says so in one plain sentence.
+- Connect saves only what the host built, and an undo is made from the file as it is now.
+- A saved card input counts as the same device only when it is the listed input of a certain pair. The Windows
+  ContainerId match is a follow-up.
