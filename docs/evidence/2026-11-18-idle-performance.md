@@ -98,6 +98,38 @@ Tests:
 
 Measure: `perf-idle` `gpu.gpu3dPct`, host CPU seconds, the CEF subprocess (obs-browser-page.exe) CPU and memory.
 
+### 2a. Measured: what shutdown costs on a scene switch (2026-11-18, studio closed)
+
+Asked in review: with `shutdown: true` a page reloads when its scene comes on air, so an overlay could be blank for
+the first frames after a cut or fade. Measured with `node app/host/tools/browser-switch-measure.mjs --mode both
+--cycles 3` (added in the commit that carries this section; it needs that commit's `browserKeep`). Real host, NVENC
+recording at 640x360 30 fps, read back as 320x180 grey frames, no image kept. Scene `ov`: four legacy overlays in
+quadrants (atmos-frame, blood-moon-hud, social-ticker, cam-pop-frame) and a white marker block that gives the exact
+switch frame. Overlap: the clip agent's ffmpeg was running on the GPU during both runs (it started 22:15).
+
+Frames from the switch until a quadrant shows 80 % of its steady drawing (30 fps; a cell lists each cycle):
+
+| overlay (share of quadrant drawn) | cut, shutdown | cut, kept running | fade 300 ms, shutdown | fade 300 ms, kept running |
+| --- | --- | --- | --- | --- |
+| blood-moon-hud (0.7 %) | 4, 2 | 2, 1, 1 | 7, 6 | 6, 7, 7 |
+| social-ticker (2.4 %) | 5, 4, 0 | 2, 1, 1 | 6, 6 | 6, 6, 7 |
+| atmos-frame (0.4-0.8 %, animated) | 30, 19 | 16, 1, 27 | 29, 32 | 7, 6, 77 |
+| cam-pop-frame | draws nothing without an event | same | same | same |
+
+Two shutdown-mode windows (one cut, one fade) lost their marker (wall clock against file time drifted) and are left
+out. atmos-frame animates, so its 80 % point is noisy in both modes. First run (`--cycles 2`, 1 % threshold): ticker
+4-5 frames with shutdown against 1-2 kept running.
+
+- Cut: shutdown adds about 2-3 frames (67-100 ms) before a page draws. Fade 300 ms: no difference (the fade dominates).
+- CPU while the overlay scene is hidden, 30 s: obs-browser-page.exe 0.03 s with shutdown and 0.03 s kept running
+  (first run 0.08 / 0.09). obs-browser 32.1.2 already stops painting a page that is not shown, so shutdown saves
+  nothing measurable while hidden. On air, 30 s after a 5 s settle: CEF 11.1 s (shutdown) and 9.9 s (kept running).
+- Missed event: gg-burst fired while its scene was hidden, scene cut on air 400 ms later. Shutdown: 0 % drawn (the
+  page was closed when the effect went out, and the reloaded page gets nothing: the bridge sends only `Hello` on connect,
+  no backlog, so nothing is replayed either). Kept running: 2.1 % of the frame drawn (the rest of the burst).
+
+Result: shutdown has a visible cost on cuts and loses events, and no measured saving. See the next commit for the change.
+
 ## 3. Previews stop drawing while they cannot be seen
 
 Before: the H and V preview displays (`app/host/src/preview.cpp`, stand-alone windows and the previews embedded in
