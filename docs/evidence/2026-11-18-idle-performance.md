@@ -97,3 +97,29 @@ Tests:
   source is not in `_vendor`; behaviour taken from upstream obs-browser, where `shutdown` closes the browser on hide).
 
 Measure: `perf-idle` `gpu.gpu3dPct`, host CPU seconds, the CEF subprocess (obs-browser-page.exe) CPU and memory.
+
+## 3. Previews stop drawing while they cannot be seen
+
+Before: the H and V preview displays (`app/host/src/preview.cpp`, stand-alone windows and the previews embedded in
+the Qt studio shell, D280) drew every frame even while hidden, minimised or zero size.
+
+Change: `update_drawing` calls `obs_display_set_enabled(false)` while the preview window is not visible (its own
+WS_VISIBLE or a hidden parent), its top-level window is minimised, or its client area is zero; and `true` again when it
+can be seen. It runs on WM_SIZE, WM_WINDOWPOSCHANGED and on the existing 200 ms refresh timer (which catches a hidden or
+minimised parent: a child gets no message then). Headless embedded previews (`never_show`, tests) keep drawing: tests
+count their selection boxes. `preview.list` / `preview.open` report `drawing`. The Qt shell needs no change: it hides
+or minimises the windows the previews are embedded in, which the host now sees.
+
+Expected effect: with the studio minimised or the preview area hidden, no preview render passes: less GPU 3D load
+(two full-canvas scale-and-draw passes per frame at the display rate).
+
+Tests:
+
+- Host build: built.
+- `app/host/tests/host-preview-edit.test.mjs` (real host, headless): asserts `drawing` stays true for a headless
+  embedded preview. NOT RUN (studio open).
+- NOT TESTED: a visible preview minimised and restored (needs a non-headless host with a window on screen; the
+  studio was open). Check by hand: open the studio, minimise it, `preview.list` shows `drawing: false`; restore it,
+  `drawing: true` within 200 ms and the picture continues.
+
+Measure: `perf-idle` with the studio shell minimised versus shown (`gpu.gpu3dPct`).

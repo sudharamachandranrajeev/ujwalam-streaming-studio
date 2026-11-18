@@ -39,6 +39,9 @@ struct Previews::Win {
 	bool never_show = false;
 	// Selection boxes drawn (graphics thread); preview.list shows it so a test knows the box was really drawn.
 	std::atomic<uint64_t> selection_draws{0};
+	// Idle load (2026-11-18): false while the window cannot be seen (hidden, its top-level window minimised, zero
+	// size); the display is then disabled (obs_display_set_enabled) and libobs skips its render pass. UI thread writes.
+	std::atomic<bool> drawing{true};
 };
 
 namespace {
@@ -225,6 +228,24 @@ pedit::Mods mods_of(WPARAM wp)
 	return m;
 }
 
+// Turns the preview's drawing off while it cannot be seen and on again when it can (idle load, 2026-11-18). Called on
+// size and show changes and by the 200 ms refresh timer, which also catches a hidden or minimised parent (a child gets
+// no message then). Headless embedded previews (never_show) keep drawing: tests count their selection boxes.
+void update_drawing(Previews::Win *w)
+{
+	if (!w || !w->display || !w->hwnd)
+		return;
+	RECT r = {};
+	GetClientRect(w->hwnd, &r);
+	HWND root = GetAncestor(w->hwnd, GA_ROOT);
+	bool want = w->never_show ||
+		    (IsWindowVisible(w->hwnd) && !(root && IsIconic(root)) && r.right > 0 && r.bottom > 0);
+	if (want == w->drawing.load())
+		return;
+	w->drawing = want;
+	obs_display_set_enabled(w->display, want);
+}
+
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
 	auto *w = reinterpret_cast<Previews::Win *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -290,6 +311,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 				ShowWindow(hwnd, SW_HIDE);
 				hlog::warn("preview %s: headless, an embedded preview was made visible; hidden again", w->canvas.c_str());
 			}
+			update_drawing(w);
 			w->owner->editor().refresh(w->canvas);
 			return 0;
 		}
@@ -309,8 +331,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			GetClientRect(hwnd, &r);
 			if (r.right > 0 && r.bottom > 0)
 				obs_display_resize(w->display, (uint32_t)r.right, (uint32_t)r.bottom);
+			update_drawing(w);
 		}
 		return 0;
+	case WM_WINDOWPOSCHANGED: // shown or hidden through SetWindowPos / ShowWindow; DefWindowProc still sends WM_SIZE
+		update_drawing(w);
+		break;
 	case WM_ERASEBKGND:
 		return 1;
 	case WM_WINDOWPOSCHANGING: // headless embedded: SetWindowPos(SWP_SHOWWINDOW) is dropped (ShowWindow under a hidden
@@ -481,6 +507,7 @@ static json::Value win_json(const Previews::Win *w)
 		o.set("shown", (GetWindowLongPtrW(w->hwnd, GWL_STYLE) & WS_VISIBLE) != 0); // its own WS_VISIBLE
 		o.set("visible", IsWindowVisible(w->hwnd) != FALSE);                      // and every parent's
 		o.set("selectionDraws", (double)w->selection_draws.load());
+		o.set("drawing", w->drawing.load()); // false while it cannot be seen (display disabled)
 	}
 	return o;
 }
