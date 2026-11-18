@@ -1,0 +1,113 @@
+{
+  "$comment": "MU1 scene music mood (plan 2026-11-18-audio-mixer-music.md, user choice 2026-11-18). Read by services/clip/scene_music.py; schema data/schemas/music-mood.schema.json. Tempo, keys, chords, levels and loudness are the agent's proposal until the user listens (UNVERIFIED).",
+  "id": "in-match",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-18",
+  "title": "In match: low dark ambient",
+  "generator": "procedural",
+  "chordTypes": {
+    "m": [
+      0,
+      3,
+      7
+    ],
+    "m7": [
+      0,
+      3,
+      7,
+      10
+    ],
+    "sus2": [
+      0,
+      2,
+      7
+    ],
+    "maj": [
+      0,
+      4,
+      7
+    ]
+  },
+  "tempo": {
+    "minBpm": 54,
+    "maxBpm": 66
+  },
+  "keys": [
+    36,
+    38,
+    40,
+    41,
+    43
+  ],
+  "progressions": [
+    {
+      "id": "i-isus2-VI-v",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 0,
+          "type": "sus2"
+        },
+        {
+          "root": 8,
+          "type": "maj"
+        },
+        {
+          "root": 7,
+          "type": "m"
+        }
+      ]
+    },
+    {
+      "id": "i-VII-i-iv",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m7"
+        },
+        {
+          "root": 10,
+          "type": "maj"
+        },
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 5,
+          "type": "m7"
+        }
+      ]
+    }
+  ],
+  "instruments": {
+    "drone": {
+      "level": 0.6
+    },
+    "pad": {
+      "level": 0.3
+    },
+    "bell": {
+      "level": 0.1,
+      "density": 0.5
+    }
+  },
+  "drums": "none",
+  "swing": 0.5,
+  "lowpassHz": 900,
+  "reverb": {
+    "seconds": 4.5,
+    "mix": 0.45
+  },
+  "loudness": {
+    "targetLufs": -30.0,
+    "toleranceLu": 1.0,
+    "peakCeilingDb": -1.0
+  },
+  "durationSec": 240,
+  "why": "No drums and no tune: two low drones (root and fifth, two octaves down), a dark slow pad in a minor key, a rare soft bell, long reverb and a 900 Hz low-pass. Almost all energy stays low and the level is the lowest (-30 LUFS), so it stays under voice and game sound; AU3 will duck it further."
+}
