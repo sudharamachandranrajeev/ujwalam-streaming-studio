@@ -27,6 +27,13 @@ stream target a 127.0.0.1 listener), waits, measures for N minutes and prints on
 Not in it: the launcher's own loops and the Python workers (the host token exists only inside the launcher). Items 4
 and 5 and their tests cover that part.
 
+Tool check (branch head, `--minutes 1 --warmup 20`, 2026-11-18 about 22:30; NOT a baseline: the clip agent was using
+the GPU at the same time, and one minute is short): exit 0, every stack check passed, live and recording false,
+video encode 0 % mean (no replay encoder off air). Run 1: host 23.0 CPU-s, CEF pages 5.9 CPU-s (21 processes, 383 MB
+private), GPU 3D 22.9 % mean, render lag 0 of 3718 frames. Run 2: host 17.7 CPU-s, CEF 4.6 CPU-s, GPU 3D 25 % mean,
+render lag 691 of 3672 frames. The lag in run 2 is not explained yet (other GPU work ran); the before/after runs must be
+done with nothing else on the GPU. `tests/perf-idle.test.mjs`: 4 pass (arguments, roles, trees, stale parent ids).
+
 Plan: run it on `claude/alpha0-d1` (before) and on the merged branch (after), same minutes, same machine state.
 
 ## 1. Replay buffer only while live or recording
