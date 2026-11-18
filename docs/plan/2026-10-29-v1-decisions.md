@@ -2032,13 +2032,17 @@ Growth plan ED2. Decided:
 - **Decision.** User request: scenes per scenario (gameplay, lobby / just chatting, screen share, starting soon / BRB /
   ending), each an H + V pair built from data templates through the SB3 builder; new scenes only. Project layer types
   `screen` (libobs `monitor_capture`; source `{display, cursor?}`) and `window` (`window_capture`; source
-  `{window: "title:class:exe", match?: title|class|exe (default exe), cursor?}`). One app window is the default for the
+  `{window: "title:class:exe", match?: title|class|exe (default title), cursor?}`). One app window is the default for the
   screen-share scene; the whole screen stays available. Targets come from the read-only host RPC `capture.listTargets`.
 - **Screen capture allowed.** win-capture loads only when the host starts with `--allow-screen-capture`, because loading
   it fetches the OBS compatibility list from obsproject.com and copies hook files into ProgramData (D28 kept it off). The
   user allowed it on 2026-11-18: the launcher passes the switch and the package ships win-capture.
 - **Privacy.** Window titles are personal data: never logged by Ujwalam, never committed; a window layer is named after
-  its program (exe). Evidence `docs/evidence/2026-11-18-capture-layers-and-transitions-host.md`.
+  its program (exe). Shared packages (scene-builder build/edit/variants/export) keep only `:class:exe`
+  (`shareablePackage()`); an import without a title gives a placeholder, never a guessed window. The default `title`
+  match never shows another window of the same app: a closed window leaves the layer empty until the same title opens
+  again (`exe`/`class` are explicit choices that can). Display ids are 1..127 printable ASCII (OBS copies them into a
+  128-byte buffer). Codex review fixes `c75c5a0`. Evidence `docs/evidence/2026-11-18-capture-layers-and-transitions-host.md`.
 - **Scenario templates.** Six templates in `data/scene-templates/` (gameplay, lobby / just chatting, screen share,
   starting soon, BRB, ending) with explicit H and V boxes; V boxes sit inside the V safe zone and the game is never
   cropped. Slot role `screen` links a project `window` layer (first choice) or `screen` layer, or creates one from a
@@ -2052,7 +2056,10 @@ Growth plan ED2. Decided:
 - **Decision.** "Fancy transitions, default one cyberpunk colourful." Flag `transitions` is ON by default (a requested
   feature). Host types `slide {direction}`, `swipe {direction, swipeIn}`, `wipe {pattern, softness, invert}` (patterns
   from `data/transitions/luma-wipes.json`, the luma images OBS ships) and `fadeColor {color, pointPct}`, each with
-  `durationMs` and fields allowed only on their type; `transitions.types` lists them for the UI.
+  `durationMs` and fields allowed only on their type; `transitions.types` lists them for the UI. `pointPct` is 1..99
+  (OBS's curve gives NaN audio at 0 and 100). A settings change builds a fresh transition and releases the old one off
+  the channel (no in-place update: `fade_to_color` races its audio mix); a transition OBS cannot load is refused before
+  any canvas change.
 - **Stingers.** Three stingers drawn locally by `tools/make-stingers.mjs` (plain JS rasterizer, VP9 WebM with alpha,
   60 fps, 900 ms, silent): `neon-glitch` (default), `synthwave-sweep`, `cyan-grid`, data in
   `data/transitions/stingers/`, committed H and V files, packaged. Read with pathRef base `data`; the studio picks a
