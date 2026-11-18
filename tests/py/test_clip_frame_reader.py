@@ -39,13 +39,17 @@ FAKE = r"""
 import sys, time
 first, frames, delay, hang, rc = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4]), int(sys.argv[5])
 size, div, fps, late = int(sys.argv[6]), int(sys.argv[7]), float(sys.argv[8]), float(sys.argv[9])
+bad, short = int(sys.argv[10]), int(sys.argv[11])
 out = sys.stdout.buffer
 for k in range(frames):
-    sys.stderr.write(f"{round(k / fps * 1000)} 1/1000\n")
+    sys.stderr.write("-9223372036854775808 1/1000\n" if k == bad else f"{round(k / fps * 1000)} 1/1000\n")
     sys.stderr.flush()
     out.write(bytes([((first + k) // div) % 256]) * size)
     out.flush()
     time.sleep(delay)
+if short:
+    out.write(b"x" * (size // 2))
+    out.flush()
 if hang:
     time.sleep(hang)
 if late:
@@ -59,8 +63,9 @@ class FakeFfmpeg:
     """popen for FrameReader: run k gets plans[k] = (frames, delay, hang, rc[, late]); every byte of frame i (counted
     from the frame its -ss points at) is i // div, so the test sees which frames each run gave."""
 
-    def __init__(self, plans, fps=1.0, size=N, div=1):
+    def __init__(self, plans, fps=1.0, size=N, div=1, bad=-1, short=False):
         self.plans, self.fps, self.size, self.div, self.argvs = list(plans), fps, size, div, []
+        self.bad, self.short = bad, short  # first run only: frame `bad` gets ffmpeg's no-timestamp value; a half frame
 
     def __call__(self, argv):
         self.argvs.append(argv)
@@ -68,7 +73,8 @@ class FakeFfmpeg:
         ss = float(argv[argv.index("-ss") + 1]) if "-ss" in argv else 0.0
         first = int(round(ss * self.fps))
         return subprocess.Popen([PY, "-I", "-c", FAKE, str(first), str(frames), str(delay), str(hang), str(rc),
-                                 str(self.size), str(self.div), str(self.fps), str(late[0] if late else 0)],
+                                 str(self.size), str(self.div), str(self.fps), str(late[0] if late else 0),
+                                 str(self.bad if len(self.argvs) == 1 else -1), str(int(self.short))],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, **NO_WINDOW)
 
 
@@ -216,6 +222,62 @@ class DecoderChoiceTests(unittest.TestCase):
         self.assertEqual(len(list(r)), 3)
         self.assertEqual(r.stats["decoders"], ["cuda", "d3d11va"])
 
+    def test_the_watcher_ends_a_gpu_run_while_the_caller_is_busy(self):
+        # review round 2: going on air during a long OCR step ends the GPU ffmpeg at once, not at the next frame
+        state = {"ok": True}
+        procs = []
+        fake = FakeFfmpeg([(10, 0.05, 0, 0), (10, 0, 0, 0)])
+
+        def popen(argv):
+            procs.append(fake(argv))
+            return procs[-1]
+        r = reader(popen, decoders=fr.AUTO, gpu_ok=lambda: state["ok"], stall_sec=5, first_sec=5, air_check_sec=0.1)
+        got = []
+        for t, img in r:
+            got.append((t, int(img[0, 0, 0])))
+            if len(got) == 2:
+                state["ok"] = False
+                t0 = time.monotonic()
+                while procs[0].poll() is None and time.monotonic() - t0 < 5:
+                    time.sleep(0.02)
+                self.assertIsNotNone(procs[0].poll(), "the GPU ffmpeg ended while the caller held the frame")
+            if len(got) == 5:
+                break
+        self.assertEqual(got, [(float(i), i) for i in range(5)], "no frame lost or read twice")
+        self.assertEqual(r.stats["decoders"], ["cuda", "cpu"])
+
+    def test_a_failure_after_the_last_frame_is_not_success(self):
+        # review round 2: a nonzero exit after a segment's last frame used to end the pass as complete
+        fake = FakeFfmpeg([(3, 0, 0, 1)])
+        with self.assertRaises(cc.ClipError) as e:
+            list(reader(fake, start=0.0, dur=3.0))
+        self.assertIn("after the last frame", str(e.exception))
+        fake = FakeFfmpeg([(3, 0, 0, 0)], short=True)
+        with self.assertRaises(cc.ClipError):
+            list(reader(fake, start=0.0, dur=3.0))
+
+    def test_a_missing_timestamp_is_not_guessed(self):
+        # review round 2: frame 1 has ffmpeg's "no timestamp" value; the run stalls after frame 2: no restart guess
+        fake = FakeFfmpeg([(3, 0, 60, 0), (3, 0, 0, 0)], bad=1)
+        r = reader(fake)
+        with self.assertRaises(cc.ClipError) as e:
+            list(r)
+        self.assertIn("lost track of the frames", str(e.exception))
+        self.assertTrue(r.ambiguous)
+        self.assertEqual(len(fake.argvs), 1)
+
+    def test_stamp_lines(self):
+        import io
+        out = []
+        fr._stamps(io.BytesIO(b"1000 1/1000\n5 1/0\n-9223372036854775808 1/1000\n2 0/1\n"), out)
+        self.assertEqual(out, [1.0, None, None, None])
+
+    def test_the_seek_is_rounded_up(self):
+        r = reader(FakeFfmpeg([]))
+        self.assertEqual(r._seek(10.0004, 0), 10.001)
+        r.last_pts = 12.0
+        self.assertEqual(r._seek(0.0, 12), 13.0)
+
     def test_decode_setting(self):
         self.assertEqual(fr.decoders_for("auto"), fr.AUTO)
         self.assertEqual(fr.decoders_for(None), fr.AUTO)
@@ -253,27 +315,46 @@ class OnAirTests(unittest.TestCase):
         os.utime(p, (t, t))
 
     def test_rules_match_live_check(self):
-        up = lambda: True  # noqa: E731
-        self.assertFalse(cc.on_air(os.path.join(self.dir, "missing"), up))
-        self.assertFalse(cc.on_air(self.dir, up))
-        self.log("host-a.log", "[host] sink yt-h live\n")
-        self.assertTrue(cc.on_air(self.dir, up))
-        self.log("host-a.log", "[host] sink yt-h stopped\n", mode="a")
-        self.assertFalse(cc.on_air(self.dir, up), "read on from where the last call stopped")
-        self.log("host-a.log", "[host] sink rec live\n[host] sink rec dropped\n", mode="a")
-        self.assertTrue(cc.on_air(self.dir, up), "dropped (retrying) stays on air")
-        self.log("host-a.log", "[host] rpc host.alive\n", age=3600, mode="a")
-        self.assertTrue(cc.on_air(self.dir, up), "review 2026-11-18: a quiet log during a long stream is still live")
-        self.assertFalse(cc.on_air(self.dir, lambda: False), "no installed host runs: it crashed, nothing is on air")
+        import datetime
+        s1 = datetime.datetime(2026, 11, 18, 19, 15, 3)
+        s2 = datetime.datetime(2026, 11, 18, 21, 0, 0)
+        a, b = "host-2026-11-18T19-15-04.log", "host-2026-11-18T21-00-01.log"
+        up = lambda: [s1]  # noqa: E731
+        self.assertFalse(cc.on_air(self.dir, lambda: []), "no installed host runs: off air, whatever the logs say")
         self.assertIsNone(cc.on_air(self.dir, lambda: None), "the host cannot be checked: unknown")
-        self.log("host-a.log", "[host] exit 0\n", age=3600, mode="a")
+        self.assertIsNone(cc.on_air(os.path.join(self.dir, "missing"), up), "a host runs and its logs are missing")
+        self.assertIsNone(cc.on_air(self.dir, up), "a host runs and has no log: unknown")
+        self.log(a, "[host] sink yt-h live\n")
+        self.assertTrue(cc.on_air(self.dir, up))
+        self.log(a, "[host] sink yt-h stopped\n", mode="a")
+        self.assertFalse(cc.on_air(self.dir, up), "read on from where the last call stopped")
+        self.log(a, "[host] sink rec live\n[host] sink rec dropped\n", mode="a")
+        self.assertTrue(cc.on_air(self.dir, up), "dropped (retrying) stays on air")
+        self.log(a, "[host] rpc host.alive\n", age=3600, mode="a")
+        self.assertTrue(cc.on_air(self.dir, up), "review 2026-11-18: a quiet log during a long stream is still live")
+        self.log(b, "[host] sink twitch stopped\n")
+        self.assertTrue(cc.on_air(self.dir, up), "a newer log of another host does not hide this host's state")
+        self.assertFalse(cc.on_air(self.dir, lambda: [s2]), "each host reads its own log")
+        self.assertIsNone(cc.on_air(self.dir, lambda: [s1 + datetime.timedelta(hours=5)]), "no log of this host")
+        self.log(a, "[host] exit 0\n", age=3600, mode="a")
         self.assertFalse(cc.on_air(self.dir, up), "the host closed")
-        self.log("host-b.log", "[host] sink twitch live\n")
-        self.assertTrue(cc.on_air(self.dir, up), "the newest log counts")
+
+    def test_a_replaced_log_is_read_from_the_start(self):
+        import datetime
+        up = lambda: [datetime.datetime(2026, 11, 18, 19, 15, 3)]  # noqa: E731
+        name = "host-2026-11-18T19-15-03.log"
+        self.log(name, "[host] sink yt-h live\n" + "x" * 200 + "\n")
+        self.assertTrue(cc.on_air(self.dir, up))
+        os.remove(os.path.join(self.dir, name))
+        self.log(name, "[host] sink yt-h stopped\n" + "y" * 400 + "\n")  # longer than the old offset
+        self.assertFalse(cc.on_air(self.dir, up), "review round 2: same path, new file")
 
     @unittest.skipUnless(os.name == "nt", "Windows")
     def test_the_installed_host_is_found_by_path(self):
         self.assertFalse(cc.installed_host_running(self.dir), "no host under this folder")
+        self.assertIsInstance(cc.installed_hosts(self.dir), list)
+        self.assertIsInstance(cc.installed_hosts(self.dir), list, "a second call works too (ctypes types per call)")
+        self.assertIn(cc.on_air(self.dir), (False, None))
 
 
 @unittest.skipUnless(HAVE_NP and shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs numpy and ffmpeg")
@@ -548,6 +629,26 @@ class ResumeTests(unittest.TestCase):
                 f.seek(10)
                 f.write(b"garbage" * 20)
         self.cut_then(garble)
+
+    def test_rows_not_written_with_the_checkpoint_start_fresh(self):
+        # review round 2: the npz holds the SHA-256 of the rows it commits; other rows of the same length are not used
+        def swap(path):
+            with open(path + ".rows", "r+b") as f:
+                data = f.read()
+                f.seek(0)
+                swapped = data.replace(b'"t": 3.0', b'"t": 9.0', 1)
+                self.assertNotEqual(swapped, data)
+                f.write(swapped)  # still valid JSON lines of the same length and counts
+        self.cut_then(swap)
+
+    def test_one_pass_per_output_folder(self):
+        out = os.path.join(self.dir, "locked")
+        with self.dp.OutputLock(out):
+            with self.assertRaises(cc.ClipError) as e:
+                self.run_pass(out, [(self.FRAMES, 0, 0, 0)], self.settings)
+        self.assertIn("Another clip job", str(e.exception))
+        summ, _ = self.run_pass(out, [(self.FRAMES, 0, 0, 0)], self.settings)  # free again
+        self.assertEqual(summ["frames"], self.FRAMES)
 
     def test_a_watchdog_failure_keeps_the_checkpoint(self):
         self.dp.CHECKPOINT_EVERY_SEC = 3600.0  # only the failure itself saves

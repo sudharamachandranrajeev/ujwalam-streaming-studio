@@ -657,11 +657,18 @@ class Checkpoint:
       last save. Bytes past the committed length (a save cut short) are ignored and cut off on resume.
     - CHECKPOINT: the key, frames read, the last frame's source timestamp, the committed length and counts of the
       rows file, and the scanner state (npz: JSON meta plus the small band arrays; no pickles), replaced atomically
-      (temp file + rename) after the rows line is on disk."""
+      (temp file + fsync + rename) after the rows line is on disk.
+    The npz is bound to the rows it commits (review round 2): it holds the SHA-256 of the rows file's committed
+    prefix and the id of the run that wrote it; a prefix that does not match is not used. One writer per folder:
+    run_pass holds OutputLock while it scans."""
 
     def __init__(self, path, key):
+        import hashlib
+        import uuid
         self.path, self.key, self.rows_path = path, key, path + ".rows"
         self.length = self.nrows = self.nread = 0
+        self.run = uuid.uuid4().hex
+        self.digest = hashlib.sha256()  # of the committed rows prefix
 
     def load(self):
         """(frames, last pts, rows, readings, scanner state, arrays) when a checkpoint matches the key, else None
@@ -683,6 +690,10 @@ class Checkpoint:
                 data = f.read(length)
             if len(data) != length:
                 return None
+            import hashlib
+            h = hashlib.sha256(data)
+            if h.hexdigest() != doc.get("rowsSha256"):
+                return None  # rows not written with this npz (another run, an edit, or a mixed copy)
             for line in data.splitlines():
                 b = json.loads(line)
                 rows += b["rows"]
@@ -691,7 +702,7 @@ class Checkpoint:
                 return None
             with open(self.rows_path, "r+b") as f:
                 f.truncate(length)  # a save cut short after its rows line: that line is not committed
-            self.length, self.nrows, self.nread = length, nrows, nread
+            self.length, self.nrows, self.nread, self.digest = length, nrows, nread, h
             pts = doc.get("pts")
             return doc["frames"], (float(pts) if pts is not None else None), rows, readings, doc["scanner"], arrays
         except (OSError, ValueError, KeyError, TypeError, EOFError, AttributeError, zipfile.BadZipFile):
@@ -710,16 +721,64 @@ class Checkpoint:
             os.fsync(f.fileno())
         st, arrays = scanner.get_state()
         length, nrows, nread = self.length + len(line), len(rows), len(scanner.readings)
-        meta = json.dumps({"key": self.key, "frames": frames, "pts": pts, "length": length, "rows": nrows,
-                           "readings": nread, "scanner": st}, ensure_ascii=False, default=str).encode("utf-8")
+        digest = self.digest.copy()
+        digest.update(line)
+        meta = json.dumps({"key": self.key, "run": self.run, "frames": frames, "pts": pts, "length": length,
+                           "rowsSha256": digest.hexdigest(), "rows": nrows, "readings": nread, "scanner": st},
+                          ensure_ascii=False, default=str).encode("utf-8")
         tmp = f"{self.path}.{os.getpid()}.tmp"
         with open(tmp, "wb") as f:
             np.savez(f, meta=np.frombuffer(meta, np.uint8), **{f"a_{k}": v for k, v in arrays.items()})
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, self.path)
-        self.length, self.nrows, self.nread = length, nrows, nread
+        self.length, self.nrows, self.nread, self.digest = length, nrows, nread, digest
 
     def drop(self):
         drop_checkpoint(self.path)
+
+
+LOCK = "detector-pass.lock"
+
+
+class OutputLock:
+    """Exclusive lock on a job's output folder for one detector pass (review round 2): a second pass on the same
+    folder (a double-started job) fails at once instead of writing the same checkpoint and hit files. The OS drops
+    the lock when the process ends, however it ends; the lock file itself stays (empty)."""
+
+    def __init__(self, folder):
+        self.path = os.path.join(folder, LOCK)
+        self.f = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.f = open(self.path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.f.seek(0)
+                msvcrt.locking(self.f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.f.close()
+            self.f = None
+            raise ClipError("Another clip job is already working in this folder. Wait for it to finish (or stop it) "
+                            "and start this one again.") from None
+        return self
+
+    def __exit__(self, *exc):
+        if self.f is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    self.f.seek(0)
+                    msvcrt.locking(self.f.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            self.f.close()
+            self.f = None
 
 
 def drop_checkpoint(path):
@@ -860,7 +919,14 @@ def run_pass(recording, out_dir, settings, pack, names, layout, threads=g1_scan.
     checkpoint (user 2026-11-18: a job cut short goes on where it stopped): every CHECKPOINT_EVERY_SEC the scan so
     far is saved to out_dir/CHECKPOINT; a later pass with the same checkpoint_key starts ffmpeg at the next frame
     (-ss, the watchdog's restart path) with the saved rows and scanner state. A mismatched or corrupt checkpoint is
-    ignored; the file is deleted when the pass completes."""
+    ignored; the file is deleted when the pass completes. The pass holds OutputLock on out_dir throughout."""
+    with OutputLock(out_dir):
+        return _run_pass(recording, out_dir, settings, pack, names, layout, threads, duration, progress, start,
+                         progress_line, total_frames, reader_opts, checkpoint)
+
+
+def _run_pass(recording, out_dir, settings, pack, names, layout, threads, duration, progress, start, progress_line,
+              total_frames, reader_opts, checkpoint):
     scanner = FrameScanner(pack, names, settings, layout, threads)
     v = g1_scan.visible_box(layout)
     rows = []
@@ -895,6 +961,8 @@ def run_pass(recording, out_dir, settings, pack, names, layout, threads=g1_scan.
 
     def checkpoint_now():
         nonlocal ck
+        if reader.ambiguous:
+            return  # which frame comes next is not known: the last good checkpoint stays as it is
         try:
             frames, pts = reader.position()
             ck.save(frames, pts, rows, scanner)
@@ -930,6 +998,13 @@ def run_pass(recording, out_dir, settings, pack, names, layout, threads=g1_scan.
         progress_line(scanner.stats["frames"], scanner.stats["frames"])
     hits = merge_hits(rows, float(settings["mergeGapSec"]), settings.get("splitBySignal") or ())
     os.makedirs(out_dir, exist_ok=True)
+    # Publish order (review round 2): the summary (SUMMARY, written by cmd_detect last) is the completion marker that
+    # clipper._own_hits trusts. It is removed first, so a crash between the files below never pairs new hits with an
+    # old summary or old match stats; the checkpoint is dropped only after all are written.
+    try:
+        os.remove(os.path.join(out_dir, SUMMARY))
+    except FileNotFoundError:
+        pass
     tmp = os.path.join(out_dir, HITS + f".{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         for h in hits:

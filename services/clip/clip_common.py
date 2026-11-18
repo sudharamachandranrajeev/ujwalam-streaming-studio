@@ -38,6 +38,35 @@ def contain_children():
     if _JOB is not None:
         return True
     import ctypes
+    job = kill_on_close_job(ctypes.WinDLL("kernel32").GetCurrentProcess())
+    if job is None:
+        return False
+    _JOB = job
+    return True
+
+
+def _k32():
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    return k32
+
+
+def kill_on_close_job(process_handle):
+    """Windows: a new job object that kills every member when its last handle closes, with the process (a handle)
+    in it; children it starts later are members too. Returns the job handle, or None elsewhere or when Windows
+    refused. end_job() ends every member at once (the whole tree, also when the first process already exited)."""
+    if os.name != "nt" or not process_handle:
+        return None
+    import ctypes
+    from ctypes import wintypes
     from ctypes import wintypes
 
     class BASIC(ctypes.Structure):
@@ -53,24 +82,32 @@ def contain_children():
         _fields_ = [("Basic", BASIC), ("Io", IO), ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
                     ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
 
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.CreateJobObjectW.restype = wintypes.HANDLE
-    k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-    k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
-    k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-    k32.GetCurrentProcess.restype = wintypes.HANDLE
-    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32 = _k32()
     job = k32.CreateJobObjectW(None, None)
     if not job:
-        return False
+        return None
     info = EXTENDED()
     info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)) or \
-            not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):  # 9: JobObjectExtendedLimitInformation
+            not k32.AssignProcessToJobObject(job, wintypes.HANDLE(int(process_handle))):  # 9: extended limits
         k32.CloseHandle(job)
-        return False
-    _JOB = job
-    return True
+        return None
+    return job
+
+
+def end_job_members(job):
+    """End every process of a kill_on_close_job() job now; the job stays open. No-op for None."""
+    if job is not None:
+        _k32().TerminateJobObject(job, 1)
+
+
+def end_job(job):
+    """End every process of a kill_on_close_job() job and close it. No-op for None."""
+    if job is None:
+        return
+    k32 = _k32()
+    k32.TerminateJobObject(job, 1)
+    k32.CloseHandle(job)
 
 
 def end_own_tree(pid=None, run=None):
@@ -452,83 +489,161 @@ def host_logs_dir():
     return os.path.join(base, "Ujwalam", "data", "host", "logs") if base else None
 
 
-def installed_host_running(base=None):
-    """True when an ujwalam-host.exe under %LOCALAPPDATA%\\Ujwalam runs (the user's installed studio; by path, never
-    by name alone: agents' test hosts run from the repo). False when none runs, None when it cannot be told."""
+HOST_EXE = "ujwalam-host.exe"
+LOG_BIND_SEC = 120  # a host's log is named after its start (local time): the name lies within this of the start
+_LOG_NAME = re.compile(r"^host-(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)\.log$")
+
+
+def installed_hosts(base=None):
+    """Start times (local naive datetime) of the running installed hosts: every ujwalam-host.exe whose image is
+    under %LOCALAPPDATA%\\Ujwalam (by path, never by name alone: agents' test hosts run from the repo). [] when none
+    runs. None when it cannot be told: the process list fails, or a process named ujwalam-host.exe whose path or
+    start time cannot be read (an elevated host, say) - it may be the user's."""
     base = base or os.environ.get("LOCALAPPDATA")
     if os.name != "nt" or not base:
         return None
     import ctypes
+    import datetime
     from ctypes import wintypes
+
+    class _Entry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_void_p), ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
     root = os.path.normcase(os.path.join(base, "Ujwalam")) + os.sep
-    k, ps = ctypes.windll.kernel32, ctypes.windll.psapi
-    ps.EnumProcesses.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    k = ctypes.WinDLL("kernel32")  # its own instance: argtypes below name this call's _Entry class
+    k.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k.Process32FirstW.argtypes = k.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Entry)]
     k.OpenProcess.restype = wintypes.HANDLE
     k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     k.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
                                              ctypes.POINTER(wintypes.DWORD)]
+    k.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
     k.CloseHandle.argtypes = [wintypes.HANDLE]
-    pids = (wintypes.DWORD * 8192)()
-    got = wintypes.DWORD()
-    if not ps.EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(got)):
+    snap = k.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS: names without opening the processes
+    if not snap or snap == wintypes.HANDLE(-1).value:
         return None
+    pids = []
+    try:
+        e = _Entry()
+        e.dwSize = ctypes.sizeof(_Entry)
+        ok = k.Process32FirstW(snap, ctypes.byref(e))
+        if not ok:
+            return None
+        while ok:
+            if e.szExeFile.lower() == HOST_EXE:
+                pids.append(e.th32ProcessID)
+            ok = k.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        k.CloseHandle(snap)
+    out = []
     buf = ctypes.create_unicode_buffer(1024)
-    for pid in pids[:got.value // ctypes.sizeof(wintypes.DWORD)]:
+    for pid in pids:
         h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not h:
-            continue
+            return None
         try:
             n = wintypes.DWORD(len(buf))
-            if k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
-                p = os.path.normcase(buf.value)
-                if p.startswith(root) and os.path.basename(p) == "ujwalam-host.exe":
-                    return True
+            if not k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)) or not buf.value:
+                return None
+            if not os.path.normcase(buf.value).startswith(root):
+                continue  # a dev or test host from a repo checkout
+            t = [wintypes.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(h, *[ctypes.byref(x) for x in t]):
+                return None
+            ft = (t[0].dwHighDateTime << 32) | t[0].dwLowDateTime
+            utc = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(microseconds=ft // 10)
+            out.append(utc.astimezone().replace(tzinfo=None))
         finally:
             k.CloseHandle(h)
-    return False
+    return out
 
 
-_LOG_CACHE = {}  # path -> [bytes read, {sink: state}, exited, partial last line]; each poll reads only new bytes
+def ctypes_error():
+    import ctypes
+    return ctypes.ArgumentError
+
+
+def installed_host_running(base=None):
+    """True when an installed host runs, False when none does, None when it cannot be told (installed_hosts)."""
+    hosts = installed_hosts(base)
+    return None if hosts is None else bool(hosts)
+
+
+def log_for_start(names, start):
+    """The host log of the host started at `start` (local naive datetime): the newest log whose name time lies
+    within LOG_BIND_SEC around the start. None when no log belongs to it."""
+    import datetime
+    best = None
+    for f in names:
+        m = _LOG_NAME.match(f)
+        if not m:
+            continue
+        t = datetime.datetime(*map(int, m.groups()))
+        if abs((t - start).total_seconds()) <= LOG_BIND_SEC and (best is None or t > best[0]):
+            best = (t, f)
+    return best and best[1]
+
+
+_LOG_CACHE = {}  # path -> [file identity, bytes read, {sink: state}, exited, partial line]; reads only new bytes
 
 
 def _log_state(path):
-    st = _LOG_CACHE.get(path)
-    size = os.path.getsize(path)
-    if st is None or size < st[0]:
-        st = _LOG_CACHE[path] = [0, {}, False, b""]
-    if size > st[0]:
-        with open(path, "rb") as f:
-            f.seek(st[0])
-            data = st[3] + f.read(size - st[0])
-        st[0] = size
-        cut = data.rfind(b"\n") + 1
-        done, st[3] = data[:cut], data[cut:]
-        for m in _SINK_LINE.finditer(done):
-            st[1][m.group(1)] = m.group(2)
-        st[2] = st[2] or bool(_EXIT_LINE.search(done))
-    return st[1], st[2]
+    """(sink states, exited) of a host log, read incrementally. The file's identity (volume, file index, creation
+    time) is kept with the offset: a replaced, rotated or truncated file is read again from the start."""
+    with open(path, "rb") as f:
+        s = os.fstat(f.fileno())
+        ident = (s.st_dev, s.st_ino, getattr(s, "st_birthtime_ns", None) or s.st_ctime_ns)
+        st = _LOG_CACHE.get(path)
+        if st is None or st[0] != ident or s.st_size < st[1]:
+            st = _LOG_CACHE[path] = [ident, 0, {}, False, b""]
+        if s.st_size > st[1]:
+            f.seek(st[1])
+            data = st[4] + f.read(s.st_size - st[1])
+            st[1] = s.st_size
+            cut = data.rfind(b"\n") + 1
+            done, st[4] = data[:cut], data[cut:]
+            for m in _SINK_LINE.finditer(done):
+                st[2][m.group(1)] = m.group(2)
+            st[3] = st[3] or bool(_EXIT_LINE.search(done))
+    return st[2], st[3]
 
 
-def on_air(logs_dir=None, host_running=None):
-    """Is the user's studio live or recording right now? Same rule as tools/live-check.mjs: in the newest host log,
-    each sink's last live / stopped / failed / dropped line. A live or dropped sink counts however old the log is (a
-    long stream can log nothing for minutes) until the host's exit line, or until no installed host process runs (a
-    host that crashed while live). True = on air, False = off air (also when there is no host log), None = unknown
-    (callers treat it as on air). The log is read incrementally: each call reads only what was added."""
-    d = host_logs_dir() if logs_dir is None else logs_dir
-    if not d or not os.path.isdir(d):
-        return False
+def on_air(logs_dir=None, hosts=None):
+    """Is the user's studio live or recording right now? Same rule as tools/live-check.mjs. No installed host
+    process: off air. For each running installed host, its own log (named after its start, log_for_start): each
+    sink's last live / stopped / failed / dropped line; a live or dropped sink counts however old the log is (a long
+    stream can log nothing for minutes) until the host's exit line. True = on air, False = off air, None = unknown
+    (callers treat it as on air): the process check failed, or a running host's log is missing or unreadable."""
     try:
-        logs = [os.path.join(d, f) for f in os.listdir(d) if f.startswith("host-") and f.endswith(".log")]
-        if not logs:
-            return False
-        states, exited = _log_state(max(logs, key=os.path.getmtime))
+        running = (hosts or installed_hosts)()
+    except (OSError, ValueError, TypeError, AttributeError, ctypes_error()):
+        running = None  # the check itself failed: unknown
+    if running is None:
+        return None
+    if not running:
+        return False
+    d = host_logs_dir() if logs_dir is None else logs_dir
+    try:
+        names = os.listdir(d) if d else None
     except OSError:
         return None
-    if not any(s in (b"live", b"dropped") for s in states.values()) or exited:
-        return False
-    run = (host_running or installed_host_running)()
-    return None if run is None else run
+    if not names:
+        return None
+    result = False
+    for start in running:
+        f = log_for_start(names, start)
+        if f is None:
+            return None
+        try:
+            states, exited = _log_state(os.path.join(d, f))
+        except OSError:
+            return None  # replaced or removed between the listing and the read
+        if not exited and any(s in (b"live", b"dropped") for s in states.values()):
+            result = True
+    return result
 
 
 def probe(ffprobe, path):

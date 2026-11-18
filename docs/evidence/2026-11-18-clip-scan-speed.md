@@ -216,7 +216,61 @@ Each finding was checked against the code first; all were real.
 - Popen before the cleanup guard (P3): the guard starts right after Popen; only started threads are joined.
 - Whole-history checkpoint writes and whole-log reads (P3): both incremental (append-only rows file; log offset).
 
+## Review fixes, round 2
+
+All checked against the code first; all real, except where noted.
+
+- Going on air mid-run: a watcher thread on each GPU run checks every 2 s, independent of the caller's OCR step and
+  of the end-of-output wait. On air or unknown, it ends the GPU ffmpeg tree at once; the pass goes on with the CPU
+  decoder from the last frame it took (a frame taken after the watcher fired is dropped and read again on the CPU).
+- On air, unknown cases: the host is now found by name from a process snapshot (no access needed), then by path.
+  An `ujwalam-host.exe` whose path or start time cannot be read counts as unknown, as does a blank path in
+  `live-check.mjs`. No installed host = off air. A running installed host is bound to its own log by start time
+  (`host-<start>.log`, within 120 s); a missing or unreadable log of a running host = unknown (CPU, exit 2).
+- Log reading: the cache keeps the file's identity (volume, file index, creation time); a replaced, rotated or
+  truncated log is read from the start. The log is picked by the host's start time, not by mtime. A file that goes
+  between listing and reading gives unknown (Python) or unknown (Node, caught).
+- Timestamps: the seek is rounded up to the millisecond (never down onto a frame already read); the timestamp
+  origin is that exact value. A stamp line with ffmpeg's no-timestamp value or a zero or negative time base is
+  kept as "invalid", so later stamps never shift. A missing, invalid or non-increasing stamp marks the position
+  ambiguous: the next restart raises a plain `ClipError` instead of guessing, and no checkpoint is written over the
+  last good one. Frame times `t` still come from the frame count, as in `g1_scan.decode_frames` (argued: changing
+  them would change hit times on recordings with gaps; out of scope for an identical-result fix).
+- End of a segment: a nonzero ffmpeg exit after the last frame, or a pipe that ends inside a frame, is no longer
+  success: the GPU falls back, the CPU restarts, and with nothing left to read the pass raises `ClipError`.
+- Checkpoint: the npz holds the SHA-256 of the rows prefix it commits and its run id; rows that do not match are
+  not used. The npz is fsynced before the rename. `run_pass` holds an exclusive lock on the output folder
+  (`detector-pass.lock`, `msvcrt.locking`); a second pass on the same folder fails at once.
+- ffmpeg tree: each ffmpeg run goes into its own kill-on-close job object (ctypes, shared with
+  `contain_children`); cleanup ends the job whether or not ffmpeg itself already exited. taskkill stays as the
+  fallback where no job could be made.
+- Threads: a pump, stamp or watcher thread is recorded only after it started; only started threads are joined.
+- Publish (open question): could a crash expose mixed results? Yes: `clipper._own_hits` trusts `detector-hits.jsonl`
+  when `detector-pass.json` exists, and a crash between the files could pair new hits with an old summary. Now the
+  summary (the completion marker, written last by `cmd_detect`) is deleted before the hits and match stats are
+  written. A crash in between leaves no marker, so the next job runs detect again.
+
+## Padded batch detection (identity check, not shipped)
+
+All 11 band crops of a frame preprocessed as RapidOCR does, zero-padded to the largest, one DirectML call, each map
+cut back, the same post-process. 30 frames (330 crops): 35 crops identical, 295 different (box differences up to
+1182 px: the padded batch changes the detector's output). Also slower: 233.6 s against 85.0 s serial (DirectML
+with large padded batches). Not identical, not faster: not shipped, no 600-frame run.
+
 ## Tests (one file at a time, off air checked with `tools/live-check.mjs`, `UJWALAM_HEADLESS=1`)
+
+- After round 2: `test_clip_frame_reader.py` 39 tests OK (25 s). New: the watcher ends a GPU run while the caller
+  holds a frame; a failure after the last frame is not success (exit code and a partial frame); a missing timestamp
+  is not guessed; stamp lines (zero time base, no-timestamp value); the seek is rounded up; rows not written with
+  the checkpoint start fresh; one pass per output folder; a replaced log is read from the start; each host reads its
+  own log. `tests/live-check.test.mjs` 4 OK. Re-run, all OK: `test_clip_detector_pass.py` (37),
+  `test_clip_match_gate.py` (37), `test_clip_live_review_gate.py` (6), `test_clip_live_montage.py` (6),
+  `test_render_watch.py` (10), `test_g1_detector_pass.py` (1), `test_g1_ocr.py` (8), node record-clips + live-check
+  (25). Lint 0 findings.
+- Real recording after round 2 (same 400-1000 s segment): `detector-hits.jsonl` and `match-stats.json` SHA-256
+  identical to the old code; 259.9 s, 138.5 frames/min, OCR 229.8 s, ffmpeg 17.5 CPU-s, VRAM max 2189 MB. The
+  first attempt failed at the first on-air check (a ctypes type bound to a struct class of an earlier call); fixed
+  (own kernel32 instance per call, a failing check counts as unknown) and covered by a test that calls it twice.
 
 - After the review fixes: `tests/py/test_clip_frame_reader.py` 31 tests OK (25 s); `tests/live-check.test.mjs`
   4 tests OK. New: a failing CPU run ends in a plain error; end of output waits for the exit code; a stalled
