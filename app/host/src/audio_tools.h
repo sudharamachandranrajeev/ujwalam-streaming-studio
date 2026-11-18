@@ -11,12 +11,18 @@
 // in the fixed order suppress -> gate -> eq -> gain -> compressor -> limiter. apply_filters() changes them in place
 // (obs_source_update / enabled / filter add or remove): the source is never rebuilt, its audio never stops.
 // Ranges: services/project/audio-filters.mjs (the filters' obs_properties limits, OBS 32.1.2).
+//
+// AU3 duck: tool "duck" is a compressor_filter whose sidechain_source is the libobs name of another project sound,
+// found through a DuckResolve from the sound's audio source id. While that sound is not there (or is a layer's sound,
+// whose private source has no name to find), the filter is disabled and keeps the plain reason: compressor_filter
+// would otherwise compress the strip on its own signal. refresh_duck() re-finds the sound after a mixer change.
 #pragma once
 
 #include "json.h"
 
 #include <obs.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -24,10 +30,18 @@ namespace audio_tools {
 
 // Throws rpc::Error(INVALID_PARAMS) for a malformed `filters` value.
 void check_filters(const json::Value &f, const std::string &what);
+// AU3: the libobs name of the source bound to project sound `audio` (to use as a sidechain), or "" with a plain
+// reason in `why`.
+using DuckResolve = std::function<std::string(const std::string &audio, std::string &why)>;
+
 // Makes the source's tool filters match `f` (null or missing = none). Never recreates the source. Runs the filter
 // list changes on the graphics thread and waits for them; only changed settings are sent to a filter.
-void apply_filters(obs_source_t *src, const json::Value &f);
-// The tool filters on a source as {kind: {on, settings...}} (for tests and status).
+void apply_filters(obs_source_t *src, const json::Value &f, const DuckResolve &resolve);
+// AU3: finds the duck tool's sound again (after the mixer changed). `force_name`: a sound of that name was replaced
+// by a new source of the same name (recreate): point the sidechain at the new one.
+void refresh_duck(obs_source_t *src, const DuckResolve &resolve, const std::string &force_name = "");
+// AU3: {on (the user's switch), active (ducking now), source, reason ("" when active)}, or null without a duck tool.
+json::Value duck_status(obs_source_t *src);// The tool filters on a source as {kind: {on, settings...}} (for tests and status).
 json::Value read_filters(obs_source_t *src);
 
 // AU1 app sound. check_exe throws for a bad {exe}; the result is the exe name.
@@ -56,6 +70,8 @@ json::Value playlist_status(obs_source_t *src);
 void shutdown_playlists();
 
 // --test-hooks: peak and RMS (dBFS, channel 0) of the source's audio after its filters, over `ms` after `skip_ms`.
-json::Value measure(obs_source_t *src, uint32_t skip_ms, uint32_t ms);
+// bin_ms > 0 adds bins (peak dBFS per bin_ms) and startMs (the audio clock of the first frame). Muted audio counts as
+// silence.
+json::Value measure(obs_source_t *src, uint32_t skip_ms, uint32_t ms, uint32_t bin_ms = 0);
 
 } // namespace audio_tools

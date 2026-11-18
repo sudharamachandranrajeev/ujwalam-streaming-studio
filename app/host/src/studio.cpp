@@ -1696,10 +1696,11 @@ json::Value Studio::load_model(const json::Value &doc, const LoadOptions &o)
 			obs_source_set_audio_mixers(target->src, a.mixers);
 			if (flags_.allow_devices) // monitoring opens an audio output device
 				obs_source_set_monitoring_type(target->src, monitoring_type(a.monitoring));
-			audio_tools::apply_filters(target->src, a.filters); // AU2 strip tools
+			audio_tools::apply_filters(target->src, a.filters, [this](const std::string &id, std::string &why) { return duck_name(id, why); }); // AU2 strip tools
 			if (!a.obs_type.empty())
 				audio_tools::attach_playlist(target->src, a.playlist, a.playlist_loop, a.playlist_root); // AU1 folder playlist
 		}
+		refresh_ducks(); // AU3: a strip may duck under a sound built after it
 		for (auto &c : canvases_) {
 			Scene *s = p.active.empty() ? nullptr : scene(p.active, c.id);
 			if (s)
@@ -2019,11 +2020,12 @@ json::Value Studio::audio_add_model(const json::Value &doc, const std::string &a
 	obs_source_set_audio_mixers(target->src, x->mixers);
 	if (flags_.allow_devices) // monitoring opens an audio output device
 		obs_source_set_monitoring_type(target->src, monitoring_type(x->monitoring));
-	audio_tools::apply_filters(target->src, x->filters); // AU2 strip tools
+	audio_tools::apply_filters(target->src, x->filters, [this](const std::string &id, std::string &why) { return duck_name(id, why); }); // AU2 strip tools
 	if (!x->obs_type.empty())
 		audio_tools::attach_playlist(target->src, x->playlist, x->playlist_loop, x->playlist_root); // AU1 folder playlist
 	model_doc_ = doc;
 	dirty_ = false;
+	refresh_ducks(); // AU3: strips that duck under this sound start ducking (A2 waiting device bound, or added)
 	hlog::info("audio added from the project: %s (%s)", aid.c_str(), x->obs_type.empty() ? "layer sound" : x->obs_type.c_str());
 	json::Value r = json::Value::object();
 	r.set("audio", aid);
@@ -2076,6 +2078,7 @@ json::Value Studio::audio_remove_model(const json::Value &doc, const std::string
 				}
 	model_doc_ = doc;
 	dirty_ = false;
+	refresh_ducks(); // AU3: strips that ducked under this sound stop, with a reason
 	hlog::info("audio removed from the project: %s (%s)", aid.c_str(), kind.empty() ? "was not built" : kind.c_str());
 	json::Value r = json::Value::object();
 	r.set("audio", aid);
@@ -2096,6 +2099,44 @@ obs_source_t *Studio::bound_audio_ref(const std::string &aid) const
 			if (l.src && l.src->audio_id == aid)
 				return obs_source_get_ref(l.src->src);
 	return nullptr;
+}
+
+std::string Studio::duck_name(const std::string &aid, std::string &why) const
+{
+	for (auto &g : globals_)
+		if (g.src && g.src->audio_id == aid)
+			return obs_source_get_name(g.src->src); // a public source: compressor_filter finds it by this name
+	std::string name = aid;
+	bool listed = false;
+	if (const json::Value *au = model_doc_.find("audio"))
+		if (const json::Value *ss = au->find("sources"); ss && ss->is_array())
+			for (auto &x : ss->as_array())
+				if (const json::Value *i = x.find("id"); i && i->is_string() && i->as_string() == aid) {
+					listed = true;
+					if (const json::Value *n = x.find("name"); n && n->is_string() && !n->as_string().empty())
+						name = n->as_string();
+					if (x.find("layer")) {
+						why = "Off: ducking can follow a microphone, an app or a sound file, not a layer's sound.";
+						return "";
+					}
+				}
+	if (!listed)
+		why = "Off: the sound to duck under is not in the mixer any more. Pick another one.";
+	else
+		why = "Off: " + name + " is not connected now. Ducking starts again when it is back.";
+	return "";
+}
+
+void Studio::refresh_ducks(const std::string &force_name)
+{
+	auto resolve = [this](const std::string &id, std::string &why) { return duck_name(id, why); };
+	for (auto &g : globals_)
+		if (g.src && !g.src->audio_id.empty())
+			audio_tools::refresh_duck(g.src->src, resolve, force_name);
+	for (auto &s : scenes_)
+		for (auto &l : s.layers)
+			if (l.src && !l.src->audio_id.empty())
+				audio_tools::refresh_duck(l.src->src, resolve, force_name);
 }
 
 json::Value Studio::audio_filters_model(const json::Value &doc, const std::string &aid)
@@ -2120,10 +2161,11 @@ json::Value Studio::audio_filters_model(const json::Value &doc, const std::strin
 
 	if (!src)
 		throw Error(rpc::UNAVAILABLE, "This sound is not in the mixer now, so its tools cannot change.");
-	audio_tools::apply_filters(src, f ? *f : json::Value());
+	audio_tools::apply_filters(src, f ? *f : json::Value(), [this](const std::string &id, std::string &why) { return duck_name(id, why); });
 	json::Value r = json::Value::object();
 	r.set("audio", aid);
 	r.set("filters", audio_tools::read_filters(src));
+	r.set("duck", audio_tools::duck_status(src));
 	obs_source_release(src);
 	model_doc_ = doc;
 	dirty_ = false;
@@ -2131,7 +2173,7 @@ json::Value Studio::audio_filters_model(const json::Value &doc, const std::strin
 	return r;
 }
 
-json::Value Studio::audio_measure(const std::string &aid, uint32_t skip_ms, uint32_t ms)
+json::Value Studio::audio_measure(const std::string &aid, uint32_t skip_ms, uint32_t ms, uint32_t bin_ms)
 {
 	obs_source_t *src = nullptr;
 	{
@@ -2141,8 +2183,9 @@ json::Value Studio::audio_measure(const std::string &aid, uint32_t skip_ms, uint
 	}
 	if (!src)
 		throw Error(rpc::INVALID_PARAMS, "no such audio source");
-	json::Value r = audio_tools::measure(src, skip_ms, ms); // not under the studio mutex: it blocks
+	json::Value r = audio_tools::measure(src, skip_ms, ms, bin_ms); // not under the studio mutex: it blocks
 	r.set("filters", audio_tools::read_filters(src));
+	r.set("duck", audio_tools::duck_status(src));
 	obs_source_release(src);
 	return r;
 }
@@ -2935,6 +2978,7 @@ bool Studio::recreate_global(Global &g)
 	obs_source_set_monitoring_type(n, mon);
 	obs_set_output_source(g.channel, n);
 	g.src = w;
+	refresh_ducks(name); // AU3: strips ducking under it follow the new source (the old one is parked, silent)
 	return true;
 }
 
@@ -3187,6 +3231,7 @@ json::Value Studio::mixer_list() const
 		o.set("tracks", std::move(ts));
 		o.set("cue", obs_source_get_monitoring_type(src.src) != OBS_MONITORING_TYPE_NONE);
 		o.set("playlist", audio_tools::playlist_status(src.src)); // AU1: null unless a folder playlist
+		o.set("duck", audio_tools::duck_status(src.src));         // AU3: null without a duck tool
 		// libobs holds back monitoring of a source with video until its frame is shown: CUE on such a source is late.
 		o.set("cueDelayed", (obs_source_get_output_flags(src.src) & OBS_SOURCE_VIDEO) != 0);
 		o.set("active", obs_source_active(src.src));

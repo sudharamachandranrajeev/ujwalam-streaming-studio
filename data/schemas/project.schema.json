@@ -341,7 +341,7 @@
     },
     "audioFilters": {
       "type": "object", "additionalProperties": false,
-      "$comment": "AU2: strip tools on libobs audio filters. Ranges are the filters' obs_properties limits in OBS 32.1.2 (plugins/obs-filters, checked 2026-11-18); same table as services/project/audio-filters.mjs and app/host/src/audio_filters.cpp. Order on the strip: suppress, gate, eq, gain, compressor, limiter.",
+      "$comment": "AU2: strip tools on libobs audio filters. Ranges are the filters' obs_properties limits in OBS 32.1.2 (plugins/obs-filters, checked 2026-11-18); same table as services/project/audio-filters.mjs and app/host/src/audio_filters.cpp. Order on the strip: suppress, gate, eq, gain, duck, compressor, limiter.",
       "properties": {
         "suppress": { "type": "object", "additionalProperties": false, "required": ["on"], "properties": { "on": { "type": "boolean" } } },
         "gate": { "type": "object", "additionalProperties": false, "required": ["on", "closeDb", "openDb", "attackMs", "holdMs", "releaseMs"],
@@ -362,7 +362,12 @@
             "outputGainDb": { "type": "number", "minimum": -32, "maximum": 32 } } },
         "limiter": { "type": "object", "additionalProperties": false, "required": ["on", "thresholdDb", "releaseMs"],
           "properties": { "on": { "type": "boolean" },
-            "thresholdDb": { "type": "number", "minimum": -60, "maximum": 0 }, "releaseMs": { "type": "integer", "minimum": 1, "maximum": 1000 } } }
+            "thresholdDb": { "type": "number", "minimum": -60, "maximum": 0 }, "releaseMs": { "type": "integer", "minimum": 1, "maximum": 1000 } } },
+        "duck": { "type": "object", "additionalProperties": false, "required": ["on", "source", "amountDb", "attackMs", "releaseMs"],
+          "$comment": "AU3: duck under another project sound (source = its audio source id): a compressor_filter with that sound as sidechain. amountDb 3..18 keeps the derived ratio inside 1..32.",
+          "properties": { "on": { "type": "boolean" }, "source": { "$ref": "#/$defs/id" },
+            "amountDb": { "type": "number", "minimum": 3, "maximum": 18 },
+            "attackMs": { "type": "integer", "minimum": 1, "maximum": 500 }, "releaseMs": { "type": "integer", "minimum": 1, "maximum": 1000 } } }
       }
     },
     "outputRef": {

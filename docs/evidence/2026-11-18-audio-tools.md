@@ -132,3 +132,43 @@ Suppression measurement: under CPU load (the clip agent's ffmpeg was running), a
 Between playlist files, ffmpeg_source closes one file and opens the next on the same source. The gap was not measured (UNVERIFIED); the playlist test hears both files and the loop.
 
 Runs (2026-11-18, BelowNormal, headless, one file at a time). host-audio-tools 18 pass / 0 fail / 1 skipped (file symlink, EPERM). audio-tools-routes 12/0. project-schema 148/0. studio-qml-audio-tools 4/0. studio-qml-devices-mixer 5/0. host-audio-add 4/0. Lint: 0 findings. Host and studio builds exit 0.
+## AU3 ducking: music and game sound drop while the mic talks
+
+What was built:
+
+- Tool `duck` on a strip: `{on, source, amountDb 3..18, attackMs 1..500, releaseMs 1..1000}`. It is the same table in `services/project/audio-filters.mjs` (`FILTER_RANGES`, `FILTER_REFS`), the schema (`$defs/audioFilters.duck`) and the host (`audio_tools.cpp` `tools()`). Processing order: suppress, gate, eq, gain, duck, compressor, limiter.
+- libobs: a `compressor_filter` named `ujw:tool:duck` with `sidechain_source` set to the libobs name of the other sound's source. The project stores only that sound's audio source id (`source`); the host finds the source (`Studio::duck_name`).
+- Mapping (one constant pair in JS and C++): the threshold is -30 dBFS. A talking voice's peaks (-10 dBFS reference) give a drop of `amountDb`, so `ratio = 1 / (1 - amount/20)` (12 dB gives ratio 2.5; the 18 dB maximum gives ratio 10). The compressor's peak follower is exponential, so going 20 dB takes ln(10) time constants. `attackMs` ("drops within") and `releaseMs` ("back within") are therefore divided by ln(10) for the compressor's attack and release (400 ms gives 174 ms).
+- Missing sound: compressor_filter without a sidechain compresses the strip on its own signal (compressor-filter.c `analyze_envelope`). While the sound is not in the mixer, is waiting for its device (D395), or is a layer's sound (its private source has no findable name), the filter is switched off and keeps a plain reason. `mixer.list` shows `duck {on, active, source, reason}`, and the Tools window shows the reason after a change.
+- Reconnect: `refresh_ducks()` runs after a load, after `audio_add_model` (also when an A2 waiting device is bound), after `audio_remove_model`, and after the watchdog's `recreate_global`. The recreate case forces a new lookup, because the parked old source keeps the name's weak reference alive. Only the duck filter's settings and switch change; there is no rebuild.
+- Edits: the route refuses a duck under the strip itself, under a layer's sound or under an unknown sound (`bad-duck`). The validator refuses a duck under the strip itself only; a saved id whose sound was removed later stays valid, and the host says why ducking is off.
+- Preset "Duck music under my voice" (`data/audio-tools/presets.json`, `needs: "mic"`): drops by 12 dB, within 10 ms, back within 400 ms. The Tools window fills `source` with the first microphone of the mixer, only on the user's click. The "Duck under:" buttons pick another sound.
+- `audio.testMeasure` (test hooks) gained `binMs`: peak per bin, aligned on the audio clock (`startMs`). Muted audio counts as silence.
+
+Loopback measurement (`app/host/tests/host-audio-tools.test.mjs`, AU3 tests, 2026-11-18). Music: a 1 kHz tone at -20 dBFS. Mic: a 300 Hz tone at -10 dBFS, switched on by unmuting for 1 s. Setting: 12 dB, 10 ms, 400 ms; 10 ms bins.
+
+| Value | Measured | Setting |
+|---|---|---|
+| Music level before | -20.00 dBFS | |
+| Ducked level | -31.71 dBFS | |
+| Dip | 11.71 dB | 12 dB |
+| Full dip after the dip starts | 10 ms | attack 10 ms |
+| Mic onset to the first dipped music bin | 100 ms | (see below) |
+| Back within 1.5 dB after the mic stops | 410 ms | release 400 ms (10 ms bins) |
+| Compressor as built | ratio 2.5, attack 4 ms, release 174 ms | |
+
+The 100 ms between the mic's own capture and the start of the dip is UNVERIFIED as to cause. It is either libobs's sidechain buffer (the compressor reads the mic's audio from a deque filled by an audio capture callback) or a difference in the two ffmpeg_sources' timestamps used to line the bins up. A real mic's latency on air is UNVERIFIED.
+
+Missing mic: the mic is removed from the mixer, then the music measures -20.00 dBFS (ducking is off with "Off: …", and the music is not compressed on its own signal). The mic is added back unmuted, then ducking is on again: -29.16 dBFS. The strip stays the same strip (no rebuild).
+
+Accepted small risk: after a new lookup (first apply, or the mic's source recreated) compressor_filter finds the source on its next video tick. For at most one frame the filter runs without a sidechain.
+
+Tests (2026-11-18, BelowNormal, headless, one file at a time):
+
+- host-audio-tools: 21 pass, 0 fail, 1 skipped (file symlink, EPERM). The 3 AU3 tests cover the dip timing, the missing and back reconnect, and refusal of a bad id and of 19 dB.
+- audio-tools-routes: 15/0. The 3 AU3 tests cover the sounds list without layer sounds and microphones first, the preset offered, save and send, the bad-duck refusals, and the validator refusing a duck under the strip itself.
+- studio-qml-audio-tools: 5/0. The preset click ducks under the mic and does not offer the strip itself; a sound picked plus switch plus amount are saved.
+- host-audio-add 4/0, host-audio-health 7/0, studio-qml-devices-mixer 5/0, project-schema 148/0.
+- Lint: 0 findings. Host and studio builds exit 0.
+
+Unverified (AU3): a real microphone and real speech (the -10 dBFS reference and the -30 dBFS threshold are set for typical voice peaks, not tuned on the user's mic); use on a real stream.

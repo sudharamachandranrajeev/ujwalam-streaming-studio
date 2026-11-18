@@ -485,7 +485,9 @@ QtObject {
     function setAudioTools(audio, filters, then) {
         Api.post("ui/api/audio", { op: "filters", audio: audio, filters: filters }, (ok, b, err) => {
             if (!ok) { const m = "Not changed: " + audioError(b, err); if (then) then(false, m); else say(m); return; }
-            if (then) then(true, b.saved ? "" : "Live only: not saved to the project file.");
+            // AU3: ducking that waits for its sound says why (the host's plain reason)
+            const duck = b.duck && b.duck.on && !b.duck.active ? b.duck.reason : "";
+            if (then) then(true, [duck, b.saved ? "" : "Live only: not saved to the project file."].filter(Boolean).join(" "));
         });
     }
     function removeAudio(audio, name) {

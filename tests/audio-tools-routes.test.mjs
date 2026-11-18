@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createAudioRoutes, AUDIO_PRESETS_FILE } from '../services/studio-ui/audio-routes.mjs';
 import { listAudio } from '../services/studio-ui/assets.mjs';
-import { FILTER_ORDER, FILTER_RANGES, defaultTool, filtersProblems } from '../services/project/audio-filters.mjs';
+import { FILTER_ORDER, FILTER_RANGES, FILTER_REFS, defaultTool, filtersProblems } from '../services/project/audio-filters.mjs';
 import { validateProject } from '../services/project/validate.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -139,12 +139,17 @@ test('tools: out-of-range or unknown values are refused before the host; nothing
 test('tools route: ranges, order and presets; every preset is a valid filters value', async () => {
   const { req } = setup();
   const r = await req('GET', '/ui/api/audio/tools');
-  assert.deepEqual(r.body.order, ['suppress', 'gate', 'eq', 'gain', 'compressor', 'limiter']);
+  assert.deepEqual(r.body.order, ['suppress', 'gate', 'eq', 'gain', 'duck', 'compressor', 'limiter']);
   assert.deepEqual(r.body.ranges.gain.db.slice(0, 2), [-30, 30]);
   assert.ok(r.body.presets.some((p) => p.id === 'clean-voice' && p.name === 'Clean voice'));
   const file = JSON.parse(readFileSync(AUDIO_PRESETS_FILE, 'utf8'));
   assert.ok(file.source && /^\d{4}-\d{2}-\d{2}$/.test(file.checked), 'source and checked date');
-  for (const p of r.body.presets) assert.deepEqual(filtersProblems(p.filters, p.id), [], p.id);
+  // a preset that needs a mic gets duck.source = the chosen mic in the Tools window
+  for (const p of r.body.presets) {
+    const f = structuredClone(p.filters);
+    if (p.needs === 'mic') f.duck.source = 'aud-mic';
+    assert.deepEqual(filtersProblems(f, p.id), [], p.id);
+  }
   assert.deepEqual(Object.keys(r.body.presets.find((p) => p.id === 'clean-voice').filters), ['suppress', 'gate', 'compressor', 'limiter']);
 });
 
@@ -155,7 +160,7 @@ test('schema and validator agree on the tool ranges (obs_properties limits)', ()
       assert.deepEqual([s[kind].properties[k].minimum, s[kind].properties[k].maximum], [min, max], `${kind}.${k}`);
       assert.equal(s[kind].properties[k].type, int ? 'integer' : 'number', `${kind}.${k} type`);
     }
-    assert.deepEqual(s[kind].required.sort(), ['on', ...Object.keys(keys)].sort(), kind);
+    assert.deepEqual(s[kind].required.sort(), ['on', ...(FILTER_REFS[kind] ?? []), ...Object.keys(keys)].sort(), kind);
   }
 });
 
@@ -213,4 +218,49 @@ test('review: sound files come from the media base only; the schema says exactly
     assert.ok(!validateProject(d).ok, `validator: ${why}`);
     assert.ok(!v(d), `schema: ${why}`);
   }
+});
+// ---- AU3 ducking ----
+
+test('AU3: Tools lists the sounds a strip can duck under (no layer sounds); the duck preset is offered', async () => {
+  const { req } = setup();
+  const r = await req('GET', '/ui/api/audio/tools');
+  const doc = JSON.parse(readFileSync(SAMPLE, 'utf8'));
+  const layerIds = doc.audio.sources.filter((a) => a.layer).map((a) => a.id);
+  assert.ok(r.body.sounds.length > 0);
+  for (const s of r.body.sounds) assert.ok(!layerIds.includes(s.id), `${s.id} is not a layer sound`);
+  const firstNonMic = r.body.sounds.findIndex((s) => !s.mic);
+  assert.ok(firstNonMic < 0 || r.body.sounds.slice(firstNonMic).every((s) => !s.mic), 'microphones first');
+  const p = r.body.presets.find((x) => x.id === 'duck-under-voice');
+  assert.equal(p.name, 'Duck music under my voice');
+  assert.equal(p.needs, 'mic');
+  assert.deepEqual(r.body.refs, { duck: ['source'] });
+});
+
+test('AU3: duck under another sound is saved and sent; under itself, a layer sound or an unknown id is refused', async () => {
+  const { req, saved, calls } = setup();
+  const doc = JSON.parse(readFileSync(SAMPLE, 'utf8'));
+  const other = doc.audio.sources.find((a) => a.id !== 'aud-mic' && !a.layer);
+  const layer = doc.audio.sources.find((a) => a.layer);
+  const duck = (source) => ({ duck: { on: true, source, amountDb: 12, attackMs: 10, releaseMs: 400 } });
+  assert.ok(other, 'the sample has a second sound');
+  let r = await req('POST', '/ui/api/audio', { op: 'filters', audio: other.id, filters: duck('aud-mic') });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(saved().audio.sources.find((x) => x.id === other.id).filters, duck('aud-mic'));
+  assert.ok(calls.some(([m, p]) => m === 'audio.setFilters' && p.audio === other.id));
+  for (const bad of [other.id, 'nope', ...(layer ? [layer.id] : [])]) {
+    r = await req('POST', '/ui/api/audio', { op: 'filters', audio: other.id, filters: duck(bad) });
+    assert.equal(r.status, 400, bad);
+    assert.equal(r.body.error, 'bad-duck', bad);
+  }
+  r = await req('POST', '/ui/api/audio', { op: 'filters', audio: other.id, filters: { duck: { ...duck('aud-mic').duck, amountDb: 19 } } });
+  assert.equal(r.body.error, 'bad-tools', 'amount over 18 dB');
+});
+
+test('AU3: the validator refuses a strip ducking under itself; a missing sound id stays valid (the host says why)', () => {
+  const doc = JSON.parse(readFileSync(SAMPLE, 'utf8'));
+  const s = doc.audio.sources.find((a) => a.id === 'aud-mic');
+  s.filters = { duck: { on: true, source: 'aud-mic', amountDb: 12, attackMs: 10, releaseMs: 400 } };
+  assert.ok(!validateProject(doc).ok);
+  s.filters.duck.source = 'aud-gone';
+  assert.ok(validateProject(doc).ok);
 });

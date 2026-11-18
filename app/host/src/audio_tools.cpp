@@ -63,6 +63,12 @@ const std::vector<Tool> &tools()
 		  {"releaseMs", "release_time", 0, 10000, true}}},
 		{"eq", "basic_eq_filter", {{"lowDb", "low", -20, 20, false}, {"midDb", "mid", -20, 20, false}, {"highDb", "high", -20, 20, false}}},
 		{"gain", "gain_filter", {{"db", "db", -30, 30, false}}},
+		// AU3: the user's values are kept in the filter's settings (ujw_*) and turned into the compressor's (duck_settings)
+		{"duck",
+		 "compressor_filter",
+		 {{"amountDb", "ujw_amount", 3, 18, false},
+		  {"attackMs", "ujw_attack", 1, 500, true},
+		  {"releaseMs", "ujw_release", 1, 1000, true}}},
 		{"compressor",
 		 "compressor_filter",
 		 {{"ratio", "ratio", 1, 32, false},
@@ -97,6 +103,34 @@ obs_data_t *tool_settings(const Tool &t, const json::Value &v)
 	return d;
 }
 
+// AU3 duck as compressor settings. compressor_filter: gain = (1 - 1/ratio) * (threshold - envelope), envelope = the
+// sidechain's peak follower. It starts at kDuckThresholdDb; at kDuckRefDb (a talking voice's peaks) the drop is
+// amountDb: ratio = 1 / (1 - amount / (ref - threshold)). Same constants as services/project/audio-filters.mjs.
+// The follower moves exponentially with the attack / release time as its time constant: going between the reference
+// and the threshold (20 dB, a factor of 10) takes ln(10) time constants. So the user's attackMs / releaseMs ("the drop
+// is there within", "the music is back within") are divided by ln(10) for the compressor.
+constexpr double kDuckThresholdDb = -30, kDuckRefDb = -10;
+const double kDuckSpan = std::log(std::pow(10.0, (kDuckRefDb - kDuckThresholdDb) / 20.0));
+
+// Fills the duck settings, with the sidechain found through `resolve`. Returns whether the filter may run: switched
+// on and its sound found (without a sidechain, compressor_filter would compress the strip on its own signal).
+bool duck_settings(obs_data_t *d, const std::string &source, bool on, const DuckResolve &resolve)
+{
+	const double amount = obs_data_get_double(d, "ujw_amount");
+	const double slope = std::min(amount / (kDuckRefDb - kDuckThresholdDb), 31.0 / 32.0);
+	obs_data_set_double(d, "ratio", std::clamp(1.0 / (1.0 - slope), 1.0, 32.0));
+	obs_data_set_double(d, "threshold", kDuckThresholdDb);
+	obs_data_set_double(d, "output_gain", 0);
+	obs_data_set_int(d, "attack_time", std::max<int64_t>(1, std::llround(obs_data_get_int(d, "ujw_attack") / kDuckSpan)));
+	obs_data_set_int(d, "release_time", std::max<int64_t>(1, std::llround(obs_data_get_int(d, "ujw_release") / kDuckSpan)));
+	obs_data_set_string(d, "ujw_duck_source", source.c_str());
+	obs_data_set_bool(d, "ujw_on", on);
+	std::string why;
+	const std::string name = resolve ? resolve(source, why) : std::string();
+	obs_data_set_string(d, "sidechain_source", name.empty() ? "none" : name.c_str());
+	obs_data_set_string(d, "ujw_duck_why", name.empty() ? why.c_str() : "");
+	return on && !name.empty();
+}
 } // namespace
 
 void check_filters(const json::Value &f, const std::string &what)
@@ -110,8 +144,15 @@ void check_filters(const json::Value &f, const std::string &what)
 		const std::string w = what + "." + t->kind;
 		if (!m.second.is_object())
 			throw Error(rpc::INVALID_PARAMS, w + " must be an object");
+		const bool duck = std::string(t->kind) == "duck";
+		if (duck) {
+			static const std::regex id_re("^[a-z][a-z0-9_-]{0,63}$");
+			const json::Value *s = m.second.find("source");
+			if (!s || !s->is_string() || !std::regex_match(s->as_string(), id_re))
+				throw Error(rpc::INVALID_PARAMS, w + ": bad source");
+		}
 		for (auto &k : m.second.members()) {
-			bool ok = k.first == "on";
+			bool ok = k.first == "on" || (duck && k.first == "source");
 			for (auto &p : t->params)
 				ok = ok || k.first == p.key;
 			if (!ok)
@@ -162,7 +203,7 @@ bool same_settings(obs_data_t *have, obs_data_t *want)
 }
 
 // apply_filters on the graphics thread (see there).
-void apply_now(obs_source_t *src, const json::Value &f)
+void apply_now(obs_source_t *src, const json::Value &f, const DuckResolve &resolve)
 {
 	struct Step {
 		obs_source_t *fl; // a reference
@@ -180,7 +221,9 @@ void apply_now(obs_source_t *src, const json::Value &f)
 			continue;
 		}
 		obs_data_t *d = tool_settings(t, *v);
-		bool fresh = false;
+		bool fresh = false, on = v->find("on")->as_bool();
+		if (std::string(t.kind) == "duck") // AU3: on only while its sound is there (else it would compress itself)
+			on = duck_settings(d, v->find("source")->as_string(), on, resolve);
 		if (have) {
 			obs_data_t *cur = obs_source_get_settings(have);
 			if (!same_settings(cur, d))
@@ -199,7 +242,7 @@ void apply_now(obs_source_t *src, const json::Value &f)
 			fresh = true;
 		}
 		obs_data_release(d);
-		keep.push_back({have, v->find("on")->as_bool(), fresh});
+		keep.push_back({have, on, fresh});
 	}
 	// The audio thread may run a block between any two of these calls, so every step leaves a safe chain: tools going
 	// off are switched off first to last (a boost before its limiter goes first), new tools join switched off, and
@@ -230,7 +273,7 @@ void apply_now(obs_source_t *src, const json::Value &f)
 
 } // namespace
 
-void apply_filters(obs_source_t *src, const json::Value &f)
+void apply_filters(obs_source_t *src, const json::Value &f, const DuckResolve &resolve)
 {
 	if (!src)
 		return;
@@ -240,9 +283,11 @@ void apply_filters(obs_source_t *src, const json::Value &f)
 	struct Job {
 		obs_source_t *src;
 		const json::Value *f;
-	} job{src, &f};
+		const DuckResolve *resolve;
+	} job{src, &f, &resolve};
 	obs_queue_task(
-		OBS_TASK_GRAPHICS, [](void *p) { auto *j = static_cast<Job *>(p); apply_now(j->src, *j->f); }, &job, true);
+		OBS_TASK_GRAPHICS, [](void *p) { auto *j = static_cast<Job *>(p); apply_now(j->src, *j->f, *j->resolve); }, &job,
+		true);
 }
 json::Value read_filters(obs_source_t *src)
 {
@@ -258,6 +303,14 @@ json::Value read_filters(obs_source_t *src)
 		obs_data_t *d = obs_source_get_settings(have);
 		for (auto &p : t.params)
 			o.set(p.key, p.integer ? json::Value((int64_t)obs_data_get_int(d, p.obs)) : json::Value(obs_data_get_double(d, p.obs)));
+		if (std::string(t.kind) == "duck") { // what libobs runs (for tests): the derived compressor and its sidechain
+			o.set("source", obs_data_get_string(d, "ujw_duck_source"));
+			o.set("ratio", obs_data_get_double(d, "ratio"));
+			o.set("thresholdDb", obs_data_get_double(d, "threshold"));
+			o.set("sidechain", obs_data_get_string(d, "sidechain_source"));
+			o.set("obsAttackMs", (int64_t)obs_data_get_int(d, "attack_time"));
+			o.set("obsReleaseMs", (int64_t)obs_data_get_int(d, "release_time"));
+		}
 		obs_data_release(d);
 		r.set(t.kind, std::move(o));
 		obs_source_release(have);
@@ -276,6 +329,53 @@ json::Value read_filters(obs_source_t *src)
 			order.push(nm.substr(9));
 	r.set("order", std::move(order));
 	return r;
+}
+
+void refresh_duck(obs_source_t *src, const DuckResolve &resolve, const std::string &force_name)
+{
+	if (!src)
+		return;
+	obs_source_t *fl = obs_source_get_filter_by_name(src, filter_name("duck").c_str());
+	if (!fl)
+		return;
+	obs_data_t *cur = obs_source_get_settings(fl);
+	obs_data_t *d = obs_data_create();
+	obs_data_set_double(d, "ujw_amount", obs_data_get_double(cur, "ujw_amount"));
+	obs_data_set_int(d, "ujw_attack", obs_data_get_int(cur, "ujw_attack"));
+	obs_data_set_int(d, "ujw_release", obs_data_get_int(cur, "ujw_release"));
+	const bool run = duck_settings(d, obs_data_get_string(cur, "ujw_duck_source"), obs_data_get_bool(cur, "ujw_on"), resolve);
+	const bool force = run && !force_name.empty() && force_name == obs_data_get_string(d, "sidechain_source");
+	if (!run)
+		obs_source_set_enabled(fl, false); // off before the sidechain goes
+	if (force) { // same name, new source: a name change makes compressor_filter look the name up again
+		obs_data_t *x = obs_data_create();
+		obs_data_set_string(x, "sidechain_source", "none");
+		obs_source_update(fl, x);
+		obs_data_release(x);
+	}
+	if (force || !same_settings(cur, d))
+		obs_source_update(fl, d);
+	if (run && !obs_source_enabled(fl))
+		obs_source_set_enabled(fl, true);
+	obs_data_release(d);
+	obs_data_release(cur);
+	obs_source_release(fl);
+}
+json::Value duck_status(obs_source_t *src)
+{
+	obs_source_t *fl = src ? obs_source_get_filter_by_name(src, filter_name("duck").c_str()) : nullptr;
+	if (!fl)
+		return json::Value();
+	obs_data_t *d = obs_source_get_settings(fl);
+	json::Value o = json::Value::object();
+	const bool on = obs_data_get_bool(d, "ujw_on");
+	o.set("on", on);
+	o.set("active", obs_source_enabled(fl));
+	o.set("source", obs_data_get_string(d, "ujw_duck_source"));
+	o.set("reason", !on ? std::string("Switched off.") : std::string(obs_data_get_string(d, "ujw_duck_why")));
+	obs_data_release(d);
+	obs_source_release(fl);
+	return o;
 }
 
 // ---- AU1 app sound ----
@@ -706,24 +806,34 @@ void shutdown_playlists()
 }
 // ---- test hooks: levels after the filters ----
 
-json::Value measure(obs_source_t *src, uint32_t skip_ms, uint32_t ms)
+json::Value measure(obs_source_t *src, uint32_t skip_ms, uint32_t ms, uint32_t bin_ms)
 {
 	struct Acc {
 		std::mutex m;
 		bool on = false;
 		double peak = 0, sum = 0;
-		uint64_t n = 0;
+		uint64_t n = 0, start_ns = 0, bin_frames = 0;
+		std::vector<double> bins; // peak per bin_ms, from the first counted frame
 	} acc;
-	auto cb = [](void *p, obs_source_t *, const struct audio_data *a, bool) {
+	acc.bin_frames = (uint64_t)audio_output_get_sample_rate(obs_get_audio()) * bin_ms / 1000;
+	auto cb = [](void *p, obs_source_t *, const struct audio_data *a, bool muted) {
 		auto *x = static_cast<Acc *>(p);
 		std::lock_guard<std::mutex> lk(x->m);
 		if (!x->on || !a->data[0])
 			return;
+		if (!x->n)
+			x->start_ns = a->timestamp; // the audio clock: the same for every source, so two measures line up
 		const float *f = reinterpret_cast<const float *>(a->data[0]);
 		for (uint32_t i = 0; i < a->frames; i++) {
-			const double v = std::fabs((double)f[i]);
+			const double v = muted ? 0.0 : std::fabs((double)f[i]); // muted audio is heard (and ducked on) as silence
 			x->peak = std::max(x->peak, v);
 			x->sum += v * v;
+			if (x->bin_frames) {
+				const size_t b = (size_t)((x->n + i) / x->bin_frames);
+				if (b >= x->bins.size())
+					x->bins.resize(b + 1, 0.0);
+				x->bins[b] = std::max(x->bins[b], v);
+			}
 		}
 		x->n += a->frames;
 	};
@@ -741,7 +851,13 @@ json::Value measure(obs_source_t *src, uint32_t skip_ms, uint32_t ms)
 	r.set("frames", (int64_t)acc.n);
 	r.set("peakDb", db(acc.peak));
 	r.set("rmsDb", acc.n ? db(std::sqrt(acc.sum / (double)acc.n)) : -200.0);
+	if (bin_ms) {
+		r.set("startMs", (double)acc.start_ns / 1e6);
+		json::Value bins = json::Value::array();
+		for (double v : acc.bins)
+			bins.push(std::round(db(v) * 100) / 100);
+		r.set("bins", std::move(bins));
+	}
 	return r;
 }
-
 } // namespace audio_tools

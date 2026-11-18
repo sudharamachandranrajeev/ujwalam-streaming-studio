@@ -210,6 +210,13 @@ export function setAudioFilters(doc, { audio, filters } = {}) {
   const i = (doc.audio?.sources ?? []).findIndex((a) => a.id === audio);
   if (i < 0) return { error: 'unknown-sound' };
   if (filters !== null && filtersProblems(filters, 'filters').length) return { error: 'bad-tools', errors: filtersProblems(filters, 'filters') };
+  // AU3: ducking follows another sound of the mixer that is not a layer's sound (libobs finds a sidechain by name;
+  // layer sources are private and have none).
+  const duck = filters?.duck;
+  if (duck) {
+    const under = doc.audio.sources.find((a) => a.id === duck.source);
+    if (!under || under.id === audio || under.layer) return { error: 'bad-duck' };
+  }
   const project = structuredClone(doc);
   const src = project.audio.sources[i];
   if (filters === null || Object.keys(filters).length === 0) delete src.filters;

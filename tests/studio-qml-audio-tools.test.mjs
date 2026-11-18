@@ -62,6 +62,9 @@ describe('QML studio audio tools (headless probe)', { skip }, () => {
     const doc = createProject({ name: 'T', fps: 30 });
     doc.devices.push({ id: 'dev-mic', kind: 'microphone', name: 'Mic', match: { name: 'Mic' } });
     doc.audio.sources.push({ id: 'aud-game', name: 'Game', device: 'dev-mic', volumeDb: 0, muted: false, monitoring: 'off', tracks: ['track1'] });
+    // AU3: a second microphone sound to duck under
+    doc.devices.push({ id: 'dev-voice', kind: 'microphone', name: 'Voice', match: { name: 'Voice' } });
+    doc.audio.sources.push({ id: 'aud-voice', name: 'Voice', device: 'dev-voice', volumeDb: 0, muted: false, monitoring: 'off', tracks: ['track1'] });
     saveProject(file, doc);
     const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: key, dataDir, flags, authority: null, limits: { statusPollMs: 50 }, log: () => {},
       assetsDir: media, projectSync: createProjectSync({ file, delayMs: 5 }) });
@@ -84,7 +87,7 @@ describe('QML studio audio tools (headless probe)', { skip }, () => {
     const t = r.s.audioTools;
     assert.equal(t.open, true);
     assert.equal(t.audio, 'aud-game');
-    assert.deepEqual(t.tools, ['Noise suppression', 'Noise gate', 'Tone (bass, middle, treble)', 'Gain', 'Compressor', 'Limiter']);
+    assert.deepEqual(t.tools, ['Noise suppression', 'Noise gate', 'Tone (bass, middle, treble)', 'Gain', 'Duck under another sound', 'Compressor', 'Limiter']);
     assert.ok(t.presets.includes('Clean voice'));
     const f = r.saved.audio.sources.find((x) => x.id === 'aud-game').filters;
     assert.deepEqual(Object.keys(f).sort(), ['compressor', 'gain', 'gate', 'limiter', 'suppress']);
@@ -101,6 +104,21 @@ describe('QML studio audio tools (headless probe)', { skip }, () => {
     const g = r.saved.audio.sources.find((x) => x.id === 'aud-game').filters.gate;
     assert.deepEqual([g.closeDb, g.openDb], [-10, -10]);
   });
+  test('AU3: Duck music under my voice on a click ducks under the microphone; another sound can be picked', async () => {
+    const r = await probe(['mixer-tools:scene-1/game', 'tools-preset:duck-under-voice'], { ms: 8000 });
+    assert.deepEqual(r.done, [true, true], JSON.stringify(r.p.actions));
+    assert.deepEqual(r.s.audioTools.sounds, ['aud-voice'], 'the strip itself is not offered');
+    assert.ok(r.s.audioTools.presets.includes('Duck music under my voice'));
+    const f = r.saved.audio.sources.find((x) => x.id === 'aud-game').filters;
+    assert.deepEqual(f, { duck: { on: true, amountDb: 12, attackMs: 10, releaseMs: 400, source: 'aud-voice' } });
+    const sent = r.calls.filter(([m]) => m === 'audio.setFilters');
+    assert.equal(sent.length, 1);
+    const r2 = await probe(['mixer-tools:scene-1/game', 'tools-duck:aud-voice', 'tools-toggle:duck', 'tools-set:duck:amountDb:6'], { ms: 9000 });
+    assert.deepEqual(r2.done, [true, true, true, true], JSON.stringify(r2.p.actions));
+    const d = r2.saved.audio.sources.find((x) => x.id === 'aud-game').filters.duck;
+    assert.deepEqual([d.on, d.source, d.amountDb], [true, 'aud-voice', 6]);
+  });
+
   test('Tools are offered, never applied on their own: opening the window changes nothing', async () => {
     const r = await probe(['mixer-tools:scene-1/game'], { ms: 6000 });
     assert.equal(r.s.audioTools.open, true);

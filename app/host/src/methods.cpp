@@ -726,11 +726,11 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 	});
 	// audio.testMeasure {audio, skipMs, ms}: peak and RMS after the filters of a project audio source. --test-hooks only.
 	add("audio.testMeasure", [&a](const json::Value &p) {
-		Params q(p, {"audio", "skipMs", "ms"});
+		Params q(p, {"audio", "skipMs", "ms", "binMs"});
 		if (!a.test_hooks)
 			throw Error(rpc::FORBIDDEN, "audio.testMeasure needs a host started with --test-hooks");
 		return a.studio->audio_measure(q.str("audio", 64), (uint32_t)q.int_or("skipMs", 300, 0, 10000),
-					       (uint32_t)q.int_or("ms", 1000, 50, 10000));
+					       (uint32_t)q.int_or("ms", 1000, 50, 10000), (uint32_t)q.int_or("binMs", 0, 0, 1000));
 	});
 	add("layers.remove", [&a](const json::Value &p) {
 		Params q(p, {"scene", "canvas", "layer"});

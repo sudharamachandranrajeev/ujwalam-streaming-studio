@@ -132,7 +132,7 @@ public:
 	// source it is bound to (audio_tools::apply_filters: never a rebuild). Returns {audio, filters (as libobs holds them)}.
 	json::Value audio_filters_model(const json::Value &doc, const std::string &audio);
 	// --test-hooks: audio_tools::measure on the source bound to project audio source `audio` (blocks for skip+ms).
-	json::Value audio_measure(const std::string &audio, uint32_t skip_ms, uint32_t ms);
+	json::Value audio_measure(const std::string &audio, uint32_t skip_ms, uint32_t ms, uint32_t bin_ms = 0);
 	json::Value layer_set_visible(const std::string &scene, const std::string &canvas, const std::string &layer, bool visible);
 	// Effect editor (D260): replaces a layer's effects on every canvas (project v1 layers only).
 	json::Value layer_set_effects(const std::string &scene, const std::string &layer, const json::Value &effects);
@@ -366,6 +366,10 @@ private:
 	std::vector<Scene> scenes_;
 	std::vector<Global> globals_;
 	obs_source_t *bound_audio_ref(const std::string &aid) const; // AU2: a new reference or null
+	// AU3 ducking: the libobs name of the mixer source of project sound `aid` (a sidechain), or "" and a plain reason.
+	std::string duck_name(const std::string &aid, std::string &why) const;
+	// AU3: every strip's duck tool finds its sound again (after the mixer changed; force_name: replaced by recreate).
+	void refresh_ducks(const std::string &force_name = "");
 	std::string format_; // "project-v1" or "ujwalam-host-test"
 	json::Value model_doc_;
 	LoadOptions last_opts_; // of the last project v1 load (layer_add_model builds with them)

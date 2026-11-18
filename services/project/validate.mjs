@@ -506,6 +506,9 @@ export function validateProject(doc) {
             }
           }
           if ('filters' in s) for (const e of filtersProblems(s.filters, `${p}.filters`)) err(e.path, e.message);
+          // AU3: a strip never ducks under itself. Another id that is not (or no longer) in the project is allowed: the
+          // host keeps ducking off with a reason until that sound is there.
+          if (isObj(s.filters?.duck) && s.filters.duck.source === s.id) err(`${p}.filters.duck.source`, 'must be another sound');
           if ('volumeDb' in s) num(s.volumeDb, `${p}.volumeDb`, -100, 12);
           if ('muted' in s && typeof s.muted !== 'boolean') err(`${p}.muted`, 'must be a boolean');
           if ('monitoring' in s && !MONITORING.includes(s.monitoring)) err(`${p}.monitoring`, `must be one of ${MONITORING.join(', ')}`);

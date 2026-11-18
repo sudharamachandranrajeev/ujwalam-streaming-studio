@@ -16,7 +16,7 @@
 //   POST /ui/api/audio {op: 'remove', audio}         the project audio source leaves the mixer -> { ok, removed, saved }
 //   POST /ui/api/audio {op: 'filters', audio, filters}  AU2 strip tools (null = none), applied in place on air (the host
 //                                       never rebuilds the source) -> { ok, audio, filters, saved }
-//   GET  /ui/api/audio/tools            { ranges, order, presets, filters: {audio id: filters} } for the Tools window
+//   GET  /ui/api/audio/tools            { ranges, order, refs, presets, filters: {audio id: filters}, sounds } for the Tools window
 //                                       (presets: data/audio-tools/presets.json)
 // AU1 choices also list apps (host audio.apps: exe names only, never window titles) and sound files / folders under
 // the media base (listAudio; rel paths only, never an absolute path).
@@ -27,7 +27,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadProject, saveProject } from '../project/store.mjs';
 import { addAudioSource, audioChoices, removeAudioSource, sameDeviceRows, setAudioFilters, streamTracks } from '../project/audio-sources.mjs';
-import { FILTER_ORDER, FILTER_RANGES } from '../project/audio-filters.mjs';
+import { FILTER_ORDER, FILTER_RANGES, FILTER_REFS } from '../project/audio-filters.mjs';
 import { listAudio } from './assets.mjs';
 
 export { sameDeviceRows };
@@ -56,6 +56,7 @@ export const AUDIO_ERROR_TEXT = Object.freeze({
   'ambiguous-app': 'Two different programs with this name are running, so Ujwalam cannot tell which one to capture. Close one, then try again.',
   'unknown-file': 'That sound file is not in your media folder any more. Open Add audio again.',
   'bad-tools': 'A tool setting is out of its range.',
+  'bad-duck': 'Pick another sound of the mixer (a microphone, an app or a sound file) to duck under.',
   'in-stream': 'That sound is in the stream already.',
   'same-device': 'That device\'s sound is in the mix already through another channel; adding it twice would double it in the stream.',
   'bad-params': 'That request was not understood.',
@@ -122,7 +123,12 @@ export function createAudioRoutes(opts) {
     const r = readDoc();
     const filters = {};
     for (const a of r.doc?.audio?.sources ?? []) if (a.filters) filters[a.id] = a.filters;
-    return json(res, 200, { order: FILTER_ORDER, ranges: FILTER_RANGES, presets, filters });
+    // AU3: the sounds a strip can duck under (not a layer's sound), microphones first: [{id, name, mic}]
+    const devKind = new Map((r.doc?.devices ?? []).map((d) => [d.id, d.kind]));
+    const sounds = (r.doc?.audio?.sources ?? []).filter((a) => !a.layer)
+      .map((a) => ({ id: a.id, name: a.name || a.id, mic: devKind.get(a.device) === 'microphone' }))
+      .sort((x, y) => Number(y.mic) - Number(x.mic));
+    return json(res, 200, { order: FILTER_ORDER, ranges: FILTER_RANGES, refs: FILTER_REFS, presets, filters, sounds });
   }
 
   // Host first, then the file: a refusal there saves nothing. A failed save undoes the host change (undo: the opposite
@@ -168,10 +174,10 @@ export function createAudioRoutes(opts) {
 
     if (body.op === 'filters') {
       const x = setAudioFilters(doc, { audio: body.audio, filters: body.filters });
-      if (x.error) return refuse(res, x.error, x.error === 'bad-tools' ? 400 : 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
+      if (x.error) return refuse(res, x.error, x.error === 'bad-tools' || x.error === 'bad-duck' ? 400 : 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
       return commit(res, file, x.project, () => host.call('audio.setFilters', { project: x.project, audio: body.audio }),
         () => host.call('audio.setFilters', { project: doc, audio: body.audio }),
-        (out) => ({ op: 'filters', audio: body.audio, filters: x.audio.filters ?? null, live: out?.filters ?? null }), '[studio-ui] mixer: tools changed');
+        (out) => ({ op: 'filters', audio: body.audio, filters: x.audio.filters ?? null, live: out?.filters ?? null, duck: out?.duck ?? null }), '[studio-ui] mixer: tools changed');
     }
 
     if (body.op === 'stream') {

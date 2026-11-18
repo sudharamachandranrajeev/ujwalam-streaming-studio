@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // A mixer strip's Tools (AU2, plan 2026-11-18-audio-mixer-music): noise suppression, noise gate, tone (3-band EQ), gain,
-// compressor and limiter, the libobs audio filters on that sound. Each tool is a switch that says what it does, with its
+// duck (AU3: drops this sound while another one, the mic, is heard), compressor and limiter, the libobs audio filters on that sound. Each tool is a switch that says what it does, with its
 // sliders always shown (greyed while off, so nothing moves). Every change is sent at once and heard at once, also on
 // air; the host changes the filter in place and never restarts the sound. Presets ("Clean voice", "Loud room") come
 // from data/audio-tools/presets.json and are offered here, never applied on their own. Ranges are the filters' own
@@ -17,6 +17,7 @@ Dialog {
     property string name: ""
     property var ranges: ({})
     property var presets: []
+    property var sounds: []      // AU3: sounds this strip can duck under [{id, name, mic}], microphones first
     property var filters: ({})   // the strip's tools as saved: { kind: { on, ...values } }
     property string message: ""
     property bool busy: false
@@ -39,6 +40,9 @@ Dialog {
           params: [{ key: "lowDb", label: "Bass", unit: " dB" }, { key: "midDb", label: "Middle", unit: " dB" }, { key: "highDb", label: "Treble", unit: " dB" }] },
         { kind: "gain", title: "Gain", what: "Makes the sound louder or quieter before the tools below.",
           params: [{ key: "db", label: "Gain", unit: " dB" }] },
+        { kind: "duck", title: "Duck under another sound", what: "Drops this sound (music, game) while the chosen sound, your microphone, is heard.",
+          params: [{ key: "amountDb", label: "Drops by", unit: " dB" }, { key: "attackMs", label: "Drops within", unit: " ms" },
+                   { key: "releaseMs", label: "Back within", unit: " ms" }] },
         { kind: "compressor", title: "Compressor", what: "Evens out loud and quiet parts: what goes above the threshold is turned down.",
           params: [{ key: "thresholdDb", label: "Threshold", unit: " dB" }, { key: "ratio", label: "Ratio", unit: " : 1" },
                    { key: "attackMs", label: "Reacts in", unit: " ms" }, { key: "releaseMs", label: "Lets go over", unit: " ms" },
@@ -53,6 +57,7 @@ Dialog {
         name = label;
         ranges = info.ranges || {};
         presets = info.presets || [];
+        sounds = (info.sounds || []).filter(s => s.id !== audioId);
         filters = (info.filters && info.filters[audioId]) ? JSON.parse(JSON.stringify(info.filters[audioId])) : {};
         message = "";
         busy = false;
@@ -64,6 +69,7 @@ Dialog {
         if (filters[kind]) return filters[kind];
         const t = { on: false };
         for (const k in (ranges[kind] || {})) t[k] = ranges[kind][k][4];
+        if (kind === "duck") t.source = sounds.length ? sounds[0].id : "";
         return t;
     }
     function send(next, done) {
@@ -87,12 +93,24 @@ Dialog {
         if (kind === "gate" && g.closeDb > g.openDb) {
             if ("closeDb" in patch) g.openDb = g.closeDb; else g.closeDb = g.openDb;
         }
+        if (kind === "duck" && !g.source) { message = "Add a microphone (or another sound) to the mixer first: ducking follows it."; return; }
         send(next);
     }
-    function usePreset(p) { send(JSON.parse(JSON.stringify(p.filters))) }
+    function soundName(id) { const s = sounds.find(x => x.id === id); return s ? s.name : "a sound that is not in the mixer" }
+    // A preset that needs a mic (Duck music under my voice) takes the first microphone of the mixer.
+    function usePreset(p) {
+        const f = JSON.parse(JSON.stringify(p.filters));
+        if (p.needs === "mic") {
+            const mic = sounds.find(s => s.mic) || sounds[0];
+            if (!mic) { message = "Add your microphone to the mixer first: this preset ducks under it."; return; }
+            if (f.duck) f.duck.source = mic.id;
+        }
+        send(f);
+    }
     function clearAll() { send({}) }
 
-    // Probe (tests): tools-toggle:<kind>, tools-set:<kind>:<key>:<value>, tools-preset:<id>, tools-clear.
+    // Probe (tests): tools-toggle:<kind>, tools-set:<kind>:<key>:<value>, tools-preset:<id>, tools-clear,
+    // tools-duck:<audio id> (the sound to duck under).
     function probeAction(a) {
         if (!opened) return false;
         if (a.startsWith("tools-toggle:")) { const k = a.slice(13); if (!spec.some(s => s.kind === k)) return false; setTool(k, { on: !toolOf(k).on }); return true }
@@ -104,9 +122,10 @@ Dialog {
         }
         if (a.startsWith("tools-preset:")) { const p = presets.find(x => x.id === a.slice(13)); if (!p) return false; usePreset(p); return true }
         if (a === "tools-clear") { clearAll(); return true }
+        if (a.startsWith("tools-duck:")) { const id = a.slice(11); if (!sounds.some(s => s.id === id)) return false; setTool("duck", { source: id }); return true }
         return false;
     }
-    function probe() { return { open: opened, audio: audio, name: name, filters: filters, message: message, presets: presets.map(p => p.name), tools: spec.map(s => s.title) } }
+    function probe() { return { open: opened, audio: audio, name: name, filters: filters, message: message, presets: presets.map(p => p.name), tools: spec.map(s => s.title), sounds: sounds.map(s => s.id) } }
 
     background: Rectangle {
         color: Theme.c.panel
@@ -198,6 +217,31 @@ Dialog {
                                 checked: card.tool.on === true
                                 enabled: !dlg.busy
                                 onClicked: dlg.setTool(card.modelData.kind, { on: checked })
+                            }
+                            // AU3: which sound this one ducks under (one button per sound; the chosen one is marked)
+                            Flow {
+                                visible: card.modelData.kind === "duck"
+                                width: inner.width
+                                spacing: Theme.sp.s
+                                Text {
+                                    text: dlg.sounds.length ? "Duck under:" : "Duck under: add your microphone to the mixer first."
+                                    color: Theme.c.muted
+                                    font.family: Theme.family
+                                    font.pixelSize: Theme.ty.small
+                                    height: 32
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                Repeater {
+                                    model: card.modelData.kind === "duck" ? dlg.sounds : []
+                                    delegate: UButton {
+                                        required property var modelData
+                                        objectName: "toolDuckUnder:" + modelData.id
+                                        text: (card.tool.source === modelData.id ? "\u2713 " : "") + modelData.name
+                                        tip: "Duck this sound while " + modelData.name + " is heard"
+                                        enabled: !dlg.busy
+                                        onClicked: dlg.setTool("duck", { source: modelData.id })
+                                    }
+                                }
                             }
                             Repeater {
                                 model: card.modelData.params

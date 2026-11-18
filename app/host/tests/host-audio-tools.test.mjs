@@ -379,3 +379,79 @@ test('a playlist folder that is a junction out of the media folder is refused (n
   const u = (p.unavailable ?? []).find((x) => x.audio === 's-j');
   assert.equal(u?.code, 'unavailable', JSON.stringify(p.unavailable));
 });
+// ---- AU3 ducking ----
+
+const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+
+test('AU3 duck: music dips by about the amount while the mic talks, within attack, and comes back within release', async () => {
+  wav('duck-music.wav', sine(1000, -20));
+  wav('duck-mic.wav', sine(300, -10));
+  const d = project();
+  d.audio.sources = [
+    { id: 's-music', name: 'Music', playback: { file: { base: 'media', rel: 'duck-music.wav' }, loop: true }, volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] },
+    { id: 's-mic', name: 'Mic', playback: { file: { base: 'media', rel: 'duck-mic.wav' }, loop: true }, volumeDb: 0, muted: true, monitoring: 'off', tracks: ['t1'] },
+  ];
+  await loadIntoHost(c, d, { bases: { media } });
+  doc = d;
+  const duck = { on: true, source: 's-mic', amountDb: 12, attackMs: 10, releaseMs: 400 };
+  const r = await setFilters('s-music', { duck });
+  assert.equal(r.duck.active, true, JSON.stringify(r.duck));
+  assert.equal(r.filters.duck.sidechain, 'ujw:audio:s-mic');
+  await sleep(500);
+  const BIN = 10;
+  const mus = c.call('audio.testMeasure', { audio: 's-music', skipMs: 0, ms: 3000, binMs: BIN });
+  const mic = c.call('audio.testMeasure', { audio: 's-mic', skipMs: 0, ms: 3000, binMs: BIN });
+  await sleep(800);
+  await c.call('mixer.setMute', { id: 'audio:s-mic', muted: false });
+  await sleep(1000);
+  await c.call('mixer.setMute', { id: 'audio:s-mic', muted: true });
+  const [m, k] = await Promise.all([mus, mic]);
+  const off = Math.round((k.startMs - m.startMs) / BIN); // mic bin i = music bin i + off
+  const on = k.bins.findIndex((v) => v > -30) + off;
+  const endI = k.bins.length - 1 - [...k.bins].reverse().findIndex((v) => v > -30);
+  const end = endI + 1 + off;
+  const base = median(m.bins.slice(5, on - 2));
+  const dipped = median(m.bins.slice(on + 20, end - 5));
+  const dip = base - dipped;
+  // the mic's audio reaches the music's compressor through libobs's sidechain buffer, a little later than its own
+  // capture: that delay is reported (latencyMs); the attack is timed from the first dipped bin to the full dip
+  const startBins = m.bins.slice(on).findIndex((v) => v <= base - 1);
+  const attackBins = m.bins.slice(on + startBins).findIndex((v) => v <= base - 0.9 * dip);
+  const backBins = m.bins.slice(end).findIndex((v) => v >= base - 1.5);
+  RESULTS.duck = { setting: duck, baseDb: base, dippedDb: dipped, dipDb: dip, latencyMs: startBins * BIN, attackMs: attackBins * BIN, recoveryMs: backBins * BIN,
+    obsAttackMs: r.filters.duck.obsAttackMs, obsReleaseMs: r.filters.duck.obsReleaseMs, ratio: r.filters.duck.ratio };
+  assert.ok(Math.abs(dip - 12) < 2, `dip ${dip.toFixed(2)} dB, set 12`);
+  assert.ok(startBins >= 0 && startBins * BIN <= 150, `the dip starts ${startBins * BIN} ms after the mic (sidechain buffer)`);
+  assert.ok(attackBins >= 0 && attackBins * BIN <= duck.attackMs + 50, `full dip in ${attackBins * BIN} ms (attack ${duck.attackMs} ms; 10 ms bins, 21 ms blocks)`);
+  assert.ok(backBins >= 0 && backBins * BIN <= duck.releaseMs + 50, `back within 1.5 dB in ${backBins * BIN} ms (release ${duck.releaseMs} ms)`);
+});
+
+test('AU3 duck: off with a plain reason while the mic is missing; on again when it is back; no rebuild', async () => {
+  const mic = doc.audio.sources.find((x) => x.id === 's-mic');
+  doc.audio.sources = doc.audio.sources.filter((x) => x.id !== 's-mic');
+  await c.call('audio.removeFromProject', { project: doc, audio: 's-mic' });
+  let row1 = await row('s-music');
+  assert.equal(row1.duck.active, false);
+  assert.match(row1.duck.reason, /^Off: /);
+  // a sound that is gone does not compress the music on its own signal (-20 dBFS tone stays at -20)
+  const m = await measure('s-music');
+  assert.ok(Math.abs(m.peakDb - -20) < 0.6, `music at ${m.peakDb.toFixed(2)} while the mic is missing`);
+  doc.audio.sources.push({ ...mic, muted: false });
+  await c.call('audio.addFromProject', { project: doc, audio: 's-mic' });
+  row1 = await row('s-music');
+  assert.equal(row1.duck.active, true, JSON.stringify(row1.duck));
+  await sleep(500);
+  const m2 = await measure('s-music');
+  RESULTS.duckReconnect = { missingPeak: m.peakDb, backPeak: m2.peakDb, reason: (await row('s-music')).duck.reason };
+  assert.ok(m2.peakDb < -28, `ducking again after the mic came back (${m2.peakDb.toFixed(2)} dBFS)`);
+  assert.equal((await c.call('mixer.list', {})).sources.filter((x) => x.id === 'audio:s-music').length, 1, 'same strip');
+});
+
+test('AU3 duck: a strip never ducks under itself; the host refuses a bad source id', async () => {
+  const s = doc.audio.sources.find((x) => x.id === 's-music');
+  s.filters = { duck: { on: true, source: 'Bad Id', amountDb: 12, attackMs: 10, releaseMs: 400 } };
+  await assert.rejects(c.call('audio.setFilters', { project: doc, audio: 's-music' }), (e) => e.code === -32602);
+  s.filters = { duck: { on: true, source: 's-mic', amountDb: 19, attackMs: 10, releaseMs: 400 } };
+  await assert.rejects(c.call('audio.setFilters', { project: doc, audio: 's-music' }), (e) => e.code === -32602);
+  delete s.filters;
+});

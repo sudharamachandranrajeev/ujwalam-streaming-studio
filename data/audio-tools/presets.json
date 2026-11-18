@@ -1,5 +1,5 @@
 {
-  "$comment": "Mixer strip tool presets (AU2, plan 2026-11-18-audio-mixer-music). Data, not code: each preset is a full `filters` value for a project audio source (services/project/audio-filters.mjs ranges; validated by tests/audio-tools-routes.test.mjs). Offered in the Tools window, never applied on their own. Values are starting points for a voice mic, chosen from the libobs filter defaults and common streaming practice; not tuned on the user's mic yet (UNVERIFIED on a real stream).",
+  "$comment": "Mixer strip tool presets (AU2 and AU3, plan 2026-11-18-audio-mixer-music). Data, not code: each preset is a full `filters` value (a preset with needs: mic gets duck.source = the microphone the user picks in the Tools window) for a project audio source (services/project/audio-filters.mjs ranges; validated by tests/audio-tools-routes.test.mjs). Offered in the Tools window, never applied on their own. Values are starting points for a voice mic, chosen from the libobs filter defaults and common streaming practice; not tuned on the user's mic yet (UNVERIFIED on a real stream).",
   "source": "Ujwalam AU2 (2026-11-18): libobs obs-filters 32.1.2 defaults (noise_gate_filter -26/-32 dB, compressor_filter 10:1 -18 dB 6/60 ms, limiter_filter -6 dB 60 ms) adjusted for a spoken voice",
   "checked": "2026-11-18",
   "presets": [
@@ -24,6 +24,15 @@
         "eq": { "on": true, "lowDb": -6, "midDb": 0, "highDb": 1 },
         "compressor": { "on": true, "ratio": 4, "thresholdDb": -22, "attackMs": 4, "releaseMs": 80, "outputGainDb": 4 },
         "limiter": { "on": true, "thresholdDb": -3, "releaseMs": 60 }
+      }
+    },
+    {
+      "id": "duck-under-voice",
+      "name": "Duck music under my voice",
+      "text": "For music or game sound: it drops about 12 dB while you talk into your microphone and comes back about half a second after you stop.",
+      "needs": "mic",
+      "filters": {
+        "duck": { "on": true, "amountDb": 12, "attackMs": 10, "releaseMs": 400 }
       }
     }
   ]
