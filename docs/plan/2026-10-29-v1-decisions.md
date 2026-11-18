@@ -2107,3 +2107,23 @@ Growth plan ED2. Decided:
   states which reader was used.
 - **Evidence.** `docs/evidence/2026-11-18-transitions-ui-and-builder-ai.md`.
 - **UNVERIFIED.** A transition change mid-stream on a real stream; the `/v1/models` shape of the user's LM Studio.
+
+## D395 — Late devices, waiting mixer strips, Try again, capture-card sound pairing (user bug reports, 2026-11-18)
+
+- **Decision.** Merged from `fix/devices-mixer` (`732c98d`). A device missing at load is never dropped: its layer is a
+  placeholder that connects by itself when the device appears (slow retry), and its sound is a waiting mixer strip
+  with a plain message. "Try again" (`devices.rescan`) restarts the connect attempts. Preset capture placeholders are
+  rebound to the user's devices at start and on Connect.
+- **Mixer.** Strips come from the host's `mixer.list` plus the waiting rows, never doubled. Meters read
+  `mixer.levels` (never waits) with peak hold. Volume goes up to +12 dB.
+- **Connect.** It saves on a fresh read of the project (`projectSync.update`), undoes the host change when the save
+  fails (`not-saved`), and a refresh asked for during a refresh runs once more.
+- **Capture-card sound.** A card's "-Video" / "-Audio" pair is merged into one sound only when the device list holds
+  exactly one of each for that product. Otherwise the sound is added with a warning.
+- **Monitoring output.** It is switched only while no sound has CUE on. Codex round 2 (2 P1) found this still unsafe
+  against libobs deferred source teardown and the loopback dedup reader. The fix is pending on a new branch; the
+  proposal is to switch only where no audio sources exist.
+- **Evidence.** `docs/evidence/2026-11-18-devices-and-mixer-fixes.md`. host-devices-late 6/6, host-api 16/16,
+  studio-devices-mixer 14/14.
+- **UNVERIFIED.** The runtime check of the monitoring gate; a real late-plugged capture card and microphone on the
+  user's laptop.
