@@ -7,7 +7,8 @@
 // without it. No device is opened (--test-hooks without --allow-devices). Headless. Needs the built host.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { launchHost, stopHost } from '../lib/launch.mjs';
 import { loadIntoHost, planInHost } from '../lib/project.mjs';
@@ -71,6 +72,10 @@ async function setFilters(id, filters) {
   return c.call('audio.setFilters', { project: doc, audio: id });
 }
 const measure = (id, ms = 1000) => c.call('audio.testMeasure', { audio: id, skipMs: 400, ms });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The host process's thread count (Windows; no console window).
+const threads = () => Number(execFileSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${h.child.pid}).Threads.Count`], { windowsHide: true }).toString().trim());
+const row = async (id) => (await c.call('mixer.list', {})).sources.find((x) => x.id === `audio:${id}`);
 
 before(async () => {
   mkdirSync(OUT, { recursive: true });
@@ -171,7 +176,9 @@ test('the 3-band EQ changes the energy of its band only', async () => {
 test('noise suppression (RNNoise) lowers stationary noise', async () => {
   const base = await measure('s-noise', 2000);
   await setFilters('s-noise', { suppress: { on: true } });
-  const sup = await measure('s-noise', 2000);
+  // RNNoise adapts to the noise over its first second or so: measured after that (one run under CPU load measured
+  // 7.6 dB with a 0.4 s wait, 15.2 dB alone; 2026-11-18 review rerun)
+  const sup = await c.call('audio.testMeasure', { audio: 's-noise', skipMs: 2000, ms: 2000 });
   RESULTS.suppress = { baseRms: base.rmsDb, suppressedRms: sup.rmsDb, reductionDb: base.rmsDb - sup.rmsDb };
   assert.ok(base.rmsDb - sup.rmsDb > 10, `stationary noise down by ${(base.rmsDb - sup.rmsDb).toFixed(2)} dB`);
 });
@@ -257,4 +264,118 @@ test('saved tools come back on a project load (a restart builds the same strip)'
   assert.equal(m.filters.gate.on, false, 'a tool saved off stays off');
   assert.equal(m.filters.gate.closeDb, -50);
   assert.ok(m.peakDb <= -23.5, `the saved limiter works after the load (${m.peakDb.toFixed(2)} dBFS)`);
+});
+// ---- review fixes (Codex review of AU1/AU2, 2026-11-18) ----
+
+test('tool edits during scene switches: the list changes run on the graphics thread; the host keeps running', async () => {
+  // libobs walks a source's filters without its filter mutex in the video tick when the source is shown or hidden;
+  // a layer's sound is shown and hidden by every scene switch. Edits and switches are sent together, 40 rounds.
+  wav('layer-tone.wav', sine(1000, -20));
+  const d = project();
+  d.scenes = [
+    { id: 'main', name: 'Main', layers: [{ id: 'tl', type: 'media', name: 'Tone', source: { file: { base: 'media', rel: 'layer-tone.wav' }, loop: true },
+      placements: { h: { visible: true, x: 0, y: 0, width: 64, height: 36 } } }] },
+    { id: 'other', name: 'Other', layers: [] },
+  ];
+  d.audio.sources = [{ id: 's-layer', name: 'layer', layer: 'tl', volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] }];
+  await loadIntoHost(c, d, { bases: { media } });
+  doc = d;
+  const full = {
+    gate: { on: true, closeDb: -60, openDb: -55, attackMs: 25, holdMs: 200, releaseMs: 150 }, gain: { on: true, db: 0 },
+    compressor: { on: true, ratio: 2, thresholdDb: -30, attackMs: 6, releaseMs: 60, outputGainDb: 0 }, limiter: { on: true, thresholdDb: -6, releaseMs: 60 },
+  };
+  for (let i = 0; i < 40; i++)
+    await Promise.all([c.call('scenes.activate', { scene: i % 2 ? 'main' : 'other' }), setFilters('s-layer', i % 2 ? full : { limiter: full.limiter })]);
+  await c.call('scenes.activate', { scene: 'main' });
+  const last = await setFilters('s-layer', full);
+  const m = await measure('s-layer');
+  RESULTS.sceneSwitchEdits = { rounds: 40, frames: m.frames, order: m.filters.order };
+  assert.deepEqual(last.filters.order, ['gate', 'gain', 'compressor', 'limiter']);
+  assert.ok(m.frames > 40000, `the layer's sound flows after the switches (${m.frames} frames)`);
+});
+
+test('an unchanged tool is not updated again: changing the gain leaves an open gate open', async () => {
+  const d = project();
+  await loadIntoHost(c, d, { bases: { media } });
+  doc = d;
+  // gate open (the -20 dBFS tone is far over -55), then only the gain changes: the gate must not close and reopen
+  const gate = { on: true, closeDb: -60, openDb: -55, attackMs: 500, holdMs: 0, releaseMs: 150 };
+  await setFilters('s-mid', { gate, gain: { on: true, db: 0 } });
+  await sleep(1000);
+  const during = c.call('audio.testMeasure', { audio: 's-mid', skipMs: 100, ms: 600 });
+  await setFilters('s-mid', { gate, gain: { on: true, db: -1 } });
+  const m = await during;
+  RESULTS.unchangedGate = { rmsDb: m.rmsDb, frames: m.frames };
+  // a gate closed by an update would reopen over its 500 ms attack: the window's level would drop far below -24 dB RMS
+  assert.ok(m.rmsDb > -24.5, `the gate stayed open (RMS ${m.rmsDb.toFixed(2)} dBFS over the change)`);
+});
+
+test('a gate whose close level is above its open level is refused; "#" in an exe name is refused', async () => {
+  const s = doc.audio.sources.find((x) => x.id === 's-mid');
+  s.filters = { gate: { on: true, closeDb: -20, openDb: -30, attackMs: 25, holdMs: 200, releaseMs: 150 } };
+  await assert.rejects(c.call('audio.setFilters', { project: doc, audio: 's-mid' }), (e) => e.code === -32602);
+  delete s.filters;
+  const d = structuredClone(doc);
+  d.audio.sources = [{ id: 's-app', name: 'App', app: { exe: 'a#3Ab.exe' }, volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] }];
+  await assert.rejects(c.call('project.plan', { project: d }), (e) => e.code === -32602);
+});
+
+test('sound files come from the media base only', async () => {
+  const d = structuredClone(doc);
+  d.audio.sources = [{ id: 's-data', name: 'Data', playback: { file: { base: 'data', rel: 'x.wav' }, loop: true }, volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] }];
+  await assert.rejects(planInHost(c, d, { bases: { media } }), (e) => e.name === 'ProjectRefused', 'the validator refuses base data');
+  await assert.rejects(c.call('project.plan', { project: d }), (e) => e.code === -32602, 'and the host');
+});
+
+test('a playlist of files that cannot play stops after one pass ("unavailable"), with no thread growth', async () => {
+  const dir = path.join(media, 'bad');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'x.wav'), Buffer.from('not a sound file at all'));
+  writeFileSync(path.join(dir, 'y.mp3'), Buffer.from('nor is this one'));
+  const t0 = threads();
+  doc.audio.sources.push({ id: 's-bad', name: 'bad', playback: { folder: { base: 'media', rel: 'bad' }, loop: true },
+    volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] });
+  await c.call('audio.addFromProject', { project: doc, audio: 's-bad' });
+  let r;
+  for (let i = 0; i < 50 && (r = await row('s-bad'))?.playlist?.state !== 'unavailable'; i++) await sleep(200);
+  assert.equal(r?.playlist?.state, 'unavailable', `stopped: ${JSON.stringify(r?.playlist)}`);
+  const at = r.playlist.at;
+  await sleep(2000);
+  const t1 = threads();
+  const later = await row('s-bad');
+  RESULTS.badPlaylist = { playlist: later.playlist, threadsBefore: t0, threadsAfter: t1 };
+  assert.equal(later.playlist.at, at, 'no file is opened again');
+  assert.ok(t1 <= t0 + 4, `threads ${t0} -> ${t1}`);
+});
+
+test('a link in a playlist folder that points out of the media folder is left out', async (t) => {
+  const outside = mkdtempSync(path.join(OUT, 'audio-tools-outside-'));
+  wav('out.wav', sine(1000, -5), 1.5, outside);
+  const dir = path.join(media, 'linked');
+  mkdirSync(dir, { recursive: true });
+  wav('in-a.wav', sine(1000, -25), 1.5, dir);
+  wav('in-b.wav', sine(1000, -28), 1.5, dir);
+  try { symlinkSync(path.join(outside, 'out.wav'), path.join(dir, 'link.wav'), 'file'); } catch (e) {
+    t.skip(`no symlink right on this account (${e.code})`); return;
+  }
+  doc.audio.sources.push({ id: 's-linked', name: 'linked', playback: { folder: { base: 'media', rel: 'linked' }, loop: true },
+    volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] });
+  await c.call('audio.addFromProject', { project: doc, audio: 's-linked' });
+  const r = await row('s-linked');
+  assert.equal(r.playlist?.files, 2, 'the link is not in the list');
+  const peaks = [];
+  for (let i = 0; i < 8; i++) peaks.push((await c.call('audio.testMeasure', { audio: 's-linked', skipMs: 0, ms: 450 })).peakDb);
+  RESULTS.linkedPlaylist = { peaks };
+  assert.ok(peaks.every((p) => p < -20), `the -5 dBFS file outside media never plays: ${peaks.map((p) => p.toFixed(1))}`);
+});
+test('a playlist folder that is a junction out of the media folder is refused (no link right needed)', async () => {
+  const outside = mkdtempSync(path.join(OUT, 'audio-tools-outside-'));
+  wav('o1.wav', sine(1000, -5), 1, outside);
+  wav('o2.wav', sine(1000, -5), 1, outside);
+  symlinkSync(outside, path.join(media, 'jout'), 'junction');
+  const d = structuredClone(doc);
+  d.audio.sources = [{ id: 's-j', name: 'j', playback: { folder: { base: 'media', rel: 'jout' }, loop: true }, volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] }];
+  const p = await planInHost(c, d, { bases: { media } });
+  const u = (p.unavailable ?? []).find((x) => x.audio === 's-j');
+  assert.equal(u?.code, 'unavailable', JSON.stringify(p.unavailable));
 });

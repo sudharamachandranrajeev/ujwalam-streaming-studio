@@ -1007,6 +1007,9 @@ Plan build(const json::Value &doc, const Options &o)
 				x.settings = audio_tools::app_settings(x.app);
 				if (!o.allow_devices && !o.test_capture)
 					u = {"forbidden", "app sound is off (host started without --allow-devices)"};
+				else if (!o.test_capture && audio_tools::app_ambiguous(x.app))
+					u = {"unavailable", "Two different programs named " + x.app +
+								    " are running, so Ujwalam cannot tell which one to capture. Close one, then press Try again."};
 			} else {
 				const json::Value &pb = *a.find("playback");
 				chk::only_keys(pb, {"file", "folder", "loop"}, what + ".playback");
@@ -1015,9 +1018,14 @@ Plan build(const json::Value &doc, const Options &o)
 				if (folder == (pb.find("file") != nullptr))
 					throw Error(rpc::INVALID_PARAMS, what + ".playback: needs exactly one of file or folder");
 				x.playlist_loop = chk::get_bool(pb, "loop", true, what + ".playback");
-				std::string f = resolve_file(*pb.find(folder ? "folder" : "file"), o, what + ".playback", u, folder);
+				const json::Value &ref = *pb.find(folder ? "folder" : "file");
+				if (const json::Value *b = ref.find("base"); !b || !b->is_string() || b->as_string() != "media")
+					throw Error(rpc::INVALID_PARAMS, what + ".playback: sound files must be in the media folder (base media)");
+				std::string f = resolve_file(ref, o, what + ".playback", u, folder);
 				if (u.code.empty()) {
-					x.playlist = folder ? audio_tools::folder_playlist(f) : std::vector<std::string>{f};
+					std::error_code ec; // resolve_file found the media base, so it is there
+					x.playlist_root = fs::canonical(fs::u8path(o.bases.at("media")), ec).generic_u8string();
+					x.playlist = folder ? audio_tools::folder_playlist(f, x.playlist_root) : std::vector<std::string>{f};
 					if (x.playlist.empty())
 						u = {"unavailable", "the folder has no audio files"};
 				}

@@ -29,7 +29,7 @@ export const DISPLAY_ID_RE = /^[ -~]{1,127}$/;
 export const WINDOW_SPEC_RE = /^[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]+$/;
 const MONITORING = ['off', 'monitor-only', 'monitor-and-output'];
 // AU1: a program file name (no folder), as Windows shows it for a running app; never a window title.
-export const EXE_RE = /^[^\\/:*?"<>|\u0000-\u001f]{1,120}\.exe$/i;
+export const EXE_RE = /^[^\\/:*?"<>|#\u0000-\u001f]{1,120}\.exe$/i; // no "#": OBS window specs encode it (#22, #3A)
 const PATH_BASES = ['data', 'luts', 'media', 'overlays', 'profile']; // luts: the app's shipped LUTs (D381)
 // D291 layer effects: key -> [min, max] or [min, max, 'int'], 'color' (#RRGGBB), 'file' (pathRef), 'bool', or
 // [[allowed values]]. All keys are required. Same ranges as app/host/src/model.cpp and data/schemas/project.schema.json.
@@ -497,8 +497,11 @@ export function validateProject(doc) {
             else {
               noExtra(b, ['file', 'folder', 'loop'], bp); req(b, ['loop'], bp);
               if (('file' in b) === ('folder' in b)) err(bp, 'needs exactly one of file or folder');
-              if ('file' in b) pathRefOk(b.file, `${bp}.file`);
-              if ('folder' in b) pathRefOk(b.folder, `${bp}.folder`);
+              for (const k of ['file', 'folder']) {
+                if (!(k in b)) continue;
+                pathRefOk(b[k], `${bp}.${k}`);
+                if (isObj(b[k]) && b[k].base !== 'media') err(`${bp}.${k}.base`, 'must be "media"');
+              }
               if ('loop' in b && typeof b.loop !== 'boolean') err(`${bp}.loop`, 'must be a boolean');
             }
           }

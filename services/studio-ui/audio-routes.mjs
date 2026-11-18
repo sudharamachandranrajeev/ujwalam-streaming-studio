@@ -53,6 +53,7 @@ export const AUDIO_ERROR_TEXT = Object.freeze({
   'no-track': 'The project has no audio track.',
   'bad-key': 'Pick a sound from the list.',
   'unknown-app': 'That app is not running any more. Open Add audio again.',
+  'ambiguous-app': 'Two different programs with this name are running, so Ujwalam cannot tell which one to capture. Close one, then try again.',
   'unknown-file': 'That sound file is not in your media folder any more. Open Add audio again.',
   'bad-tools': 'A tool setting is out of its range.',
   'in-stream': 'That sound is in the stream already.',

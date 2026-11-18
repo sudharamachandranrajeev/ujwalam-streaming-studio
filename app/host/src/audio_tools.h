@@ -24,7 +24,8 @@ namespace audio_tools {
 
 // Throws rpc::Error(INVALID_PARAMS) for a malformed `filters` value.
 void check_filters(const json::Value &f, const std::string &what);
-// Makes the source's tool filters match `f` (null or missing = none). Never recreates the source.
+// Makes the source's tool filters match `f` (null or missing = none). Never recreates the source. Runs the filter
+// list changes on the graphics thread and waits for them; only changed settings are sent to a filter.
 void apply_filters(obs_source_t *src, const json::Value &f);
 // The tool filters on a source as {kind: {on, settings...}} (for tests and status).
 json::Value read_filters(obs_source_t *src);
@@ -32,16 +33,27 @@ json::Value read_filters(obs_source_t *src);
 // AU1 app sound. check_exe throws for a bad {exe}; the result is the exe name.
 std::string check_exe(const json::Value &app, const std::string &what);
 json::Value app_settings(const std::string &exe);
-// Running apps with a visible top-level window: [{exe, sound}] (exe names only, sorted, unique; sound = has an
-// active audio session on the default render device). available = false when the system has no app capture.
+// Running apps with a visible top-level window: [{exe, sound, ambiguous}] (exe names only, sorted, unique; sound =
+// has an active audio session on the default render device; ambiguous = two different programs of this name run).
+// Only this user's programs in this session. available = false when the system has no app capture.
 json::Value list_apps();
+// Two different programs (paths) named `exe` run now: OBS matches by name only, so either could go on air.
+bool app_ambiguous(const std::string &exe);
 
 // AU1 playback.
-std::vector<std::string> folder_playlist(const std::string &dir); // audio files in the folder, by name; at most 500
+// Audio files in the folder, by name, at most 500, as real paths; a link whose target is not inside `root` (the
+// media folder) is left out.
+std::vector<std::string> folder_playlist(const std::string &dir, const std::string &root);
 json::Value playback_settings(const std::string &file, bool loop);
 // Plays `files` in turn on `src` (a playlist with more than one file): the next one on media_ended; after the last,
-// the first again when loop. A source with one file needs nothing (ffmpeg_source loops it).
-void attach_playlist(obs_source_t *src, const std::vector<std::string> &files, bool loop);
+// the first again when loop. A source with one file needs nothing (ffmpeg_source loops it). Each file is checked
+// against `root` again when it is opened. After one full pass in which no file gave audio, the playlist stops
+// ("unavailable").
+void attach_playlist(obs_source_t *src, const std::vector<std::string> &files, bool loop, const std::string &root);
+// {files, at, state: "playing" | "unavailable"} of the source's playlist, or null.
+json::Value playlist_status(obs_source_t *src);
+// Stops the playlist thread (before obs_shutdown).
+void shutdown_playlists();
 
 // --test-hooks: peak and RMS (dBFS, channel 0) of the source's audio after its filters, over `ms` after `skip_ms`.
 json::Value measure(obs_source_t *src, uint32_t skip_ms, uint32_t ms);

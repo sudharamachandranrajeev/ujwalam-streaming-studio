@@ -41,6 +41,14 @@
         "rel": { "type": "string", "minLength": 1, "maxLength": 260 }
       }
     },
+    "mediaRef": {
+      "type": "object", "additionalProperties": false, "required": ["base", "rel"],
+      "$comment": "AU1 review (2026-11-18): a pathRef limited to the media base (sound files and playlists)",
+      "properties": {
+        "base": { "const": "media" },
+        "rel": { "type": "string", "minLength": 1, "maxLength": 260 }
+      }
+    },
     "canvas": {
       "type": "object", "additionalProperties": false, "required": ["id", "width", "height", "fps"],
       "properties": {
@@ -295,6 +303,12 @@
           "items": {
             "type": "object", "additionalProperties": false,
             "required": ["id", "name", "volumeDb", "muted", "monitoring", "tracks"],
+            "oneOf": [
+              { "type": "object", "properties": { "device": true }, "required": ["device"] },
+              { "type": "object", "properties": { "layer": true }, "required": ["layer"] },
+              { "type": "object", "properties": { "app": true }, "required": ["app"] },
+              { "type": "object", "properties": { "playback": true }, "required": ["playback"] }
+            ],
             "properties": {
               "id": { "$ref": "#/$defs/id" },
               "name": { "$ref": "#/$defs/label" },
@@ -303,12 +317,16 @@
               "app": {
                 "type": "object", "additionalProperties": false, "required": ["exe"],
                 "$comment": "AU1: one app's sound (wasapi_process_output_capture), matched by program file name only; never a window title",
-                "properties": { "exe": { "type": "string", "pattern": "^[^\\\\/:*?\"<>|\\u0000-\\u001f]{1,120}\\.[Ee][Xx][Ee]$" } }
+                "properties": { "exe": { "type": "string", "pattern": "^[^\\\\/:*?\"<>|#\\u0000-\\u001f]{1,120}\\.[Ee][Xx][Ee]$" } }
               },
               "playback": {
                 "type": "object", "additionalProperties": false, "required": ["loop"],
-                "$comment": "AU1: an audio file (ffmpeg_source) or a folder played as a playlist, under a pathRef base. Exactly one of file / folder, and exactly one of device / layer / app / playback per source: checked by validate.mjs and the host",
-                "properties": { "file": { "$ref": "#/$defs/pathRef" }, "folder": { "$ref": "#/$defs/pathRef" }, "loop": { "type": "boolean" } }
+                "$comment": "AU1: an audio file (ffmpeg_source) or a folder played as a playlist, under the media base only. Exactly one of file / folder, and exactly one of device / layer / app / playback per source (also checked by validate.mjs and the host)",
+                "oneOf": [
+                  { "type": "object", "properties": { "file": true }, "required": ["file"] },
+                  { "type": "object", "properties": { "folder": true }, "required": ["folder"] }
+                ],
+                "properties": { "file": { "$ref": "#/$defs/mediaRef" }, "folder": { "$ref": "#/$defs/mediaRef" }, "loop": { "type": "boolean" } }
               },
               "volumeDb": { "type": "number", "minimum": -100, "maximum": 12 },
               "muted": { "type": "boolean" },

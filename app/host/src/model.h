@@ -176,6 +176,7 @@ struct Audio {
 	std::string app;        // AU1: program file name of one app's sound (wasapi_process_output_capture)
 	std::vector<std::string> playlist; // AU1: audio files played in turn (one file: ffmpeg_source loops it)
 	bool playlist_loop = true;
+	std::string playlist_root; // AU1: the media folder (canonical); every playlist file must stay inside it
 };
 
 struct Plan {

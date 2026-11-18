@@ -1698,7 +1698,7 @@ json::Value Studio::load_model(const json::Value &doc, const LoadOptions &o)
 				obs_source_set_monitoring_type(target->src, monitoring_type(a.monitoring));
 			audio_tools::apply_filters(target->src, a.filters); // AU2 strip tools
 			if (!a.obs_type.empty())
-				audio_tools::attach_playlist(target->src, a.playlist, a.playlist_loop); // AU1 folder playlist
+				audio_tools::attach_playlist(target->src, a.playlist, a.playlist_loop, a.playlist_root); // AU1 folder playlist
 		}
 		for (auto &c : canvases_) {
 			Scene *s = p.active.empty() ? nullptr : scene(p.active, c.id);
@@ -2021,7 +2021,7 @@ json::Value Studio::audio_add_model(const json::Value &doc, const std::string &a
 		obs_source_set_monitoring_type(target->src, monitoring_type(x->monitoring));
 	audio_tools::apply_filters(target->src, x->filters); // AU2 strip tools
 	if (!x->obs_type.empty())
-		audio_tools::attach_playlist(target->src, x->playlist, x->playlist_loop); // AU1 folder playlist
+		audio_tools::attach_playlist(target->src, x->playlist, x->playlist_loop, x->playlist_root); // AU1 folder playlist
 	model_doc_ = doc;
 	dirty_ = false;
 	hlog::info("audio added from the project: %s (%s)", aid.c_str(), x->obs_type.empty() ? "layer sound" : x->obs_type.c_str());
@@ -3186,6 +3186,7 @@ json::Value Studio::mixer_list() const
 				ts.push(tracks[n].first);
 		o.set("tracks", std::move(ts));
 		o.set("cue", obs_source_get_monitoring_type(src.src) != OBS_MONITORING_TYPE_NONE);
+		o.set("playlist", audio_tools::playlist_status(src.src)); // AU1: null unless a folder playlist
 		// libobs holds back monitoring of a source with video until its frame is shown: CUE on such a source is late.
 		o.set("cueDelayed", (obs_source_get_output_flags(src.src) & OBS_SOURCE_VIDEO) != 0);
 		o.set("active", obs_source_active(src.src));

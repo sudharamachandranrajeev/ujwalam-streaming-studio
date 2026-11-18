@@ -3,6 +3,7 @@
 // (docs/evidence/2026-10-27-p1a-build.md): PATH (not SetDllDirectory) for the runtime bin dir, helper exes next to
 // the host exe, module config under the host data dir.
 #include "obs_runtime.h"
+#include "audio_tools.h"
 #include "effects.h"
 #include "log.h"
 
@@ -173,6 +174,7 @@ bool start(const Options &o, std::string &err)
 
 void shutdown(uint32_t guard_ms)
 {
+	audio_tools::shutdown_playlists(); // no playlist step may open a file while sources are destroyed
 	obs_set_output_source(0, nullptr);
 	hlog::info("obs_shutdown begin");
 	// Guard: libobs destroys sources on one destruction thread and obs_shutdown waits for it. A source whose destroy

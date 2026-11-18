@@ -95,6 +95,12 @@ describe('QML studio audio tools (headless probe)', { skip }, () => {
     assert.ok(!r.calls.some(([m]) => m === 'audio.removeFromProject' || m === 'audio.addFromProject'), 'no rebuild of the sound');
   });
 
+  test('review: moving the gate close level above its open level takes the open level along', async () => {
+    const r = await probe(['mixer-tools:scene-1/game', 'tools-toggle:gate', 'tools-set:gate:closeDb:-10'], { ms: 9000 });
+    assert.deepEqual(r.done, [true, true, true], JSON.stringify(r.p.actions));
+    const g = r.saved.audio.sources.find((x) => x.id === 'aud-game').filters.gate;
+    assert.deepEqual([g.closeDb, g.openDb], [-10, -10]);
+  });
   test('Tools are offered, never applied on their own: opening the window changes nothing', async () => {
     const r = await probe(['mixer-tools:scene-1/game'], { ms: 6000 });
     assert.equal(r.s.audioTools.open, true);

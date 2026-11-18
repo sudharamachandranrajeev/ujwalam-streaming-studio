@@ -17,6 +17,8 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -31,6 +33,9 @@ using rpc::Error;
 namespace audio_tools {
 
 namespace {
+
+// A program file name: no path, no OBS window-spec separator ':' or escape '#'. Same as validate.mjs EXE_RE.
+const char *const kExeRe = "^[^\\\\/:*?\"<>|#\\x00-\\x1f]{1,120}\\.[eE][xX][eE]$";
 
 // One tool: its project key, libobs filter id, and project key -> libobs setting (with range and integer flag).
 struct Param {
@@ -121,28 +126,66 @@ void check_filters(const json::Value &f, const std::string &what)
 			    (p.integer && !x->is_int()))
 				throw Error(rpc::INVALID_PARAMS, w + ": bad " + p.key);
 		}
+		if (std::string(t->kind) == "gate" && m.second.find("closeDb")->as_double() > m.second.find("openDb")->as_double())
+			throw Error(rpc::INVALID_PARAMS, w + ": closeDb must not be above openDb");
 	}
 }
 
-void apply_filters(obs_source_t *src, const json::Value &f)
+namespace {
+
+// True when every setting in `want` already has that value on the filter. noise_gate_filter's update closes the gate
+// (and other filters reset their state), so an unchanged tool is never updated again.
+bool same_settings(obs_data_t *have, obs_data_t *want)
 {
-	if (!src)
-		return;
-	std::vector<obs_source_t *> present; // in processing order (a reference each)
+	for (obs_data_item_t *it = obs_data_first(want); it; obs_data_item_next(&it)) {
+		const char *k = obs_data_item_get_name(it);
+		bool same = true;
+		switch (obs_data_item_gettype(it)) {
+		case OBS_DATA_STRING:
+			same = std::string(obs_data_get_string(have, k)) == obs_data_item_get_string(it);
+			break;
+		case OBS_DATA_BOOLEAN:
+			same = obs_data_get_bool(have, k) == obs_data_item_get_bool(it);
+			break;
+		case OBS_DATA_NUMBER:
+			same = obs_data_get_double(have, k) == obs_data_item_get_double(it);
+			break;
+		default:
+			break;
+		}
+		if (!same) {
+			obs_data_item_release(&it);
+			return false;
+		}
+	}
+	return true;
+}
+
+// apply_filters on the graphics thread (see there).
+void apply_now(obs_source_t *src, const json::Value &f)
+{
+	struct Step {
+		obs_source_t *fl; // a reference
+		bool on, fresh;
+	};
+	std::vector<Step> keep;           // in processing order
+	std::vector<obs_source_t *> drop; // tools to take off (a reference each)
 	for (auto &t : tools()) {
 		const std::string name = filter_name(t.kind);
 		obs_source_t *have = obs_source_get_filter_by_name(src, name.c_str()); // a new reference or null
 		const json::Value *v = f.is_object() ? f.find(t.kind) : nullptr;
 		if (!v) {
-			if (have) {
-				obs_source_filter_remove(src, have);
-				obs_source_release(have);
-			}
+			if (have)
+				drop.push_back(have);
 			continue;
 		}
 		obs_data_t *d = tool_settings(t, *v);
+		bool fresh = false;
 		if (have) {
-			obs_source_update(have, d);
+			obs_data_t *cur = obs_source_get_settings(have);
+			if (!same_settings(cur, d))
+				obs_source_update(have, d);
+			obs_data_release(cur);
 		} else {
 			have = obs_source_create_private(t.obs_id, name.c_str(), d);
 			if (!have || !obs_obj_get_data(have)) {
@@ -152,21 +195,55 @@ void apply_filters(obs_source_t *src, const json::Value &f)
 				obs_data_release(d);
 				continue;
 			}
-			obs_source_filter_add(src, have);
+			obs_source_set_enabled(have, false); // joins the strip switched off; switched on with the others below
+			fresh = true;
 		}
 		obs_data_release(d);
-		obs_source_set_enabled(have, v->find("on")->as_bool());
-		present.push_back(have);
+		keep.push_back({have, v->find("on")->as_bool(), fresh});
 	}
+	// The audio thread may run a block between any two of these calls, so every step leaves a safe chain: tools going
+	// off are switched off first to last (a boost before its limiter goes first), new tools join switched off, and
+	// tools going on are switched on last to first (the limiter before the boost in front of it).
+	for (auto &k : keep)
+		if (!k.on && obs_source_enabled(k.fl))
+			obs_source_set_enabled(k.fl, false);
+	for (auto *x : drop)
+		obs_source_set_enabled(x, false);
+	for (auto *x : drop) {
+		obs_source_filter_remove(src, x);
+		obs_source_release(x);
+	}
+	for (auto &k : keep)
+		if (k.fresh)
+			obs_source_filter_add(src, k.fl);
 	// libobs runs a source's audio filters from the last array entry to the first: the first tool in processing order
 	// goes to the highest index of the tool filters (they sit at 0..n-1; other filters stay after them).
-	const size_t n = present.size();
+	const size_t n = keep.size();
 	for (size_t i = 0; i < n; i++)
-		obs_source_filter_set_index(src, present[i], n - 1 - i);
-	for (auto *x : present)
-		obs_source_release(x);
+		obs_source_filter_set_index(src, keep[i].fl, n - 1 - i);
+	for (size_t i = n; i > 0; i--)
+		if (keep[i - 1].on && !obs_source_enabled(keep[i - 1].fl))
+			obs_source_set_enabled(keep[i - 1].fl, true);
+	for (auto &k : keep)
+		obs_source_release(k.fl);
 }
 
+} // namespace
+
+void apply_filters(obs_source_t *src, const json::Value &f)
+{
+	if (!src)
+		return;
+	// libobs 32.1.2 walks a source's filter array without its filter mutex in the video tick (show/hide and
+	// activate/deactivate in obs_source_video_tick): adding, removing or moving filters runs on the graphics thread,
+	// between ticks, never next to that walk. The caller waits (obs_queue_task runs it inline when already there).
+	struct Job {
+		obs_source_t *src;
+		const json::Value *f;
+	} job{src, &f};
+	obs_queue_task(
+		OBS_TASK_GRAPHICS, [](void *p) { auto *j = static_cast<Job *>(p); apply_now(j->src, *j->f); }, &job, true);
+}
 json::Value read_filters(obs_source_t *src)
 {
 	json::Value r = json::Value::object();
@@ -208,7 +285,7 @@ std::string check_exe(const json::Value &app, const std::string &what)
 	chk::only_keys(app, {"exe"}, what + ".app");
 	chk::require(app, {"exe"}, what + ".app");
 	std::string exe = chk::get_str(app, "exe", "", 124, what + ".app");
-	static const std::regex re("^[^\\\\/:*?\"<>|\\x00-\\x1f]{1,120}\\.[eE][xX][eE]$");
+	static const std::regex re(kExeRe); // no '#': OBS window specs encode it (#22, #3A)
 	if (!std::regex_match(exe, re))
 		throw Error(rpc::INVALID_PARAMS, what + ".app: bad exe");
 	return exe;
@@ -217,7 +294,7 @@ std::string check_exe(const json::Value &app, const std::string &what)
 json::Value app_settings(const std::string &exe)
 {
 	json::Value s = json::Value::object();
-	// OBS window spec "title:class:executable"; an exe name holds no ':' or '#'. Empty title and class: with the
+	// OBS window spec "title:class:executable"; check_exe refuses ':' and '#' (the spec's separator and escape). Empty title and class: with the
 	// "executable" priority (2, WINDOW_PRIORITY_EXE) any window of that program matches.
 	s.set("window", "::" + exe);
 	s.set("priority", 2);
@@ -236,20 +313,82 @@ std::string narrow(const std::wstring &w)
 	return s;
 }
 
-std::string exe_of(DWORD pid)
+// Full image path of a process that runs as this user in this session, or "" (another user's or session's process,
+// or one that cannot be opened).
+std::wstring own_image_of(DWORD pid)
 {
+	DWORD sess = 0, my_sess = 0;
+	if (!ProcessIdToSessionId(pid, &sess) || !ProcessIdToSessionId(GetCurrentProcessId(), &my_sess) || sess != my_sess)
+		return {};
 	HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
 	if (!h)
 		return {};
-	wchar_t buf[MAX_PATH * 2];
-	DWORD n = (DWORD)(sizeof(buf) / sizeof(buf[0]));
-	std::string r;
-	if (QueryFullProcessImageNameW(h, 0, buf, &n))
-		r = narrow(fs::path(std::wstring(buf, n)).filename().wstring());
+	std::wstring r;
+	auto user_sid = [](HANDLE proc, std::vector<char> &buf) -> PSID {
+		HANDLE tok = nullptr;
+		if (!OpenProcessToken(proc, TOKEN_QUERY, &tok))
+			return nullptr;
+		DWORD n = 0;
+		GetTokenInformation(tok, TokenUser, nullptr, 0, &n);
+		buf.resize(n ? n : 1);
+		const bool ok = n && GetTokenInformation(tok, TokenUser, buf.data(), n, &n);
+		CloseHandle(tok);
+		return ok ? reinterpret_cast<TOKEN_USER *>(buf.data())->User.Sid : nullptr;
+	};
+	std::vector<char> a, b;
+	PSID theirs = user_sid(h, a), mine = user_sid(GetCurrentProcess(), b);
+	if (theirs && mine && EqualSid(theirs, mine)) {
+		wchar_t buf[MAX_PATH * 2];
+		DWORD n = (DWORD)(sizeof(buf) / sizeof(buf[0]));
+		if (QueryFullProcessImageNameW(h, 0, buf, &n))
+			r.assign(buf, n);
+	}
 	CloseHandle(h);
 	return r;
 }
 
+std::string lower(std::string s)
+{
+	std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) { return (char)std::tolower(ch); });
+	return s;
+}
+
+struct AppScan {
+	std::map<std::string, std::set<DWORD>> pids;         // lower-case exe -> pids
+	std::map<std::string, std::set<std::wstring>> paths; // lower-case exe -> full image paths (lower case)
+	std::map<std::string, std::string> shown;            // lower-case exe -> exe as Windows names it
+};
+
+// Programs with a visible top-level window, run by this user in this session (window titles are only tested for
+// being there; never read).
+AppScan scan_apps()
+{
+	AppScan ctx;
+	EnumWindows(
+		[](HWND w, LPARAM p) -> BOOL {
+			if (!IsWindowVisible(w) || GetWindow(w, GW_OWNER) || (GetWindowLongW(w, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) ||
+			    GetWindowTextLengthW(w) == 0)
+				return TRUE;
+			DWORD pid = 0;
+			GetWindowThreadProcessId(w, &pid);
+			if (!pid || pid == GetCurrentProcessId())
+				return TRUE;
+			const std::wstring img = own_image_of(pid);
+			if (img.empty())
+				return TRUE;
+			auto *c = reinterpret_cast<AppScan *>(p);
+			const std::string exe = narrow(fs::path(img).filename().wstring());
+			const std::string k = lower(exe);
+			std::wstring li = img;
+			std::transform(li.begin(), li.end(), li.begin(), [](wchar_t ch) { return (wchar_t)towlower(ch); });
+			c->pids[k].insert(pid);
+			c->paths[k].insert(li);
+			c->shown.emplace(k, exe);
+			return TRUE;
+		},
+		(LPARAM)&ctx);
+	return ctx;
+}
 // Process ids with an active audio session on the default render device (best effort; empty on any failure).
 std::set<DWORD> sounding_pids()
 {
@@ -297,40 +436,19 @@ std::set<DWORD> sounding_pids()
 
 json::Value list_apps()
 {
-	struct Ctx {
-		std::map<std::string, std::set<DWORD>> apps; // lower-case exe -> pids
-		std::map<std::string, std::string> shown;    // lower-case exe -> exe as Windows names it
-	} ctx;
-	EnumWindows(
-		[](HWND w, LPARAM p) -> BOOL {
-			if (!IsWindowVisible(w) || GetWindow(w, GW_OWNER) || (GetWindowLongW(w, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) ||
-			    GetWindowTextLengthW(w) == 0) // the title is only tested for being there; never read
-				return TRUE;
-			DWORD pid = 0;
-			GetWindowThreadProcessId(w, &pid);
-			if (!pid || pid == GetCurrentProcessId())
-				return TRUE;
-			std::string exe = exe_of(pid);
-			if (exe.empty())
-				return TRUE;
-			auto *c = reinterpret_cast<Ctx *>(p);
-			std::string k = exe;
-			std::transform(k.begin(), k.end(), k.begin(), [](unsigned char ch) { return (char)std::tolower(ch); });
-			c->apps[k].insert(pid);
-			c->shown.emplace(k, exe);
-			return TRUE;
-		},
-		(LPARAM)&ctx);
+	const AppScan ctx = scan_apps();
 	const std::set<DWORD> sound = sounding_pids();
 	json::Value list = json::Value::array();
-	static const std::regex re("^[^\\\\/:*?\"<>|\\x00-\\x1f]{1,120}\\.[eE][xX][eE]$");
-	for (auto &[k, pids] : ctx.apps) {
-		const std::string &exe = ctx.shown[k];
+	static const std::regex re(kExeRe);
+	for (auto &[k, pids] : ctx.pids) {
+		const std::string &exe = ctx.shown.at(k);
 		if (!std::regex_match(exe, re))
 			continue;
 		json::Value o = json::Value::object();
 		o.set("exe", exe);
 		o.set("sound", std::any_of(pids.begin(), pids.end(), [&](DWORD d) { return sound.count(d) > 0; }));
+		// two different programs with this file name: OBS matches by name only, so either could go on air
+		o.set("ambiguous", ctx.paths.at(k).size() > 1);
 		list.push(std::move(o));
 		if (list.size() >= 200)
 			break;
@@ -341,27 +459,62 @@ json::Value list_apps()
 	return r;
 }
 
+bool app_ambiguous(const std::string &exe)
+{
+	const AppScan ctx = scan_apps();
+	auto it = ctx.paths.find(lower(exe));
+	return it != ctx.paths.end() && it->second.size() > 1;
+}
 // ---- AU1 playback ----
 
-std::vector<std::string> folder_playlist(const std::string &dir)
+namespace {
+
+// True when `p` (canonical) lies inside the directory `root` (canonical).
+bool inside(const fs::path &root, const fs::path &p)
+{
+	auto r = root.begin(), q = p.begin();
+	for (; r != root.end(); ++r, ++q)
+		if (q == p.end() || *q != *r)
+			return false;
+	return true;
+}
+
+// The file's real path when it is a regular file inside `root` after following every link, else "".
+std::string real_inside(const std::string &file, const std::string &root)
+{
+	std::error_code ec;
+	const fs::path rt = fs::canonical(fs::u8path(root), ec);
+	if (ec)
+		return {};
+	const fs::path p = fs::canonical(fs::u8path(file), ec);
+	if (ec || !inside(rt, p) || !fs::is_regular_file(p, ec))
+		return {};
+	return p.generic_u8string();
+}
+
+} // namespace
+
+std::vector<std::string> folder_playlist(const std::string &dir, const std::string &root)
 {
 	static const std::set<std::string> ext = {".mp3", ".wav", ".ogg", ".opus", ".flac", ".m4a", ".aac", ".wma"};
 	std::vector<std::string> out;
 	std::error_code ec;
 	for (auto it = fs::directory_iterator(fs::u8path(dir), ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
-		if (!it->is_regular_file(ec))
-			continue;
 		std::string e = it->path().extension().u8string();
 		std::transform(e.begin(), e.end(), e.begin(), [](unsigned char ch) { return (char)std::tolower(ch); });
-		if (ext.count(e))
-			out.push_back(it->path().generic_u8string());
+		if (!ext.count(e))
+			continue;
+		// a link in the folder is followed only when its target is still inside the media folder
+		const std::string real = real_inside(it->path().u8string(), root);
+		if (real.empty())
+			continue;
+		out.push_back(real);
 		if (out.size() >= 500)
 			break;
 	}
 	std::sort(out.begin(), out.end());
 	return out;
 }
-
 json::Value playback_settings(const std::string &file, bool loop)
 {
 	json::Value st = json::Value::object();
@@ -376,81 +529,181 @@ json::Value playback_settings(const std::string &file, bool loop)
 
 namespace {
 
+// A folder playlist. Its state lives as long as the source or any queued step holds it; the weak reference is
+// released with the last holder.
 struct Playlist {
 	obs_weak_source_t *weak = nullptr;
 	std::vector<std::string> files;
+	std::string root; // the media folder: every file is checked again against it when it is opened
 	bool loop = true;
+	// guarded by Worker::m
 	size_t at = 0;
+	bool queued = false, unavailable = false;
+	size_t silent_ends = 0; // files in a row that ended without one block of audio (missing, broken, not audio)
+	std::atomic<bool> heard{false};
+	Playlist() = default;
+	Playlist(const Playlist &) = delete;
+	Playlist &operator=(const Playlist &) = delete;
+	~Playlist() { obs_weak_source_release(weak); }
 };
-std::mutex g_pl_mutex;
-std::map<obs_source_t *, std::shared_ptr<Playlist>> g_playlists;
+
+// One thread for every playlist: it opens the next file (ffmpeg_source's update stops and joins the media thread that
+// sent media_ended, so it never runs on that thread). Ends that arrive while a step is queued are dropped, so a list
+// of broken files can never pile up work.
+struct Worker {
+	std::mutex m;
+	std::condition_variable cv;
+	std::deque<std::shared_ptr<Playlist>> q;
+	std::map<obs_source_t *, std::shared_ptr<Playlist>> lists;
+	std::thread th;
+	bool stop = false;
+};
+Worker &worker()
+{
+	static Worker w;
+	return w;
+}
+
+void on_audio(void *p, obs_source_t *, const struct audio_data *a, bool)
+{
+	if (a->frames)
+		static_cast<Playlist *>(p)->heard = true;
+}
+
+// Worker::m held: the next step after the current file ended (or could not be opened).
+void advance_locked(Worker &w, const std::shared_ptr<Playlist> &pl, bool heard)
+{
+	if (pl->unavailable || pl->queued)
+		return;
+	pl->silent_ends = heard ? 0 : pl->silent_ends + 1;
+	if (pl->silent_ends >= pl->files.size()) {
+		pl->unavailable = true; // one full pass and not one file played: stop instead of reopening them forever
+		hlog::warn("audio playlist: none of its %zu files could be played; it stops", pl->files.size());
+		return;
+	}
+	if (pl->at + 1 >= pl->files.size() && !pl->loop)
+		return; // the last file of a playlist that does not loop
+	pl->at = (pl->at + 1) % pl->files.size();
+	pl->queued = true;
+	w.q.push_back(pl);
+	if (!w.th.joinable())
+		w.th = std::thread([&w] {
+			for (;;) {
+				std::shared_ptr<Playlist> p;
+				std::string next;
+				{
+					std::unique_lock<std::mutex> lk(w.m);
+					w.cv.wait(lk, [&] { return w.stop || !w.q.empty(); });
+					if (w.stop)
+						return;
+					p = w.q.front();
+					w.q.pop_front();
+					p->queued = false;
+					next = p->files[p->at];
+				}
+				const std::string real = real_inside(next, p->root);
+				if (real.empty()) { // gone, or now a link out of the media folder: skip it like a broken file
+					std::lock_guard<std::mutex> lk(w.m);
+					advance_locked(w, p, false);
+					continue;
+				}
+				obs_source_t *s = obs_weak_source_get_source(p->weak);
+				if (!s)
+					continue;
+				p->heard = false;
+				obs_data_t *d = obs_data_create();
+				obs_data_set_string(d, "local_file", real.c_str());
+				obs_source_update(s, d); // the same source: its filters, volume, tracks and mixer strip stay
+				obs_data_release(d);
+				obs_source_release(s);
+			}
+		});
+	w.cv.notify_one();
+}
 
 void on_media_ended(void *, calldata_t *cd)
 {
 	obs_source_t *src = (obs_source_t *)calldata_ptr(cd, "source");
-	std::shared_ptr<Playlist> pl;
-	std::string next;
-	{
-		std::lock_guard<std::mutex> lk(g_pl_mutex);
-		auto it = g_playlists.find(src);
-		if (it == g_playlists.end())
-			return;
-		pl = it->second;
-		if (pl->at + 1 >= pl->files.size() && !pl->loop)
-			return; // the last file of a playlist that does not loop
-		pl->at = (pl->at + 1) % pl->files.size();
-		next = pl->files[pl->at];
-	}
-	// Not on the media thread that sent the signal: ffmpeg_source's update stops and joins that thread.
-	obs_weak_source_t *w = pl->weak;
-	obs_weak_source_addref(w);
-	std::thread([w, next] {
-		obs_source_t *s = obs_weak_source_get_source(w);
-		obs_weak_source_release(w);
-		if (!s)
-			return;
-		obs_data_t *d = obs_data_create();
-		obs_data_set_string(d, "local_file", next.c_str());
-		obs_source_update(s, d); // the same source: its filters, volume, tracks and mixer strip stay
-		obs_data_release(d);
-		obs_source_release(s);
-	}).detach();
+	Worker &w = worker();
+	std::lock_guard<std::mutex> lk(w.m);
+	auto it = w.lists.find(src);
+	if (it == w.lists.end() || w.stop)
+		return;
+	advance_locked(w, it->second, it->second->heard.exchange(false));
 }
 
 void on_destroy(void *, calldata_t *cd)
 {
 	obs_source_t *src = (obs_source_t *)calldata_ptr(cd, "source");
+	Worker &w = worker();
 	std::shared_ptr<Playlist> pl;
 	{
-		std::lock_guard<std::mutex> lk(g_pl_mutex);
-		auto it = g_playlists.find(src);
-		if (it == g_playlists.end())
+		std::lock_guard<std::mutex> lk(w.m);
+		auto it = w.lists.find(src);
+		if (it == w.lists.end())
 			return;
 		pl = it->second;
-		g_playlists.erase(it);
+		w.lists.erase(it);
 	}
-	obs_weak_source_release(pl->weak);
-}
+	obs_source_remove_audio_capture_callback(src, on_audio, pl.get());
+} // a queued step keeps its own reference; the last one releases the weak source
 
 } // namespace
 
-void attach_playlist(obs_source_t *src, const std::vector<std::string> &files, bool loop)
+void attach_playlist(obs_source_t *src, const std::vector<std::string> &files, bool loop, const std::string &root)
 {
 	if (!src || files.size() < 2)
 		return;
 	auto pl = std::make_shared<Playlist>();
 	pl->weak = obs_source_get_weak_source(src);
 	pl->files = files;
+	pl->root = root;
 	pl->loop = loop;
+	Worker &w = worker();
 	{
-		std::lock_guard<std::mutex> lk(g_pl_mutex);
-		g_playlists[src] = pl;
+		std::lock_guard<std::mutex> lk(w.m);
+		if (w.stop)
+			return;
+		w.lists[src] = pl;
 	}
+	obs_source_add_audio_capture_callback(src, on_audio, pl.get());
 	signal_handler_t *sh = obs_source_get_signal_handler(src);
 	signal_handler_connect(sh, "media_ended", on_media_ended, nullptr);
 	signal_handler_connect(sh, "destroy", on_destroy, nullptr);
+	// The first file may have ended (or failed to open) before the signal was connected.
+	const enum obs_media_state st = obs_source_media_get_state(src);
+	if (st == OBS_MEDIA_STATE_ENDED || st == OBS_MEDIA_STATE_ERROR) {
+		std::lock_guard<std::mutex> lk(w.m);
+		advance_locked(w, pl, pl->heard.exchange(false));
+	}
 }
 
+json::Value playlist_status(obs_source_t *src)
+{
+	Worker &w = worker();
+	std::lock_guard<std::mutex> lk(w.m);
+	auto it = w.lists.find(src);
+	if (it == w.lists.end())
+		return json::Value();
+	json::Value o = json::Value::object();
+	o.set("files", (uint64_t)it->second->files.size());
+	o.set("at", (uint64_t)it->second->at);
+	o.set("state", it->second->unavailable ? "unavailable" : "playing");
+	return o;
+}
+
+void shutdown_playlists()
+{
+	Worker &w = worker();
+	{
+		std::lock_guard<std::mutex> lk(w.m);
+		w.stop = true;
+		w.q.clear();
+	}
+	w.cv.notify_all();
+	if (w.th.joinable())
+		w.th.join();
+}
 // ---- test hooks: levels after the filters ----
 
 json::Value measure(obs_source_t *src, uint32_t skip_ms, uint32_t ms)

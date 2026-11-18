@@ -173,3 +173,44 @@ test('validator: app exe names only, playback needs exactly one of file / folder
   assert.ok(!add({ app: { exe: 'a.exe' }, device: 'dev-mic' }).ok, 'one kind only');
   assert.ok(add({ device: 'dev-mic', filters: { suppress: { on: true }, eq: defaultTool('eq', false) } }).ok);
 });
+
+// ---- review fixes (Codex review of AU1/AU2, 2026-11-18) ----
+
+test('review: a gate whose close level is above its open level is refused; "#" in an exe name is refused', async () => {
+  const { req } = setup();
+  const r = await req('POST', '/ui/api/audio', { op: 'filters', audio: 'aud-mic', filters: { gate: { ...defaultTool('gate'), closeDb: -20, openDb: -30 } } });
+  assert.equal(r.body.error, 'bad-tools');
+  const doc = JSON.parse(readFileSync(SAMPLE, 'utf8'));
+  doc.audio.sources.push({ id: 'aud-x', name: 'X', volumeDb: 0, muted: false, monitoring: 'off', tracks: ['track1'], app: { exe: 'a#3Ab.exe' } });
+  assert.ok(!validateProject(doc).ok, 'validator');
+});
+
+test('review: two different programs with one name are offered but refused with a plain reason', async () => {
+  const { req, saved } = setup({ apps: [{ exe: 'player.exe', sound: true, ambiguous: true }] });
+  const c = await req('GET', '/ui/api/audio/choices');
+  assert.equal(c.body.apps[0].ambiguous, true);
+  const r = await req('POST', '/ui/api/audio', { op: 'add', key: 'app|player.exe' });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error, 'ambiguous-app');
+  assert.match(r.body.text, /Two different programs/);
+  assert.ok(!saved().audio.sources.some((x) => x.app));
+});
+
+test('review: sound files come from the media base only; the schema says exactly one kind and one of file / folder', async () => {
+  const { default: Ajv2020 } = await import('ajv/dist/2020.js');
+  const v = new Ajv2020({ allErrors: true, strict: true }).compile(SCHEMA);
+  const doc = JSON.parse(readFileSync(SAMPLE, 'utf8'));
+  const add = (x) => { const d = structuredClone(doc); d.audio.sources.push({ id: 'aud-x', name: 'X', volumeDb: 0, muted: false, monitoring: 'off', tracks: ['track1'], ...x }); return d; };
+  const good = add({ playback: { file: { base: 'media', rel: 'a.mp3' }, loop: true } });
+  assert.ok(validateProject(good).ok);
+  assert.ok(v(good), JSON.stringify(v.errors));
+  for (const [why, d] of [
+    ['base data', add({ playback: { file: { base: 'data', rel: 'a.mp3' }, loop: true } })],
+    ['file and folder', add({ playback: { file: { base: 'media', rel: 'a.mp3' }, folder: { base: 'media', rel: 'm' }, loop: true } })],
+    ['two kinds', add({ app: { exe: 'a.exe' }, device: 'dev-mic' })],
+    ['no kind', add({})],
+  ]) {
+    assert.ok(!validateProject(d).ok, `validator: ${why}`);
+    assert.ok(!v(d), `schema: ${why}`);
+  }
+});

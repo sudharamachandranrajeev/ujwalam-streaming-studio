@@ -194,7 +194,7 @@ export function audioChoices({ doc, list, mixer, recommended = null, apps = null
     }),
     skipped,
     // AU1: apps not in the mix yet (sound first), files and folders under the media base
-    apps: appsFree(doc, apps).map((a) => ({ key: `app|${a.exe}`, name: a.exe, sound: a.sound === true })),
+    apps: appsFree(doc, apps).map((a) => ({ key: `app|${a.exe}`, name: a.exe, sound: a.sound === true, ambiguous: a.ambiguous === true })),
     files: (Array.isArray(audio?.files) ? audio.files : []).map((rel) => ({ key: `file|${rel}`, name: rel })),
     folders: (Array.isArray(audio?.folders) ? audio.folders : []).map((x) => ({ key: `folder|${x.rel}`, name: x.rel, count: x.count })),
   };
@@ -235,6 +235,8 @@ export function addAudioSource(doc, { key, list, mixer, name, volumeDb, muted, a
     // the exe must be one the host listed just now (apps), never a made-up name
     const hit = (Array.isArray(apps) ? apps : []).find((a) => a && typeof a.exe === 'string' && lower(a.exe) === lower(ref));
     if (!hit || !EXE_RE.test(hit.exe)) return { error: 'unknown-app' };
+    // two different programs of this name run: OBS matches by name only, so either could go on air
+    if (hit.ambiguous === true) return { error: 'ambiguous-app' };
     if (appInMix(doc, hit.exe)) return { error: 'already-added' };
     src.app = { exe: hit.exe };
     src.name = label(name) ?? hit.exe.replace(/\.exe$/i, '');

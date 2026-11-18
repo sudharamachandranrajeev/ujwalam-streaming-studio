@@ -82,6 +82,11 @@ Dialog {
     function setTool(kind, patch) {
         const next = JSON.parse(JSON.stringify(filters));
         next[kind] = Object.assign(JSON.parse(JSON.stringify(toolOf(kind))), patch);
+        // the gate closes at or below where it opens: moving one level past the other takes the other along
+        const g = next[kind];
+        if (kind === "gate" && g.closeDb > g.openDb) {
+            if ("closeDb" in patch) g.openDb = g.closeDb; else g.closeDb = g.openDb;
+        }
         send(next);
     }
     function usePreset(p) { send(JSON.parse(JSON.stringify(p.filters))) }

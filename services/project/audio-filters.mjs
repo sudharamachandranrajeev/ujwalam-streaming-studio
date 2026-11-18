@@ -49,6 +49,9 @@ export function filtersProblems(f, p) {
       if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max || (kind === 'int' && !Number.isInteger(v)))
         out.push({ path: `${tp}.${x}`, message: `must be ${kind === 'int' ? 'an integer' : 'a number'} from ${min} to ${max}` });
     }
+    // the gate closes below where it opens (noise_gate_filter has no check; a close level above the open level chatters)
+    if (k === 'gate' && typeof t.closeDb === 'number' && typeof t.openDb === 'number' && t.closeDb > t.openDb)
+      out.push({ path: `${tp}.closeDb`, message: 'must not be above openDb' });
   }
   return out;
 }
