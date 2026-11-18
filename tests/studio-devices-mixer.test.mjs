@@ -3,7 +3,7 @@
 // layer sound and its audio input are one device), and the UI server's device routes (A1 Connect: preset placeholders
 // become the capture layers in place; A3 Try again: host devices.rescan). Device names here are placeholders.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -160,6 +160,26 @@ test('device routes: Try again calls devices.rescan and answers counts; devices 
   const off = harness({ list: null });
   const o = await off.post('/ui/api/devices/rescan', {});
   assert.equal(o.body.error, 'devices-off');
+});
+
+test('start (A1): a kept project with placeholders is rebound before the load when the devices are listed; a copy goes to _old', async () => {
+  const { rebindAtStart } = await import('../services/studio-ui/launch.mjs');
+  const h = harness();
+  const dataDir = path.dirname(h.file);
+  const lines = [];
+  const log = console.log;
+  console.log = (s) => lines.push(String(s));
+  try {
+    await rebindAtStart({ client: { call: async () => DEV_LIST }, file: h.file, profile: {}, dataDir });
+  } finally { console.log = log; }
+  assert.deepEqual(placeholderRoles(h.disk(), upgradePresets(PRESETS_DIR)), []);
+  const old = path.join(dataDir, '_old');
+  assert.ok(readdirSync(old).some((f) => /\.before-rebind\.project\.json$/.test(f)), lines.join('\n'));
+  // nothing listed: the file stays as it is
+  const h2 = harness();
+  const before = readFileSync(h2.file, 'utf8');
+  await rebindAtStart({ client: { call: async () => ({ devices: [] }) }, file: h2.file, profile: {}, dataDir: path.dirname(h2.file) });
+  assert.equal(readFileSync(h2.file, 'utf8'), before);
 });
 
 test('fake host: a waiting device sound is a waiting mixer row until devices.rescan finds it; mixer.levels lists meters only', async () => {
