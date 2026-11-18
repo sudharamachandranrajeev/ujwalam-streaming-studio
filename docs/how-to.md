@@ -3,7 +3,54 @@
 Plain steps for the alpha build on Windows 11. Brand, channel and account names appear here as placeholders only.
 Anything marked UNVERIFIED was read from the code but not run end to end on a real PC.
 
+## 0. Install, update, repair and remove with Ujwalam setup
+
+Every build is made in the project folder: `npm run build:setup` once, then `npm run package:alpha`. The build folder
+`out\dist` then holds the package (`ujwalam-<version>-win64.zip` with its `.zip.sha256`) and `Ujwalam-Setup.exe`.
+
+**Install or update.** Double-click `out\dist\Ujwalam-Setup.exe`. The window shows what is installed and what is in
+the build folder, and offers one button: Install, Update to <version>, or Repair (same version). It needs no admin
+rights and installs into `%LOCALAPPDATA%\Ujwalam`. What happens, in order:
+
+1. It checks the zip against its checksum file. A damaged or changed zip is refused and nothing changes.
+2. It unpacks the zip with Windows' own `tar` and runs the installer (`Install-Ujwalam.ps1`) with no window. The
+   installer checks every file again, then copies the new version next to the old one.
+3. Before anything switches, it copies your settings into `data\backups\settings\` (settings, projects, flags,
+   connections, bots, outputs, the event database; not recordings or clips). The newest 10 backups are kept, and
+   always the one a rollback needs. A settings file over 4 MiB is named on screen (it is not copied). If the backup
+   fails, nothing switches and no setting changes.
+4. It switches to the new version and checks that every backed-up file is still in place, and that the stream key
+   names in Windows Credential Manager are all still there. It never reads a key.
+5. If a shortcut cannot be written after the switch, it says so; the new version is installed and works, and Repair
+   puts the shortcut back.
+
+It remembers the build folder, so the studio can offer the next update. Only one setup runs at a time, and Ujwalam
+does not start while setup is working (open it again when setup has finished).
+
+**Update from the studio.** When the build folder has a newer package, the top bar shows **Update available:
+<version>**. One click installs it; the studio keeps running and the new version starts the next time you open
+Ujwalam. While you are live or recording it refuses and says why: stop first, then click again. The studio checks
+when it starts and when you click **More > Check for updates**. It does not check in the background.
+
+**Roll back.** Start menu > **Ujwalam setup (update, repair, uninstall)** > **Roll back to <version>**. Ujwalam must be
+closed. Your settings go back to how they were before that update, all at once or not at all. The newer settings are
+kept in a backup folder, and rolling forward again brings them back. If the backup of that update is missing or
+damaged, the rollback is refused and nothing changes (`Install-Ujwalam.ps1 -Rollback -Force` switches the version
+anyway and leaves your current settings as they are).
+
+**Repair.** Same window: with the installed version's package in the build folder, the button says **Repair**. It
+re-checks every file and replaces the version folder if anything was changed or is missing. Your data is not touched.
+
+**Uninstall.** Same window: **Uninstall**. Ujwalam must be closed. It asks once. The program files and shortcuts are
+removed, and your data folder (settings, projects, recordings, clips) is **kept** unless you tick "Also delete my
+data". Stream keys stay in Windows Credential Manager (entries named `Ujwalam/...`); remove them there by hand if you
+want.
+
+Setup leaves nothing running: it ends when its window closes.
+
 ## 1. Install from the zip
+
+The steps below are what Ujwalam setup does for you. Use them when you want to run the installer by hand.
 
 1. Unzip the folder anywhere.
 2. In that folder run:

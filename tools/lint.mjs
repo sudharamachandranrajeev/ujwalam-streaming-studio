@@ -238,6 +238,9 @@ function checkText(rel, text, lines, out, wanted, ctx) {
         if (!m) continue;
         // A value that is only an environment-variable-shaped name (UPPER_SNAKE) is a name, not a secret.
         if (label === 'secret assignment' && ENV_NAME_RE.test(m[1] ?? '')) continue;
+        // A Windows assembly identity's publicKeyToken (16 hex digits, e.g. Common-Controls in an app manifest) is the
+        // published id of a public key, not a credential (Ujwalam-Setup.exe manifest, 2026-11-18).
+        if (label === 'secret assignment' && /^[0-9a-f]{16}$/i.test(m[1] ?? '') && /publicKey$/i.test(l.slice(0, m.index))) continue;
         out.push([rel, i + 1, 'secret', `looks like a secret: ${label}`]);
         break;
       }

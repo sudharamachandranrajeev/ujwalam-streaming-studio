@@ -135,6 +135,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/AlertStrip.qml
 		qml/TaskCenter.qml
 		qml/TaskChip.qml
+		qml/UpdateButton.qml
 		qml/TrayFlow.qml
 		qml/FeedbackWindow.qml
 		qml/ReportDialog.qml

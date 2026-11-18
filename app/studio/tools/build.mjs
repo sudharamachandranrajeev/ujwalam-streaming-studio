@@ -26,7 +26,7 @@ export function qtDir() {
   return typeof v === 'string' && v ? path.resolve(REPO_ROOT, v) : null;
 }
 
-function vcvars() {
+export function vcvars() {
   const pf86 = process.env['ProgramFiles(x86)'];
   const vswhere = pf86 && path.join(pf86, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
   if (!vswhere || !existsSync(vswhere)) return null;

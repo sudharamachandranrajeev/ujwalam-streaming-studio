@@ -86,7 +86,7 @@ describe('QML studio: More menu windows (headless probe)', { skip }, () => {
     test('flags on: Posts, Growth numbers and Report a problem show, in the widget order', async () => {
       const { s } = await probe({ flagIds: ['posting', 'growth', 'report-button'], actions: ['more-open'] });
       assert.equal(s.more.open, true);
-      assert.deepEqual(s.more.items.map((i) => i.id), ['import', 'feedback', 'posts', 'growth', 'report']);
+      assert.deepEqual(s.more.items.map((i) => i.id), ['import', 'scenebuilder', 'feedback', 'posts', 'growth', 'report', 'updates']);
       assert.ok(s.more.items.every((i) => i.enabled && i.tip !== ''), 'every item enabled with a tip');
     });
   });

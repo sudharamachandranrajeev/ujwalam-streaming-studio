@@ -173,6 +173,13 @@ test('secret: an environment-variable-shaped name is not a secret; a real token-
   assert.deepEqual(pos.map((x) => x.line), [1, 2, 3]);
 });
 
+test('secret: a Windows manifest publicKeyToken (16 hex digits) is a public id, not a secret; other 16-hex tokens still are', async () => {
+  const neg = await run({ 'a.manifest': '<assemblyIdentity name="Microsoft.Windows.Common-Controls" publicKeyToken="6595b64144ccf1df" language="*"/>\n' }, 'secret');
+  assert.deepEqual(neg, []);
+  const pos = await run({ 'a.txt': 'token="6595b64144ccf1df"\npublicKeyToken="6595b64144ccf1df6595b64144ccf1df"\n' }, 'secret'); // lint-allow: secret
+  assert.deepEqual(pos.map((x) => x.line), [1, 2]);
+});
+
 test('secret marker outside tests/ is itself a finding and the secret check still applies', async () => {
   const f = await run({ 'src/a.txt': `${SECRETS.aws} // lint-allow: secret\n` });
   assert.deepEqual(f.map((x) => x.rule).sort(), ['lint-allow', 'secret']);

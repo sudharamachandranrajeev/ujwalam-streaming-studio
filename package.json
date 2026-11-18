@@ -18,6 +18,7 @@
     "restore": "node tools/restore-local.mjs",
     "build:host": "node app/host/tools/build.mjs",
     "build:studio": "node app/studio/tools/build.mjs",
+    "build:setup": "node app/setup/tools/build.mjs",
     "test:host": "node --test --test-timeout=300000 --test-concurrency=2 \"app/host/tests/*.test.mjs\"",
     "bench": "node tools/bench/run.mjs",
     "soak": "node tools/soak/live-soak.mjs",
