@@ -232,6 +232,7 @@ describe('SB4 CLI: theme <reference> behind the scene-builder flag, dry run by d
     const ref = writePng(FIXTURES.glow(), dir, 'cli ref');
     const outs = [], errs = [];
     const o = (s) => outs.push(s), e = (s) => errs.push(s);
+    writeFileSync(path.join(data, 'flags.local.json'), JSON.stringify({ flags: { 'scene-builder': false } })); // on by default since D390
     assert.equal(await cli(['theme', ref, '--themes-dir', themes, '--data-dir', data], o, e), 2);
     assert.match(errs.join('\n'), /scene-builder feature flag is off/);
     writeFileSync(path.join(data, 'flags.local.json'), JSON.stringify({ flags: { 'scene-builder': true } }));

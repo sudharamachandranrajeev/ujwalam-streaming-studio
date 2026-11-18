@@ -65,6 +65,7 @@ describe('QML studio: new scene from a reference (headless probe)', { skip }, ()
   async function probe({ actions = [], ms = Math.max(9000, 4000 + actions.length * 900), flagsOn = ['scene-builder'], live = false } = {}) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qml-sb-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
+    flags.set('scene-builder', flagsOn.includes('scene-builder')); // on by default since D390: [] means off here
     for (const id of flagsOn) flags.set(id, true);
     const file = path.join(dataDir, 'p.project.json');
     const assetsDir = path.join(dataDir, 'assets'); mkdirSync(assetsDir);
@@ -95,7 +96,7 @@ describe('QML studio: new scene from a reference (headless probe)', { skip }, ()
   const open = ['more-open', 'more:scenebuilder'];
   const WAIT = [`sb-pick:${REF}`]; // a quiet action: the window gets its answer before the next one
 
-  test('flag off (the default): no menu item; flag on: the item with its tip', async () => {
+  test('flag off: no menu item; flag on: the item with its tip', async () => {
     const r = await probe({ actions: ['more-open', 'more:scenebuilder'], flagsOn: [] });
     assert.equal(done(r.p)['more:scenebuilder'], false);
     assert.ok(!r.s.more.items.some((i) => i.id === 'scenebuilder'));

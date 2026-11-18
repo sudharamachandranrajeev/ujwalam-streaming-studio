@@ -306,17 +306,18 @@ describe('local model hook (typed, never a paid API)', () => {
 });
 
 describe('CLI entry point behind the scene-builder flag', () => {
-  test('the flag is defined and off by default', () => {
+  test('the flag is defined and on by default (user-requested, D390)', () => {
     const flags = JSON.parse(readFileSync(path.join(REPO, 'data', 'flags.json'), 'utf8')).flags;
     const f = flags.find((x) => x.id === 'scene-builder');
     assert.ok(f, 'flag defined');
-    assert.equal(f.default, false);
+    assert.equal(f.default, true);
   });
   test('flag off: refuses with exit 2; flag on: prints a schema-valid read; nothing is written', async () => {
     const data = mkdtempSync(path.join(dir, 'data-'));
     const p = writePng(layoutV().canvas, dir, 'cli');
     const before = readdirSync(dir).sort();
     const outs = [], errs = [];
+    writeFileSync(path.join(data, 'flags.local.json'), JSON.stringify({ flags: { 'scene-builder': false } })); // on by default since D390
     assert.equal(await cli(['read', p, '--data-dir', data], (s) => outs.push(s), (s) => errs.push(s)), 2);
     assert.match(errs.join('\n'), /scene-builder feature flag is off/);
     assert.equal(outs.length, 0);

@@ -130,6 +130,7 @@ export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'yo
           return { scene: p.scene, layer: p.layer, placement: structuredClone(l.placement) };
         }
         // D292: the structure edits (duplicate, add, order, remove) as the real host takes them from the project document.
+        case 'capture.listTargets': return { displays: [{ id: 'display-1', name: 'Display 1', width: 1920, height: 1080 }], windows: [{ id: 'Example App:ExampleClass:example.exe', title: 'Example App', exe: 'example.exe' }] }; // placeholders only (D390)
         case 'scenes.create': {
           if (scenes.some((x) => x.id === p.scene.id)) return { ok: true }; // one entry per scene; the fake has one canvas each
           scenes.push({ id: p.scene.id, name: p.scene.name, canvas: p.scene.canvas }); layers[p.scene.id] ??= [];
