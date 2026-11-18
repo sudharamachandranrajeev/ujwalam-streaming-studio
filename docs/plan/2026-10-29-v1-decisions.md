@@ -2077,3 +2077,18 @@ Growth plan ED2. Decided:
   unloads it after 120 s idle (UNVERIFIED for every version). Never while live or recording (6 GB VRAM, D1). The rules
   result stands when the model is off, fails or answers out of shape. CLI `--ai`; the studio window follows.
   UNVERIFIED: a real read on the user's references.
+
+## D393 — Scene music moods from the local procedural maker (user, 2026-11-18)
+
+- **Decision.** MU1 of `docs/plan/2026-11-18-audio-mixer-music.md`. Scene music beds come from the local procedural
+  maker `services/clip/scene_music.py` (numpy only, `reel_music.py` unchanged). The five moods the user chose are data:
+  `data/music/moods/*.json`, schema `data/schemas/music-mood.schema.json`. They are starting-soon (hype synthwave),
+  lobby (chill lofi), in-match (low dark ambient), brb (lofi) and ending (calm outro).
+- **Beds.** Each bed is a seeded 48 kHz stereo 16-bit WAV of 3 to 4 minutes that loops seamlessly. The loop seam is
+  checked: the step from the last sample to the first is compared with the 99.9th-percentile step.
+- **Loudness.** Integrated LUFS (BS.1770-4, cross-checked against ffmpeg ebur128 to 0.1 LU): -20 starting-soon, -23
+  lobby and brb, -24 ending, -30 in-match. Tolerance 1 LU, peak ceiling -1 dBFS.
+- **Where it runs.** The library (about 180 MB, about 7 min of CPU) is made off air only, into the app data folder,
+  never into the repo and never committed. The CLI refuses unless `tools/live-check.mjs` says off air.
+- **Open.** The moods stay `proposed` until the user listens. Playback and scene wiring are MU2. ACE-Step comes later.
+  Evidence `docs/evidence/2026-11-18-scene-music-moods.md`.
