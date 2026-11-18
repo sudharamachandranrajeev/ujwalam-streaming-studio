@@ -157,9 +157,12 @@ async function recordSwitch(name, t) {
   return st.sinks[0].path;
 }
 
-// Frames between full white and full black (the transition running), as one run.
+// Frames that differ from both the first (white) and the last (black) frame: the transition running, as one run.
+// Not a mid-grey band: slide and swipe ease in and out (measured 2026-11-18: mean luma 234..17 over frames 22..46 of a
+// 1 s slide, but only 16 frames inside 30..225), so a band check undercounts them; the wipe is linear.
 function midRun(f) {
-  const mid = f.map((x) => x.y > 30 && x.y < 225);
+  const y0 = f[0].y, y1 = f.at(-1).y;
+  const mid = f.map((x) => Math.abs(x.y - y0) > 1 && Math.abs(x.y - y1) > 1);
   const runs = [];
   for (let i = 0; i < mid.length; i++) if (mid[i]) { if (i > 0 && mid[i - 1]) runs[runs.length - 1]++; else runs.push(1); }
   return runs;
@@ -177,7 +180,7 @@ for (const t of [
     assert.ok(f[0].y > 200, 'starts white');
     assert.ok(f.at(-1).y < 40, 'ends black');
     assert.equal(runs.length, 1, 'one transition');
-    assert.ok(runs[0] >= 22 && runs[0] <= 32, `${runs[0]} frames in between (1 s at 30 fps)`);
+    assert.ok(runs[0] >= 20 && runs[0] <= 32, `${runs[0]} frames in between (1 s at 30 fps; eased ends are within 1 luma step)`);
   });
 }
 

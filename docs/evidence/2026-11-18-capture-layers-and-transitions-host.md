@@ -166,3 +166,35 @@ All runs were preceded by `tools/live-check.mjs` (off air) and ran one file at a
   - `app/host/tests/host-screen-capture.test.mjs`: gained 128-character and non-ASCII display refusals, and its live window layer now uses the default `title` match.
   - The other host tests and the full CI.
 
+
+### Host GPU runs (2026-11-18, the user's studio closed)
+
+The env was `UJWALAM_HEADLESS=1` and `UJWALAM_SCREEN_CAPTURE_TESTS=1`. Each file ran after `tools/live-check.mjs` (off air), one at a time at BelowNormal priority.
+
+The first coordinator run had 3 failures. All three were faults in the tests, not the host:
+
+- **Recorded slide and swipe, "frames in between".** The test counted frames with mean luma in 30..225. A per-frame dump shows that `durationMs` applies:
+  - 1 s slide: luma 234..17 over frames 22..46;
+  - 1 s swipe: the same frames;
+  - 1 s wipe: luma 234..17, linear, over frames 20..48.
+
+  OBS eases slide and swipe in and out, so only 16 slide frames fall inside the band. The test now counts frames that differ by more than 1 luma step from both the first and the last frame, with a bound of 20..32. Measured: slide 24, swipe 24, wipe 28.
+- **Screen capture "off by default".** The host drops unavailable layers from `plan.sources` (`model.cpp`, "unavailable sources are not built; drop them", since 2026-10-30). The test now checks `unavailable[].type` and that the two layers are not built. A plain `project.load` refuses forbidden layers with -32001, so the test now checks that refusal and then loads with `skipUnavailable`.
+- **Screen capture "bad specs".** `planInHost` runs the project validator first, so the bad spec never reached the host, and the thrown error had no RPC code. The test now checks that the validator refuses it and that the raw `project.plan` RPC refuses it with -32602. A probe showed that the host refuses `{"display":""}` with -32602.
+
+Results:
+
+| Test file | Pass | Fail |
+| --- | --- | --- |
+| `host-transitions-d391` | 9 | 0 |
+| `host-screen-capture` | 3 | 0 (2 displays and 3 windows listed; counts only) |
+| `host-stinger` | 4 | 0 |
+| `host-api` | 16 | 0 |
+| `host-transitions`, run 1 | 3 | 1 |
+| `host-transitions`, run 2 | 4 | 0 |
+
+The `host-transitions` failure in run 1 was a frame stall, not a wrong duration:
+
+- The recorded fade jumped from luma 235 to 103 in one frame, repeated one frame and then finished. About 16 frames of the fade are missing.
+- The passing run fades linearly over 30 frames.
+- The fade code path did not change in this branch. The stall is intermittent and remains open.
