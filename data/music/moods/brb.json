@@ -1,0 +1,161 @@
+{
+  "$comment": "MU1 scene music mood (plan 2026-11-18-audio-mixer-music.md, user choice 2026-11-18). Read by services/clip/scene_music.py; schema data/schemas/music-mood.schema.json. Tempo, keys, chords, levels and loudness are the agent's proposal until the user listens (UNVERIFIED).",
+  "id": "brb",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-18",
+  "title": "Be right back: lofi",
+  "generator": "procedural",
+  "chordTypes": {
+    "m7": [
+      0,
+      3,
+      7,
+      10
+    ],
+    "maj7": [
+      0,
+      4,
+      7,
+      11
+    ],
+    "7": [
+      0,
+      4,
+      7,
+      10
+    ],
+    "maj9": [
+      0,
+      4,
+      7,
+      11,
+      14
+    ],
+    "m9": [
+      0,
+      3,
+      7,
+      10,
+      14
+    ]
+  },
+  "tempo": {
+    "minBpm": 76,
+    "maxBpm": 90
+  },
+  "keys": [
+    55,
+    57,
+    60,
+    62,
+    64
+  ],
+  "progressions": [
+    {
+      "id": "I-IV-iii-vi",
+      "chords": [
+        {
+          "root": 0,
+          "type": "maj9"
+        },
+        {
+          "root": 5,
+          "type": "maj7"
+        },
+        {
+          "root": 4,
+          "type": "m7"
+        },
+        {
+          "root": 9,
+          "type": "m7"
+        }
+      ]
+    },
+    {
+      "id": "IV-V-iii-vi",
+      "chords": [
+        {
+          "root": 5,
+          "type": "maj7"
+        },
+        {
+          "root": 7,
+          "type": "7"
+        },
+        {
+          "root": 4,
+          "type": "m7"
+        },
+        {
+          "root": 9,
+          "type": "m9"
+        }
+      ]
+    },
+    {
+      "id": "ii-V-I-IV",
+      "chords": [
+        {
+          "root": 2,
+          "type": "m7"
+        },
+        {
+          "root": 7,
+          "type": "7"
+        },
+        {
+          "root": 0,
+          "type": "maj9"
+        },
+        {
+          "root": 5,
+          "type": "maj7"
+        }
+      ]
+    }
+  ],
+  "instruments": {
+    "keys": {
+      "level": 0.28
+    },
+    "bass": {
+      "level": 0.3
+    },
+    "kick": {
+      "level": 0.45
+    },
+    "snare": {
+      "level": 0.13
+    },
+    "hat": {
+      "level": 0.07
+    },
+    "crackle": {
+      "level": 0.025
+    },
+    "pad": {
+      "level": 0.18,
+      "density": 0.7
+    },
+    "bell": {
+      "level": 0.1,
+      "density": 0.6
+    }
+  },
+  "drums": "lofi",
+  "swing": 0.62,
+  "lowpassHz": 3800,
+  "reverb": {
+    "seconds": 1.4,
+    "mix": 0.14
+  },
+  "loudness": {
+    "targetLufs": -23.0,
+    "toleranceLu": 1.0,
+    "peakCeilingDb": -1.0
+  },
+  "durationSec": 180,
+  "why": "Lofi again but a little brighter and looser than the lobby: 76-90 BPM, more swing (0.62), major-leaning progressions, a soft pad and sparse bells, lighter drums. -23 LUFS."
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ujwalam/music-mood.schema.json",
+  "title": "Scene music mood manifest (MU1)",
+  "description": "One mood of the procedural scene music maker (services/clip/scene_music.py). Data, not code: tempo, key, instruments, loudness target, version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "status", "checked", "title", "generator", "tempo", "keys", "chordTypes", "progressions",
+               "instruments", "drums", "swing", "lowpassHz", "reverb", "loudness", "durationSec", "why"],
+  "properties": {
+    "$comment": { "type": "string" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "status": { "enum": ["proposed", "unverified", "verified"] },
+    "checked": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "generator": { "enum": ["procedural"] },
+    "tempo": {
+      "type": "object", "additionalProperties": false, "required": ["minBpm", "maxBpm"],
+      "properties": { "minBpm": { "type": "integer", "minimum": 40, "maximum": 160 },
+                      "maxBpm": { "type": "integer", "minimum": 40, "maximum": 160 } }
+    },
+    "keys": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "type": "integer", "minimum": 36, "maximum": 72 } },
+    "chordTypes": {
+      "type": "object", "minProperties": 1,
+      "additionalProperties": { "type": "array", "minItems": 2, "maxItems": 6, "items": { "type": "integer", "minimum": 0, "maximum": 24 } }
+    },
+    "progressions": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "chords"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "chords": {
+            "type": "array", "minItems": 2, "maxItems": 8,
+            "items": { "type": "object", "additionalProperties": false, "required": ["root", "type"],
+                       "properties": { "root": { "type": "integer", "minimum": -12, "maximum": 12 },
+                                       "type": { "type": "string", "minLength": 1 } } }
+          }
+        }
+      }
+    },
+    "instruments": {
+      "type": "object", "minProperties": 1,
+      "propertyNames": { "enum": ["keys", "pad", "bass", "pulseBass", "arp", "drone", "bell", "kick", "snare", "clap", "hat", "crackle"] },
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false, "required": ["level"],
+        "properties": {
+          "level": { "type": "number", "minimum": 0, "maximum": 1 },
+          "density": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "drums": { "enum": ["four-on-floor", "lofi", "none"] },
+    "swing": { "type": "number", "minimum": 0.5, "maximum": 0.75 },
+    "lowpassHz": { "type": "number", "minimum": 400, "maximum": 12000 },
+    "reverb": {
+      "type": "object", "additionalProperties": false, "required": ["seconds", "mix"],
+      "properties": { "seconds": { "type": "number", "minimum": 0, "maximum": 8 }, "mix": { "type": "number", "minimum": 0, "maximum": 1 } }
+    },
+    "loudness": {
+      "type": "object", "additionalProperties": false, "required": ["targetLufs", "toleranceLu", "peakCeilingDb"],
+      "properties": {
+        "targetLufs": { "type": "number", "minimum": -40, "maximum": -14 },
+        "toleranceLu": { "type": "number", "minimum": 0.1, "maximum": 3 },
+        "peakCeilingDb": { "type": "number", "minimum": -6, "maximum": 0 }
+      }
+    },
+    "durationSec": { "type": "number", "minimum": 60, "maximum": 600 },
+    "why": { "type": "string", "minLength": 1 }
+  }
+}

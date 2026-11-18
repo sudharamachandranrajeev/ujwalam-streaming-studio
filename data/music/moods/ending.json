@@ -1,0 +1,124 @@
+{
+  "$comment": "MU1 scene music mood (plan 2026-11-18-audio-mixer-music.md, user choice 2026-11-18). Read by services/clip/scene_music.py; schema data/schemas/music-mood.schema.json. Tempo, keys, chords, levels and loudness are the agent's proposal until the user listens (UNVERIFIED).",
+  "id": "ending",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-18",
+  "title": "Ending: calm outro",
+  "generator": "procedural",
+  "chordTypes": {
+    "maj7": [
+      0,
+      4,
+      7,
+      11
+    ],
+    "maj9": [
+      0,
+      4,
+      7,
+      11,
+      14
+    ],
+    "m7": [
+      0,
+      3,
+      7,
+      10
+    ],
+    "sus2": [
+      0,
+      2,
+      7
+    ],
+    "maj": [
+      0,
+      4,
+      7
+    ]
+  },
+  "tempo": {
+    "minBpm": 58,
+    "maxBpm": 68
+  },
+  "keys": [
+    53,
+    55,
+    57,
+    60
+  ],
+  "progressions": [
+    {
+      "id": "I-V-vi-IV",
+      "chords": [
+        {
+          "root": 0,
+          "type": "maj9"
+        },
+        {
+          "root": 7,
+          "type": "sus2"
+        },
+        {
+          "root": 9,
+          "type": "m7"
+        },
+        {
+          "root": 5,
+          "type": "maj7"
+        }
+      ]
+    },
+    {
+      "id": "I-iii-IV-V",
+      "chords": [
+        {
+          "root": 0,
+          "type": "maj7"
+        },
+        {
+          "root": 4,
+          "type": "m7"
+        },
+        {
+          "root": 5,
+          "type": "maj9"
+        },
+        {
+          "root": 7,
+          "type": "sus2"
+        }
+      ]
+    }
+  ],
+  "instruments": {
+    "pad": {
+      "level": 0.45
+    },
+    "keys": {
+      "level": 0.2,
+      "density": 0.8
+    },
+    "bell": {
+      "level": 0.16,
+      "density": 0.9
+    },
+    "bass": {
+      "level": 0.15
+    }
+  },
+  "drums": "none",
+  "swing": 0.5,
+  "lowpassHz": 4500,
+  "reverb": {
+    "seconds": 3.5,
+    "mix": 0.35
+  },
+  "loudness": {
+    "targetLufs": -24.0,
+    "toleranceLu": 1.0,
+    "peakCeilingDb": -1.0
+  },
+  "durationSec": 180,
+  "why": "Slow and warm, no drums: wide pad on major-seventh chords, a sparse electric-piano melody, high soft bells, long reverb, 4.5 kHz low-pass, 58-68 BPM. -24 LUFS, a calm feel while the stream closes."
+}

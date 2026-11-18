@@ -1,0 +1,146 @@
+{
+  "$comment": "MU1 scene music mood (plan 2026-11-18-audio-mixer-music.md, user choice 2026-11-18). Read by services/clip/scene_music.py; schema data/schemas/music-mood.schema.json. Tempo, keys, chords, levels and loudness are the agent's proposal until the user listens (UNVERIFIED).",
+  "id": "starting-soon",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-18",
+  "title": "Starting soon: hype synthwave",
+  "generator": "procedural",
+  "chordTypes": {
+    "m": [
+      0,
+      3,
+      7
+    ],
+    "maj": [
+      0,
+      4,
+      7
+    ],
+    "m7": [
+      0,
+      3,
+      7,
+      10
+    ],
+    "maj7": [
+      0,
+      4,
+      7,
+      11
+    ]
+  },
+  "tempo": {
+    "minBpm": 108,
+    "maxBpm": 122
+  },
+  "keys": [
+    45,
+    47,
+    50,
+    52
+  ],
+  "progressions": [
+    {
+      "id": "i-VI-III-VII",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 8,
+          "type": "maj"
+        },
+        {
+          "root": 3,
+          "type": "maj"
+        },
+        {
+          "root": 10,
+          "type": "maj"
+        }
+      ]
+    },
+    {
+      "id": "i-VII-VI-VII",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 10,
+          "type": "maj"
+        },
+        {
+          "root": 8,
+          "type": "maj"
+        },
+        {
+          "root": 10,
+          "type": "maj"
+        }
+      ]
+    },
+    {
+      "id": "i-III-VII-VI",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m7"
+        },
+        {
+          "root": 3,
+          "type": "maj7"
+        },
+        {
+          "root": 10,
+          "type": "maj"
+        },
+        {
+          "root": 8,
+          "type": "maj7"
+        }
+      ]
+    }
+  ],
+  "instruments": {
+    "pad": {
+      "level": 0.45
+    },
+    "pulseBass": {
+      "level": 0.5
+    },
+    "arp": {
+      "level": 0.35,
+      "density": 0.85
+    },
+    "kick": {
+      "level": 0.7
+    },
+    "clap": {
+      "level": 0.35
+    },
+    "snare": {
+      "level": 0.15
+    },
+    "hat": {
+      "level": 0.18
+    }
+  },
+  "drums": "four-on-floor",
+  "swing": 0.5,
+  "lowpassHz": 7500,
+  "reverb": {
+    "seconds": 1.6,
+    "mix": 0.18
+  },
+  "loudness": {
+    "targetLufs": -20.0,
+    "toleranceLu": 1.0,
+    "peakCeilingDb": -1.0
+  },
+  "durationSec": 180,
+  "why": "Synthwave sits at 108-122 BPM with a four-on-the-floor kick, offbeat hats, an 8th-note pulse bass, a 16th arpeggio and a wide saw pad in a minor key; a clap on 2 and 4 and a snare fill every 8 bars give the build. Loudest of the five (-20 LUFS) because it plays before the stream, with nobody talking."
+}
