@@ -161,7 +161,9 @@ describe('mutating API', () => {
     assert.equal((await post(port, a, route, { method: 'layers.move', params: { scene: 's', layer: 'l', index: -1 } })).status, 400);
     assert.equal((await post(port, a, route, { method: 'scenes.activate', params: { scene: '../x' } })).status, 400);
     assert.equal((await post(port, a, route, { method: 'scenes.list', params: { extra: 1 } })).status, 400);
-    assert.equal((await post(port, a, route, { method: 'mixer.setVolume', params: { id: 'scene-1/cam', db: 12 } })).status, 400);
+    // -100..+12 dB since B5 (2026-11-18): +12 is taken, above it is refused.
+    assert.equal((await post(port, a, route, { method: 'mixer.setVolume', params: { id: 'scene-1/cam', db: 12.5 } })).status, 400);
+    assert.equal((await post(port, a, route, { method: 'mixer.setVolume', params: { id: 'scene-1/cam', db: 12 } })).status, 200);
     assert.equal((await post(port, a, route, { method: 'mixer.setVolume', params: { id: 'nocolon', db: -3 } })).status, 400);
     assert.equal((await post(port, a, route, { method: 'mixer.setVolume', params: { id: 'scene-1/cam', db: -3 } })).status, 200);
     // inspector: nested placement patch, every field range-checked; no unknown keys, no empty patch

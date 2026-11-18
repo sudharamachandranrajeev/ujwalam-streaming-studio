@@ -20,7 +20,9 @@ import path from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadProject, saveProject } from '../project/store.mjs';
-import { addAudioSource, audioChoices, removeAudioSource, streamTracks } from '../project/audio-sources.mjs';
+import { addAudioSource, audioChoices, removeAudioSource, sameDeviceRows, streamTracks } from '../project/audio-sources.mjs';
+
+export { sameDeviceRows };
 import { loadDevicePresets, matchRoles } from '../project/device-roles.mjs';
 
 export const AUDIO_ROUTES = Object.freeze(['/ui/api/audio/choices', '/ui/api/audio']);
@@ -42,6 +44,7 @@ export const AUDIO_ERROR_TEXT = Object.freeze({
   'no-track': 'The project has no audio track.',
   'bad-key': 'Pick a sound from the list.',
   'in-stream': 'That sound is in the stream already.',
+  'same-device': 'That device\'s sound is in the mix already through another channel; adding it twice would double it in the stream.',
   'bad-params': 'That request was not understood.',
   'not-saved': 'The project file could not be saved, so the change was undone. Nothing changed.',
   'not-saved-live': 'The project file could not be saved and the change could not be undone: it is live until Ujwalam restarts.',
@@ -156,6 +159,7 @@ export function createAudioRoutes(opts) {
     const list = body.key.startsWith('layer|') ? null : await listDevices();
     const row = body.key.startsWith('layer|') ? mixer.find((m) => m.layer === body.key.slice(6) && typeof m.audioSource !== 'string') : null;
     const x = addAudioSource(doc, { key: body.key, list, mixer, name: body.name, volumeDb: row?.volumeDb, muted: row?.muted });
+    if (x.error === 'same-device') return json(res, 409, { error: x.error, text: `That device's sound is in the mix already as ${String(x.as).slice(0, 120)}; adding it twice would double it in the stream.` });
     if (x.error) return refuse(res, x.error, 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
     return commit(res, file, x.project, () => host.call('audio.addFromProject', { project: x.project, audio: x.audio.id }),
       () => host.call('audio.removeFromProject', { project: doc, audio: x.audio.id }),

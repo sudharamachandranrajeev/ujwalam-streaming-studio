@@ -93,7 +93,10 @@ export function createHostClient({ dataDir = null, env = process.env } = {}) {
 
 /** BLOCKED-ON-HOST fake. Behaves like the proposed host API over in-memory data. Outputs are never "ready" unless
  *  outputsReady is passed (tests / UI work only), so start/stop stay disabled by default. */
-export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'youtube-v', 'twitch', 'kick', 'record'] } = {}) {
+// waitingAudio (tests, 2026-11-18): project device sounds whose device is "not connected" ([{id, name}]): mixer.list shows
+// them as waiting rows (as the real host does, A2) until devices.rescan "finds" them (they become normal strips).
+export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'youtube-v', 'twitch', 'kick', 'record'], waitingAudio = [] } = {}) {
+  const waiting = waitingAudio.map((w) => ({ ...w }));
   const sinkState = new Map(sinks.map((id) => [id, 'idle']));
   const isRec = (id) => id === 'record' || id.startsWith('record-'); // "record" (H) and "record-v" (V, LC1)
   const scenes = [
@@ -173,7 +176,20 @@ export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'yo
         // D390/D391: the fake has no displays, windows or OBS transitions; it lists none (never invented titles).
         case 'capture.listTargets': return { displays: [], windows: [], fake: true };
         case 'transitions.types': return { types: [{ type: 'cut', fields: [], available: true }, { type: 'fade', fields: ['durationMs', 'easing'], available: true }], wipes: [], fake: true };
-        case 'mixer.list': return { sources: mixer.map((m) => ({ ...m, mixers: TRACKS.reduce((b, t, n) => (m.tracks.includes(t.id) ? b | (1 << n) : b), 0), peakDb: null })), tracks: TRACKS };
+        case 'mixer.list': return {
+          sources: [
+            ...mixer.map((m) => ({ ...m, mixers: TRACKS.reduce((b, t, n) => (m.tracks.includes(t.id) ? b | (1 << n) : b), 0), peakDb: null })),
+            ...waiting.map((w) => ({ id: `audio:${w.id}`, name: w.name, audioSource: w.id, waiting: true, message: `Waiting for audio input "${w.name}": it is not connected. Plug it in; the sound connects by itself.`, active: false, peakDb: null, magnitudeDb: null })),
+          ],
+          tracks: TRACKS,
+        };
+        case 'mixer.levels': return { busy: false, levels: mixer.map((m) => ({ id: m.id, peakDb: null, magnitudeDb: null })) };
+        // devices.rescan ("Try again", 2026-11-18): the waiting device sounds are found.
+        case 'devices.rescan': {
+          const n = waiting.length;
+          for (const w of waiting.splice(0)) mixer.push({ id: `audio:${w.id}`, name: w.name, volumeDb: 0, muted: false, cue: false, audioSource: w.id, tracks: ['t1'] });
+          return { retried: 0, audio: n, media: 0, pass: null };
+        }
         case 'mixer.setTracks': {
           const m = need(mixer.find((x) => x.id === p.id), 'source');
           if (!p.tracks.every((t) => TRACKS.some((x) => x.id === t))) throw new Error('unknown track');
@@ -194,7 +210,7 @@ export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'yo
           else if (i >= 0) { delete mixer[i].audioSource; mixer[i].tracks = []; }
           return { audio: p.audio, removed: i >= 0 };
         }
-        case 'mixer.setVolume': need(mixer.find((m) => m.id === p.id), 'source').volumeDb = p.db; return { ok: true };
+        case 'mixer.setVolume': { const m = need(mixer.find((x) => x.id === p.id), 'source'); m.volumeDb = p.db; return { ok: true, id: m.id, volumeDb: p.db, ...(m.audioSource ? { audioSource: m.audioSource } : {}) }; }
         case 'mixer.setMute': need(mixer.find((m) => m.id === p.id), 'source').muted = p.muted; return { ok: true };
         case 'mixer.setCue': need(mixer.find((m) => m.id === p.id), 'source').cue = p.cue; return { id: p.id, cue: p.cue, cueDelayed: false };
         case 'stream.start': case 'stream.stop': case 'record.start': case 'record.stop': {

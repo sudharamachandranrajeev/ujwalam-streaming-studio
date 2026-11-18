@@ -76,7 +76,8 @@ import { createYoutubePresets } from './youtube-presets.mjs';
 import { createYoutubeQuality } from './youtube-quality.mjs';
 import { createGoLiveRoutes } from './golive-routes.mjs';
 import { createSceneBuilderRoutes } from './scene-builder-routes.mjs';
-import { DEFAULT_PRESETS_DIR, createAudioRoutes } from './audio-routes.mjs';
+import { DEFAULT_PRESETS_DIR, createAudioRoutes, sameDeviceRows } from './audio-routes.mjs';
+import { createDeviceRoutes } from './device-routes.mjs';
 import { connectTargets, readSetup } from './stream-setup.mjs';
 import { integrationsInEffect } from './integrations.mjs';
 
@@ -166,7 +167,10 @@ export const HOST_CALLS = Object.freeze({
   // capture.listTargets carries window titles (personal): the server passes it to the page, it never logs it.
   'capture.listTargets': { schema: {} },
   'transitions.types': { schema: {} },
-  'mixer.setVolume': { schema: { id: { type: 'string', pattern: MIXER_ID, required: true }, db: { type: 'num', min: -100, max: 0, required: true } } },
+  // The meters only (B9, 2026-11-18): ids and peaks, never blocking the host's model lock; mixer.list stays for structure.
+  'mixer.levels': { schema: {} },
+  // -100..+12 dB: the project's own range (audio-sources.mjs, project schema); the fader shows -60..+12 (B5, 2026-11-18).
+  'mixer.setVolume': { schema: { id: { type: 'string', pattern: MIXER_ID, required: true }, db: { type: 'num', min: -100, max: 12, required: true } } },
   'mixer.setMute': { schema: { id: { type: 'string', pattern: MIXER_ID, required: true }, muted: { type: 'bool', required: true } } },
   // CUE (headphone monitoring, Meld's per-channel button): not a stream change, applied at once.
   'mixer.setCue': { schema: { id: { type: 'string', pattern: MIXER_ID, required: true }, cue: { type: 'bool', required: true } } },
@@ -989,7 +993,7 @@ export function createStudioServer(opts) {
         ...(hs ? pick(hs, ['live', 'recording', 'droppedFrames', 'totalFrames', 'fps', 'cpuPct', 'gpuPct', 'outputsReady', 'previewEditing', 'previewSnap', 'previewSelection', 'uptimeMs']) : {}),
         ...(hs && hs.audioHealth ? { audioHealth: audioReadiness(hs.audioHealth) } : {}),
         ...(previewLast ? { previewEdit: previewLast } : {}),
-        ...(dev ? { devices: { seq: dev.seq, waiting: dev.waiting } } : {}),
+        ...(dev ? { devices: { seq: dev.seq, waiting: dev.waiting, connectable: deviceRoutes.connectable() } } : {}),
         ...(onAir ? { onAir } : {}),
         effectEditing: !!flags && flags.isOn('effect-editor') },
       clips: clipStatus(),
@@ -1077,9 +1081,11 @@ export function createStudioServer(opts) {
     return { seq: d.seq, waiting: Array.isArray(d.waiting) ? d.waiting.length : 0, connected, listed: d.listed === true };
   }
   function devicesSync(dev) {
-    if (devicesSeen === null) { devicesSeen = dev.seq; return; }
+    // Placeholder layers whose device is listed now (A1, 2026-11-18): recomputed at the first read and on every move.
+    if (devicesSeen === null) { devicesSeen = dev.seq; if (dev.listed) deviceRoutes.refresh(); return; }
     if (dev.seq === devicesSeen) return;
     devicesSeen = dev.seq; // a restarted host (lower seq) is a change too
+    if (dev.listed) deviceRoutes.refresh();
     broadcast('devices', { seq: dev.seq, waiting: dev.waiting });
     broadcast('layers', { source: 'devices' });
   }
@@ -1290,6 +1296,13 @@ export function createStudioServer(opts) {
     broadcast('layers', { source: 'structure', edit: { op, scene: r.scene?.id ?? body.scene, layer: r.layer?.id ?? body.layer ?? null } });
     return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(r.graded ? { graded: r.graded.length } : {}), saved });
   }
+  // B7 (2026-11-18): a capture layer's own sound whose card's audio input is in the mix already carries sameAs (the name
+  // of that sound), so the studio shows it once instead of offering it twice. The project file is read only for this.
+  function withSameDevice(result) {
+    const file = projectSync?.status?.().file;
+    if (!isPlain(result) || !Array.isArray(result.sources) || typeof file !== 'string') return result;
+    try { return { ...result, sources: sameDeviceRows(loadProject(file).project, result.sources) }; } catch { return result; }
+  }
   function withRenames(method, result) {
     if (!renamed.size || !isPlain(result)) return result;
     const fix = (o, kind) => (isPlain(o) && typeof o.id === 'string' && renamed.has(`${kind}:${o.id}`) ? { ...o, name: renamed.get(`${kind}:${o.id}`) } : o);
@@ -1356,6 +1369,15 @@ export function createStudioServer(opts) {
   });
   // D393 (proposed): the mixer's Add audio, Add to stream and Remove (audio-routes.mjs). No flag; works while live.
   const audioRoutes = createAudioRoutes({ host, json, projectSync, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log });
+  // Devices that arrive after the start (2026-11-18 bug report): Connect a placeholder layer, Try again (device-routes.mjs).
+  const deviceRoutes = createDeviceRoutes({
+    host, json, projectSync, flags, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log,
+    afterEdit: () => {
+      history.clear();
+      broadcast('edits', history.state());
+      broadcast('layers', { source: 'devices' });
+    },
+  });
   // D327: Stream settings, Outputs panel, Integrations, Force complete transition (settings-routes.mjs).
   const settingsRoutes = createSettingsRoutes({
     dataDir: opts.dataDir, flags, host, json, log,
@@ -1558,6 +1580,7 @@ export function createStudioServer(opts) {
     if (await settingsRoutes.handle('POST', route, body, res)) return undefined;
     if (await sceneBuilderRoutes.handle('POST', route, body, res)) return undefined;
     if (await audioRoutes.handle('POST', route, body, res)) return undefined;
+    if (await deviceRoutes.handle('POST', route, body, res)) return undefined;
 
     if (route === '/ui/api/edits/undo' || route === '/ui/api/edits/redo') {
       // Not while live (D238): undo there is the inspector's job. Fresh host.status, fail closed.
@@ -1669,6 +1692,7 @@ export function createStudioServer(opts) {
       try { result = await host.call(body.method, params) ?? null; } catch (e) { pt?.fail('Could not open'); return json(res, 502, { error: 'host-error', detail: String(e?.code ?? e?.message ?? 'error').slice(0, 80) }); }
       pt?.done();
       result = withRenames(body.method, result);
+      if (body.method === 'mixer.list') result = withSameDevice(result);
       remember(body.method, params, before);
       // P5b autosave: only after the host accepted the edit; the real host only (the fake has no project file).
       const saved = projectSync && host.describe().kind === 'host' ? projectSync.record(body.method, syncParams(body.method, params, result)) : false;

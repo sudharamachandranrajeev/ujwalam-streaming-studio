@@ -67,15 +67,79 @@ function endpointInUse(doc, projectKind, entry) {
 /** Mixer rows (host mixer.list sources) that are a layer's sound with no project audio entry. */
 const freeLayerSounds = (mixer) => (Array.isArray(mixer) ? mixer : []).filter((m) => m && typeof m.layer === 'string' && typeof m.audioSource !== 'string');
 
+// One physical device, two Windows names (B7, 2026-11-18): a capture card lists its picture as "<product>-Video" and its
+// sound input as "<endpoint> (<product>-Audio)" (AVerMedia, seen 2026-11-06). Its game sound must be in the mix once: the
+// capture layer's own sound OR the card's audio input. Only that "-Video" / "-Audio" pair counts as the same device; any
+// other naming is never guessed (UNVERIFIED for other brands).
+export function hardwareKey(name, kind) {
+  let s = String(name ?? '').trim();
+  if (kind === 'audio') { const m = /\(([^()]+)\)\s*$/.exec(s); if (!m) return null; s = m[1].trim(); }
+  const m = (kind === 'audio' ? /^(.{3,})-audio$/i : /^(.{3,})-video$/i).exec(s);
+  return m ? m[1].trim().toLowerCase() : null;
+}
+
+function layerOf(doc, id) {
+  for (const s of doc.scenes ?? []) for (const l of s.layers ?? []) if (l.id === id) return l;
+  return null;
+}
+/** The hardware key of the device behind layer `id` (a copy counts as its source layer), or null. */
+function layerHardware(doc, id) {
+  let l = layerOf(doc, id);
+  if (l?.type === 'duplicate') l = layerOf(doc, l.source?.layer);
+  if (l?.type !== 'capture') return null;
+  const d = (doc.devices ?? []).find((x) => x.id === l.source?.device);
+  return d ? hardwareKey(d.match?.name ?? d.name, 'video') : null;
+}
+/** hardware key -> the name of the project sound that already takes that device's audio input (WASAPI). */
+function inputsInMix(doc) {
+  const out = new Map();
+  for (const a of doc.audio?.sources ?? []) {
+    const d = typeof a.device === 'string' ? (doc.devices ?? []).find((x) => x.id === a.device) : null;
+    const k = d && d.kind === 'microphone' ? hardwareKey(d.match?.name ?? d.name, 'audio') : null;
+    if (k && !out.has(k)) out.set(k, a.name);
+  }
+  return out;
+}
+/** hardware key -> the name of the project sound that takes a capture layer's own sound. */
+function layersInMix(doc) {
+  const out = new Map();
+  const { out: bound } = boundLayers(doc);
+  for (const id of bound) {
+    const k = layerHardware(doc, id);
+    if (!k || out.has(k)) continue;
+    const a = (doc.audio?.sources ?? []).find((x) => x.layer === id || (x.device && layerOf(doc, id)?.source?.device === x.device)) ?? null;
+    out.set(k, a?.name ?? 'the capture layer');
+  }
+  return out;
+}
+
+/** Mixer rows with `sameAs` (the project sound name) on a layer sound whose device's audio input is in the mix already.
+ *  The studio then shows that strip as "already in the mix as <name>" without an Add to stream button. */
+export function sameDeviceRows(doc, rows) {
+  if (!doc || !Array.isArray(rows)) return rows;
+  const inputs = inputsInMix(doc);
+  if (!inputs.size) return rows;
+  return rows.map((m) => {
+    if (!m || typeof m.layer !== 'string' || typeof m.audioSource === 'string') return m;
+    const k = layerHardware(doc, m.layer);
+    return k && inputs.has(k) ? { ...m, sameAs: String(inputs.get(k)).slice(0, 120) } : m;
+  });
+}
+
 export function audioChoices({ doc, list, mixer, recommended = null } = {}) {
   const free = (kind) => entriesOf(list).filter((e) => e.kind === KIND_OF[kind] && !endpointInUse(doc, PROJECT_KIND[kind], e));
   const rec = recommended && typeof recommended.path === 'string' ? lower(recommended.path) : null;
   const { out: bound, real } = boundLayers(doc);
+  const inputs = inputsInMix(doc), layers = layersInMix(doc);
+  const skipped = []; // the same device's sound is in the mix already (B7): not offered, said why
+  const inputOk = (e) => { const k = hardwareKey(e.name, 'audio'); if (k && layers.has(k)) { skipped.push({ name: e.name.slice(0, 120), as: layers.get(k) }); return false; } return true; };
+  const layerOk = (m) => { const k = layerHardware(doc, m.layer); if (k && inputs.has(k)) { skipped.push({ name: String(m.name ?? m.layer).slice(0, 120), as: inputs.get(k) }); return false; } return true; };
   return {
-    inputs: free('input').map((e) => ({ key: `input|${e.path}`, name: e.name.slice(0, 120), recommended: rec !== null && lower(e.path) === rec }))
+    inputs: free('input').filter(inputOk).map((e) => ({ key: `input|${e.path}`, name: e.name.slice(0, 120), recommended: rec !== null && lower(e.path) === rec }))
       .sort((a, b) => Number(b.recommended) - Number(a.recommended)),
     outputs: free('output').map((e) => ({ key: `output|${e.path}`, name: e.name.slice(0, 120) })),
-    layers: freeLayerSounds(mixer).filter((m) => !bound.has(real(m.layer))).map((m) => ({ key: `layer|${m.layer}`, layer: m.layer, name: String(m.name ?? m.layer).slice(0, 120), cueDelayed: m.cueDelayed === true })),
+    layers: freeLayerSounds(mixer).filter((m) => !bound.has(real(m.layer))).filter(layerOk).map((m) => ({ key: `layer|${m.layer}`, layer: m.layer, name: String(m.name ?? m.layer).slice(0, 120), cueDelayed: m.cueDelayed === true })),
+    skipped,
   };
 }
 
@@ -98,12 +162,16 @@ export function addAudioSource(doc, { key, list, mixer, name, volumeDb, muted } 
     const { out: bound, real } = boundLayers(doc);
     if (!doc.scenes.some((s) => s.layers.some((l) => l.id === ref))) return { error: 'unknown-sound' };
     if (bound.has(real(ref))) return { error: 'already-added' };
+    const hw = layerHardware(doc, ref);
+    if (hw && inputsInMix(doc).has(hw)) return { error: 'same-device', as: inputsInMix(doc).get(hw) };
     src.layer = ref;
     src.name = label(name) ?? label(row.name) ?? 'Sound';
   } else {
     const entry = entriesOf(list).find((e) => e.kind === KIND_OF[kind] && lower(e.path) === lower(ref));
     if (!entry) return { error: 'unknown-device' };
     if (endpointInUse(project, PROJECT_KIND[kind], entry)) return { error: 'already-added' };
+    const hw = kind === 'input' ? hardwareKey(entry.name, 'audio') : null;
+    if (hw && layersInMix(doc).has(hw)) return { error: 'same-device', as: layersInMix(doc).get(hw) };
     let dev = deviceFor(project, PROJECT_KIND[kind], entry);
     if (!dev) {
       if ((project.devices ?? []).length >= 64) return { error: 'too-many-devices' };
