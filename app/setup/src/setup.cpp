@@ -8,12 +8,18 @@
 // only reads files that are already on disk.
 //
 // Install / update / repair:
-//   1. the zip's SHA-256 must match its .zip.sha256 file (else nothing happens);
-//   2. it is unpacked with Windows' own tar.exe into <install root>\.setup-<pid>\ (same disk as the install);
-//   3. the unpacked Install-Ujwalam.ps1 runs hidden (CREATE_NO_WINDOW) with -AdoptPackage: it checks every file
-//      against SHA256SUMS.txt again, backs up the settings, moves the folder into place and switches current.txt;
-//   4. when the installer fails after current.txt changed, the previous version is put back (-Rollback);
-//   5. the .setup folder is removed.
+//   1. a new folder <install root>\.setup-<pid>-<random>\ is made (it must not exist yet: never someone else's folder
+//      or a link), the zip is copied into it, and the COPY's SHA-256 must match the .zip.sha256 file next to the zip
+//      (else nothing happens); the copy is what gets unpacked, so the file checked is the file used (Codex review
+//      2026-11-18);
+//   2. the copy is unpacked with Windows' own tar.exe into that folder (same disk as the install);
+//   3. the unpacked Install-Ujwalam.ps1 must match its line in the unpacked SHA256SUMS.txt; then it runs hidden
+//      (CREATE_NO_WINDOW) with -AdoptPackage: it checks every file against SHA256SUMS.txt again, backs up the
+//      settings, moves the folder into place and switches current.txt. A step that fails after the switch (shortcuts,
+//      hand-over) is reported by the installer itself and leaves the new version installed and working;
+//   4. the .setup folder is removed.
+// Trust: the package is the user's own build from their own build folder; it is not signed (signing is P17, D3). Anyone
+// who can write that folder can already change Ujwalam itself, so the checksums catch damage, not an attacker.
 // Roll back: Install-Ujwalam.ps1 -Rollback of the installed version. Uninstall: a copy of Install-Ujwalam.ps1 in the
 // temp folder runs -Uninstall; the data folder is kept unless the user ticks "Also delete my data".
 //
@@ -329,9 +335,20 @@ bool sha256File(const std::wstring &file, std::string &hex)
 
 // ---- files --------------------------------------------------------------------------------------------------------
 
-// Deletes a folder this program made (the .setup unpack folder, the temp copy of the installer). Never follows a link.
+bool isReparse(const std::wstring &p)
+{
+	const DWORD a = GetFileAttributesW(p.c_str());
+	return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
+// Deletes a folder this program made (the .setup unpack folder, the temp copy of the installer). Never follows a link:
+// a link (junction, symlink) at the top or anywhere inside is removed as a link, never walked into.
 void removeTree(const std::wstring &dir)
 {
+	if (isReparse(dir)) {
+		RemoveDirectoryW(dir.c_str());
+		return;
+	}
 	WIN32_FIND_DATAW fd;
 	HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
 	if (h != INVALID_HANDLE_VALUE) {
@@ -353,6 +370,48 @@ void removeTree(const std::wstring &dir)
 		FindClose(h);
 	}
 	RemoveDirectoryW(dir.c_str());
+}
+
+// Makes a new folder <parent>\<prefix><pid>-<random> that did not exist before (CreateDirectory fails on an existing
+// name, a link included), so the folder is this program's own. Empty on failure.
+std::wstring makePrivateDir(const std::wstring &parent, const std::wstring &prefix)
+{
+	for (int i = 0; i < 8; i++) {
+		unsigned char r[8] = {};
+		if (BCryptGenRandom(nullptr, r, sizeof(r), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+			return std::wstring();
+		std::wstring hex;
+		static const wchar_t *hx = L"0123456789abcdef";
+		for (unsigned char b : r) {
+			hex += hx[b >> 4];
+			hex += hx[b & 15];
+		}
+		const std::wstring d = parent + L"\\" + prefix + std::to_wstring(GetCurrentProcessId()) + L"-" + hex;
+		if (CreateDirectoryW(d.c_str(), nullptr))
+			return isReparse(d) ? std::wstring() : d;
+		if (GetLastError() != ERROR_ALREADY_EXISTS)
+			return std::wstring();
+	}
+	return std::wstring();
+}
+
+// The SHA-256 a SHA256SUMS.txt lists for one file (lines "<64 hex>  <path>"); empty when it is not listed.
+std::string listedSum(const std::string &sums, const std::string &rel)
+{
+	size_t at = 0;
+	while (at < sums.size()) {
+		size_t nl = sums.find('\n', at);
+		if (nl == std::string::npos)
+			nl = sums.size();
+		std::string l = sums.substr(at, nl - at);
+		at = nl + 1;
+		while (!l.empty() && (l.back() == '\r' || l.back() == ' '))
+			l.pop_back();
+		if (l.size() == 66 + rel.size() && l.compare(64, 2, "  ") == 0 && l.compare(66, std::string::npos, rel) == 0 &&
+		    l.find_first_not_of("0123456789abcdef") >= 64)
+			return l.substr(0, 64);
+	}
+	return std::string();
 }
 
 // ---- running a hidden program ---------------------------------------------------------------------------------------
@@ -440,6 +499,7 @@ Opts g_opts;
 State g_state;
 HWND g_wnd = nullptr;
 bool g_busy = false;
+int g_exit = 0; // window mode: the exit code of the last action (the process returns it)
 
 void refreshState()
 {
@@ -448,7 +508,11 @@ void refreshState()
 	s.prev = readPointer(s.root + L"\\previous.txt");
 	if (s.prev.ok && !isDir(s.root + L"\\" + s.prev.text))
 		s.prev = Ver{};
-	s.updateFolder = jsonString(readSmall(s.root + L"\\data\\ujwalam.json"), "updateFolder");
+	// The data root as the launcher and the installer resolve it: UJWALAM_DATA_ROOT, else <install root>\data.
+	const std::wstring dataRoot = env(L"UJWALAM_DATA_ROOT").empty() ? s.root + L"\\data" : fullPath(env(L"UJWALAM_DATA_ROOT"));
+	s.updateFolder = jsonString(readSmall(dataRoot + L"\\ujwalam.json"), "updateFolder");
+	if (!s.updateFolder.empty() && s.updateFolder.find(L':') == std::wstring::npos && s.updateFolder.rfind(L"\\\\", 0) != 0)
+		s.updateFolder = dataRoot + L"\\" + s.updateFolder; // relative to the data root, like the launcher
 	s.pkg = Pkg{};
 	if (!g_opts.package.empty()) {
 		const std::wstring zip = fullPath(g_opts.package);
@@ -531,25 +595,39 @@ int doInstall()
 		say(L"The package has no checksum file (" + s.pkg.zip + L".sha256); build it again with npm run package:alpha. Nothing was changed.");
 		return 21;
 	}
+	SHCreateDirectoryExW(nullptr, s.root.c_str(), nullptr);
+	const std::wstring staging = makePrivateDir(s.root, L".setup-");
+	if (staging.empty()) {
+		say(L"Could not make a work folder in " + s.root + L" (error " + std::to_wstring(GetLastError()) + L"). Nothing was changed.");
+		return 22;
+	}
+	// The copy is checked and the copy is unpacked: the file checked is the file used.
+	const std::wstring zip = staging + L"\\package.zip";
 	std::string have;
-	if (!sha256File(s.pkg.zip, have) || have != want) {
+	if (!CopyFileW(s.pkg.zip.c_str(), zip.c_str(), TRUE) || !sha256File(zip, have) || have != want) {
 		say(L"The package does not match its checksum file (it is damaged or was changed); build it again. Nothing was changed.");
+		removeTree(staging);
 		return 21;
 	}
 	say(L"package checksum ok (SHA-256 " + widen(have.substr(0, 16)) + L"...)");
 
-	SHCreateDirectoryExW(nullptr, s.root.c_str(), nullptr);
-	const std::wstring staging = s.root + L"\\.setup-" + std::to_wstring(GetCurrentProcessId());
-	if (isDir(staging))
-		removeTree(staging);
-	CreateDirectoryW(staging.c_str(), nullptr);
 	step(L"Unpacking " + s.pkg.ver.text);
-	DWORD code = runCapture(quote(system32() + L"\\tar.exe") + L" -xf " + quote(s.pkg.zip) + L" -C " + quote(staging), staging, say);
+	DWORD code = runCapture(quote(system32() + L"\\tar.exe") + L" -xf " + quote(zip) + L" -C " + quote(staging), staging, say);
 	const std::wstring pkgDir = staging + L"\\ujwalam-" + s.pkg.ver.text + L"-win64";
-	if (code != 0 || !isFile(pkgDir + L"\\Install-Ujwalam.ps1")) {
+	const std::wstring script = pkgDir + L"\\Install-Ujwalam.ps1";
+	if (code != 0 || !isFile(script)) {
 		say(L"The package could not be unpacked (tar exit " + std::to_wstring(code) + L"). Nothing was changed.");
 		removeTree(staging);
 		return 22;
+	}
+	// The installer script runs only when it matches its line in the package's SHA256SUMS.txt (the script then checks
+	// every other file itself).
+	const std::string listed = listedSum(readSmall(pkgDir + L"\\SHA256SUMS.txt", 16u << 20), "Install-Ujwalam.ps1");
+	std::string scriptSum;
+	if (listed.empty() || !sha256File(script, scriptSum) || scriptSum != listed) {
+		say(L"The unpacked installer does not match the package's SHA256SUMS.txt; build the package again. Nothing was changed.");
+		removeTree(staging);
+		return 21;
 	}
 
 	step(std::wstring(repair ? L"Repairing " : s.cur.ok ? L"Updating to " : L"Installing ") + s.pkg.ver.text);
@@ -558,15 +636,10 @@ int doInstall()
 		args += L" -Repair";
 	if (g_opts.nextStart)
 		args += L" -NoHandOver";
-	const Ver before = s.cur;
-	code = runInstaller(pkgDir + L"\\Install-Ujwalam.ps1", args);
-	const Ver after = readPointer(s.root + L"\\current.txt");
-	if (code != 0 && before.ok && after.ok && cmpVer(before, after) != 0) {
-		// The installer stopped after current.txt changed (a shortcut or the hand-over failed): put the old version back.
-		step(L"Putting " + before.text + L" back");
-		const DWORD rb = runInstaller(s.root + L"\\" + after.text + L"\\Install-Ujwalam.ps1", L" -Rollback");
-		say(rb == 0 ? L"The install did not finish; " + before.text + L" is the installed version again." : L"The install did not finish and the rollback failed too: run Ujwalam setup again and choose Roll back.");
-	}
+	// The installer finishes the job itself, rolling nothing back from out here: before current.txt changes every
+	// failure leaves the old version in place; after it, the new version is installed and a failed extra (a shortcut)
+	// is reported, not undone (an outside -Rollback would be refused while the studio that asked for the update runs).
+	code = runInstaller(script, args);
 	removeTree(staging);
 	return int(code);
 }
@@ -600,10 +673,9 @@ int doUninstall()
 	}
 	step(L"Removing Ujwalam");
 	// The installer is copied out first: the folder it sits in is removed.
-	const std::wstring tmp = env(L"TEMP") + L"\\ujwalam-setup-" + std::to_wstring(GetCurrentProcessId());
-	CreateDirectoryW(tmp.c_str(), nullptr);
+	const std::wstring tmp = makePrivateDir(env(L"TEMP"), L"ujwalam-setup-");
 	const std::wstring copy = tmp + L"\\Install-Ujwalam.ps1";
-	if (!CopyFileW(script.c_str(), copy.c_str(), FALSE)) {
+	if (tmp.empty() || !CopyFileW(script.c_str(), copy.c_str(), TRUE)) {
 		say(L"Could not copy the installer to " + tmp + L"; nothing was removed.");
 		return 1;
 	}
@@ -716,10 +788,9 @@ bool askUninstall(bool &deleteData)
 // The program cannot remove itself while it runs from the install folder: a copy in the temp folder does the uninstall.
 bool relaunchFromTemp()
 {
-	const std::wstring tmp = env(L"TEMP") + L"\\ujwalam-uninstall-" + std::to_wstring(GetCurrentProcessId());
-	CreateDirectoryW(tmp.c_str(), nullptr);
+	const std::wstring tmp = makePrivateDir(env(L"TEMP"), L"ujwalam-uninstall-");
 	const std::wstring copy = tmp + L"\\Ujwalam-Setup.exe";
-	if (!CopyFileW(g_state.self.c_str(), copy.c_str(), FALSE))
+	if (tmp.empty() || !CopyFileW(g_state.self.c_str(), copy.c_str(), TRUE))
 		return false;
 	std::wstring cmd = quote(copy) + L" --uninstall --confirmed --wait-pid " + std::to_wstring(GetCurrentProcessId()) + L" --install-root " + quote(g_state.root);
 	if (g_opts.deleteData)
@@ -826,6 +897,7 @@ LRESULT CALLBACK wndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
 		SendMessageW(bar, PBM_SETMARQUEE, FALSE, 0);
 		ShowWindow(bar, SW_HIDE);
 		const int code = int(wp);
+		g_exit = code;
 		setText(IDC_STEP, code == 0 ? L"Done." : L"Stopped: see the lines below (code " + std::to_wstring(code) + L"). Nothing half-done was left in use.");
 		refreshState();
 		updateUi();
@@ -974,5 +1046,5 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show)
 		TranslateMessage(&m);
 		DispatchMessageW(&m);
 	}
-	return 0;
+	return g_exit;
 }

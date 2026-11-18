@@ -25,7 +25,8 @@
 
 .PARAMETER InstallRoot   Default %LOCALAPPDATA%\Ujwalam.
 .PARAMETER Rollback      Switch back to the previous version.
-.PARAMETER Force         Reinstall a version that is already installed (the old folder is renamed, not deleted).
+.PARAMETER Force         Reinstall a version that is already installed (the old folder is renamed, not deleted). With
+                         -Rollback: switch even when the settings backup of that update is missing (settings stay).
 .PARAMETER NoShortcuts   Skip the shortcuts.
 .PARAMETER StartMenuDir  Default: the user's Start menu Programs folder.
 .PARAMETER DesktopDir    Default: the user's desktop.
@@ -55,12 +56,21 @@
 
   Settings safety (2026-11-18): before an install changes an existing install, a backup of the settings and project
   files (not media) is taken with tools\package\settings-backup.mjs into data\backups\settings\ (the newest 10 are
-  kept); without it the install stops before current.txt changes. -Rollback puts the backup from that update back
-  (the newer files are kept in a before-rollback backup first) and is refused while Ujwalam runs.
+  kept, and always the one a rollback of the current version needs); without it the install stops before
+  current.txt changes. -Rollback puts the backup from that update back, all or nothing (the newer files are kept in a
+  before-rollback backup first, which a later -Rollback back to the newer version restores). It is refused while
+  Ujwalam runs, and refused when that backup is missing or damaged (-Rollback -Force switches the version anyway and
+  leaves the current settings as they are). The data folder is UJWALAM_DATA_ROOT when set (as for the launcher), else
+  <InstallRoot>\data.
+
+  One at a time (Codex review 2026-11-18): an install, repair, rollback or uninstall holds <InstallRoot>\install.lock
+  while it works. A second one stops (14), and Ujwalam does not start until it is done (the launcher says so). The
+  lock goes away by itself when this script ends, even when it is killed.
 
   Exit codes: 0 done, 2 bad arguments or no package, 4 already installed (or running), 5 no previous version,
   6 prerequisites missing, 7 checksum problem, 8 cannot list running programs, 10 a file could not be replaced,
-  11 uninstall refused (Ujwalam runs), 12 rollback refused (Ujwalam runs), 13 settings backup failed.
+  11 uninstall refused (Ujwalam runs), 12 rollback refused (Ujwalam runs), 13 settings backup or restore failed (or
+  no backup for a rollback), 14 another install is running.
 #>
 [CmdletBinding()]
 param(
@@ -106,6 +116,25 @@ if (-not $InstallRoot) {
 $InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 $currentFile = Join-Path $InstallRoot 'current.txt'
 $previousFile = Join-Path $InstallRoot 'previous.txt'
+# The data folder, resolved as the launcher does (tools\package\run-installed.mjs dataRootFrom): UJWALAM_DATA_ROOT when
+# set; else <InstallRoot>\data (for the default install root that is the launcher's %LOCALAPPDATA%\Ujwalam\data).
+$dataRoot = if ($env:UJWALAM_DATA_ROOT) { [System.IO.Path]::GetFullPath($env:UJWALAM_DATA_ROOT) } else { Join-Path $InstallRoot 'data' }
+
+# One install, repair, rollback or uninstall at a time, and no Ujwalam start meanwhile (run-installed.mjs refuses while
+# the file is held). Held open with no sharing for the rest of this script; delete-on-close removes it when the process
+# ends in any way.
+$script:installLock = $null
+function Lock-Install {
+  New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+  $f = Join-Path $InstallRoot 'install.lock'
+  try {
+    $script:installLock = New-Object System.IO.FileStream($f, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::DeleteOnClose)
+  } catch { Fail "another Ujwalam setup (install, update, repair, roll back or uninstall) is working in $InstallRoot; wait for it to finish, then try again. Nothing was changed." 14 }
+  $b = [System.Text.Encoding]::ASCII.GetBytes("$PID`r`n")
+  $script:installLock.Write($b, 0, $b.Length)
+  $script:installLock.Flush()
+}
+function Unlock-Install { if ($script:installLock) { $script:installLock.Dispose(); $script:installLock = $null } }
 
 function Read-Pointer([string]$f) {
   if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return $null }
@@ -176,7 +205,7 @@ function Get-Sha256([string]$f) {
 # Hands the installed new version to the running launcher (services/supervisor/install-channel.mjs): one JSON line out,
 # one back. $null when there is no channel (flag off, an older version, or Ujwalam is just closing).
 function Send-LiveInstall([string]$root, [int]$timeoutMs) {
-  $chanFile = Join-Path $InstallRoot 'data\core\live\install-channel.json'
+  $chanFile = Join-Path $dataRoot 'core\live\install-channel.json'
   if (-not (Test-Path -LiteralPath $chanFile -PathType Leaf)) { return $null }
   try { $ch = Get-Content -LiteralPath $chanFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
   if ($ch.v -ne 1 -or [string]$ch.pipe -notmatch '^ujwalam-install-[0-9a-f]{32}$' -or [string]$ch.token -notmatch '^[0-9a-f]{64}$') { return $null }
@@ -229,7 +258,7 @@ if ($Repair -and $Rollback) { Fail '-Repair and -Rollback cannot be combined' 2 
 if ($appSettingsGiven) {
   Test-Folder 'RecordingsFolder' $RecordingsFolder
   Test-Folder 'ClipsFolder' $ClipsFolder
-  $sf = Join-Path $InstallRoot 'data\core\settings.json'
+  $sf = Join-Path $dataRoot 'core\settings.json'
   $s = Read-JsonFile $sf
   $clips = [ordered]@{ recording = 'ask'; live = 'ask' }
   if ($s.Contains('clips') -and $s['clips']) { foreach ($p in $s['clips'].PSObject.Properties) { $clips[$p.Name] = $p.Value } }
@@ -247,7 +276,7 @@ if ($appSettingsGiven) {
 }
 if ($PSBoundParameters.ContainsKey('ClipMaker')) {
   if ($ClipMaker -and -not (Test-Path -LiteralPath (Join-Path $ClipMaker 'services\clip\clipper.py'))) { Fail "ClipMaker: no services\clip\clipper.py in $ClipMaker" 2 }
-  $uf = Join-Path $InstallRoot 'data\ujwalam.json'
+  $uf = Join-Path $dataRoot 'ujwalam.json'
   $u = Read-JsonFile $uf
   if ($ClipMaker) { $u['clipRoot'] = $ClipMaker } elseif ($u.Contains('clipRoot')) { $u.Remove('clipRoot') }
   Write-JsonFile $uf $u
@@ -255,17 +284,22 @@ if ($PSBoundParameters.ContainsKey('ClipMaker')) {
 }
 if ($PSBoundParameters.ContainsKey('UpdateFolder')) {
   if ($UpdateFolder -and (-not [IO.Path]::IsPathRooted($UpdateFolder) -or -not (Test-Path -LiteralPath $UpdateFolder -PathType Container))) { Fail "UpdateFolder must be an existing folder given as a full path: $UpdateFolder" 2 }
-  $uf = Join-Path $InstallRoot 'data\ujwalam.json'
+}
+# Written only once the install has succeeded (Codex review 2026-11-18): a failed or refused install changes no setting.
+function Set-UpdateFolder {
+  if (-not $script:updateFolderGiven) { return }
+  $uf = Join-Path $dataRoot 'ujwalam.json'
   $u = Read-JsonFile $uf
   if ($UpdateFolder) { $u['updateFolder'] = [IO.Path]::GetFullPath($UpdateFolder).TrimEnd('\') } elseif ($u.Contains('updateFolder')) { $u.Remove('updateFolder') }
   Write-JsonFile $uf $u
   Say "update folder: $(if ($UpdateFolder) { $u['updateFolder'] } else { 'not set' })"
 }
+$script:updateFolderGiven = $PSBoundParameters.ContainsKey('UpdateFolder')
 if ($SettingsOnly) {
   if (-not $settingsGiven) { Fail 'SettingsOnly needs at least one setting' 2 }
+  Set-UpdateFolder
   exit 0
 }
-$dataRoot = Join-Path $InstallRoot 'data'
 
 # The settings helper (tools\package\settings-backup.mjs) of the first of these folders that has it.
 function Find-Helper([string[]]$dirs) {
@@ -294,6 +328,7 @@ if ($Uninstall) {
   $verRe = '^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+(\.replaced-[0-9]{8}-[0-9]{6})?$'
   $ours = @(Get-ChildItem -LiteralPath $InstallRoot -Directory -Force | Where-Object { $_.Name -match $verRe -or $_.Name -match '^\.(staging|setup)-' })
   if (-not (Test-Path -LiteralPath $currentFile) -and $ours.Count -eq 0) { Fail "no Ujwalam install found in $InstallRoot; nothing was removed" 2 }
+  Lock-Install
   $running = @(Get-RunningUnder $InstallRoot)
   if ($running.Count) { Fail "Ujwalam is running from $InstallRoot ($($running.Count) program(s)): close the studio window first; nothing was removed" 11 }
   if (-not $NoShortcuts) {
@@ -306,7 +341,11 @@ if ($Uninstall) {
       }
     }
   }
-  foreach ($d in $ours) { Remove-Item -LiteralPath $d.FullName -Recurse -Force; Say "removed $($d.Name)" }
+  foreach ($d in $ours) {
+    # A link (junction) is removed as a link: Windows PowerShell's Remove-Item -Recurse would empty the folder it points at.
+    if ($d.Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($d.FullName); Say "removed link $($d.Name)"; continue }
+    Remove-Item -LiteralPath $d.FullName -Recurse -Force; Say "removed $($d.Name)"
+  }
   $keptFiles = @()
   foreach ($n in @('current.txt', 'previous.txt', 'Ujwalam.cmd', 'ujwalam-start.exe', 'ujwalam.ico', 'Ujwalam-Setup.exe')) {
     $f = Join-Path $InstallRoot $n
@@ -319,6 +358,7 @@ if ($Uninstall) {
   } elseif (Test-Path -LiteralPath $dataRoot) {
     Say "kept your data folder $dataRoot (settings, projects, recordings, clips, logs); installing Ujwalam again uses it"
   }
+  Unlock-Install
   $left = @(Get-ChildItem -LiteralPath $InstallRoot -Force)
   if ($left.Count -eq 0) { Remove-Item -LiteralPath $InstallRoot -Force; Say "removed $InstallRoot" }
   else { Say "left in $InstallRoot`: $(($left | ForEach-Object { $_.Name }) -join ', ')" }
@@ -332,15 +372,24 @@ if ($Rollback) {
   $prev = Read-Pointer $previousFile
   if (-not $prev) { Fail "no previous version recorded in $previousFile" 5 }
   if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $InstallRoot $prev) 'Ujwalam.cmd'))) { Fail "previous version folder $prev is missing" 5 }
-  # A rollback puts settings back too: never while Ujwalam runs (it would write them again).
+  # A rollback puts settings back too: never while Ujwalam runs (it would write them again). The lock comes first, so
+  # Ujwalam cannot start between this check and the end of the restore.
+  Lock-Install
   if (@(Get-RunningUnder $InstallRoot).Count) { Fail 'Ujwalam is running: close the studio window first, then roll back; nothing was changed' 12 }
-  if ($cur) {
+  $hasData = (Test-Path -LiteralPath $dataRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $dataRoot -Force | Select-Object -First 1).Count -gt 0
+  if ($cur -and $hasData) {
+    # The settings go back with the version, all or nothing; without the backup of that update the version stays
+    # (-Force: switch anyway and keep the current settings as they are).
     $nodeExe = Find-Node
     $helper = Find-Helper @((Join-Path $InstallRoot $cur), (Join-Path $InstallRoot $prev), $PSScriptRoot)
-    if (-not $nodeExe -or -not $helper) { Say 'settings: not restored (Node.js or the settings helper was not found); your current settings stay as they are' }
-    else {
+    if (-not $nodeExe -or -not $helper) {
+      if (-not $Force) { Fail 'settings cannot be put back (Node.js or the settings helper was not found); the version was not changed (-Rollback -Force switches anyway and keeps the current settings)' 13 }
+      Say 'settings: not put back (-Force); your current settings stay as they are'
+    } else {
       [void](Invoke-Helper $nodeExe $helper @('restore', '--data', $dataRoot, '--from', $cur, '--to', $prev))
-      if ($script:helperCode -ne 0) { Fail 'settings could not be put back (see above); the version was not changed' 13 }
+      if ($script:helperCode -eq 3 -and $Force) { Say 'settings: no backup for this rollback (-Force); your current settings stay as they are' }
+      elseif ($script:helperCode -eq 3) { Fail "there is no settings backup from the update $prev -> $cur, so the settings of $prev cannot be put back; the version was not changed (-Rollback -Force switches anyway and keeps the current settings)" 13 }
+      elseif ($script:helperCode -ne 0) { Fail 'settings could not be put back (see above); nothing was changed: the version and every setting stay as they were' 13 }
     }
   }
   Write-Pointer $currentFile $prev
@@ -418,7 +467,8 @@ if ($bad.Count) { $bad | Select-Object -First 20 | ForEach-Object { Write-Host "
 Say 'checksums ok'
 
 # ---- copy ---------------------------------------------------------------------------------------------------------
-New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+# The lock first: no second install and no Ujwalam start from here on (a studio that already runs is found below).
+Lock-Install
 $target = Join-Path $InstallRoot $version
 $pkgFull = [System.IO.Path]::GetFullPath($pkg).TrimEnd('\')
 if ($pkgFull -ieq $target.TrimEnd('\')) { Fail 'run this from the unzipped build, not from the installed folder' 2 }
@@ -438,6 +488,15 @@ if ($Repair -and (Test-Path -LiteralPath $target)) {
   $damage = @(Test-Sums $target | Where-Object { $_ -notlike 'extra file *' })
   if ($damage.Count -eq 0) { $intact = $true; Say "repair: $version is intact (every file matches SHA256SUMS.txt); the launcher files and shortcuts are put back" }
   else { Say "repair: $($damage.Count) problem(s) in $version ($($damage[0])): reinstalling it"; $Force = $true }
+} elseif ((Test-Path -LiteralPath $target) -and -not $Force -and (Read-Pointer $currentFile) -ne $version -and -not ($live -and @(Get-RunningUnder $target).Count -gt 0)) {
+  # A folder for this version that current.txt does not name: an earlier attempt that stopped before the switch (a
+  # failed settings backup, a launcher file in use), or the newer version a rollback left (Codex review 2026-11-18).
+  # The same build (its SHA256SUMS.txt is this package's) and intact: used as it is, the install goes on from there.
+  # Otherwise (damaged, or another build with the same version) it is kept aside, renamed, and installed again.
+  $sameBuild = (Test-Path -LiteralPath (Join-Path $target 'SHA256SUMS.txt') -PathType Leaf) -and ((Get-Sha256 (Join-Path $target 'SHA256SUMS.txt')) -eq (Get-Sha256 (Join-Path $pkg 'SHA256SUMS.txt')))
+  $damage = @(if ($sameBuild) { Test-Sums $target | Where-Object { $_ -notlike 'extra file *' } } else { 'another build of the same version' })
+  if ($damage.Count -eq 0) { $intact = $true; Say "$version is already unpacked in $target and intact (from an earlier attempt or a rollback): using it" }
+  else { Say "the $version folder from an earlier attempt is not this build or has problems ($($damage[0])): installing it again"; $Force = $true }
 }
 if ((Test-Path -LiteralPath $target) -and -not $intact) {
   if ($live -and @(Get-RunningUnder $target).Count -gt 0) { Fail "$version is the version that is running now; nothing was changed (close Ujwalam first to reinstall it)" 4 }
@@ -510,13 +569,21 @@ if ($hasData) {
   $helper = Find-Helper @($target)
   if (-not $helper) { Fail "tools\package\settings-backup.mjs is missing from $version; current.txt was not changed" 10 }
   $reason = if (-not $cur) { 'install' } elseif ($cur -eq $version) { 'repair' } else { 'update' }
-  $backupDir = Invoke-Helper $node.Source $helper @('backup', '--data', $dataRoot, '--from', $(if ($cur) { $cur } else { 'none' }), '--to', $version, '--reason', $reason)
+  $helperArgs = @('backup', '--data', $dataRoot, '--from', $(if ($cur) { $cur } else { 'none' }), '--to', $version, '--reason', $reason)
+  # The backup a rollback of the current version needs is never pruned, however many repairs come after it.
+  $prevNow = Read-Pointer $previousFile
+  if ($cur -and $prevNow -and $prevNow -ne $cur) { $helperArgs += @('--pin-from', $prevNow, '--pin-to', $cur) }
+  $backupDir = Invoke-Helper $node.Source $helper $helperArgs
   if ($script:helperCode -ne 0 -or -not $backupDir) { Fail "the settings backup failed (see above); current.txt was not changed, nothing in your data folder was touched" 13 }
 }
 
+# The switch. While Ujwalam runs (live install) this is safe on air: current.txt is read only when Ujwalam starts
+# (ujwalam-start.exe, Ujwalam.cmd), so the running studio, its stream and its recording are not touched; nothing it
+# uses was replaced above, and the lock keeps a new start from reading the pointers half-written.
 if ($cur -and $cur -ne $version) { Write-Pointer $previousFile $cur }
 Write-Pointer $currentFile $version
-New-Item -ItemType Directory -Force -Path (Join-Path $InstallRoot 'data') | Out-Null
+try { Set-UpdateFolder } catch { Say "WARNING: the update folder could not be saved in ujwalam.json ($($_.Exception.Message.Trim())); the install itself is done" }
+New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
 Say "installed: current $version$(if ($cur -and $cur -ne $version) { ", previous $cur (Install-Ujwalam.ps1 -Rollback switches back)" })"
 foreach ($k in $keptTop) { Say "kept $k in $InstallRoot`: the running Ujwalam uses it (it still starts the version in current.txt); run this installer again after Ujwalam has closed to replace it" }
 if ($backupDir) {
@@ -542,7 +609,9 @@ if ($live -and $NoHandOver) {
 }
 
 # ---- shortcuts ----------------------------------------------------------------------------------------------------
-if (-not $NoShortcuts) {
+# After the switch nothing is undone (Codex review 2026-11-18): the new version is installed and works; a shortcut that
+# cannot be written is reported, and Repair in Ujwalam setup puts it back.
+if (-not $NoShortcuts) { try {
   if (-not $StartMenuDir) { $StartMenuDir = [Environment]::GetFolderPath('Programs') }
   if (-not $DesktopDir) { $DesktopDir = [Environment]::GetFolderPath('Desktop') }
   $shell = New-Object -ComObject WScript.Shell
@@ -580,7 +649,9 @@ if (-not $NoShortcuts) {
     $lnk.Save()
     Say "shortcut: $(Join-Path $StartMenuDir $SetupShortcutName)"
   }
-}
+} catch {
+  Say "WARNING: the shortcuts could not be written ($($_.Exception.Message.Trim())). Ujwalam $version is installed and works; run Ujwalam setup and choose Repair (or this installer again) to put them back."
+} }
 
 # ---- older versions (reported, never deleted) ---------------------------------------------------------------------
 $keep = @($version, (Read-Pointer $previousFile)) | Where-Object { $_ }

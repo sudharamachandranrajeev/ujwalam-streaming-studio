@@ -15,7 +15,7 @@
 // Usage: Ujwalam.cmd [launcher flags...]   e.g. --mock --no-open --stop-on-stdin, --allow-devices, --live
 //        Ujwalam.cmd diag [--out FILE]     diagnostics bundle (tools/diag/bundle.mjs), no host or UI needed
 // Node is checked first (release.json nodeMin) and the launcher is loaded only after the check passes.
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -27,6 +27,16 @@ export function nodeOk(version, min) {
   const b = p(min);
   for (let i = 0; i < 3; i++) { if (a[i] > b[i]) return true; if (a[i] < b[i]) return false; }
   return true;
+}
+
+/**
+ * True while Ujwalam setup (Install-Ujwalam.ps1) installs, repairs, rolls back or uninstalls in this install root: it
+ * holds <root>\install.lock open with no sharing (Codex review 2026-11-18). A lock file left by nothing is not "busy".
+ */
+export function installBusy(root) {
+  const f = path.join(root, 'install.lock');
+  if (!existsSync(f)) return false;
+  try { closeSync(openSync(f, 'r')); return false; } catch (e) { return e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES'; }
 }
 
 export function dataRootFrom(env = process.env) {
@@ -102,6 +112,10 @@ export async function main(args = process.argv.slice(2)) {
   if (!nodeOk(process.versions.node, release.nodeMin)) {
     console.log(`[ujwalam] Node.js ${release.nodeMin} or newer is needed (found ${process.versions.node}). Install it from nodejs.org; nothing was started.`);
     return 9;
+  }
+  if (installBusy(path.dirname(INSTALL))) {
+    console.log('[ujwalam] Ujwalam setup is installing, updating, repairing or rolling back right now. Nothing was started: open Ujwalam again when setup has finished.');
+    return 14;
   }
   let dataRoot;
   try { dataRoot = dataRootFrom(); } catch (e) { console.log(`[ujwalam] ${e.message}`); return 2; }

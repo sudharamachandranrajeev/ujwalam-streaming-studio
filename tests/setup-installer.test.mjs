@@ -6,13 +6,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { SETUP_EXE } from '../app/setup/tools/build.mjs';
-import { backup, listBackups, prune, restore, settingsFiles, verify, wanted } from '../tools/package/settings-backup.mjs';
+import { backup, findSnapshot, listBackups, MAX_FILE, prune, recover, restore, scanSettings, settingsFiles, verify, wanted } from '../tools/package/settings-backup.mjs';
+import { installBusy } from '../tools/package/run-installed.mjs';
 import { writeZip } from '../tools/package/zip.mjs';
 import { cmpVersion, createSetupUpdate, newestPackage } from '../services/studio-ui/setup-update.mjs';
 
@@ -21,6 +22,8 @@ const ICO = path.join(REPO, 'app', 'studio', 'res', 'ujwalam.ico');
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 const tmp = (p) => mkdtempSync(path.join(os.tmpdir(), `ujw-setup-${p}-`));
 const noCreds = () => null;
+// Child installers never see a data-root override from the developer's shell: their data is the temp install's.
+const childEnv = () => { const e = { ...process.env }; delete e.UJWALAM_DATA_ROOT; return e; };
 const A = '0.1.0-alpha.1';
 const B = '0.1.0-alpha.2';
 
@@ -150,13 +153,17 @@ test('settings backup: update A -> B keeps every file; rollback B -> A puts A\'s
     assert.deepEqual(dbRows(d), { rows: ['a-1', 'a-2', 'b-1'], version: 6 });
 
     const none = await restore({ dataRoot: d, from: '0.1.0-alpha.9', to: '0.1.0-alpha.8', now, creds: noCreds });
-    assert.equal(none.source, undefined, 'no matching backup: nothing restored');
+    assert.deepEqual([none.missing, none.restored], [true, 0], 'no matching backup: nothing restored, and the caller is told');
     // Tampered backup: refused. The one a B -> A rollback uses now is the newest A -> B one (the roll-forward's
     // before-rollback backup), not b1.
     const next = listBackups(d).find((b) => b.from === A && b.to === B);
     assert.notEqual(next.dir, b1.dir);
     writeFileSync(path.join(next.dir, 'files', 'core', 'settings.json'), 'tampered');
+    const pre = snapshot(d);
+    const preCount = listBackups(d).length;
     await assert.rejects(restore({ dataRoot: d, from: B, to: A, now, creds: noCreds }), /backup file changed or missing/);
+    assert.deepEqual(snapshot(d), pre, 'a damaged snapshot changes nothing (checked whole before any file is touched)');
+    assert.equal(listBackups(d).length, preCount, 'and takes no before-rollback backup');
   } finally { db?.close(); rmSync(d, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
@@ -177,6 +184,86 @@ test('settings backup: keeps the newest N (only folders it made), refuses bad ve
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
+test('settings restore is all or nothing: a failure in the middle of the swap undoes it, an interrupted one is undone on the next run', async () => {
+  const d = tmp('atomic');
+  try {
+    writeData(d).close();
+    let t = Date.parse('2026-11-18T10:00:00Z');
+    const now = () => new Date(t += 1000);
+    await backup({ dataRoot: d, from: A, to: B, reason: 'update', now, creds: noCreds });
+    writeFileSync(path.join(d, 'core', 'settings.json'), '{"fromB":true}');
+    writeFileSync(path.join(d, 'core', 'projects', 'alpha.json'), '{"version":4}');
+    const bState = snapshot(d);
+    // A failure after some files are swapped (the 5th rename): every swapped file goes back, the staging folder goes.
+    await assert.rejects(restore({ dataRoot: d, from: B, to: A, now, creds: noCreds, failAt: 5 }), /settings were not put back, everything stays as it was/);
+    assert.deepEqual(snapshot(d), bState, 'no mixed state: every file is B\'s again');
+    assert.equal(dbRows(d).rows.length, 2);
+    assert.ok(!readdirSync(path.join(d, 'backups', 'settings')).some((n) => n.startsWith('.restore-')), 'staging removed');
+
+    // Power loss in the middle of a swap (the journal still says "swapping"): the next run puts the moved files back.
+    const stage = path.join(d, 'backups', 'settings', '.restore-1-1');
+    mkdirSync(path.join(stage, 'old', 'core'), { recursive: true });
+    writeFileSync(path.join(stage, 'old', 'core', 'settings.json'), '{"fromB":true}');
+    writeFileSync(path.join(d, 'core', 'settings.json'), '{"halfway":true}');
+    writeFileSync(path.join(stage, 'journal.json'), JSON.stringify({ v: 1, state: 'swapping', items: [{ path: 'core/settings.json', hadOld: true, swapped: true }] }));
+    assert.equal(recover(d), 1);
+    assert.deepEqual(snapshot(d), bState, 'the interrupted restore is undone');
+    assert.ok(!existsSync(stage));
+  } finally { rmSync(d, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+test('settings restore keeps rows that live only in the database\'s write-ahead log (no committed row is lost)', async () => {
+  const d = tmp('wal');
+  const crash = tmp('wal-crash');
+  let db;
+  try {
+    db = writeData(d);
+    let t = Date.parse('2026-11-18T10:00:00Z');
+    const now = () => new Date(t += 1000);
+    await backup({ dataRoot: d, from: A, to: B, reason: 'update', now, creds: noCreds });
+    // B writes a row that stays in event-core.db-wal; the PC stops before SQLite folds it in (copied while open).
+    db.exec("PRAGMA wal_autocheckpoint=0; INSERT INTO audit (what) VALUES ('b-wal');");
+    cpSync(d, crash, { recursive: true });
+    db.close(); db = null;
+    assert.ok(statSync(path.join(crash, 'core', 'event-core.db-wal')).size > 0, 'the row is in the WAL only');
+    const r = await restore({ dataRoot: crash, from: B, to: A, now, creds: noCreds });
+    assert.deepEqual(dbRows(crash).rows, ['a-1', 'a-2'], 'A\'s database is back');
+    const kept = new DatabaseSync(path.join(r.kept, 'files', 'core', 'event-core.db'), { readOnly: true });
+    try { assert.deepEqual(kept.prepare('SELECT what FROM audit ORDER BY id').all().map((x) => x.what), ['a-1', 'a-2', 'b-wal'], 'B\'s WAL row is in the before-rollback backup'); } finally { kept.close(); }
+    await restore({ dataRoot: crash, from: A, to: B, now, creds: noCreds });
+    assert.deepEqual(dbRows(crash).rows, ['a-1', 'a-2', 'b-wal'], 'rolling forward brings it back');
+  } finally { db?.close(); rmSync(d, { recursive: true, force: true, maxRetries: 3 }); rmSync(crash, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+test('settings backup: the snapshot a rollback needs survives any number of repairs (pinned); without it a rollback is refused; skipped files are named', async () => {
+  const d = tmp('pin');
+  try {
+    writeData(d).close();
+    let t = Date.parse('2026-11-18T10:00:00Z');
+    const now = () => new Date(t += 1000);
+    const upd = await backup({ dataRoot: d, from: A, to: B, reason: 'update', now, creds: noCreds });
+    for (let i = 0; i < 12; i++) await backup({ dataRoot: d, from: B, to: B, reason: 'repair', now, creds: noCreds, pins: [{ from: A, to: B }] });
+    assert.equal(listBackups(d).length, 11, 'the newest 10 plus the pinned update');
+    assert.equal(findSnapshot(d, B, A)?.dir, upd.dir);
+    // Unpinned (an older installer's prune): the snapshot is gone, and restore says so instead of reporting success.
+    await backup({ dataRoot: d, from: B, to: B, reason: 'repair', now, creds: noCreds });
+    assert.equal(findSnapshot(d, B, A), null);
+    const before = snapshot(d);
+    const r = await restore({ dataRoot: d, from: B, to: A, now, creds: noCreds });
+    assert.deepEqual([r.missing, r.restored], [true, 0]);
+    assert.deepEqual(snapshot(d), before);
+
+    // A settings file over the limit is named, never silently left out.
+    writeFileSync(path.join(d, 'core', 'projects', 'huge.json'), Buffer.alloc(MAX_FILE + 1, 32));
+    const scan = scanSettings(d);
+    assert.deepEqual(scan.skipped.map((s) => s.path), ['core/projects/huge.json']);
+    assert.match(scan.skipped[0].why, /over the 4 MiB limit/);
+    const b = await backup({ dataRoot: d, from: B, to: B, reason: 'repair', now, creds: noCreds });
+    assert.deepEqual(b.skipped.map((s) => s.path), ['core/projects/huge.json']);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(b.dir, 'backup.json'), 'utf8')).skipped.map((s) => s.path), ['core/projects/huge.json']);
+  } finally { rmSync(d, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // ---- Install-Ujwalam.ps1 on fake packages ------------------------------------------------------------------------------
 
 function fakePackage(dir, version) {
@@ -195,7 +282,7 @@ function fakePackage(dir, version) {
 
 function ps(script, root, ...args) {
   const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-InstallRoot', root, ...args],
-    { encoding: 'utf8', windowsHide: true, timeout: 120_000 });
+    { encoding: 'utf8', windowsHide: true, timeout: 120_000, env: childEnv() });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
 const shortcutDirs = (root) => ['-StartMenuDir', path.join(root, 'start'), '-DesktopDir', path.join(root, 'desk')];
@@ -279,11 +366,87 @@ test('Install-Ujwalam.ps1: install A, write settings, update to B (backup first,
   } finally { rmSync(t, { recursive: true, force: true, maxRetries: 5 }); }
 });
 
+test('Install-Ujwalam.ps1: one at a time (install.lock; Ujwalam does not start meanwhile), a failed backup changes no setting and a retry goes on, a rollback without its backup is refused, uninstall never follows a link', {
+  skip: process.platform !== 'win32' && 'Windows only', timeout: 300_000,
+}, async (tc) => {
+  const t = tmp('ps1b');
+  const ir = path.join(t, 'Ujwalam');
+  const data = path.join(ir, 'data');
+  let holder = null;
+  try {
+    const pa = fakePackage(path.join(t, 'pkg-a'), A);
+    let r = ps(path.join(pa.dir, 'Install-Ujwalam.ps1'), ir, '-NoShortcuts');
+    if (r.code === 6) { tc.skip(`prerequisites missing: ${r.out}`); return; }
+    assert.equal(r.code, 0, r.out);
+    assert.ok(!existsSync(path.join(ir, 'install.lock')), 'the lock goes with the installer');
+    assert.equal(installBusy(ir), false);
+    writeData(data).close();
+    const before = snapshot(data);
+
+    // Another setup holds the lock: a second one stops (14) and the launcher would not start.
+    const lockFile = path.join(ir, 'install.lock');
+    holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$f = New-Object System.IO.FileStream('${lockFile}', [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose); [Console]::Out.WriteLine('held'); Start-Sleep -Seconds 60`],
+    { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    await new Promise((res, rej) => { holder.stdout.on('data', (b) => { if (String(b).includes('held')) res(); }); holder.on('exit', () => rej(new Error('lock holder ended'))); });
+    assert.equal(installBusy(ir), true, 'run-installed.mjs refuses to start while setup works');
+    const pb = fakePackage(path.join(t, 'pkg-b'), B);
+    r = ps(path.join(pb.dir, 'Install-Ujwalam.ps1'), ir, '-NoShortcuts');
+    assert.equal(r.code, 14, r.out);
+    r = ps(path.join(ir, A, 'Install-Ujwalam.ps1'), ir, '-Uninstall', '-NoShortcuts');
+    assert.equal(r.code, 14, r.out);
+    assert.ok(existsSync(path.join(ir, A, 'release.json')), 'nothing removed');
+    holder.kill(); await new Promise((res) => holder.on('exit', res)); holder = null;
+    assert.equal(installBusy(ir), false, 'released when its holder ends, even killed');
+
+    // A failed settings backup: current.txt, previous.txt and ujwalam.json unchanged; the retry with a good package goes on.
+    const broken = fakePackage(path.join(t, 'pkg-b-broken'), B);
+    writeFileSync(path.join(broken.dir, 'tools', 'package', 'settings-backup.mjs'), 'process.exit(1);\n');
+    writeFileSync(path.join(broken.dir, 'SHA256SUMS.txt'), broken.rels.map((x) => `${sha(readFileSync(path.join(broken.dir, x)))}  ${x}\n`).join(''));
+    const dist = path.join(t, 'dist');
+    mkdirSync(dist);
+    r = ps(path.join(broken.dir, 'Install-Ujwalam.ps1'), ir, '-NoShortcuts', '-UpdateFolder', dist);
+    assert.equal(r.code, 13, r.out);
+    assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), A);
+    assert.deepEqual(snapshot(data), before, 'no setting changed, the update folder included');
+    r = ps(path.join(pb.dir, 'Install-Ujwalam.ps1'), ir, '-NoShortcuts', '-UpdateFolder', dist);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /not this build or has problems/);
+    assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), B);
+    assert.equal(JSON.parse(readFileSync(path.join(data, 'ujwalam.json'), 'utf8')).updateFolder, dist, 'written once the install succeeded');
+    assert.ok(readdirSync(ir).some((n) => n.startsWith(`${B}.replaced-`)), 'the broken attempt is kept aside, not deleted');
+
+    // Rollback without the backup of that update: refused (13), nothing changed; -Force switches and keeps the settings.
+    writeFileSync(path.join(data, 'core', 'settings.json'), '{"fromB":true}');
+    const bState = snapshot(data);
+    rmSync(path.join(data, 'backups'), { recursive: true, force: true });
+    r = ps(path.join(ir, B, 'Install-Ujwalam.ps1'), ir, '-Rollback');
+    assert.equal(r.code, 13, r.out);
+    assert.match(r.out, /no settings backup from the update/);
+    assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), B);
+    r = ps(path.join(ir, B, 'Install-Ujwalam.ps1'), ir, '-Rollback', '-Force');
+    assert.equal(r.code, 0, r.out);
+    assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), A);
+    assert.deepEqual(snapshot(data), bState, '-Force keeps the current settings');
+
+    // A link named like Setup's work folder: uninstall removes the link, never what it points at.
+    const victim = path.join(t, 'victim');
+    mkdirSync(victim);
+    writeFileSync(path.join(victim, 'keep.txt'), 'mine');
+    symlinkSync(victim, path.join(ir, '.setup-1-0123456789abcdef'), 'junction');
+    r = ps(path.join(ir, A, 'Install-Ujwalam.ps1'), ir, '-Uninstall', '-NoShortcuts');
+    assert.equal(r.code, 0, r.out);
+    assert.equal(readFileSync(path.join(victim, 'keep.txt'), 'utf8'), 'mine');
+    assert.ok(!existsSync(path.join(ir, '.setup-1-0123456789abcdef')));
+  } finally { holder?.kill(); rmSync(t, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
 // ---- Ujwalam-Setup.exe end to end ---------------------------------------------------------------------------------------
 
-function packageZip(dist, version, { tamper = false } = {}) {
+function packageZip(dist, version, { tamper = false, badScript = false } = {}) {
   const stage = path.join(dist, `stage-${version}`);
   const { dir, rels } = fakePackage(stage, version);
+  if (badScript) writeFileSync(path.join(dir, 'Install-Ujwalam.ps1'), `${readFileSync(path.join(dir, 'Install-Ujwalam.ps1'), 'utf8')}\r\n# changed\r\n`);
   const top = `ujwalam-${version}-win64`;
   const zip = path.join(dist, `${top}.zip`);
   writeZip(zip, [...rels, 'SHA256SUMS.txt'].map((r) => ({ name: `${top}/${r}`, file: path.join(dir, ...r.split('/')) })));
@@ -293,7 +456,7 @@ function packageZip(dist, version, { tamper = false } = {}) {
 }
 
 function setup(...args) {
-  const r = spawnSync(SETUP_EXE, ['--quiet', ...args], { encoding: 'utf8', windowsHide: true, timeout: 180_000 });
+  const r = spawnSync(SETUP_EXE, ['--quiet', ...args], { encoding: 'utf8', windowsHide: true, timeout: 180_000, env: childEnv() });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
 
@@ -338,6 +501,14 @@ test('Ujwalam-Setup.exe --quiet: install from the zip next to it, update, refuse
     assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), B, 'nothing changed');
     r = setup('--update', '--install-root', ir, '--package', path.join(dist, 'ujwalam-0.1.0-alpha.7-win64.zip'));
     assert.equal(r.code, 21, 'no zip / no checksum file');
+    // The zip matches its .sha256 but the installer script inside does not match the package's SHA256SUMS.txt: never run.
+    const odd = packageZip(dist, '0.1.0-alpha.4', { badScript: true });
+    r = setup('--update', '--install-root', ir, '--package', odd);
+    assert.equal(r.code, 21, r.out);
+    assert.match(r.out, /unpacked installer does not match/);
+    assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), B);
+    assert.ok(!readdirSync(ir).some((n) => n.startsWith('.setup-')), 'work folder removed');
+    rmSync(odd); rmSync(`${odd}.sha256`);
 
     writeFileSync(path.join(data, 'core', 'settings.json'), '{"fromB":true}');
     r = setup('--rollback', '--install-root', ir);
@@ -410,7 +581,9 @@ test('Update available route: newest verified package only, refused while live o
     const zb = zipFile(B);
     assert.equal((await get()).reason, 'no-setup', 'no Ujwalam-Setup.exe next to the package or in the install root');
     writeFileSync(path.join(dist, 'Ujwalam-Setup.exe'), 'stand-in');
-    let s = await get();
+    assert.equal((await get(true)).reason, 'no-setup', 'a Setup.exe in the build folder without a matching .sha256 is not run');
+    writeFileSync(path.join(dist, 'Ujwalam-Setup.exe.sha256'), `${sha(Buffer.from('stand-in'))}  Ujwalam-Setup.exe\n`);
+    let s = await get(true);
     assert.deepEqual([s.available, s.latest, s.current, s.zip], [true, { version: B, verified: true }, A, undefined]);
     writeFileSync(`${zb}.sha256`, `${'0'.repeat(64)}  x\n`);
     assert.equal((await get(true)).reason, 'not-verified', 'a checksum mismatch is never offered');
@@ -423,7 +596,21 @@ test('Update available route: newest verified package only, refused while live o
     assert.equal((await post()).body.error, 'live');
     status = 'fail';
     assert.equal((await post()).body.error, 'live', 'unknown on-air state: refused');
+    // The stream starts while the package is being checked: asked again right before Setup starts.
+    let asks = 0;
+    const flip = createSetupUpdate({ json, installDir, updateDir: dist, hostStatus: async () => ({ live: ++asks > 1, recording: false }), spawnImpl });
+    r = fakeRes(); await flip.handle('POST', '/ui/api/setup/update', r, null);
+    assert.deepEqual([r.code, r.body.error, asks], [409, 'live', 2]);
     assert.equal(spawned.length, 0);
+    // Setup cannot be started (quarantined, blocked): not stuck "installing", the reason is shown, a retry is possible.
+    const throwing = createSetupUpdate({ json, installDir, updateDir: dist, hostStatus: async () => ({ live: false, recording: false }), spawnImpl: () => { throw Object.assign(new Error('spawn EPERM'), { code: 'EPERM' }); } });
+    r = fakeRes(); await throwing.handle('POST', '/ui/api/setup/update', r, null);
+    assert.deepEqual([r.code, r.body.error], [500, 'not-started']);
+    const ts = await throwing.state(false);
+    assert.deepEqual([ts.installing, ts.last.ok], [null, false]);
+    assert.match(ts.last.message, /could not be started \(EPERM\); nothing was changed/);
+    r = fakeRes(); await throwing.handle('POST', '/ui/api/setup/update', r, null);
+    assert.equal(r.body.error, 'not-started', 'not "busy"');
 
     status = { live: false, recording: false };
     r = await post();

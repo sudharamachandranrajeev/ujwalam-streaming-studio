@@ -6,6 +6,7 @@
 //   GET  /ui/api/setup/update[?fresh=1]  { installed, current, folder, latest: { version, verified } | null, available,
 //                                          installing, last: { ok, code, message, at } | null, reason }
 //   POST /ui/api/setup/update  {}        202 { started, version } | 409 { error: live|busy|nothing|not-verified|... , message }
+//                                        | 500 { error: not-started, message } (Setup could not be started)
 //
 // The update folder is data\ujwalam.json "updateFolder" (UJWALAM_UPDATE_DIR, set by run-installed.mjs; Ujwalam-Setup.exe
 // writes the folder it installed from). A package counts only when its SHA-256 matches its .zip.sha256 file (cached by
@@ -56,6 +57,7 @@ const MESSAGES = {
   7: 'The package does not match its checksums; build it again.',
   10: 'The package is incomplete; build it again.',
   13: 'Your settings could not be backed up, so nothing was changed.',
+  14: 'Another Ujwalam setup is working right now; try again when it has finished.',
   20: 'No package was found in the build folder.',
   21: 'The package does not match its checksum file; build it again.',
   22: 'The package could not be unpacked; nothing was changed.',
@@ -84,7 +86,14 @@ export function createSetupUpdate(opts) {
     try { return JSON.parse(readFileSync(path.join(installDir, 'release.json'), 'utf8')).version ?? null; } catch { return null; }
   };
   const installed = () => existsSync(path.join(root, 'current.txt')) && existsSync(path.join(installDir, 'release.json'));
-  const setupExe = () => [updateDir && path.join(updateDir, 'Ujwalam-Setup.exe'), path.join(root, 'Ujwalam-Setup.exe')].find((f) => f && existsSync(f)) ?? null;
+  // The build folder's Ujwalam-Setup.exe when it matches its .sha256 (written by npm run package:alpha), else the one
+  // installed in the install root (checked against SHA256SUMS.txt when it was installed). Resolved once per POST.
+  async function setupExe(fresh) {
+    const built = updateDir && path.join(updateDir, 'Ujwalam-Setup.exe');
+    if (built && existsSync(built) && await verified(built, fresh)) return built;
+    const own = path.join(root, 'Ujwalam-Setup.exe');
+    return existsSync(own) ? own : null;
+  }
 
   async function verified(zip, fresh) {
     let st;
@@ -111,8 +120,9 @@ export function createSetupUpdate(opts) {
     if (!newer) return { ...base, latest: { version: pkg.version, verified: null }, reason: 'up-to-date' };
     const ok = await verified(pkg.zip, fresh);
     if (!ok) return { ...base, latest: { version: pkg.version, verified: false }, reason: 'not-verified' };
-    if (!setupExe()) return { ...base, latest: { version: pkg.version, verified: true }, reason: 'no-setup' };
-    return { ...base, latest: { version: pkg.version, verified: true }, available: true, reason: null, zip: pkg.zip };
+    const exe = await setupExe(fresh);
+    if (!exe) return { ...base, latest: { version: pkg.version, verified: true }, reason: 'no-setup' };
+    return { ...base, latest: { version: pkg.version, verified: true }, available: true, reason: null, zip: pkg.zip, exe };
   }
 
   // Live or recording, or unknown: refuse (fail closed).
@@ -123,9 +133,11 @@ export function createSetupUpdate(opts) {
     } catch { return true; }
   }
 
+  // Starts Setup; throws when it cannot be started (the caller clears `installing`).
   function runSetup(exe, zip, version) {
     const args = ['--update', '--quiet', '--next-start', '--package', zip, '--install-root', root];
     const c = spawnImpl(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (!c || typeof c.on !== 'function') throw new Error('Ujwalam-Setup.exe did not start');
     try { os.setPriority(c.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* it still runs */ }
     const tail = [];
     const keep = (d) => { for (const l of String(d).split(/\r?\n/)) if (l.trim()) { tail.push(l.trim()); if (tail.length > 30) tail.shift(); } };
@@ -149,19 +161,21 @@ export function createSetupUpdate(opts) {
     if (method === 'GET') {
       const s = await state(url?.searchParams?.get('fresh') === '1');
       delete s.zip;
+      delete s.exe;
       json(res, 200, s);
       return true;
     }
     if (method !== 'POST') return false;
     if (installing || checking) { json(res, 409, { error: 'busy', message: 'An update is already being installed.' }); return true; }
+    const liveMsg = { error: 'live', message: 'Stop the stream and the recording first; the update installs when nothing is on air.' };
     checking = true;
     let s;
     try {
-      if (await onAir()) {
-        json(res, 409, { error: 'live', message: 'Stop the stream and the recording first; the update installs when nothing is on air.' });
-        return true;
-      }
+      if (await onAir()) { json(res, 409, liveMsg); return true; }
       s = await state(true);
+      // Checking the package takes a while: asked again right before Setup starts (Codex review 2026-11-18). Setup
+      // itself never touches the running studio either (it only switches current.txt for the next start).
+      if (s.available && await onAir()) { json(res, 409, liveMsg); return true; }
     } finally { checking = false; }
     if (!s.available) {
       const message = s.reason === 'not-verified' ? 'The package in the build folder does not match its checksum file; build it again.'
@@ -172,7 +186,16 @@ export function createSetupUpdate(opts) {
     }
     installing = { version: s.latest.version, started: now() };
     last = null;
-    runSetup(setupExe(), s.zip, s.latest.version);
+    try {
+      runSetup(s.exe, s.zip, s.latest.version);
+    } catch (e) {
+      // Not started (Setup missing, blocked or quarantined meanwhile): nothing is installing.
+      installing = null;
+      last = { ok: false, code: -1, version: s.latest.version, at: now(), message: `Ujwalam setup could not be started (${e.code ?? e.message}); nothing was changed.`, lines: [] };
+      log(`setup update ${s.latest.version}: not started (${e.message})`);
+      json(res, 500, { error: 'not-started', message: last.message });
+      return true;
+    }
     json(res, 202, { started: true, version: s.latest.version });
     return true;
   }
