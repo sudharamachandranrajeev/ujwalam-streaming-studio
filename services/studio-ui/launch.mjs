@@ -99,7 +99,8 @@ import { createRecordClips, isLive } from './record-clips.mjs';
 import { hasExited, killChildTree } from '../common/kill-tree.mjs';
 import { createPostChain } from '../posting/auto-chain.mjs';
 import { createLearningSignals } from '../learning/signals.mjs';
-import { folderProblem, readSettings } from './user-settings.mjs';
+import { folderProblem, readSettings, SETTINGS_FILE } from './user-settings.mjs';
+import { createStatCache } from '../common/stat-cache.mjs';
 import { createMediaInfo } from '../project/media-info.mjs';
 import { rpc } from './backends.mjs';
 import { collectDiag, CRASH_LOG_FILE, outputsSafe, SNAPSHOT_FILE } from '../../tools/diag/bundle.mjs';
@@ -873,6 +874,7 @@ function superviseHost(o) {
   const watchMs = Math.max(100, Number(process.env.UJWALAM_HOST_WATCH_MS ?? 2000) || 2000);
   let client = o.initialClient;
   let lastOutputs = null;
+  let lastOutputsAt = 0; // when lastOutputs was read (Date.now)
   let busy = false;
   // Stream recovery (D303 proposed): the streams seen live before the crash wait here until a restarted host is ready
   // (a host that is not ready keeps them for the next attempt; the crash time stays the first one).
@@ -935,7 +937,7 @@ function superviseHost(o) {
   };
   const readOutputs = async () => {
     if (busy || isStopping()) return;
-    try { lastOutputs = await client.call('outputs.status'); } catch { /* host gone or busy: keep the last answer */ }
+    try { lastOutputs = await client.call('outputs.status'); lastOutputsAt = Date.now(); } catch { /* host gone or busy: keep the last answer */ }
   };
   const poll = setInterval(readOutputs, watchMs);
   poll.unref();
@@ -1146,6 +1148,9 @@ function superviseHost(o) {
   return {
     client: () => client,
     restarting: () => busy,
+    // The watch loop's last outputs.status when it is at most maxAgeMs old, else null (idle load, 2026-11-18: the clip
+    // tick reuses it instead of reading its own).
+    recentOutputs: (maxAgeMs) => (lastOutputs && Date.now() - lastOutputsAt <= maxAgeMs ? lastOutputs : null),
     // check(): the candidate's last hash, run after the old host has exited and right before the new one is spawned
     // (Codex re-review). candidateFailed in the answer: the candidate itself failed (check, readiness, project load);
     // without it nothing of the candidate ran (it is kept for a retry). running (Codex review of the merge): which host
@@ -1551,6 +1556,9 @@ export async function main(argv = process.argv.slice(2)) {
         // switched while live); a clipper that could not start (no capture device yet) starts once it can.
         syncWorkers();
         try {
+          // The host watch loop reads outputs.status every 2 s; a fresh answer from it is used (one call fewer).
+          const recent = hostSup?.recentOutputs?.(2500);
+          if (recent) { recordClips.feed(recent); return; }
           const d = JSON.parse(readFileSync(hostDiscovery, 'utf8'));
           recordClips.feed(await new HostClient({ port: d.port, token: hostToken }).call('outputs.status'));
         } catch { /* host restarting: next tick */ }
@@ -1578,6 +1586,7 @@ export async function main(argv = process.argv.slice(2)) {
       // crash at most LIVE_CLIPPER_MAX_RESTARTS times; never stops the stream. One that cannot start yet (e.g. no
       // capture device on the game layer) is tried again on every clip tick, so binding the device later starts it (LC1).
       let lastReason = null;
+      const settingsCache = createStatCache(); // settings.json read again only when it changed
       let clipper = null; // the running clipper process
       // The scene file is read again only when it changed (it is read on every tick while the clipper cannot start).
       let specCache = { key: null, lc: null };
@@ -1593,7 +1602,7 @@ export async function main(argv = process.argv.slice(2)) {
       };
       const syncClipper = () => {
         if (stopping) return;
-        if (!liveClipperWanted({ flagOn: flagIsOn('live-clips'), clips: readSettings(dataDir).clips })) {
+        if (!liveClipperWanted({ flagOn: flagIsOn('live-clips'), clips: settingsCache(path.join(dataDir, SETTINGS_FILE), () => readSettings(dataDir)).clips })) {
           if (clipper) {
             endWorker(clipper);
             clipper = null;

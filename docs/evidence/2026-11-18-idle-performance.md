@@ -163,3 +163,40 @@ Tests:
 - NOT RUN: a full alpha session with the real workers switching on and off (needs the studio closed and the venvs).
 
 Measure: `perf-idle` per-process CPU seconds for python.exe (before: live_worker scanning when the flag is on).
+
+## 5. Polling loops do less work that does not change
+
+Before:
+
+- UI server (`services/studio-ui/server.mjs`), 1 s tick: `readSettings` twice (preview snap, clip status), a read and
+  parse of `clips/status.json` and of the recovery status, and up to three `outputs.status` calls (on-air bar while
+  live or recording, record while live, Instagram).
+- Launcher: the clip tick (5 s) read the host discovery file and called `outputs.status` while the host watch loop
+  (2 s) called it too; `createFlags` (which reads and validates `data/flags.json`) was built anew on each check; the
+  scene file was loaded every 5 s while the clipper could not start.
+
+Change:
+
+- New `services/common/stat-cache.mjs`: a value read again only when its file changed (mtime in ns, size, file id).
+  Used for settings.json, clips/status.json and the recovery status in the UI server, and settings.json in the
+  launcher's clip tick. The posting queue summary is not cached (it depends on the clock).
+- One `outputs.status` per tick, shared (lazily) by the on-air bar, record while live and Instagram. The record-while-
+  live owner is still taken before any status is read.
+- Idle back-off: off air, with no event-stream (SSE) page open and no recording owned, the tick skips every second
+  interval (2 s). The Qt shell polls `/ui/api/status` every 2 s, so it still sees a fresh snapshot each poll. Live,
+  recording or with a page open: every second as before.
+- Launcher: the clip tick uses the host watch loop's `outputs.status` when it is at most 2.5 s old (one call and one
+  file read fewer every 5 s). Item 4 already added one flags instance and the scene-file stat check.
+- Not changed: the host watch loop (2 s): crash recovery needs the last streams seen; the mixer and device polling
+  (another agent's work).
+
+Expected effect: off air, UI server host calls fall from 3 per second (host.status, core.status, + previewSync
+calls) to the same per 2 s, no file parses per tick while nothing changes, and one host call fewer every 5 s in the
+launcher. Small CPU savings in node.exe; mainly less wake-up churn.
+
+Tests (each file alone, `--test-concurrency=1`, BelowNormal): `tests/stat-cache.test.mjs` 2 pass (new),
+`studio-ui-server` 40, `instagram-live` 29, `studio-ui-preview-edit` 6, `live-test-kit` 16, `studio-ui-alpha` 40,
+`studio-ui-quit-lock` 5, `studio-ui-transitions` 4, `studio-ui-device-hotplug` 3, `studio-ui-stream-settings` 16,
+`golive-routes` 35, `studio-ui-readiness` 39, `record-live` 12: all pass.
+
+Measure: `perf-idle` node.exe CPU seconds (UI server and launcher).
