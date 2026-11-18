@@ -49,6 +49,59 @@ this pass, see "Not run").
     loaded (the whole file took 819 s).
   - Rerun of the three tests (`--test-name-pattern`): pass 3, fail 0.
 
+## Codex review fixes (2026-11-18, after the rebase onto claude/alpha0-d1)
+
+- **P1, monitoring output switch (live path).** Checked against OBS 32.1.2 (`libobs/obs.c`
+  `obs_set_audio_monitoring_device`, `libobs/audio-monitoring/win32/wasapi-output.c`). The finding is right: the id is
+  freed under `monitoring_mutex`, but `on_audio_playback` calls `audio_monitor_init_wasapi` on its reconnect path and
+  reads `obs->audio.monitoring_device_id` with only the monitor's own playback lock held. `audio_monitor_destroy` (CUE
+  off) frees the monitor before it takes `monitoring_mutex`, while `obs_reset_audio_monitoring` walks the list. Fix:
+  `Studio::when_no_monitors` runs the switch under the studio lock. Every CUE change takes that lock. The switch runs
+  only when no source has a monitor (`obs_enum_all_sources`, private sources included; stingers are created with
+  `audio_monitoring` 0). Otherwise it waits for the next device change, Try again, or a CUE switched off. Plugging the
+  same output back in passes the same id, which libobs returns early on. Status: built; UNVERIFIED at runtime (host
+  test not run).
+- **P2, Connect saved a stale snapshot.** New `projectSync.update(change)` writes the pending edits, reads the file
+  again, makes the change and saves, all in one synchronous step. Connect makes the same rebind on the fresh copy and
+  keeps the new project device ids. If the fresh copy would rebind other layers, the host change is undone
+  (`changed`). Verified: `tests/studio-devices-mixer.test.mjs`. A structure edit saved and a layer edit recorded while
+  the host calls ran are both kept.
+- **P2, a failed save after the host accepted.** The host change is undone: `not-saved` (500). If the undo fails too:
+  `not-saved-live`. Verified (same file).
+- **P2, two cards of one model.** The finding is right: dshow names do not number duplicate cards, so one card's audio
+  blocked the other card's layer sound. Neither libobs nor the host gives a shared id: the dshow path and the WASAPI
+  endpoint id have nothing in common. The Windows container id would link them, but the host does not read it yet.
+  The rule now: refuse only when the device list has exactly one "<product>-Video" and exactly one
+  "(<product>-Audio)". Otherwise add the sound with a warning (`maybeSameAs`; the studio shows it in the "Added"
+  note). Windows' "(2- <product>-Audio)" counts as the same product. Verified (same file).
+- **P3, a device event during a refresh.** A refresh asked for while one runs now runs once more after it. Verified
+  (same file).
+- **A5** lives in `app/studio/qml/Store.qml` (status poll): when the host uptime drops, `hostRestarted()` re-embeds the
+  previews (`PreviewArea.qml`) and `loadScenes()` reloads scenes, then layers and the mixer. Built; not separately
+  tested.
+
+### Rerun after the rebase and the review fixes (off air, one file at a time, BelowNormal)
+
+| Test file | Result |
+|---|---|
+| project-rebind-roles | 4/4 |
+| studio-devices-mixer | 14/14 |
+| mixer-audio-sources | 7/7 |
+| studio-ui-server | 40/40 |
+| studio-ui-device-hotplug | 3/3 |
+| studio-ui-mixer-routing | 3/3 |
+| studio-ui-alpha | 39 pass, 1 skipped |
+| studio-ui-transitions | 4/4 |
+| studio-ui-scene-templates | 5/5 |
+| project-schema | 148/148 |
+| studio-qml-devices-mixer | 4/4 |
+| studio-qml-editing | 45 pass, 1 fail; the failure was "layer menu: Delete": exit code null, the shell killed at its 50 s limit while the machine was loaded. Rerun alone: pass |
+| studio-qml-shell | 4 pass, 1 fail ("defaults"), see below |
+
+- The "defaults" failure in studio-qml-shell is in the base branch, not this one. It expects every flag off except
+  four, but `data/flags.json` on claude/alpha0-d1 also has `transitions` on (D391). This branch changes neither file.
+- Builds: the host and the studio both build.
+
 ## Not run
 
 - `app/host/tests/host-devices-late.test.mjs` (new): starts the host. Late mic sound built on device change (A2),
