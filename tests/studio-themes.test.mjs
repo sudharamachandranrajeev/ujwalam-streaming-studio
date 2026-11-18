@@ -114,9 +114,9 @@ test('fonts: family names only (Windows or bundled OFL); no Corbel or Consolas (
   assert.deepEqual(readdirSync(dir).filter((f) => !f.endsWith('.json')), []);
 });
 
-// Round controls (setControl in main_window.cpp, QPushButton#round in theme.cpp): every icon needs >= 3:1 against its face,
-// enabled and disabled. Disabled faces are the field colour (danger: transparent over the card = panel); the disabled icon
-// is the muted token (icons::make third colour), not the faded alpha that vanished on light themes.
+// Round controls (the studio's round icon buttons): every icon needs >= 3:1 against its face, enabled and disabled.
+// Disabled faces are the field colour (danger: transparent over the card = panel); the disabled icon is the muted token,
+// not the faded alpha that vanished on light themes.
 test('round control icons keep >= 3:1 against their face in every state, all themes', () => {
   for (const { file, t } of themes) {
     const c = t.colors;
@@ -133,12 +133,12 @@ test('round control icons keep >= 3:1 against their face in every state, all the
   }
 });
 
-// The preview surface is dark in every theme (PreviewSlot in main_window.cpp), so its message uses fixed colours.
+// The preview surface is dark in every theme (PreviewArea.qml), so its message uses fixed colours.
 test('text on the preview surface keeps >= 4.5:1 (fixed light on fixed dark, same in every theme)', () => {
-  const src = readFileSync(path.resolve(dir, '..', '..', 'app', 'studio', 'src', 'main_window.cpp'), 'utf8');
-  const surface = /pal\.setColor\(QPalette::Window, QColor\((\d+), (\d+), (\d+)\)\)/.exec(src);
-  const ink = /QLabel \{ color: (#[0-9a-f]{6}); background: transparent; \}/.exec(src);
-  assert.ok(surface && ink, 'preview surface colour and message colour are set in PreviewSlot');
-  const face = '#' + [1, 2, 3].map((i) => Number(surface[i]).toString(16).padStart(2, '0')).join('');
-  assert.ok(contrast(ink[1], face) >= 4.5, `preview message ${ink[1]} on ${face} ${contrast(ink[1], face).toFixed(2)}`);
+  const src = readFileSync(path.resolve(dir, '..', '..', 'app', 'studio', 'qml', 'PreviewArea.qml'), 'utf8');
+  const surface = /color: "(#[0-9a-f]{6})" \/\/ the preview surface stays dark/.exec(src);
+  // every other fixed colour in the file is message text on that surface (the second preview's surface repeats it)
+  const ink = [...src.matchAll(/^\s+color: "(#[0-9a-f]{6})"\s*$/gm)].map((m) => m[1]).filter((c) => c !== surface?.[1]);
+  assert.ok(surface && ink.length, 'preview surface colour and message colour are set in PreviewArea.qml');
+  for (const i of ink) assert.ok(contrast(i, surface[1]) >= 4.5, `preview message ${i} on ${surface[1]} ${contrast(i, surface[1]).toFixed(2)}`);
 });

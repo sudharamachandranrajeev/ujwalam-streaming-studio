@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Tips, tour and help (D294 proposed): the data files (schema, anchors, plain words), the ui.guide settings
 // (checks, defaults, merging, file round trip) and the UI server routes (GET ui/api/guide, POST ui/api/settings
-// with ui.guide, allowed while live without a task or toast). The Qt side is tested in studio-qt-shell.test.mjs.
+// with ui.guide, allowed while live without a task or toast). The studio side is tested in studio-qml-guide.test.mjs.
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
@@ -19,7 +19,7 @@ const UI = path.join(REPO, 'ui');
 const readJson = (f) => JSON.parse(readFileSync(path.join(REPO, f), 'utf8'));
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'ujw-guide-'));
 
-// Anchor names the studio window registers (app/studio/src/main_window.cpp, "guide_->anchor"), plus names other
+// Anchor names the studio window knows (app/studio/qml/Guide.qml, anchorNames), plus names other
 // branches may add; a data file may only use these.
 const ANCHORS = new Set(['scenes', 'layers', 'layerAdd', 'previewH', 'previewV', 'look', 'mixer', 'ctlStream', 'ctlRecord', 'ctlClip', 'ctlMark',
   'chips', 'chipClips', 'taskChip', 'taskBar', 'myClips', 'settings', 'more', 'help']);
@@ -62,11 +62,11 @@ describe('data/guide/*.json', () => {
     for (const bad of [/\bD\d{3}\b/, /\bAPI\b/, /\bJSON\b/, /\blibobs\b/i, /\bOBS\b/, /\bGPU\b/, /\bflag\b/i, /\bhost\b/i, /[A-Za-z]:\\\\/, /\.(mjs|cpp|json)\b/]) assert.doesNotMatch(all, bad, String(bad));
   });
   test('the posting help does not claim more than exists', () => {
-    const cpp = readFileSync(path.join(REPO, 'app/studio/src/help_panel.cpp'), 'utf8');
-    assert.match(cpp, /sends nothing/);
-    assert.match(cpp, /private video/);
-    assert.match(cpp, /There is no switch for it in this window yet/);
-    assert.match(cpp, /You upload those yourself/);
+    const help = readFileSync(path.join(REPO, 'app/studio/qml/HelpPanel.qml'), 'utf8');
+    assert.match(help, /sends nothing/);
+    assert.match(help, /private video/);
+    assert.match(help, /There is no switch for it in this window yet/);
+    assert.match(help, /You upload those yourself/);
     const rules = readJson('data/posting/auto-post-rules.json');
     assert.deepEqual(rules.rules, [], 'the help says the rule list is empty');
     assert.equal(rules.autoUpload, false);

@@ -15,7 +15,7 @@ test('every test file is in exactly one group; the studio files are the ones tha
   assert.equal(new Set([...studio, ...other]).size, files.length);
   assert.ok(files.includes('tests/run-tests.test.mjs'));
   assert.ok(other.includes('tests/run-tests.test.mjs'));
-  for (const f of ['tests/studio-qml-themes.test.mjs', 'tests/studio-qt-shell.test.mjs', 'tests/studio-tray.test.mjs']) assert.ok(studio.includes(f), f);
+  for (const f of ['tests/studio-qml-themes.test.mjs', 'tests/studio-qml-shell.test.mjs', 'tests/studio-qml-tray.test.mjs']) assert.ok(studio.includes(f), f);
   assert.ok(files.some((f) => f.startsWith('tests/outputs/')), 'tests/outputs is included');
 });
 

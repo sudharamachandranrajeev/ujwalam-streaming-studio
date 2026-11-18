@@ -88,6 +88,17 @@ describe('createFlags', () => {
     assert.equal(f.isOn('nope'), false);
     assert.equal(f.isOn(f.ids()[0]), false);
   });
+  test('a retired flag still in the local file (studio-qml, 2026-11-18) loads without error; the next write drops it', () => {
+    const d = tmp(); const f = createFlags({ dataDir: d });
+    const id = f.ids()[0];
+    assert.equal(f.ids().includes('studio-qml'), false, 'studio-qml is no longer defined');
+    writeFileSync(path.join(d, LOCAL_NAME), JSON.stringify({ flags: { 'studio-qml': true, [id]: true } }));
+    assert.equal(f.isOn('studio-qml'), false);
+    assert.equal(f.isOn(id), true, 'the other values in the file still apply');
+    assert.equal(f.list().some((x) => x.id === 'studio-qml'), false);
+    f.set(id, false);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(d, LOCAL_NAME), 'utf8')), { flags: { [id]: false } });
+  });
   test('corrupt local file falls back to defaults', () => {
     const d = tmp(); writeFileSync(path.join(d, LOCAL_NAME), '{not json');
     assert.equal(createFlags({ dataDir: d }).isOn(createFlags({ dataDir: d }).ids()[0]), false);

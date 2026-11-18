@@ -60,25 +60,17 @@ test('host log line and launcher message name the main display, not a second dis
 
 test('studio window: shown and activated normally, no second-display move (D316 replaces D219)', () => {
   const m = src('app/studio/src/main.cpp');
-  assert.doesNotMatch(m, /screens\.at\(1\)/);
-  // WA_ShowWithoutActivating is kept only in the headless test modes: the offscreen probe (UJWALAM_STUDIO_PROBE_SHOW),
-  // the hidden native window of the studio swap tests and its HiddenWindows filter (UJWALAM_STUDIO_HIDDEN, laid out
-  // with WA_DontShowOnScreen, LU4/D346, D376), and the hidden probe's screen-shot action (D376, only with
-  // UJWALAM_STUDIO_SETTINGS_SHOT_DIR set; evidence pictures, never in the user's studio).
-  const lines = m.split('\n');
-  const uses = lines.map((l, i) => (l.includes('WA_ShowWithoutActivating') ? i : -1)).filter((i) => i >= 0);
-  assert.equal(uses.length, 4);
-  const probe = m.indexOf('UJWALAM_STUDIO_PROBE_SHOW');
-  assert.ok(probe >= 0 && lines[uses[2] - 1].includes('UJWALAM_STUDIO_PROBE_SHOW'), 'one use inside the headless probe');
-  for (const i of [uses[0], uses[3]])
-    assert.match(lines[i - 1], /WA_DontShowOnScreen, true/, 'hidden-window uses only with WA_DontShowOnScreen');
-  const shot = body(m, 'static bool screenShot(MainWindow &win, const QString &name)');
-  assert.match(shot, /UJWALAM_STUDIO_SETTINGS_SHOT_DIR/);
-  assert.match(shot, /UJWALAM_STUDIO_HIDDEN/);
-  assert.ok(shot.includes('WA_ShowWithoutActivating'), 'the screen-shot use sits inside the hidden-probe action');
-  assert.match(m, /win\.show\(\);[^\n]*\n\s*win\.raise\(\);\s*\n\s*win\.activateWindow\(\);/);
-  const leave = body(src('app/studio/src/main_window.cpp'), 'void MainWindow::leaveTray()');
-  assert.doesNotMatch(leave, /WA_ShowWithoutActivating/);
-  assert.match(leave, /activateWindow\(\)/);
-  assert.match(leave, /UJWALAM_HEADLESS/); // headless never shows it
+  assert.doesNotMatch(m, /screens\(\)\.at\(1\)|screens\.at\(1\)/);
+  assert.doesNotMatch(m, /WA_ShowWithoutActivating/);
+  // Headless (tests) never reaches the screen: the probe runs on the offscreen platform, the hidden mode never shows,
+  // and anything else is refused (exit 64).
+  assert.match(m, /if \(probe\)\s*\n\s*qputenv\("QT_QPA_PLATFORM", "offscreen"\);/);
+  assert.match(m, /if \(headless && !hidden && !probe\) \{[^}]*return 64;/);
+  const q = src('app/studio/src/qml_studio.cpp');
+  const begin = body(q, 'bool QmlStudio::begin(Mode mode)');
+  assert.doesNotMatch(begin, /screens\(\)/);
+  assert.match(begin, /case Mode::Normal:[^\n]*\n\s*win_->show\(\);\s*\n\s*win_->raise\(\);\s*\n\s*win_->requestActivate\(\);/);
+  const hidden = begin.slice(begin.indexOf('case Mode::Hidden:'), begin.indexOf('case Mode::Probe:'));
+  assert.match(hidden, /win_->create\(\);/);
+  assert.doesNotMatch(hidden, /show\(\)/, 'the hidden mode never shows its window');
 });

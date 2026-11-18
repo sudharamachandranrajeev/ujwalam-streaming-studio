@@ -22,7 +22,7 @@ export const skipReason = !existsSync(SHELL_EXE) || (!PACKAGED && !QT) ? 'studio
 function startShell(env, killMs) {
   const child = spawn(SHELL_EXE, [], {
     windowsHide: true,
-    env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', UJWALAM_STUDIO_QML: '1',
+    env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1',
       QT_QPA_FONTDIR: path.join(process.env.WINDIR ?? 'C:\Windows', 'Fonts'), ...env },
   });
   let out = '', err = '';

@@ -25,7 +25,7 @@ function runShell(env) {
   return new Promise((resolve) => {
     const child = spawn(SHELL_EXE, [], {
       windowsHide: true,
-      env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', UJWALAM_STUDIO_QML: '1', ...env },
+      env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', ...env },
     });
     let out = '', err = '';
     child.stdout.on('data', (d) => { out += d; });
