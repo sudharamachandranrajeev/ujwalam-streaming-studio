@@ -102,6 +102,18 @@ struct Studio::Meter {
 	obs_source_t *src = nullptr;
 	std::atomic<float> peak{-INFINITY}, magnitude{-INFINITY};
 	std::atomic<uint64_t> last_ns{0};
+	// Peak hold (B8, 2026-11-18): the highest peak of a short window, so a beat between two reads (the studio reads every
+	// 250 ms, the volmeter calls about every 50 ms) still shows. A window, not reset-on-read: two studio windows read the
+	// same meter. Written by the volmeter thread only; a reader may see the hold and its time from different calls, which
+	// at worst shows one stale peak for one read.
+	static constexpr uint64_t kHoldNs = 300ull * 1000000ull;
+	std::atomic<float> hold{-INFINITY};
+	std::atomic<uint64_t> hold_ns{0};
+	float held_peak() const
+	{
+		const uint64_t t = hold_ns.load();
+		return t && os_gettime_ns() - t <= kHoldNs ? hold.load() : peak.load();
+	}
 	static void on_audio(void *p, obs_source_t *, const struct audio_data *, bool)
 	{
 		static_cast<Meter *>(p)->last_ns = os_gettime_ns();
@@ -117,6 +129,11 @@ struct Studio::Meter {
 		}
 		m->magnitude = a;
 		m->peak = b;
+		const uint64_t now = os_gettime_ns();
+		if (!(b < m->hold.load()) || now - m->hold_ns.load() > kHoldNs) { // a higher peak, or the old one has aged out
+			m->hold = b;
+			m->hold_ns = now;
+		}
 	}
 	explicit Meter(obs_source_t *s) : src(s)
 	{
@@ -1208,6 +1225,12 @@ bool Studio::device_loss_pending(const devices::List &l)
 
 // Seconds without a frame before attempt n + 1 (index n - 1); kConnectAttempts attempts in all.
 static constexpr uint32_t kConnectDelaysMs[Studio::kConnectAttempts] = {3000, 6000, 12000, 24000, 30000};
+// After attempt n: the wait before the next one. The fast attempts, then once a minute for as long as there is no picture
+// (A3, 2026-11-18).
+static uint64_t connect_delay_ns(uint32_t n)
+{
+	return (uint64_t)(n >= 1 && n <= Studio::kConnectAttempts ? kConnectDelaysMs[n - 1] : Studio::kSlowRetryMs) * 1000000ull;
+}
 
 void Studio::set_check_scheduler(std::function<void(uint32_t)> f)
 {
@@ -1242,9 +1265,9 @@ void Studio::schedule_connect_check()
 {
 	uint64_t now = os_gettime_ns(), next = 0;
 	for (auto &s : capture_srcs()) {
-		if (s->waiting || !s->connecting || s->attempts == 0 || s->attempts > kConnectAttempts)
+		if (s->waiting || !s->connecting || s->attempts == 0)
 			continue;
-		uint64_t due = s->attempt_ns + (uint64_t)kConnectDelaysMs[s->attempts - 1] * 1000000ull;
+		uint64_t due = s->attempt_ns + connect_delay_ns(s->attempts);
 		uint64_t in = due > now ? due - now : 0;
 		if (next == 0 || in < next)
 			next = in == 0 ? 1 : in;
@@ -1269,9 +1292,11 @@ bool Studio::connect_checks(json::Value &changes, const char *why)
 			moved = true;
 			continue;
 		}
-		if (s->attempts == 0 || s->attempts >= kConnectAttempts)
-			continue; // the last attempt failed: stay connecting with a message (a plug event starts over)
-		if (now < s->attempt_ns + (uint64_t)kConnectDelaysMs[s->attempts - 1] * 1000000ull)
+		if (s->attempts == 0)
+			continue;
+		// After the fast attempts: stay connecting with a message and try once a minute (a plug event or devices.rescan
+		// starts over).
+		if (now < s->attempt_ns + connect_delay_ns(s->attempts))
 			continue;
 		connect_attempt(*s, s->bound_id, true);
 		json::Value c = json::Value::object();
@@ -1335,12 +1360,160 @@ json::Value Studio::devices_changed(const devices::List &l, const char *why, con
 		}
 		if (connect_checks(changes, why))
 			event = true; // a source got its picture, or was retried: the pages refresh its state
+		bind_waiting_audio(l, changes, why);
 	}
 	uint64_t seq = event || changes.size() ? ++dev_seq_ : dev_seq_.load();
 	json::Value r = json::Value::object();
 	r.set("seq", seq);
 	r.set("changes", std::move(changes));
 	return r;
+}
+
+std::vector<std::pair<std::string, std::string>> Studio::unbuilt_device_audio() const
+{
+	std::vector<std::pair<std::string, std::string>> out;
+	if (format_ != "project-v1")
+		return out;
+	const json::Value *au = model_doc_.find("audio");
+	const json::Value *ss = au && au->is_object() ? au->find("sources") : nullptr;
+	if (!ss || !ss->is_array())
+		return out;
+	for (auto &a : ss->as_array()) {
+		const json::Value *id = a.find("id"), *dev = a.find("device");
+		if (!id || !id->is_string() || !dev || !dev->is_string())
+			continue;
+		const json::Value *spec = model_device(dev->as_string());
+		const json::Value *kind = spec ? spec->find("kind") : nullptr;
+		if (!kind || !kind->is_string() || (kind->as_string() != "microphone" && kind->as_string() != "audio-output"))
+			continue;
+		const bool built = std::any_of(globals_.begin(), globals_.end(), [&](const Global &g) { return g.src->audio_id == id->as_string(); });
+		if (!built)
+			out.push_back({id->as_string(), dev->as_string()});
+	}
+	return out;
+}
+
+// A2 (2026-11-18): a microphone or audio output that was not connected at load (or that Windows would not open) was
+// left out of the mixer for good. Now each device pass builds it once its device is listed, as the mixer's Add audio
+// does (audio_add_model), without touching the saved state of the model document.
+void Studio::bind_waiting_audio(const devices::List &l, json::Value &changes, const char *why)
+{
+	if (!flags_.allow_devices && !test_devices())
+		return;
+	for (auto &[aid, did] : unbuilt_device_audio()) {
+		const json::Value *spec = model_device(did);
+		if (!spec || !devices::resolve(*spec, l).entry) {
+			audio_tries_.erase(aid); // gone (or never there): the next arrival starts the tries over
+			continue;
+		}
+		uint32_t &tries = audio_tries_[aid];
+		if (tries >= kAudioTries)
+			continue; // listed but Windows would not open it: wait for a plug event or Try again
+		tries++;
+		const json::Value doc = model_doc_; // audio_add_model replaces model_doc_ with its argument
+		const bool dirty = dirty_;
+		json::Value c = json::Value::object();
+		c.set("audio", aid);
+		c.set("device", did);
+		try {
+			audio_add_model(doc, aid);
+			audio_tries_.erase(aid);
+			c.set("action", "bound");
+			hlog::info("devices (%s): sound %s bound to device %s", why, aid.c_str(), did.c_str());
+		} catch (const std::exception &e) {
+			c.set("action", "failed");
+			c.set("attempt", (uint64_t)tries);
+			hlog::warn("devices (%s): sound %s: device %s is listed but could not be opened (try %u): %s", why, aid.c_str(),
+				   did.c_str(), tries, e.what());
+		}
+		dirty_ = dirty;
+		changes.push(std::move(c));
+	}
+}
+
+json::Value Studio::devices_rescan()
+{
+	std::lock_guard<std::recursive_mutex> lk(m_);
+	uint32_t retried = 0;
+	for (auto &s : capture_srcs()) {
+		if (s->waiting || s->bound_id.empty() || has_frame(*s))
+			continue;
+		s->attempts = 0; // a fresh set of fast attempts
+		connect_attempt(*s, s->bound_id, true);
+		retried++;
+		hlog::info("devices (rescan): layer %s: activated again", s->owner.c_str());
+	}
+	audio_tries_.clear();
+	schedule_connect_check();
+	json::Value r = json::Value::object();
+	r.set("retried", (uint64_t)retried);
+	return r;
+}
+
+uint32_t Studio::rebuild_missing_files()
+{
+	std::lock_guard<std::recursive_mutex> lk(m_);
+	if (format_ != "project-v1" || unbuilt_layers_.empty())
+		return 0;
+	const json::Value doc = model_doc_;
+	const bool dirty = dirty_;
+	// layer id -> {scene id, type}; a copy counts as the type of the layer it copies.
+	std::map<std::string, std::pair<std::string, std::string>> where;
+	std::map<std::string, std::string> copies; // copy id -> source layer id
+	if (const json::Value *ss = doc.find("scenes"); ss && ss->is_array())
+		for (auto &s : ss->as_array())
+			if (const json::Value *ls = s.find("layers"); ls && ls->is_array())
+				for (auto &l : ls->as_array()) {
+					const json::Value *id = l.find("id"), *ty = l.find("type");
+					if (!id || !id->is_string() || !ty || !ty->is_string())
+						continue;
+					where[id->as_string()] = {s.find("id")->as_string(), ty->as_string()};
+					if (ty->as_string() == "duplicate")
+						if (const json::Value *src = l.find("source"); src && src->is_object())
+							if (const json::Value *sl = src->find("layer"); sl && sl->is_string())
+								copies[id->as_string()] = sl->as_string();
+				}
+	auto file_type = [&](const std::string &lid) {
+		auto it = where.find(lid);
+		if (it == where.end())
+			return false;
+		std::string t = it->second.second;
+		if (t == "duplicate") {
+			auto c = copies.find(lid);
+			auto o = c == copies.end() ? where.end() : where.find(c->second);
+			t = o == where.end() ? "" : o->second.second;
+		}
+		return t == "image" || t == "media";
+	};
+	// The layers a copy needs come first.
+	std::vector<std::string> todo;
+	for (auto &lid : unbuilt_layers_)
+		if (file_type(lid) && !copies.count(lid))
+			todo.push_back(lid);
+	for (auto &lid : unbuilt_layers_)
+		if (file_type(lid) && copies.count(lid))
+			todo.push_back(lid);
+	uint32_t built = 0;
+	std::set<std::string> scenes_done;
+	for (auto &lid : todo) {
+		const std::string &sid = where[lid].first;
+		try {
+			layer_add_model(doc, sid, lid);
+			unbuilt_layers_.erase(lid);
+			scenes_done.insert(sid);
+			built++;
+		} catch (const std::exception &e) {
+			hlog::info("rescan: layer %s is still not built: %s", lid.c_str(), e.what());
+		}
+	}
+	for (auto &sid : scenes_done)
+		try {
+			layer_order_model(doc, sid);
+		} catch (...) {
+		}
+	model_doc_ = doc;
+	dirty_ = dirty;
+	return built;
 }
 
 json::Value Studio::devices_status() const
@@ -1379,6 +1552,19 @@ json::Value Studio::devices_status() const
 			w.set("layer", s->owner);
 			w.set("device", s->device);
 			w.set("message", spec ? devices::waiting_message(*spec, s->problem) : std::string("Waiting for its device."));
+			waiting.push(std::move(w));
+		}
+		// A2 (2026-11-18): device sounds that are not built wait for their device too ({audio, device, message}).
+		for (auto &[aid, did] : unbuilt_device_audio()) {
+			const json::Value *spec = model_device(did);
+			json::Value w = json::Value::object();
+			w.set("audio", aid);
+			w.set("device", did);
+			const bool listed = have && spec && devices::resolve(*spec, l).entry;
+			w.set("message", !spec ? std::string("Waiting for its device.")
+					 : listed ? std::string("The device for this sound is connected but Windows did not open it. "
+								"Close any other app that holds it, then press Try again.")
+						  : devices::waiting_message(*spec, ""));
 			waiting.push(std::move(w));
 		}
 		const json::Value *ds = format_ == "project-v1" ? model_doc_.find("devices") : nullptr;
@@ -1525,6 +1711,11 @@ json::Value Studio::load_model(const json::Value &doc, const LoadOptions &o)
 		model_doc_ = doc;
 		last_opts_ = o;
 		dirty_ = false;
+		unbuilt_layers_.clear();
+		audio_tries_.clear();
+		for (auto &u : p.unavailable.as_array())
+			if (const json::Value *ul = u.find("layer"); ul && ul->is_string())
+				unbuilt_layers_.insert(ul->as_string());
 		json::Value r = get();
 		json::Value counts = json::Value::object();
 		counts.set("scenes", (uint64_t)p.scenes.size());
@@ -2891,7 +3082,6 @@ json::Value Studio::mixer_list() const
 	std::lock_guard<std::recursive_mutex> lk(m_);
 	const uint64_t now_ns = os_gettime_ns();
 	json::Value a = json::Value::array();
-	std::set<const Src *> seen;
 	const auto tracks = project_tracks(model_doc_);
 	auto entry = [&](const Src &src, const std::string &id, const std::string &scene, const std::string &layer,
 			 const std::string &name, const std::string &cv) {
@@ -2917,7 +3107,7 @@ json::Value Studio::mixer_list() const
 		// libobs holds back monitoring of a source with video until its frame is shown: CUE on such a source is late.
 		o.set("cueDelayed", (obs_source_get_output_flags(src.src) & OBS_SOURCE_VIDEO) != 0);
 		o.set("active", obs_source_active(src.src));
-		float pk = src.meter->peak, mg = src.meter->magnitude;
+		float pk = src.meter->held_peak(), mg = src.meter->magnitude;
 		o.set("peakDb", std::isfinite(pk) ? json::Value((double)pk) : json::Value());
 		o.set("magnitudeDb", std::isfinite(mg) ? json::Value((double)mg) : json::Value());
 		// Readiness (D297 proposed): is the source delivering audio packets at all (silence counts; a dead device
@@ -2929,18 +3119,35 @@ json::Value Studio::mixer_list() const
 					   : json::Value());
 		a.push(std::move(o));
 	};
-	// Project audio sources first (named by their project name, e.g. "Mic", "Game"), device sources before layer
-	// audio; then layer sources with audio but no audio.sources entry (mixers 0: metered, not in any track).
-	for (auto &g : globals_)
-		if (g.src->meter && seen.insert(g.src.get()).second)
-			entry(*g.src, "audio:" + g.src->audio_id, "", "", g.src->audio_name, "");
-	for (int bound = 1; bound >= 0; bound--)
-		for (auto &s : scenes_)
-			for (auto &l : s.layers)
-				if (l.src && l.src->meter && (l.src->audio_id.empty() != (bound == 1)) &&
-				    seen.insert(l.src.get()).second)
-					entry(*l.src, s.id + "/" + l.id, s.id, l.id,
-					      l.src->audio_name.empty() ? l.name : l.src->audio_name, s.canvas);
+	each_mixer_src([&](const Src &src, const std::string &id, const Scene *s, const Layer *l) {
+		entry(src, id, s ? s->id : "", l ? l->id : "", src.audio_name.empty() && l ? l->name : src.audio_name,
+		      s ? s->canvas : "");
+	});
+	// A2 (2026-11-18): project device sounds that are not built (their device is missing or did not open) keep a row,
+	// so the mixer says what it waits for instead of the strip vanishing.
+	for (auto &[aid, did] : unbuilt_device_audio()) {
+		const json::Value *spec = model_device(did);
+		std::string name = aid;
+		if (const json::Value *au = model_doc_.find("audio"))
+			if (const json::Value *ss = au->find("sources"); ss && ss->is_array())
+				for (auto &x : ss->as_array())
+					if (const json::Value *i = x.find("id"); i && i->is_string() && i->as_string() == aid)
+						if (const json::Value *n = x.find("name"); n && n->is_string() && !n->as_string().empty())
+							name = n->as_string();
+		json::Value o = json::Value::object();
+		o.set("id", "audio:" + aid);
+		o.set("scene", json::Value());
+		o.set("layer", json::Value());
+		o.set("name", name);
+		o.set("canvas", json::Value());
+		o.set("audioSource", aid);
+		o.set("waiting", true);
+		o.set("message", spec ? devices::waiting_message(*spec, "") : std::string("Waiting for its device."));
+		o.set("active", false);
+		o.set("peakDb", json::Value());
+		o.set("magnitudeDb", json::Value());
+		a.push(std::move(o));
+	}
 	json::Value r = json::Value::object();
 	r.set("sources", std::move(a));
 	json::Value tl = json::Value::array();
@@ -2951,6 +3158,59 @@ json::Value Studio::mixer_list() const
 		tl.push(std::move(o));
 	}
 	r.set("tracks", std::move(tl));
+	return r;
+}
+
+// Project audio sources first (named by their project name, e.g. "Mic", "Game"), device sources before layer audio; then
+// layer sources with audio but no audio.sources entry (mixers 0: metered, not in any track). Each source once.
+void Studio::each_mixer_src(const std::function<void(const Src &, const std::string &, const Scene *, const Layer *)> &f) const
+{
+	std::set<const Src *> seen;
+	for (auto &g : globals_)
+		if (g.src->meter && seen.insert(g.src.get()).second)
+			f(*g.src, "audio:" + g.src->audio_id, nullptr, nullptr);
+	for (int bound = 1; bound >= 0; bound--)
+		for (auto &s : scenes_)
+			for (auto &l : s.layers)
+				if (l.src && l.src->meter && (l.src->audio_id.empty() != (bound == 1)) &&
+				    seen.insert(l.src.get()).second)
+					f(*l.src, s.id + "/" + l.id, &s, &l);
+}
+
+bool Studio::when_no_monitors(const std::function<void()> &fn)
+{
+	std::lock_guard<std::recursive_mutex> lk(m_);
+	bool any = false;
+	obs_enum_all_sources(
+		[](void *p, obs_source_t *s) {
+			if (obs_source_get_monitoring_type(s) == OBS_MONITORING_TYPE_NONE)
+				return true;
+			*static_cast<bool *>(p) = true;
+			return false;
+		},
+		&any);
+	if (any)
+		return false;
+	fn();
+	return true;
+}
+
+json::Value Studio::mixer_levels() const
+{
+	json::Value r = json::Value::object();
+	json::Value a = json::Value::array();
+	std::unique_lock<std::recursive_mutex> lk(m_, std::try_to_lock); // the meters never wait for a load or a rebuild
+	if (lk.owns_lock())
+		each_mixer_src([&](const Src &src, const std::string &id, const Scene *, const Layer *) {
+			json::Value o = json::Value::object();
+			o.set("id", id);
+			const float pk = src.meter->held_peak(), mg = src.meter->magnitude;
+			o.set("peakDb", std::isfinite(pk) ? json::Value((double)pk) : json::Value());
+			o.set("magnitudeDb", std::isfinite(mg) ? json::Value((double)mg) : json::Value());
+			a.push(std::move(o));
+		});
+	r.set("busy", !lk.owns_lock());
+	r.set("levels", std::move(a));
 	return r;
 }
 
@@ -2967,7 +3227,7 @@ json::Value Studio::mixer_set_volume(const std::string &id, const double *mul, c
 	r.set("volume", (double)now);
 	// The project file is the record (like mixer_set_tracks): the UI server saves volumeDb into audio.sources[] keyed
 	// by audioSource. A source with no project audio entry has no audioSource and stays live-only.
-	r.set("volumeDb", now > 0 ? std::max(-100.0, (double)obs_mul_to_db(now)) : -100.0);
+	r.set("volumeDb", now > 0 ? std::min(12.0, std::max(-100.0, (double)obs_mul_to_db(now))) : -100.0);
 	if (!s->audio_id.empty())
 		r.set("audioSource", s->audio_id);
 	return r;

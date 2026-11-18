@@ -300,13 +300,62 @@ QtObject {
     }
 
     // ---- mixer ----
+    // B4 (2026-11-18): the strips are a ListModel of ids kept in host order (moved, inserted, removed one by one), so a
+    // refresh never rebuilds a strip the user is touching; each strip reads its row from mixerById.
+    property ListModel mixerIds: ListModel {}
+    property var mixerById: ({})
+    property bool pMixerLoading: false
+    property var pLiveOnlySaid: ({})
+    property int pStripsMade: 0      // probe: mixer strips built (MixerPanel counts them)
+    property int pEmptyPolls: 0
     function loadMixer() {
+        pMixerLoading = true;
         Api.host("mixer.list", {}, (ok, b, err) => {
+            pMixerLoading = false;
             if (!ok) return say("Mixer: " + err);
-            mixer = unwrap(b, "sources");
+            takeMixer(unwrap(b, "sources"));
             tracks = unwrap(b, "tracks");
             takePeaks(mixer);
         });
+    }
+    function takeMixer(list) {
+        const by = {};
+        for (const m of list) by[m.id] = m;
+        mixerById = by;
+        mixer = list;
+        const want = list.map(m => m.id);
+        for (let i = mixerIds.count - 1; i >= 0; i--) if (by[mixerIds.get(i).sid] === undefined) mixerIds.remove(i);
+        for (let i = 0; i < want.length; i++) {
+            let at = -1;
+            for (let j = i; j < mixerIds.count; j++) if (mixerIds.get(j).sid === want[i]) { at = j; break; }
+            if (at < 0) mixerIds.insert(i, { sid: want[i] });
+            else if (at !== i) mixerIds.move(at, i, 1);
+        }
+    }
+    // Try again (A3): every device without a picture is activated again, device sounds and missing files are looked for.
+    function rescanDevices() {
+        Api.post("ui/api/devices/rescan", {}, (ok, b, err) => {
+            if (!ok) say("Try again: " + (b && b.text ? b.text : err));
+            else say(b.retried || b.audio || b.media ? "Trying again: " + [b.retried ? b.retried + " device(s) activated again" : "", b.audio ? b.audio + " sound(s) connected" : "", b.media ? b.media + " file layer(s) added" : ""].filter(x => x).join(", ") + "."
+                     : (b.connectable || []).length ? "Trying again. A waiting layer's device is connected: press Connect on it." : "Trying again. Nothing new is connected yet.");
+            loadLayers();
+            loadMixer();
+        });
+    }
+    // Connect (A1): a waiting preset layer (game capture, camera) becomes the capture of its now connected device.
+    function connectRole(role) {
+        Api.post("ui/api/devices/connect", role ? { role: role } : {}, (ok, b, err) => {
+            if (!ok) say("Not connected: " + (b && b.text ? b.text : (b && b.detail ? b.detail : err)));
+            else say("Connected." + (b.saved === false ? " Not saved to the project file: the change is live only." : ""));
+            loadLayers();
+            loadMixer();
+            pollStatus();
+        });
+    }
+    property var connectable: []     // host.devices.connectable: [{role, layers: [ids]}] (A1)
+    function connectRoleOf(layerId) {
+        for (const c of connectable) if ((c.layers || []).indexOf(layerId) >= 0) return c.role;
+        return "";
     }
 
     // In the stream mix: on track 1, the one every output encodes (D273). A host answer without mixers counts as in it.
@@ -320,12 +369,24 @@ QtObject {
 
     property bool paused: false      // the window is minimised: no meter polls
 
+    // B2/B9 (2026-11-18): the meters come from mixer.levels (ids and peaks only, never waiting for a host load). An empty
+    // mixer is read again every ~5 s (a strip that came late appears without a restart); a levels id set that differs
+    // from the strips reloads the strips. A host without mixer.levels falls back to mixer.list.
+    property bool pLevelsOk: true
     function pollMeters() {
-        if (pMeterBusy || paused || !mixer.length) return;
+        if (pMeterBusy || paused || pMixerLoading) return;
+        if (!mixer.length) { if (++pEmptyPolls % 20 === 0) loadMixer(); return; }
+        pEmptyPolls = 0;
         pMeterBusy = true;
-        Api.host("mixer.list", {}, (ok, b) => {
+        Api.host(pLevelsOk ? "mixer.levels" : "mixer.list", {}, (ok, b, err) => {
             pMeterBusy = false;
-            if (ok) takePeaks(unwrap(b, "sources")); // a missed meter frame is harmless
+            if (!ok) { if (pLevelsOk && /unknown|not allowed|method/i.test(String(err))) pLevelsOk = false; return; } // a missed meter frame is harmless
+            if (!pLevelsOk) return takePeaks(unwrap(b, "sources"));
+            if (b && b.result && b.result.busy === true) return;
+            const lv = unwrap(b, "levels");
+            takePeaks(lv);
+            const have = mixer.filter(m => m.waiting !== true).map(m => m.id).sort().join("|");
+            if (lv.map(m => m.id).sort().join("|") !== have) loadMixer();
         });
     }
 
@@ -338,7 +399,14 @@ QtObject {
     }
     function setVolume(id, db) {
         Api.host("mixer.setVolume", { id: id, db: Math.round(db) }, (ok, b, err) => {
-            if (!ok) { say("Volume failed: " + err); loadMixer(); }
+            if (!ok) { say("Volume failed: " + err); return loadMixer(); }
+            // B10: the strip keeps the volume the host took (no jump back on the next refresh)
+            const r = b && b.result ? b.result : {};
+            const v = typeof r.volumeDb === "number" ? r.volumeDb : Math.round(db);
+            const by = Object.assign({}, mixerById);
+            if (by[id]) { by[id] = Object.assign({}, by[id], { volumeDb: v }); mixerById = by; mixer = mixer.map(m => m.id === id ? by[id] : m); }
+            // B6: a sound with no project entry is live only (nothing to save it into); say so once per sound
+            if (!(b && b.saved) && typeof r.audioSource !== "string" && !pLiveOnlySaid[id]) { const s = Object.assign({}, pLiveOnlySaid); s[id] = true; pLiveOnlySaid = s; say("Volume changed for now only: this sound is not in the project, so the change is not saved. Add it to the stream to keep it."); }
         });
     }
     function setMute(id, muted) {
@@ -384,6 +452,7 @@ QtObject {
             const late = b.audio && b.audio.cueDelayed === true;
             say("Added " + (b.audio ? b.audio.name : "the sound") + " to the stream." +
                 (late ? " Its headphone sound (CUE) comes a little late, because it comes with video. For game sound, the capture card's audio input is heard at once." : "") +
+                (typeof b.warning === "string" ? " " + b.warning : "") +
                 (b.saved ? "" : " Not saved to the project file: the change is live only."));
             if (then) then(true, "");
             loadMixer();
@@ -513,7 +582,8 @@ QtObject {
             takeClips(s.clips || {});
             // A restarted host (crash supervisor) lost the previews it drew in our windows: embed them again (D280).
             const up = typeof h.uptimeMs === "number" ? h.uptimeMs : -1;
-            if (up >= 0 && pHostUptime >= 0 && up < pHostUptime) hostRestarted();
+            // A5 (2026-11-18): the restarted host built its scenes, layers and sounds again: reload all three.
+            if (up >= 0 && pHostUptime >= 0 && up < pHostUptime) { hostRestarted(); loadScenes(); }
             if (up >= 0) pHostUptime = up;
             const pe = h.previewEditing === true;
             if (pe !== previewEditing) { previewEditing = pe; pSelSent = ""; syncPreviewSelection(); }
@@ -539,9 +609,12 @@ QtObject {
             // A device was plugged in or out (D329): the layer list shows waiting or connected again.
             const dv = h.devices;
             if (dv && typeof dv.seq === "number") {
-                if (pDevicesSeq >= 0 && dv.seq !== pDevicesSeq) { loadLayers(); if (addOpen) loadStructure(); }
+                // B2 (2026-11-18): a device sound that came or went changes the mixer too
+                if (pDevicesSeq >= 0 && dv.seq !== pDevicesSeq) { loadLayers(); loadMixer(); if (addOpen) loadStructure(); }
                 pDevicesSeq = dv.seq;
             }
+            const con = dv && Array.isArray(dv.connectable) ? dv.connectable : [];
+            if (JSON.stringify(con) !== JSON.stringify(connectable)) connectable = con;
             loadFlags();
             edit.loadEdits();
             statusRead(s);
@@ -675,7 +748,9 @@ QtObject {
         return {
             scenes: scenes.map(s => s.name), activeScene: activeScene, canvas: canvas,
             layers: layers.map(l => ({ id: l.id, name: l.name, visible: !!l.visible })), selected: selected,
-            mixer: mixer.map(m => ({ id: m.id, name: m.name, volumeDb: m.volumeDb, muted: !!m.muted, cue: !!m.cue, inStream: inStream(m), audioSource: m.audioSource || null })),
+            mixer: mixer.map(m => ({ id: m.id, name: m.name, volumeDb: m.volumeDb, muted: !!m.muted, cue: !!m.cue, inStream: inStream(m), audioSource: m.audioSource || null, waiting: m.waiting === true, sameAs: m.sameAs || null })),
+            connectable: connectable,
+            mixerStripsMade: pStripsMade, // B4: strips built so far (a refresh must not build them again)
             live: live, recording: recording, canStream: canStream, canRecord: canRecord, hostUp: hostUp, note: note
         };
     }

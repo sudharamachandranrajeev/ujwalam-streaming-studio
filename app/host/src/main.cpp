@@ -479,12 +479,7 @@ int wmain(int argc, wchar_t **wargv)
 		if (!app.allow_devices) {
 			hlog::info("audio monitoring output: Windows default (monitoringDevice applies only with --allow-devices)");
 		} else {
-			json::Value m = devices::set_monitoring_output(app.config.monitoring_device, devices::enumerate());
-			if (const json::Value *pr = m.find("problem"))
-				hlog::warn("audio monitoring output \"%s\": %s; using the Windows default output",
-					   app.config.monitoring_device.c_str(), pr->as_string().c_str());
-			else
-				hlog::info("audio monitoring output: %s", m.find("device")->as_string().c_str());
+			apply_monitoring(app); // again after device passes while it is not in use (A4, 2026-11-18)
 		}
 	}
 	if (!ov.root.empty()) {
@@ -530,6 +525,8 @@ int wmain(int argc, wchar_t **wargv)
 			app.device_watch = std::make_unique<devwatch::Watcher>(
 				[&app](const std::vector<std::string> &removed, bool event) {
 					devices_pass(app, event ? "watcher" : "connect check", removed, event);
+					if (event)
+						apply_monitoring(app);
 				});
 			devwatch::Watcher *w = app.device_watch.get();
 			app.studio->set_check_scheduler([w](uint32_t ms) { w->check_after(ms); });

@@ -91,7 +91,8 @@ import { createFlags } from '../flags/index.mjs';
 import { loadDevicePresets, matchRoles, overrideProblems } from '../project/device-roles.mjs';
 import { hudCoverage, loadHudZones } from '../project/hud-zones.mjs';
 import { loadProject } from '../project/store.mjs';
-import { APP_DATA_DIR, alphaBases, alphaFile, buildAlphaProject, prepareAlphaProject, readProfile, stampOf, upgradePresets } from './alpha.mjs';
+import { APP_DATA_DIR, alphaBases, alphaFile, buildAlphaProject, prepareAlphaProject, readProfile, stampOf, upgradeAlphaFile, upgradePresets } from './alpha.mjs';
+import { placeholderRoles, rebindPlaceholders } from '../project/rebind-roles.mjs';
 import { upgradeScenes } from '../project/scene-upgrades.mjs';
 import { createRecordClips, isLive } from './record-clips.mjs';
 import { hasExited, killChildTree } from '../common/kill-tree.mjs';
@@ -630,6 +631,38 @@ export async function waitForDiscovery(file, child, timeoutMs = 60_000) {
   return null;
 }
 
+// A1 (user bug report 2026-11-18): a kept project whose game capture or facecam was not connected when it was built has
+// transparent placeholders for them. When their device is connected at this start, the placeholders become the capture
+// layers (in place: same ids and placements; nothing else changes; rebind-roles.mjs) before the host load. A copy of the
+// file goes to projects/_old/alpha-<stamp>.before-rebind.project.json first. Any problem: the project loads as it is.
+// While running, the studio's Connect button does the same (device-routes.mjs).
+export async function rebindAtStart({ client, file, profile, dataDir }) {
+  try {
+    const presetsDir = path.join(REPO, 'registry', 'presets');
+    const presets = upgradePresets(presetsDir);
+    let doc;
+    try { doc = loadProject(file).project; } catch { return; } // reported by the host load
+    const roles = placeholderRoles(doc, presets).map((x) => x.role);
+    if (!roles.length) return;
+    const list = await client.call('devices.list');
+    const bindings = matchRoles({ list, presets: loadDevicePresets(presetsDir), overrides: profile?.devices?.roles ?? {}, roles });
+    const flagState = createFlags({ dataDir });
+    const flags = Object.fromEntries(flagState.ids().map((id) => [id, flagState.isOn(id)]));
+    let rebound = [];
+    const done = upgradeAlphaFile({ file, upgrade: (project) => {
+      const x = rebindPlaceholders(project, { presets, bindings, flags });
+      if (x.error) throw new Error(`rebind would not be valid: ${(x.errors ?? []).map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300)}`);
+      rebound = x.rebound ?? [];
+      return { project: x.project, changes: rebound.map(() => ({ upgrade: 'rebind' })) };
+    } });
+    for (const rb of rebound) console.log(`[studio] role ${rb.role}: its device is connected now: ${rb.layers.length} placeholder layer(s) became the capture`);
+    if (done?.backup) console.log(`[studio] project before the rebind kept in projects/_old/${path.basename(done.backup)}`);
+    for (const role of roles.filter((x) => !rebound.some((rb) => rb.role === x))) console.log(`[studio] role ${role}: still a placeholder (its device is not connected); the studio offers Connect when it is`);
+  } catch (e) {
+    console.log(`[studio] WARNING: placeholder rebind not applied (project loaded as it is): ${e.message}`);
+  }
+}
+
 // Alpha project: build (or keep) <dataDir>/projects/alpha.project.json, then project.load it into the host.
 // Exported for tools/soak/stream-day.mjs (the stream-day mock run builds the same alpha session).
 export async function alphaProject({ client, dataDir, args, hostCfg, embedded = false }) {
@@ -675,6 +708,7 @@ export async function alphaProject({ client, dataDir, args, hostCfg, embedded = 
   if (r.transitionBackup) console.log(`[studio] project before the default transition kept in projects/_old/${path.basename(r.transitionBackup)}`);
   if (r.transitionError) console.log(`[studio] WARNING: default transition not applied: ${r.transitionError}`);
   if (r.upgradeError) console.log(`[studio] WARNING: scene upgrade not applied (project loaded as it is): ${r.upgradeError}`);
+  if (args['allow-devices'] === true) await rebindAtStart({ client, file: r.file, profile, dataDir });
   if (report) {
     for (const w of report.warnings) console.log(`[studio] WARNING: ${w}`);
     for (const [role, b] of Object.entries(report.roles)) console.log(`[studio] role ${role}: bound (${b.by}${b.preset ? ` ${b.preset}` : ''})`);

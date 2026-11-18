@@ -138,6 +138,27 @@ export function createProjectSync({ file, delayMs = 1000, setTimer = setTimeout,
     flush,
     /** The file was written by someone else (a structure edit, D240): write what is pending, then re-read it next time. */
     reload() { flush(); doc = null; },
+    /** A whole-file change made after awaited host calls (2026-11-18, Codex review P2): pending edits written, the file
+     *  read fresh, change(doc) -> { project } | { error } on that fresh copy, saved. One synchronous step: an edit
+     *  recorded while the caller awaited is in the fresh copy, and none can land between the read and the save.
+     *  Returns change's result, { error: 'project-unreadable' } or { error: 'not-saved' }. */
+    update(change) {
+      flush();
+      doc = null;
+      let fresh;
+      try { fresh = loadProject(file).project; } catch { return { error: 'project-unreadable' }; }
+      const r = change(fresh);
+      if (!r || r.error) return r ?? { error: 'invalid' };
+      try {
+        saveProject(file, r.project);
+        saves++;
+        lastError = null;
+      } catch (e) {
+        lastError = String(e?.message ?? e).slice(0, 200);
+        return { error: 'not-saved' };
+      }
+      return r;
+    },
     status: () => ({ file, pending, saves, lastError }),
   };
 }

@@ -17,6 +17,9 @@ Item {
     property string label: ""
     property string unit: ""          // shown after the box (" dB")
     property alias meter: sl.meter     // a level drawn in the groove (the mixer)
+    property alias hold: sl.hold       // the peak-hold marker (the mixer)
+    property alias mark: sl.mark       // a fixed tick, 0..1 (the mixer's 0 dB)
+    property string fromText: ""       // shown in the box at `from` (the mixer: "Off")
     signal committed(real value)
     implicitHeight: 32
 
@@ -27,12 +30,16 @@ Item {
         const f = Math.pow(10, decimals);
         return Math.round(v * f) / f;
     }
-    function sync() { sl.value = value; box.text = value.toFixed(decimals) }
+    function shown(v) { return fromText !== "" && v <= from ? fromText : v.toFixed(decimals) }
+    function sync() { sl.value = value; box.text = shown(value) }
     // The new value shows at once (held to the range); an owner that refuses it sets value back, which shows again.
+    // The same value again sends nothing (2026-11-18, B5: a press on the handle without a move saved nothing new but
+    // still sent a change).
     function commit(v) {
         const f = fit(v);
         sl.value = f;
-        box.text = f.toFixed(decimals);
+        box.text = shown(f);
+        if (f === fit(value)) return;
         committed(f);
     }
     // The probe's typed value: the real box, then Enter.
