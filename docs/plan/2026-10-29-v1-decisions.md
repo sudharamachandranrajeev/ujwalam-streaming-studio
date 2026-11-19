@@ -2178,3 +2178,27 @@ Growth plan ED2. Decided:
 - Connect saves only what the host built, and an undo is made from the file as it is now.
 - A saved card input counts as the same device only when it is the listed input of a certain pair. The Windows
   ContainerId match is a follow-up.
+## D398 — The QML studio is the only studio (user, 2026-11-18: "Yes, delete it")
+
+- The Qt Widgets studio (38 files, about 14,090 lines in `app/studio/src`) and the `studio-qml` flag are removed, with
+  the launcher's `qml` option and the soak tool's `--qml`. The parity checklist had reached 48/48.
+- Accepted losses: the Soft painters, the component stylesheet variants and the specimen page (three widget tests
+  with no QML twin). `packProblem` still refuses unknown variants in code.
+- `ujwalam-studio.exe` 12.7 MB to 8.9 MB. Qt Widgets stays linked for the tray and system dialogs.
+- Headless without a probe or hidden mode now exits 64 with a message.
+- `studio-qml-layout` fails 24 of 29 on both the base and the widget-free tree (same cases): an existing layout
+  problem for ujwalam-light/night, not caused by this removal. Tracked as a follow-up.
+
+## D399 — Audio tools: noise, gate, EQ, gain, compressor, limiter, ducking (AU1–AU3, 2026-11-18)
+
+- Per-strip tools are libobs filters on the strip's source. Edits run on the graphics thread (the 32.1.2 video tick
+  walks the filter list without the lock). New tools join switched off; removed tools are switched off first.
+- "Clean voice" and "Loud room" are offered presets, applied only on a click (D332). Nothing changes a mic by itself.
+- Ducking: `duck {on, source, amountDb 3..18, attackMs, releaseMs}` on libobs `compressor_filter` with a sidechain.
+  Starts at -30 dBFS, drops `amountDb` at -10 dBFS voice peaks. Measured 11.71 dB for 12 set. Every sidechain change
+  runs on the graphics thread; the filter stays off until the compressor has bound its sound (2 ticks) and is unbound
+  before its sound is retired. Missing/waiting sound: off with a plain reason, reconnects without a rebuild.
+- Sound files come from the media base only (resolved targets checked at open). An app name that matches two
+  different programs is refused. `#` is refused in app names.
+- Playlists count each file end once and stop as "unavailable" after one pass with no audio.
+- UNVERIFIED: file-symlink case (no symlink right on this account), the live app scan on a real PC.
