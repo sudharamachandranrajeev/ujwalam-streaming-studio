@@ -2203,3 +2203,19 @@ Growth plan ED2. Decided:
   different programs is refused. `#` is refused in app names.
 - Playlists count each file end once and stop as "unavailable" after one pass with no audio.
 - UNVERIFIED: file-symlink case (no symlink right on this account), the live app scan on a real PC.
+
+## D400 — Start-up time and taskbar grouping (user bug reports, 2026-11-19)
+
+- Each process writes one `startup:` line (launcher, host, studio phases). Dev build, warm, practice: the studio
+  window is spawned 4.6 s -> 3.4 s after the launcher starts; ready about 6.0 s -> 4.9 s.
+- The data-folder ACL is not rewritten when it already passes the same final check (360 -> 65 ms). The skip also
+  needs a full-control, propagating (OI+CI, no NP) grant on the folder and only inherited ACEs below it; anything
+  else takes the full rewrite. Codex follow-ups, true of the full path as well: the owner is not checked (implicit
+  WRITE_DAC), reparse points are not refused, a scan is not atomic. UNVERIFIED: icacls /save /T /C exit code on a
+  partly unreadable tree.
+- Last session's unfinished clip jobs wait 60 s after a start; a job of this session starts at once. The live
+  clipper and face worker start 10 s after the host is ready, or at once when a stream or recording starts.
+  Outputs, hotkeys, the panic key and the replay buffer are unchanged.
+- One AppUserModelID `Ujwalam.Studio` for the studio, the host's preview windows and every app shortcut (also an
+  existing taskbar pin to the launcher); the studio window's relaunch command pins the launcher. Setup has none.
+  UNVERIFIED: the real taskbar, checked by the user after updating.
