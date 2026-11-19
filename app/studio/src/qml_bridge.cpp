@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "qml_bridge.h"
+#include "startup_clock.h"
 #include "api_client.h"
 #include "fx_types.h"
 #include "icons.h"
@@ -46,7 +47,14 @@ static QJsonObject toObject(const QJSValue &v)
 void QmlApi::get(const QString &route, const QJSValue &done)
 {
 	inFlight_++;
-	api_->get(route, [this, done](bool ok, const QJsonObject &b, const QString &e) { reply(done, ok, b, e); });
+	api_->get(route, [this, done, route](bool ok, const QJsonObject &b, const QString &e) {
+		// Start-up line (startup_clock.h): the first status answer, then the first flags answer (the saved look applies).
+		if (route == QLatin1String("ui/api/status"))
+			startupclock::markOnce("status");
+		else if (route == QLatin1String("ui/api/flags"))
+			startupclock::finishOnce("flags");
+		reply(done, ok, b, e);
+	});
 }
 
 void QmlApi::post(const QString &route, const QJSValue &body, const QJSValue &done)

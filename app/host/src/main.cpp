@@ -47,6 +47,7 @@
 #include "app.h"
 #include "crash.h"
 #include "devices.h"
+#include "startup_clock.h"
 #include "discovery.h"
 #include "log.h"
 #include "obs_runtime.h"
@@ -163,6 +164,7 @@ constexpr wchar_t kAppUserModelId[] = L"Ujwalam.Studio";
 
 int wmain(int argc, wchar_t **wargv)
 {
+	startupclock::start(); // one "startup:" line at "ready" (startup_clock.h)
 	SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 	const bool aumid_ok = SUCCEEDED(SetCurrentProcessExplicitAppUserModelID(kAppUserModelId)); // before any window
 	App app;
@@ -464,6 +466,7 @@ int wmain(int argc, wchar_t **wargv)
 	o.allow_screen = app.allow_screen;
 	o.adapter = app.adapter;
 	o.low_latency_audio = app.config.low_latency_audio;
+	startupclock::mark("main");
 	if (!obsrt::start(o, err)) {
 		hlog::error("libobs start failed: %s", err.c_str());
 		return 2;
@@ -489,6 +492,7 @@ int wmain(int argc, wchar_t **wargv)
 			apply_monitoring(app); // only here, before any source exists (Codex review round 2, 2026-11-18)
 		}
 	}
+	startupclock::mark("obs");
 	if (!ov.root.empty()) {
 		app.overlay = std::make_unique<Overlay>(ov);
 		ov.events_token.assign(ov.events_token.size(), '0');
@@ -590,6 +594,7 @@ int wmain(int argc, wchar_t **wargv)
 				[st](const std::string &id, float &db) { return st->audio_peak_db(id, db); });
 		}
 
+		startupclock::mark("overlay");
 		json::Value project;
 		if (project_path.empty()) {
 			project = json::parse(kDefaultProject).value;
@@ -693,6 +698,7 @@ int wmain(int argc, wchar_t **wargv)
 			app.hotkeys->start(app.config.hotkeys,
 					   [&app](const std::string &name, const char *via) { on_hotkey(app, name, via); },
 					   app.config.hotkeys_enabled);
+			startupclock::finish("ready");
 			hlog::info("ready: rpc on 127.0.0.1:%u, discovery %s, log %s", (unsigned)server->port(),
 				   app.discovery_path.c_str(), app.log_path.c_str());
 			// Parent pipe (D234): started by the studio launcher with stdin as a pipe and UJWALAM_PARENT_PIPE=1.

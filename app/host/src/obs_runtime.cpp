@@ -3,6 +3,7 @@
 // (docs/evidence/2026-10-27-p1a-build.md): PATH (not SetDllDirectory) for the runtime bin dir, helper exes next to
 // the host exe, module config under the host data dir.
 #include "obs_runtime.h"
+#include "startup_clock.h"
 #include "audio_tools.h"
 #include "effects.h"
 #include "log.h"
@@ -118,6 +119,7 @@ bool start(const Options &o, std::string &err)
 		err = "obs_startup failed";
 		return false;
 	}
+	startupclock::mark("obs-startup");
 	obs_add_data_path(slash(runtime / "data" / "libobs").c_str());
 	obs_add_module_path(slash(runtime / "obs-plugins" / "64bit").c_str(),
 			    (slash(runtime / "data" / "obs-plugins") + "%module%").c_str());
@@ -149,6 +151,7 @@ bool start(const Options &o, std::string &err)
 		err = "obs_reset_video failed rc=" + std::to_string(rc);
 		return false;
 	}
+	startupclock::mark("video");
 	struct obs_audio_info2 oai = {};
 	oai.samples_per_sec = 48000;
 	oai.speakers = SPEAKERS_STEREO;
@@ -159,6 +162,7 @@ bool start(const Options &o, std::string &err)
 		return false;
 	}
 	hlog::info("audio buffering: %s", o.low_latency_audio ? "low latency (fixed 20 ms)" : "default (grows up to 1 s)");
+	startupclock::mark("audio");
 	struct obs_module_failure_info mfi = {};
 	obs_load_all_modules2(&mfi);
 	for (size_t i = 0; i < mfi.count; i++)
@@ -166,6 +170,7 @@ bool start(const Options &o, std::string &err)
 	obs_module_failure_info_free(&mfi);
 	obs_post_load_modules();
 	obs_log_loaded_modules();
+	startupclock::mark("modules");
 	fx::register_types(); // host-owned effect sources (effects.h)
 	hlog::info("main video %ux%u@%u NV12 709 partial; audio 48000 Hz stereo; adapter %s", o.width, o.height, o.fps,
 		   adapter_name().c_str());

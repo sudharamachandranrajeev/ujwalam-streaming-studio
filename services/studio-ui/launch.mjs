@@ -120,6 +120,12 @@ import { INSTAGRAM_FLAG, loadAddon as instagramAddon } from '../outputs/instagra
 import { botUrl, integrationsInEffect } from './integrations.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG } from './settings-routes.mjs';
 import { GUARD_ABORT_EXIT, LIVE_TEST_BUDGET, loadBudget, MAX_TEST_MINUTES, parseMinutes, parseSinkMinutes, runGuard } from './live-guard.mjs';
+import { createStartupClock } from './startup-clock.mjs';
+
+// Last session's unfinished clip jobs wait this long after a start (record-clips.mjs resumeHoldMs).
+const CLIP_RESUME_HOLD_MS = Math.max(0, Number(process.env.UJWALAM_CLIP_RESUME_HOLD_MS ?? 60_000) || 0);
+// The live clipper and the face worker start this long after the host is ready (UJWALAM_WORKER_START_DELAY_MS: tests).
+const WORKER_START_DELAY_MS = Math.max(0, Number(process.env.UJWALAM_WORKER_START_DELAY_MS ?? 10_000) || 0);
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // LU3 service swap (D337): off by default; read once at start (the fronts must exist before the services start).
@@ -1204,6 +1210,8 @@ function superviseHost(o) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  const clock = createStartupClock(); // one "[studio] startup:" line once the studio window is started (2026-11-19)
+  clock.mark('main');
   const args = parseArgs(argv);
   const alpha = args.alpha === true;
   const shellMode = shellChoice(args);
@@ -1349,6 +1357,7 @@ export async function main(argv = process.argv.slice(2)) {
     return false;
   };
   if (!(await coreStarted())) return 1;
+  clock.mark('core');
 
   // 2. host (optional). Config (exe, OBS runtime, data) comes from app/host/lib/config.mjs (env or host.local.json).
   // Devices stay off unless --allow-devices is given here; this launcher never opens a device by itself.
@@ -1485,10 +1494,12 @@ export async function main(argv = process.argv.slice(2)) {
       }
     };
     checkCandidate();
+    clock.mark('plan');
     spawnHost();
     hostDiscoveryFile = hostDiscovery;
     // The UI server and the browser start only after the host has written its discovery file (up to 60 s), so the page never meets the fake backend first.
     let disc = await waitForDiscovery(hostDiscovery, hostChild, startupHost ? updateReadyMs() : undefined);
+    clock.mark('host-ready');
     let projectLoaded = false;
     // LU5 startup trial (Codex review of D343): a host release from host-update.json must get ready and load the
     // project; otherwise it is rejected (never tried again) and the next candidate, finally the installed host, starts.
@@ -1527,7 +1538,9 @@ export async function main(argv = process.argv.slice(2)) {
           alphaClient = new HostClient({ port: disc.port, token: hostToken });
           await alphaProject({ client: alphaClient, dataDir, args, hostCfg, embedded: !!shellPaths });
         }
+        clock.mark('project');
         await alphaStatus(alphaClient);
+        clock.mark('status');
         if (lt.bandwidthTest) {
           const bp = bandwidthTestProblems(await alphaClient.call('outputs.status'));
           if (bp.length) {
@@ -1549,6 +1562,11 @@ export async function main(argv = process.argv.slice(2)) {
     // restart also stopped) | not-started (reason). Codex review of LC1: "gave-up" is set only when no restart is pending.
     const lcView = { state: 'not-started', reason: 'the studio is starting', restarts: 0, maxRestarts: LIVE_CLIPPER_MAX_RESTARTS };
     let syncWorkers = () => {};
+    // Start-up time (2026-11-19): the live clipper and the face worker (Python, GPU models) start WORKER_START_DELAY_MS
+    // after this point, so they do not compete with the studio window opening. Neither is needed before Go live is
+    // clicked, and both only act while live or recording.
+    const workersFrom = Date.now() + WORKER_START_DELAY_MS;
+    const syncWorkersWhenDue = () => { if (Date.now() >= workersFrom) syncWorkers(); };
     // One flags instance for the 5 s loops: isOn re-reads flags.local.json only when it changed (services/flags).
     let workerFlags = null;
     const flagIsOn = (id) => { try { workerFlags ??= createFlags({ dataDir }); return workerFlags.isOn(id); } catch { return false; } };
@@ -1559,12 +1577,14 @@ export async function main(argv = process.argv.slice(2)) {
       recordClips = createRecordClips({ clipRoot: CLIP_ROOT, dataDir, project: alpha ? alphaFile(dataDir) : null, log: (l) => console.log(`[studio] ${l}`), postChain: createPostChain({ dataDir, log: (l) => console.log(`[studio] ${l}`) }),
         liveClipper: () => ({ ...lcView, flagOn: liveClipsFlag() }),
         // LL4 (D342): the after-stream game pack check, last in the clip queue, only with its flag on.
-        trainFlag: () => flagIsOn('learning-train') });
+        trainFlag: () => flagIsOn('learning-train'),
+        // Start-up time (2026-11-19): last session's unfinished clip jobs wait until the studio is open (the 5 s tick starts them).
+        resumeHoldMs: CLIP_RESUME_HOLD_MS });
       const clipTick = async () => {
         if (stopping) return;
         // Idle load (2026-11-18): the live clipper and the face worker run only while wanted (flags and clip settings,
         // switched while live); a clipper that could not start (no capture device yet) starts once it can.
-        syncWorkers();
+        syncWorkersWhenDue();
         try {
           // The host watch loop reads outputs.status every 2 s; a fresh answer from it is used (one call fewer).
           const recent = hostSup?.recentOutputs?.(2500);
@@ -1697,7 +1717,8 @@ export async function main(argv = process.argv.slice(2)) {
         };
       }
       syncWorkers = () => { syncClipper(); syncFace(); };
-      syncWorkers();
+      if (WORKER_START_DELAY_MS > 0) setTimeout(() => { if (!stopping) syncWorkers(); }, WORKER_START_DELAY_MS).unref();
+      else syncWorkers();
     }
     if (disc) {
       hostSup = superviseHost({
@@ -1767,7 +1788,8 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   // 3. UI server
-  const uiArgs = [path.join(REPO, 'services', 'studio-ui', 'cli.mjs'), 'serve', '--data-dir', dataDir, '--feedback-dir', feedbackDir];
+  clock.mark('workers');
+  const uiArgs =[path.join(REPO, 'services', 'studio-ui', 'cli.mjs'), 'serve', '--data-dir', dataDir, '--feedback-dir', feedbackDir];
   uiArgs.push('--profile', typeof args.profile === 'string' ? path.resolve(args.profile) : path.join(REPO, 'data', 'profile.local.json'), '--release', path.join(REPO, 'release.json'));
   if (typeof args['ui-port'] === 'string') uiArgs.push('--port', args['ui-port']);
   if (livePlan) uiArgs.push('--live-plan', livePlan);
@@ -1812,6 +1834,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const uiChild = () => uiSlot?.child() ?? ui;
   if (!uiPort) { console.log('[studio] UI server did not start; stopping'); await stopAll(); return 1; }
+  clock.mark('ui');
 
   console.log(`[studio] UI at http://127.0.0.1:${uiPort}/ (the login key is one-time and not printed). ${process.env.UJWALAM_NO_CONSOLE === '1' ? 'Closing the studio window stops everything (started without a console: ujwalam-start.exe).' : 'Ctrl-C stops everything.'}`);
   // Headless (D191): no browser. One exception for scripted runs (F2 real-host test): UJWALAM_BROWSER naming this
@@ -1920,7 +1943,9 @@ export async function main(argv = process.argv.slice(2)) {
       studioSlot.start(REPO, launchKey);
     } else startShell(shellSpec);
     console.log('[studio] Qt studio shell started');
+    clock.mark('shell');
   } else if (args['no-open'] !== true && (!isHeadless() || headlessLoginScript())) openBrowser(`http://127.0.0.1:${uiPort}/login?k=${launchKey}`);
+  console.log(`[studio] ${clock.line()}`);
   if (alphaClient) {
     // One line that answers "are the overlays fed?": bridge counters 10 s after start (counts only, never text).
     // UJWALAM_ALPHA_STATS_MS shortens the wait for tests.

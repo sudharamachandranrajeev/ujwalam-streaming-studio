@@ -150,6 +150,11 @@ export function protectPath(p, { dir = false } = {}) {
   try {
     const sid = currentUserSid();
     if (!sid) return 'acl-failed';
+    // Start-up time (2026-11-19): an item (and tree) that already passes the same final check as step 4 is left as it
+    // is: one `icacls /save` instead of five icacls runs over the whole data folder at every start. Anything else
+    // (another principal, inheritance on, a deny ACE, an unreadable entry) takes the full path below.
+    const before = readDacls(p, { tree: dir });
+    if (before?.length && before.every((e, i) => onlySid(e.dacl, sid, { top: i === 0 }))) return 'acl';
     if (!icacls([p, '/inheritance:r', '/grant:r', dir ? `*${sid}:(OI)(CI)F` : `*${sid}:(F)`, '/Q'])) return 'acl-failed';
     const own = readDacls(p);
     if (!own || own.length !== 1) return 'acl-failed';

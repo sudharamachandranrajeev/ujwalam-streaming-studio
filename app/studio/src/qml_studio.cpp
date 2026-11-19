@@ -4,6 +4,7 @@
 #include "qml_bridge.h"
 #include "qml_tasks.h"
 #include "taskbar_id.h"
+#include "startup_clock.h"
 #include "theme.h"
 
 #include <QCoreApplication>
@@ -63,7 +64,9 @@ bool QmlStudio::begin(Mode mode)
 	// Never on a screen (hidden or probe): popups that sit at the window's edges (the task panel and notifications) are
 	// drawn inside the window, since an offscreen screen is smaller than the window and would push a popup window inward.
 	engine_->rootContext()->setContextProperty(QStringLiteral("studioUnseen"), mode != Mode::Normal);
+	startupclock::mark("engine");
 	engine_->loadFromModule("Ujwalam.Studio", "Main");
+	startupclock::mark("qml");
 	const QList<QObject *> roots = engine_->rootObjects();
 	win_ = roots.isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(roots.first());
 	if (!win_) {
@@ -102,6 +105,9 @@ bool QmlStudio::begin(Mode mode)
 		std::fflush(stdout);
 	}
 #endif
+	startupclock::mark("shown");
+	// The first frame on screen is one of the two ends of the start-up line.
+	connect(win_, &QQuickWindow::frameSwapped, this, []() { startupclock::finishOnce("frame"); }, Qt::SingleShotConnection);
 	QMetaObject::invokeMethod(win_, "start");
 	return true;
 }
