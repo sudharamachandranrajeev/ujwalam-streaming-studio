@@ -208,6 +208,20 @@ function treeHash(dir) {
   return out.join('\n');
 }
 
+test('Install-Ujwalam.ps1 update with nothing running: a changed start exe is replaced in place (alpha.35 regression: "The path is not of a legal form")', { skip: process.platform !== 'win32' && 'Windows only', timeout: 120_000 }, async (t) => {
+  const root = tmp('swap-start');
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+  const ir = path.join(root, 'Ujwalam');
+  let r = install(fakePackage(root, '0.1.0-alpha.1', { start: 'start v1\n' }), root);
+  if (r.code === 6) { t.skip(`prerequisites missing on this machine: ${r.out}`); return; }
+  assert.equal(r.code, 0, r.out);
+  r = install(fakePackage(root, '0.1.0-alpha.2', { start: 'start v2\n' }), root);
+  assert.equal(r.code, 0, r.out);
+  assert.equal(readFileSync(path.join(ir, 'ujwalam-start.exe'), 'utf8'), 'start v2\n', 'the new start exe took the old one\'s place');
+  assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), '0.1.0-alpha.2');
+  assert.deepEqual(readdirSync(ir).filter((n) => /\.new$|\.bak$/i.test(n)), [], 'no temp or backup file left behind');
+});
+
 test('Install-Ujwalam.ps1 while Ujwalam runs from the install (found by path): side by side, the start exe in use is kept, the running version is untouched, no hand-over without a channel', { skip: process.platform !== 'win32' && 'Windows only', timeout: 120_000 }, async (t) => {
   const root = tmp('live-ps');
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));

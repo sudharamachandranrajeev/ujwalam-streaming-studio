@@ -547,7 +547,9 @@ function Copy-Top([string]$name, [bool]$required, [bool]$soft = $false) {
     if ((Test-Path -LiteralPath $dst -PathType Leaf) -and ((Get-Sha256 $src) -eq (Get-Sha256 $dst))) { return }
     if ($live -and (Test-Path -LiteralPath $dst) -and (Test-InUse $running $dst)) { $script:keptTop += $name; return }
     [System.IO.File]::Copy($src, $tmp, $true)
-    if (Test-Path -LiteralPath $dst -PathType Leaf) { [System.IO.File]::Replace($tmp, $dst, $null) } else { [System.IO.File]::Move($tmp, $dst) }
+    # [NullString]::Value, not $null: PowerShell passes $null to a .NET string parameter as "", and File.Replace
+    # refuses an empty backup path ("The path is not of a legal form"; alpha.35 install, the first changed launcher)
+    if (Test-Path -LiteralPath $dst -PathType Leaf) { [System.IO.File]::Replace($tmp, $dst, [NullString]::Value) } else { [System.IO.File]::Move($tmp, $dst) }
   } catch {
     try { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force } } catch { }
     $e = $_.Exception
