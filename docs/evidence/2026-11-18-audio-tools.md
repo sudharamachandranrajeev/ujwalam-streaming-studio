@@ -172,3 +172,18 @@ Tests (2026-11-18, BelowNormal, headless, one file at a time):
 - Lint: 0 findings. Host and studio builds exit 0.
 
 Unverified (AU3): a real microphone and real speech (the -10 dBFS reference and the -30 dBFS threshold are set for typical voice peaks, not tuned on the user's mic); use on a real stream.
+## Review fixes, round 2 (Codex review of AU1-AU3, 2026-11-19)
+
+1. Duck sidechain rebinds (bind, remove, watchdog refresh) all run on the graphics thread, the thread where compressor_filter binds its sidechain in its tick. Before a sound is removed or parked by the watchdog, every duck that uses it is switched off and set to "none", so the compressor drops its capture callback from the old source (`unbind_duck`). A recreated source's copied duck is switched off at copy.
+2. A duck stays off while its sidechain changes. A tick callback switches it on two video ticks later, after the compressor's own tick has bound the new sound, and only if the sound is still found by that name. Before a duck's sidechain is cleared, the duck is switched off. `active` in the status means "its sound is found" (ducking, or bound within two ticks).
+3. Playlists count each file's end once. From queuing the next file until the source signals "update" or "media_restart" (the next file opened), any end is the previous file's and is ignored. This covers both the startup check and media_ended.
+4. `apply_now` order: removed tools are switched off first, then retained tools going off (first to last), then settings change, filters are added or removed, the order is set, and tools going on are switched on (last to first).
+5. A folder list is deduplicated by canonical path. A transition to the same file uses `obs_source_media_restart`, because ffmpeg_source does not reopen an unchanged local_file.
+
+Tests (host-audio-tools, 25 pass, 1 skip (symlink right)):
+
+- Rebind: a -20 dBFS tone with a duck under a muted mic. There were 12 source switches, then the sound was removed and added back, measured in 10 ms bins: lowest bin -20.00 dBFS (no dip). Negative control (duck switched on right at the update, build not kept): dips to -25.9 dBFS. So the test detects the bug.
+- Boost removal: +30 dB gain plus a limiter at -12, alternated 16 times with "gain removed, limiter off": highest bin -12.00 dBFS (an unlimited boost would be +10).
+- First file broken in a 2-file list: the list goes on to file 2 and plays at -25 dBFS. State "playing".
+- Second file deleted: file 1 restarts, and every 450 ms window has audio at -25 dBFS.
+- Duck timing rerun: dip 11.71 dB, attack 10 ms, recovery 400 ms, latency 90 ms.

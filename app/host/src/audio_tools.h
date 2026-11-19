@@ -37,11 +37,19 @@ using DuckResolve = std::function<std::string(const std::string &audio, std::str
 // Makes the source's tool filters match `f` (null or missing = none). Never recreates the source. Runs the filter
 // list changes on the graphics thread and waits for them; only changed settings are sent to a filter.
 void apply_filters(obs_source_t *src, const json::Value &f, const DuckResolve &resolve);
-// AU3: finds the duck tool's sound again (after the mixer changed). `force_name`: a sound of that name was replaced
-// by a new source of the same name (recreate): point the sidechain at the new one.
-void refresh_duck(obs_source_t *src, const DuckResolve &resolve, const std::string &force_name = "");
-// AU3: {on (the user's switch), active (ducking now), source, reason ("" when active)}, or null without a duck tool.
-json::Value duck_status(obs_source_t *src);// The tool filters on a source as {kind: {on, settings...}} (for tests and status).
+// AU3: finds the duck tool's sound again (after the mixer changed). Runs on the graphics thread (where
+// compressor_filter binds its sidechain) and waits. A duck whose sidechain changes is switched off first and switched
+// on again only after compressor_filter has bound the new one (two video ticks later).
+void refresh_duck(obs_source_t *src, const DuckResolve &resolve);
+// AU3: before the source named `name` is retired (removed, or parked for a new one of the same name): a duck on `src`
+// that uses it is switched off and let go of it ("none"), on the graphics thread. refresh_duck binds it again.
+void unbind_duck(obs_source_t *src, const std::string &name);
+// Ends the duck binding work (before obs_shutdown).
+void shutdown_ducks();
+// AU3: {on (the user's switch), active (its sound is found: ducking, or bound within two ticks), source, reason
+// ("" when active)}, or null without a duck tool.
+json::Value duck_status(obs_source_t *src);
+// The tool filters on a source as {kind: {on, settings...}} (for tests and status).
 json::Value read_filters(obs_source_t *src);
 
 // AU1 app sound. check_exe throws for a bad {exe}; the result is the exe name.

@@ -131,6 +131,98 @@ bool duck_settings(obs_data_t *d, const std::string &source, bool on, const Duck
 	obs_data_set_string(d, "ujw_duck_why", name.empty() ? why.c_str() : "");
 	return on && !name.empty();
 }
+
+// ---- AU3 duck binding (graphics thread only) ----
+// compressor_filter finds its sidechain by name in its video tick (graphics thread): it publishes the weak reference,
+// then adds its audio capture callback to that source. Until then it compresses the strip on its own signal. So a
+// duck stays switched off while its sidechain changes and is switched on two ticks later (the compressor's tick ran in
+// between), once the sound is still there by that name. Every change to a duck's sidechain runs on the graphics
+// thread, so it never overlaps that tick. Binds made: filter uuid -> sidechain name; waiting: filters to switch on.
+struct DuckWait {
+	obs_weak_source_t *fl;
+	std::string name;
+	int ticks;
+};
+std::map<std::string, std::string> g_duck_bound;
+std::vector<DuckWait> g_duck_wait;
+bool g_duck_tick = false;
+
+std::string sidechain_of(obs_source_t *fl)
+{
+	obs_data_t *d = obs_source_get_settings(fl);
+	std::string s = obs_data_get_string(d, "sidechain_source");
+	obs_data_release(d);
+	return s;
+}
+bool duck_bound(obs_source_t *fl, const std::string &name)
+{
+	auto it = g_duck_bound.find(obs_source_get_uuid(fl));
+	return it != g_duck_bound.end() && it->second == name && sidechain_of(fl) == name;
+}
+void duck_forget(obs_source_t *fl)
+{
+	const std::string id = obs_source_get_uuid(fl);
+	g_duck_bound.erase(id);
+	g_duck_wait.erase(std::remove_if(g_duck_wait.begin(), g_duck_wait.end(),
+					 [&](DuckWait &w) {
+						 if (!obs_weak_source_references_source(w.fl, fl))
+							 return false;
+						 obs_weak_source_release(w.fl);
+						 return true;
+					 }),
+			  g_duck_wait.end());
+}
+void duck_set_sidechain(obs_source_t *fl, const char *name)
+{
+	obs_data_t *x = obs_data_create();
+	obs_data_set_string(x, "sidechain_source", name);
+	obs_source_update(fl, x);
+	obs_data_release(x);
+}
+
+void duck_tick(void *, float)
+{
+	for (size_t i = 0; i < g_duck_wait.size();) {
+		DuckWait &w = g_duck_wait[i];
+		if (--w.ticks > 0) {
+			i++;
+			continue;
+		}
+		if (obs_source_t *fl = obs_weak_source_get_source(w.fl)) {
+			obs_data_t *d = obs_source_get_settings(fl);
+			obs_source_t *sc = obs_get_source_by_name(w.name.c_str());
+			if (sc && obs_data_get_bool(d, "ujw_on") && w.name == obs_data_get_string(d, "sidechain_source")) {
+				g_duck_bound[obs_source_get_uuid(fl)] = w.name;
+				obs_source_set_enabled(fl, true);
+			}
+			obs_source_release(sc);
+			obs_data_release(d);
+			obs_source_release(fl);
+		}
+		obs_weak_source_release(w.fl);
+		g_duck_wait.erase(g_duck_wait.begin() + (ptrdiff_t)i);
+	}
+}
+
+// fl is switched off and its settings name `name`: make compressor_filter look the name up again (a "none" in between
+// drops any old binding, e.g. a copied filter or a source re-made under the same name), and switch it on after.
+void duck_wait(obs_source_t *fl, const std::string &name)
+{
+	duck_forget(fl);
+	duck_set_sidechain(fl, "none");
+	duck_set_sidechain(fl, name.c_str());
+	g_duck_wait.push_back({obs_source_get_weak_source(fl), name, 2});
+	if (!g_duck_tick) {
+		obs_add_tick_callback(duck_tick, nullptr);
+		g_duck_tick = true;
+	}
+}
+
+// Runs fn on the graphics thread and waits (inline when already there).
+template <class F> void on_graphics(F &fn)
+{
+	obs_queue_task(OBS_TASK_GRAPHICS, [](void *p) { (*static_cast<F *>(p))(); }, &fn, true);
+}
 } // namespace
 
 void check_filters(const json::Value &f, const std::string &what)
@@ -206,8 +298,10 @@ bool same_settings(obs_data_t *have, obs_data_t *want)
 void apply_now(obs_source_t *src, const json::Value &f, const DuckResolve &resolve)
 {
 	struct Step {
-		obs_source_t *fl; // a reference
+		obs_source_t *fl;  // a reference
+		obs_data_t *want;  // settings to apply to a filter already on the strip (a reference), or null
 		bool on, fresh;
+		std::string duck;  // a duck that runs: its sidechain (switched on once bound)
 	};
 	std::vector<Step> keep;           // in processing order
 	std::vector<obs_source_t *> drop; // tools to take off (a reference each)
@@ -221,38 +315,55 @@ void apply_now(obs_source_t *src, const json::Value &f, const DuckResolve &resol
 			continue;
 		}
 		obs_data_t *d = tool_settings(t, *v);
-		bool fresh = false, on = v->find("on")->as_bool();
-		if (std::string(t.kind) == "duck") // AU3: on only while its sound is there (else it would compress itself)
-			on = duck_settings(d, v->find("source")->as_string(), on, resolve);
+		Step k{have, nullptr, v->find("on")->as_bool(), false, {}};
+		if (std::string(t.kind) == "duck") { // AU3: on only while its sound is there (else it would compress itself)
+			k.on = duck_settings(d, v->find("source")->as_string(), k.on, resolve);
+			if (k.on)
+				k.duck = obs_data_get_string(d, "sidechain_source");
+		}
 		if (have) {
 			obs_data_t *cur = obs_source_get_settings(have);
 			if (!same_settings(cur, d))
-				obs_source_update(have, d);
+				k.want = (obs_data_addref(d), d);
 			obs_data_release(cur);
 		} else {
-			have = obs_source_create_private(t.obs_id, name.c_str(), d);
-			if (!have || !obs_obj_get_data(have)) {
+			k.fl = obs_source_create_private(t.obs_id, name.c_str(), d);
+			if (!k.fl || !obs_obj_get_data(k.fl)) {
 				hlog::warn("audio tools: %s could not be created (%s not loaded?)", t.kind, t.obs_id);
-				if (have)
-					obs_source_release(have);
+				if (k.fl)
+					obs_source_release(k.fl);
 				obs_data_release(d);
 				continue;
 			}
-			obs_source_set_enabled(have, false); // joins the strip switched off; switched on with the others below
-			fresh = true;
+			obs_source_set_enabled(k.fl, false); // joins the strip switched off; switched on with the others below
+			k.fresh = true;
 		}
 		obs_data_release(d);
-		keep.push_back({have, on, fresh});
+		// a duck whose sidechain is not bound yet waits switched off (else it would compress the strip on itself)
+		if (!k.duck.empty() && (k.fresh || !duck_bound(k.fl, k.duck)))
+			k.on = false;
+		else
+			k.duck.clear();
+		keep.push_back(std::move(k));
 	}
-	// The audio thread may run a block between any two of these calls, so every step leaves a safe chain: tools going
-	// off are switched off first to last (a boost before its limiter goes first), new tools join switched off, and
-	// tools going on are switched on last to first (the limiter before the boost in front of it).
+	// The audio thread may run a block between any two of these calls, so every step leaves a safe chain: removed tools
+	// are switched off first (a boost that goes, before any limiter goes off), then tools going off, first to last (a
+	// boost before its limiter); settings change after that, new tools join switched off, and tools going on are
+	// switched on last to first (the limiter before the boost in front of it).
+	for (auto *x : drop)
+		obs_source_set_enabled(x, false);
 	for (auto &k : keep)
 		if (!k.on && obs_source_enabled(k.fl))
 			obs_source_set_enabled(k.fl, false);
-	for (auto *x : drop)
-		obs_source_set_enabled(x, false);
+	for (auto &k : keep)
+		if (k.want) {
+			if (!k.on || sidechain_of(k.fl) != obs_data_get_string(k.want, "sidechain_source"))
+				duck_forget(k.fl); // a duck's binding changes (no-op for other tools)
+			obs_source_update(k.fl, k.want);
+			obs_data_release(k.want);
+		}
 	for (auto *x : drop) {
+		duck_forget(x);
 		obs_source_filter_remove(src, x);
 		obs_source_release(x);
 	}
@@ -267,10 +378,12 @@ void apply_now(obs_source_t *src, const json::Value &f, const DuckResolve &resol
 	for (size_t i = n; i > 0; i--)
 		if (keep[i - 1].on && !obs_source_enabled(keep[i - 1].fl))
 			obs_source_set_enabled(keep[i - 1].fl, true);
-	for (auto &k : keep)
+	for (auto &k : keep) {
+		if (!k.duck.empty())
+			duck_wait(k.fl, k.duck);
 		obs_source_release(k.fl);
+	}
 }
-
 } // namespace
 
 void apply_filters(obs_source_t *src, const json::Value &f, const DuckResolve &resolve)
@@ -331,37 +444,70 @@ json::Value read_filters(obs_source_t *src)
 	return r;
 }
 
-void refresh_duck(obs_source_t *src, const DuckResolve &resolve, const std::string &force_name)
+void refresh_duck(obs_source_t *src, const DuckResolve &resolve)
 {
 	if (!src)
 		return;
 	obs_source_t *fl = obs_source_get_filter_by_name(src, filter_name("duck").c_str());
 	if (!fl)
 		return;
-	obs_data_t *cur = obs_source_get_settings(fl);
-	obs_data_t *d = obs_data_create();
-	obs_data_set_double(d, "ujw_amount", obs_data_get_double(cur, "ujw_amount"));
-	obs_data_set_int(d, "ujw_attack", obs_data_get_int(cur, "ujw_attack"));
-	obs_data_set_int(d, "ujw_release", obs_data_get_int(cur, "ujw_release"));
-	const bool run = duck_settings(d, obs_data_get_string(cur, "ujw_duck_source"), obs_data_get_bool(cur, "ujw_on"), resolve);
-	const bool force = run && !force_name.empty() && force_name == obs_data_get_string(d, "sidechain_source");
-	if (!run)
-		obs_source_set_enabled(fl, false); // off before the sidechain goes
-	if (force) { // same name, new source: a name change makes compressor_filter look the name up again
-		obs_data_t *x = obs_data_create();
-		obs_data_set_string(x, "sidechain_source", "none");
-		obs_source_update(fl, x);
-		obs_data_release(x);
-	}
-	if (force || !same_settings(cur, d))
-		obs_source_update(fl, d);
-	if (run && !obs_source_enabled(fl))
-		obs_source_set_enabled(fl, true);
-	obs_data_release(d);
-	obs_data_release(cur);
+	auto job = [&] {
+		obs_data_t *cur = obs_source_get_settings(fl);
+		obs_data_t *d = obs_data_create();
+		obs_data_set_double(d, "ujw_amount", obs_data_get_double(cur, "ujw_amount"));
+		obs_data_set_int(d, "ujw_attack", obs_data_get_int(cur, "ujw_attack"));
+		obs_data_set_int(d, "ujw_release", obs_data_get_int(cur, "ujw_release"));
+		const bool run = duck_settings(d, obs_data_get_string(cur, "ujw_duck_source"), obs_data_get_bool(cur, "ujw_on"), resolve);
+		const std::string name = obs_data_get_string(d, "sidechain_source");
+		if (run && duck_bound(fl, name)) { // the same sound, still bound: other values may change while it runs
+			if (!same_settings(cur, d))
+				obs_source_update(fl, d);
+			if (!obs_source_enabled(fl))
+				obs_source_set_enabled(fl, true);
+		} else {
+			obs_source_set_enabled(fl, false); // off before its sidechain changes or goes
+			duck_forget(fl);
+			if (!same_settings(cur, d))
+				obs_source_update(fl, d);
+			if (run)
+				duck_wait(fl, name);
+		}
+		obs_data_release(d);
+		obs_data_release(cur);
+	};
+	on_graphics(job);
 	obs_source_release(fl);
 }
-json::Value duck_status(obs_source_t *src)
+void unbind_duck(obs_source_t *src, const std::string &name)
+{
+	if (!src)
+		return;
+	obs_source_t *fl = obs_source_get_filter_by_name(src, filter_name("duck").c_str());
+	if (!fl)
+		return;
+	auto job = [&] {
+		if (name.empty() || sidechain_of(fl) == name) {
+			obs_source_set_enabled(fl, false);
+			duck_forget(fl);
+			duck_set_sidechain(fl, "none"); // compressor_filter removes its callback from the old source
+		}
+	};
+	on_graphics(job);
+	obs_source_release(fl);
+}
+void shutdown_ducks()
+{
+	auto job = [] {
+		if (g_duck_tick)
+			obs_remove_tick_callback(duck_tick, nullptr);
+		g_duck_tick = false;
+		for (auto &w : g_duck_wait)
+			obs_weak_source_release(w.fl);
+		g_duck_wait.clear();
+		g_duck_bound.clear();
+	};
+	on_graphics(job);
+}json::Value duck_status(obs_source_t *src)
 {
 	obs_source_t *fl = src ? obs_source_get_filter_by_name(src, filter_name("duck").c_str()) : nullptr;
 	if (!fl)
@@ -370,7 +516,8 @@ json::Value duck_status(obs_source_t *src)
 	json::Value o = json::Value::object();
 	const bool on = obs_data_get_bool(d, "ujw_on");
 	o.set("on", on);
-	o.set("active", obs_source_enabled(fl));
+	// running, or bound and switched on within two ticks (duck_wait)
+	o.set("active", on && std::string(obs_data_get_string(d, "sidechain_source")) != "none");
 	o.set("source", obs_data_get_string(d, "ujw_duck_source"));
 	o.set("reason", !on ? std::string("Switched off.") : std::string(obs_data_get_string(d, "ujw_duck_why")));
 	obs_data_release(d);
@@ -613,6 +760,7 @@ std::vector<std::string> folder_playlist(const std::string &dir, const std::stri
 			break;
 	}
 	std::sort(out.begin(), out.end());
+	out.erase(std::unique(out.begin(), out.end()), out.end()); // a link to a file in the list is the same file
 	return out;
 }
 json::Value playback_settings(const std::string &file, bool loop)
@@ -639,6 +787,9 @@ struct Playlist {
 	// guarded by Worker::m
 	size_t at = 0;
 	bool queued = false, unavailable = false;
+	// a next file is on its way: from the step being queued until the source has opened it (its "update" or
+	// "media_restart" signal). An end in that time is the previous file's (each file's end counts once).
+	bool opening = false;
 	size_t silent_ends = 0; // files in a row that ended without one block of audio (missing, broken, not audio)
 	std::atomic<bool> heard{false};
 	Playlist() = default;
@@ -685,6 +836,7 @@ void advance_locked(Worker &w, const std::shared_ptr<Playlist> &pl, bool heard)
 		return; // the last file of a playlist that does not loop
 	pl->at = (pl->at + 1) % pl->files.size();
 	pl->queued = true;
+	pl->opening = true;
 	w.q.push_back(pl);
 	if (!w.th.joinable())
 		w.th = std::thread([&w] {
@@ -711,10 +863,17 @@ void advance_locked(Worker &w, const std::shared_ptr<Playlist> &pl, bool heard)
 				if (!s)
 					continue;
 				p->heard = false;
-				obs_data_t *d = obs_data_create();
-				obs_data_set_string(d, "local_file", real.c_str());
-				obs_source_update(s, d); // the same source: its filters, volume, tracks and mixer strip stay
-				obs_data_release(d);
+				obs_data_t *cur = obs_source_get_settings(s);
+				const bool same = real == obs_data_get_string(cur, "local_file");
+				obs_data_release(cur);
+				if (same) { // ffmpeg_source does not reopen an unchanged file on update (e.g. the other files are gone)
+					obs_source_media_restart(s);
+				} else {
+					obs_data_t *d = obs_data_create();
+					obs_data_set_string(d, "local_file", real.c_str());
+					obs_source_update(s, d); // the same source: its filters, volume, tracks and mixer strip stay
+					obs_data_release(d);
+				}
 				obs_source_release(s);
 			}
 		});
@@ -727,9 +886,20 @@ void on_media_ended(void *, calldata_t *cd)
 	Worker &w = worker();
 	std::lock_guard<std::mutex> lk(w.m);
 	auto it = w.lists.find(src);
-	if (it == w.lists.end() || w.stop)
+	if (it == w.lists.end() || w.stop || it->second->opening)
 		return;
 	advance_locked(w, it->second, it->second->heard.exchange(false));
+}
+
+// The source opened the next file (deferred update ran, or the restart did): its own end counts from now.
+void on_opened(void *, calldata_t *cd)
+{
+	obs_source_t *src = (obs_source_t *)calldata_ptr(cd, "source");
+	Worker &w = worker();
+	std::lock_guard<std::mutex> lk(w.m);
+	auto it = w.lists.find(src);
+	if (it != w.lists.end() && !it->second->queued)
+		it->second->opening = false;
 }
 
 void on_destroy(void *, calldata_t *cd)
@@ -769,12 +939,15 @@ void attach_playlist(obs_source_t *src, const std::vector<std::string> &files, b
 	obs_source_add_audio_capture_callback(src, on_audio, pl.get());
 	signal_handler_t *sh = obs_source_get_signal_handler(src);
 	signal_handler_connect(sh, "media_ended", on_media_ended, nullptr);
+	signal_handler_connect(sh, "update", on_opened, nullptr);
+	signal_handler_connect(sh, "media_restart", on_opened, nullptr);
 	signal_handler_connect(sh, "destroy", on_destroy, nullptr);
 	// The first file may have ended (or failed to open) before the signal was connected.
 	const enum obs_media_state st = obs_source_media_get_state(src);
 	if (st == OBS_MEDIA_STATE_ENDED || st == OBS_MEDIA_STATE_ERROR) {
 		std::lock_guard<std::mutex> lk(w.m);
-		advance_locked(w, pl, pl->heard.exchange(false));
+		if (!pl->opening) // media_ended has not counted this end already
+			advance_locked(w, pl, pl->heard.exchange(false));
 	}
 }
 

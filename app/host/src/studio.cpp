@@ -2052,6 +2052,7 @@ json::Value Studio::audio_remove_model(const json::Value &doc, const std::string
 		if (it->src->audio_id != aid)
 			continue;
 		auto src = it->src;
+		unbind_ducks(obs_source_get_name(src->src)); // AU3: strips ducking under it let go of it before it goes
 		obs_set_output_source(it->channel, nullptr);
 		obs_source_set_monitoring_type(src->src, OBS_MONITORING_TYPE_NONE);
 		obs_source_set_audio_mixers(src->src, 0);
@@ -2127,16 +2128,27 @@ std::string Studio::duck_name(const std::string &aid, std::string &why) const
 	return "";
 }
 
-void Studio::refresh_ducks(const std::string &force_name)
+void Studio::refresh_ducks()
 {
 	auto resolve = [this](const std::string &id, std::string &why) { return duck_name(id, why); };
 	for (auto &g : globals_)
 		if (g.src && !g.src->audio_id.empty())
-			audio_tools::refresh_duck(g.src->src, resolve, force_name);
+			audio_tools::refresh_duck(g.src->src, resolve);
 	for (auto &s : scenes_)
 		for (auto &l : s.layers)
 			if (l.src && !l.src->audio_id.empty())
-				audio_tools::refresh_duck(l.src->src, resolve, force_name);
+				audio_tools::refresh_duck(l.src->src, resolve);
+}
+
+void Studio::unbind_ducks(const std::string &name)
+{
+	for (auto &g : globals_)
+		if (g.src)
+			audio_tools::unbind_duck(g.src->src, name);
+	for (auto &s : scenes_)
+		for (auto &l : s.layers)
+			if (l.src)
+				audio_tools::unbind_duck(l.src->src, name);
 }
 
 json::Value Studio::audio_filters_model(const json::Value &doc, const std::string &aid)
@@ -2961,6 +2973,8 @@ bool Studio::recreate_global(Global &g)
 	obs_source_set_balance_value(n, obs_source_get_balance_value(o));
 	obs_source_set_flags(n, obs_source_get_flags(o)); // e.g. OBS_SOURCE_FLAG_FORCE_MONO
 	obs_source_copy_filters(n, o);                    // e.g. noise suppression on the mic; same names, enabled state
+	audio_tools::unbind_duck(n, "");                   // AU3: its copied duck waits switched off until refresh_ducks binds it
+	unbind_ducks(name);                                // AU3: strips ducking under the old one let go of it before it is parked
 	const enum obs_monitoring_type mon = obs_source_get_monitoring_type(o);
 	// Park the old source: off its channel, out of every track, monitoring off, renamed. It is not released here:
 	// destroying a WASAPI source whose work queue died never returns and would block libobs's destruction thread.
@@ -2978,7 +2992,7 @@ bool Studio::recreate_global(Global &g)
 	obs_source_set_monitoring_type(n, mon);
 	obs_set_output_source(g.channel, n);
 	g.src = w;
-	refresh_ducks(name); // AU3: strips ducking under it follow the new source (the old one is parked, silent)
+	refresh_ducks(); // AU3: strips ducking under it bind the new source (the old one is parked, silent)
 	return true;
 }
 

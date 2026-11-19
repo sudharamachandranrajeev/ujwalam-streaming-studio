@@ -175,6 +175,7 @@ bool start(const Options &o, std::string &err)
 void shutdown(uint32_t guard_ms)
 {
 	audio_tools::shutdown_playlists(); // no playlist step may open a file while sources are destroyed
+	audio_tools::shutdown_ducks();     // no duck waits to be switched on while filters are destroyed
 	obs_set_output_source(0, nullptr);
 	hlog::info("obs_shutdown begin");
 	// Guard: libobs destroys sources on one destruction thread and obs_shutdown waits for it. A source whose destroy

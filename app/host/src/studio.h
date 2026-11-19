@@ -368,8 +368,10 @@ private:
 	obs_source_t *bound_audio_ref(const std::string &aid) const; // AU2: a new reference or null
 	// AU3 ducking: the libobs name of the mixer source of project sound `aid` (a sidechain), or "" and a plain reason.
 	std::string duck_name(const std::string &aid, std::string &why) const;
-	// AU3: every strip's duck tool finds its sound again (after the mixer changed; force_name: replaced by recreate).
-	void refresh_ducks(const std::string &force_name = "");
+	// AU3: every strip's duck tool finds its sound again (after the mixer changed).
+	void refresh_ducks();
+	// AU3: every strip's duck tool that uses the source named `name` lets go of it (before that source is retired).
+	void unbind_ducks(const std::string &name);
 	std::string format_; // "project-v1" or "ujwalam-host-test"
 	json::Value model_doc_;
 	LoadOptions last_opts_; // of the last project v1 load (layer_add_model builds with them)

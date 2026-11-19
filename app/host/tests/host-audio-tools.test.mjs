@@ -7,7 +7,7 @@
 // without it. No device is opened (--test-hooks without --allow-devices). Headless. Needs the built host.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { launchHost, stopHost } from '../lib/launch.mjs';
@@ -454,4 +454,95 @@ test('AU3 duck: a strip never ducks under itself; the host refuses a bad source 
   s.filters = { duck: { on: true, source: 's-mic', amountDb: 19, attackMs: 10, releaseMs: 400 } };
   await assert.rejects(c.call('audio.setFilters', { project: doc, audio: 's-music' }), (e) => e.code === -32602);
   delete s.filters;
+});
+
+// ---- review round 2 ----
+
+test('AU3 duck: a rebind never compresses the music on its own signal (off until the new sound is bound)', async () => {
+  // both mics muted: the sidechain is silence, so a bound duck leaves the -20 dBFS tone alone; an unbound one that
+  // ran would compress it on itself (threshold -30 dB, ratio 2.5: about 6 dB down)
+  delete doc.audio.sources.find((x) => x.id === 's-music').filters;
+  doc.audio.sources.find((x) => x.id === 's-mic').muted = true;
+  await c.call('mixer.setMute', { id: 'audio:s-mic', muted: true });
+  doc.audio.sources.push({ id: 's-mic2', name: 'Mic 2', playback: { file: { base: 'media', rel: 'duck-mic.wav' }, loop: true }, volumeDb: 0, muted: true, monitoring: 'off', tracks: ['t1'] });
+  await c.call('audio.addFromProject', { project: doc, audio: 's-mic2' });
+  await setFilters('s-music', { duck: { on: true, source: 's-mic', amountDb: 12, attackMs: 1, releaseMs: 400 } });
+  await sleep(1500); // the dip of the last test (the mic was talking) is fully released
+  const BIN = 10;
+  const mus = c.call('audio.testMeasure', { audio: 's-music', skipMs: 0, ms: 4000, binMs: BIN });
+  const t0 = Date.now(); const marks = [];
+  await sleep(200);
+  for (let i = 0; i < 12; i++) {
+    marks.push(Date.now() - t0);
+    await setFilters('s-music', { duck: { on: true, source: i % 2 ? 's-mic' : 's-mic2', amountDb: 12, attackMs: 1, releaseMs: 400 } });
+    await sleep(120);
+  }
+  // the sound it ducks under goes and comes back (the clear and the rebind of the watchdog path)
+  const mic2 = doc.audio.sources.find((x) => x.id === 's-mic2');
+  doc.audio.sources = doc.audio.sources.filter((x) => x.id !== 's-mic2');
+  marks.push(Date.now() - t0);
+  await c.call('audio.removeFromProject', { project: doc, audio: 's-mic2' });
+  marks.push(Date.now() - t0);
+  doc.audio.sources.push(mic2);
+  await c.call('audio.addFromProject', { project: doc, audio: 's-mic2' });
+  const m = await mus;
+  const base = median(m.bins);
+  const low = Math.min(...m.bins);
+  RESULTS.duckRebind = { baseDb: base, lowestBinDb: low, bins: m.bins.length, marks, dips: m.bins.map((v, i) => [i * BIN, v]).filter(([, v]) => v < base - 0.3) };
+  assert.ok(Math.abs(base - -20) < 0.6, `music at ${base.toFixed(2)} dBFS`);
+  assert.ok(low > base - 1, `no bin dips (lowest ${low.toFixed(2)} dBFS, ${(base - low).toFixed(2)} dB under)`);
+});
+
+test('removing a boost while its limiter goes off never lets the full boost through', async () => {
+  const lim = { on: true, thresholdDb: -12, releaseMs: 60 };
+  const boosted = { gain: { on: true, db: 30 }, limiter: lim };
+  const plain = { limiter: { ...lim, on: false } };
+  await setFilters('s-music', boosted);
+  await sleep(300);
+  const BIN = 10;
+  const mus = c.call('audio.testMeasure', { audio: 's-music', skipMs: 0, ms: 4000, binMs: BIN });
+  for (let i = 0; i < 16; i++) {
+    await setFilters('s-music', i % 2 ? boosted : plain);
+    await sleep(100);
+  }
+  const m = await mus;
+  const high = Math.max(...m.bins);
+  RESULTS.boostRemoval = { highestBinDb: high, bins: m.bins.length };
+  // -20 dBFS + 30 dB = +10 dBFS unlimited; capped at -12 by the limiter; -20 without the boost
+  assert.ok(high < -6, `highest bin ${high.toFixed(2)} dBFS`);
+  await setFilters('s-music', null);
+});
+
+test('a playlist whose first file cannot play goes on to the second (one end counted per file)', async () => {
+  const dir = path.join(media, 'firstbad');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'a-bad.wav'), Buffer.from('not a sound file at all'));
+  wav('b-good.wav', sine(1000, -25), 1.5, dir);
+  doc.audio.sources.push({ id: 's-firstbad', name: 'firstbad', playback: { folder: { base: 'media', rel: 'firstbad' }, loop: true },
+    volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] });
+  await c.call('audio.addFromProject', { project: doc, audio: 's-firstbad' });
+  const peaks = [];
+  for (let i = 0; i < 8; i++) peaks.push((await c.call('audio.testMeasure', { audio: 's-firstbad', skipMs: 0, ms: 450 })).peakDb);
+  const r = await row('s-firstbad');
+  RESULTS.firstBadPlaylist = { peaks, playlist: r.playlist };
+  assert.equal(r.playlist?.state, 'playing', JSON.stringify(r.playlist));
+  assert.ok(peaks.some((p) => Math.abs(p - -25) < 1), `the good file plays: ${peaks.map((p) => p.toFixed(1))}`);
+});
+
+test('a playlist whose other files are gone restarts the same file (no silence)', async () => {
+  const dir = path.join(media, 'samefile');
+  mkdirSync(dir, { recursive: true });
+  wav('x1.wav', sine(1000, -25), 0.8, dir);
+  wav('x2.wav', sine(1000, -25), 0.8, dir);
+  doc.audio.sources.push({ id: 's-same', name: 'same', playback: { folder: { base: 'media', rel: 'samefile' }, loop: true },
+    volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] });
+  await c.call('audio.addFromProject', { project: doc, audio: 's-same' });
+  unlinkSync(path.join(dir, 'x2.wav'));
+  await sleep(1000);
+  const peaks = [];
+  for (let i = 0; i < 8; i++) peaks.push((await c.call('audio.testMeasure', { audio: 's-same', skipMs: 0, ms: 450 })).peakDb);
+  const r = await row('s-same');
+  RESULTS.sameFilePlaylist = { peaks, playlist: r.playlist };
+  assert.equal(r.playlist?.state, 'playing', JSON.stringify(r.playlist));
+  assert.ok(peaks.every((p) => p > -30), `x1 keeps playing after x2 is gone: ${peaks.map((p) => p.toFixed(1))}`);
 });
