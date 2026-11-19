@@ -2186,8 +2186,9 @@ Growth plan ED2. Decided:
   with no QML twin). `packProblem` still refuses unknown variants in code.
 - `ujwalam-studio.exe` 12.7 MB to 8.9 MB. Qt Widgets stays linked for the tray and system dialogs.
 - Headless without a probe or hidden mode now exits 64 with a message.
-- `studio-qml-layout` fails 24 of 29 on both the base and the widget-free tree (same cases): an existing layout
-  problem for ujwalam-light/night, not caused by this removal. Tracked as a follow-up.
+- `studio-qml-layout` failed 24 of 29 on both trees: the Transitions box (D391/D394) ran past the side column. An
+  empty type list has no height, Grid skips zero-size items and every later row moved a column; the colour swatches
+  did not wrap. Fixed the same day (29/29).
 
 ## D399 — Audio tools: noise, gate, EQ, gain, compressor, limiter, ducking (AU1–AU3, 2026-11-18)
 

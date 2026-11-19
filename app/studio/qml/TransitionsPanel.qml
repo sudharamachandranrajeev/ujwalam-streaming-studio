@@ -191,21 +191,27 @@ UPanel {
         }
 
         FormLabel { text: "Type" }
-        Flow {
-            id: kindFlow
+        // Grid skips a zero-size item, which would shift every later row into the wrong column while the types are
+        // still loading (an empty Flow has no height); the wrapper keeps the cell
+        Item {
             width: form.fieldW
-            spacing: 6
-            Repeater {
-                model: panel.kinds
-                UToggle {
-                    required property var modelData
-                    objectName: "trKind:" + modelData.id
-                    checkable: false
-                    checked: panel.kind === modelData.id
-                    enabled: modelData.available === true
-                    text: modelData.label
-                    tip: modelData.available === true ? modelData.help : (modelData.reason || "")
-                    onClicked: panel.setKind(modelData.id)
+            height: Math.max(1, kindFlow.height)
+            Flow {
+                id: kindFlow
+                width: parent.width
+                spacing: 6
+                Repeater {
+                    model: panel.kinds
+                    UToggle {
+                        required property var modelData
+                        objectName: "trKind:" + modelData.id
+                        checkable: false
+                        checked: panel.kind === modelData.id
+                        enabled: modelData.available === true
+                        text: modelData.label
+                        tip: modelData.available === true ? modelData.help : (modelData.reason || "")
+                        onClicked: panel.setKind(modelData.id)
+                    }
                 }
             }
         }
@@ -315,7 +321,7 @@ UPanel {
         }
 
         FormLabel { text: "Colour" }
-        Row {
+        Flow { // the swatches wrap under the field in the narrow side column
             width: form.fieldW
             spacing: 6
             enabled: panel.kind === "fadeColor"
