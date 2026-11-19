@@ -123,6 +123,15 @@
         "id": { "$ref": "#/$defs/id" },
         "name": { "$ref": "#/$defs/label" },
         "layers": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/layer" } },
+        "music": {
+          "type": "object", "additionalProperties": false, "required": ["on", "mood", "volumeDb"],
+          "$comment": "MU2: this scene's music bed. mood = a mood id of data/music/moods (file <mood>.wav in the music library). volumeDb is added to the Music strip's own volume. Off by default (absent = off).",
+          "properties": {
+            "on": { "type": "boolean" },
+            "mood": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+            "volumeDb": { "type": "number", "minimum": -40, "maximum": 0 }
+          }
+        },
         "origin": { "$ref": "#/$defs/origin" }
       }
     },
@@ -307,7 +316,8 @@
               { "type": "object", "properties": { "device": true }, "required": ["device"] },
               { "type": "object", "properties": { "layer": true }, "required": ["layer"] },
               { "type": "object", "properties": { "app": true }, "required": ["app"] },
-              { "type": "object", "properties": { "playback": true }, "required": ["playback"] }
+              { "type": "object", "properties": { "playback": true }, "required": ["playback"] },
+              { "type": "object", "properties": { "music": true }, "required": ["music"] }
             ],
             "properties": {
               "id": { "$ref": "#/$defs/id" },
@@ -327,6 +337,10 @@
                   { "type": "object", "properties": { "folder": true }, "required": ["folder"] }
                 ],
                 "properties": { "file": { "$ref": "#/$defs/mediaRef" }, "folder": { "$ref": "#/$defs/mediaRef" }, "loop": { "type": "boolean" } }
+              },
+              "music": {
+                "type": "object", "additionalProperties": false, "properties": {},
+                "$comment": "MU2: the scene music strip (ffmpeg_source). Its bed follows the active scene's music {on, mood, volumeDb} from the music library (base music). At most one per project (validate.mjs)."
               },
               "volumeDb": { "type": "number", "minimum": -100, "maximum": 12 },
               "muted": { "type": "boolean" },

@@ -5,6 +5,7 @@
 // validateProject(doc) -> { ok, errors: [{ path, message }] }. Reports every problem it finds; never throws.
 
 import { filtersProblems } from './audio-filters.mjs';
+import { sceneMusicProblems } from './scene-music.mjs';
 
 export const PROJECT_VERSION = 1;
 export const ID_RE = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -412,8 +413,9 @@ export function validateProject(doc) {
     doc.scenes.forEach((sc, i) => {
       const p = `.scenes[${i}]`;
       if (!isObj(sc)) { err(p, 'must be an object'); return; }
-      noExtra(sc, ['id', 'name', 'layers', 'origin'], p); req(sc, ['id', 'name', 'layers'], p);
+      noExtra(sc, ['id', 'name', 'layers', 'music', 'origin'], p); req(sc, ['id', 'name', 'layers'], p);
       if ('id' in sc) idOf(sc.id, `${p}.id`);
+      if ('music' in sc) for (const e of sceneMusicProblems(sc.music, `${p}.music`)) err(e.path, e.message); // MU2
       if ('name' in sc) str(sc.name, `${p}.name`, 1, 120);
       originOk(sc.origin, `${p}.origin`);
       if ('layers' in sc && arr(sc.layers, `${p}.layers`, 256)) {
@@ -469,21 +471,26 @@ export function validateProject(doc) {
           if ('name' in t) str(t.name, `${p}.name`, 1, 120);
         });
       }
+      let musicStrips = 0;
       if ('sources' in a && arr(a.sources, '.audio.sources', 256)) {
         uniq(a.sources, '.audio.sources', 'audio source', new Set());
         a.sources.forEach((s, i) => {
           const p = `.audio.sources[${i}]`;
           if (!isObj(s)) { err(p, 'must be an object'); return; }
-          noExtra(s, ['id', 'name', 'device', 'layer', 'app', 'playback', 'volumeDb', 'muted', 'monitoring', 'tracks', 'filters', 'origin'], p);
+          noExtra(s, ['id', 'name', 'device', 'layer', 'app', 'playback', 'music', 'volumeDb', 'muted', 'monitoring', 'tracks', 'filters', 'origin'], p);
           req(s, ['id', 'name', 'volumeDb', 'muted', 'monitoring', 'tracks'], p);
           if ('id' in s) idOf(s.id, `${p}.id`);
           if ('name' in s) str(s.name, `${p}.name`, 1, 120);
           if ('device' in s && idOf(s.device, `${p}.device`) && !deviceIds.has(s.device)) err(`${p}.device`, `unknown device "${s.device}"`);
           if ('layer' in s && idOf(s.layer, `${p}.layer`) && !layerIds.has(s.layer)) err(`${p}.layer`, `unknown layer "${s.layer}"`);
           // AU1: one app's sound (exe name only, never a window title) or a file / folder playlist
-          const kinds = ['device', 'layer', 'app', 'playback'].filter((k) => k in s);
-          if (kinds.length > 1) err(p, 'device, layer, app and playback are exclusive');
-          if (!kinds.length) err(p, 'needs device, layer, app or playback');
+          const kinds = ['device', 'layer', 'app', 'playback', 'music'].filter((k) => k in s);
+          if (kinds.length > 1) err(p, 'device, layer, app, playback and music are exclusive');
+          if (!kinds.length) err(p, 'needs device, layer, app, playback or music');
+          if ('music' in s) { // MU2: the scene music strip, one per project
+            if (!isObj(s.music) || Object.keys(s.music).length) err(`${p}.music`, 'must be an empty object');
+            if (++musicStrips > 1) err(`${p}.music`, 'only one music strip per project');
+          }
           if ('app' in s) {
             if (!isObj(s.app)) err(`${p}.app`, 'must be an object');
             else {

@@ -124,6 +124,11 @@ public:
 	// source (volume, mute, tracks, monitoring). Refused with a plain sentence when the plan cannot build it; refused
 	// when it is in the mixer already. The doc becomes the host's model document.
 	json::Value audio_add_model(const json::Value &doc, const std::string &audio);
+	// MU2 scene music. music.setScene: a scene's music {on, mood, volumeDb} (null = off) as the UI server saved it;
+	// the active scene's bed follows at once (kEditFadeMs). music.status: what plays and why (scene_music::status plus
+	// the scenes' settings and the library folder state).
+	json::Value music_set_scene(const std::string &scene, const json::Value &music);
+	json::Value music_status() const;
 	// Mixer remove (D393 proposed): `doc` no longer has audio source `audio`. A device source leaves its channel and is
 	// released (parked instead when the watchdog has it as missing: its destroy may never return); a layer's source is
 	// unbound (no tracks, no monitoring) and stays metered. removed false when the host had not built it.
@@ -370,6 +375,15 @@ private:
 	std::string duck_name(const std::string &aid, std::string &why) const;
 	// AU3: every strip's duck tool finds its sound again (after the mixer changed).
 	void refresh_ducks();
+	struct MusicCfg {
+		bool on = false;
+		std::string mood;
+		double db = 0;
+	};
+	std::map<std::string, MusicCfg> music_cfg_; // MU2: scene id -> its music (from the project, music.setScene)
+	void music_from_plan(const model::Plan &p);
+	// Cues the bed of `scene` (the main canvas's active scene) with out_ms / in_ms of fade.
+	void music_cue(const std::string &scene, uint32_t out_ms, uint32_t in_ms);
 	// AU3: every strip's duck tool that uses the source named `name` lets go of it (before that source is retired).
 	void unbind_ducks(const std::string &name);
 	std::string format_; // "project-v1" or "ujwalam-host-test"

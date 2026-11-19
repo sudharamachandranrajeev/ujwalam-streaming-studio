@@ -154,6 +154,10 @@ json::Value effects_json(const std::vector<Effect> &e);
 
 struct Scene {
 	std::string id, name;
+	// MU2 scene music: on, mood id (the bed <bases.music>/<mood>.wav), level in dB added to the Music strip
+	bool music_on = false;
+	std::string music_mood;
+	double music_db = 0;
 	std::map<std::string, std::vector<Item>> items; // "H"/"V" -> bottom to top
 };
 
@@ -177,6 +181,7 @@ struct Audio {
 	std::vector<std::string> playlist; // AU1: audio files played in turn (one file: ffmpeg_source loops it)
 	bool playlist_loop = true;
 	std::string playlist_root; // AU1: the media folder (canonical); every playlist file must stay inside it
+	bool music = false;        // MU2: the scene music strip (ffmpeg_source; its bed follows the active scene)
 };
 
 struct Plan {

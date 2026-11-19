@@ -34,7 +34,7 @@ function checkBases(bases) {
   if (bases == null) return undefined;
   const out = {};
   for (const [k, v] of Object.entries(bases)) {
-    if (!['data', 'luts', 'media', 'overlays', 'profile'].includes(k)) throw new TypeError(`unknown pathRef base "${k}"`);
+    if (!['data', 'luts', 'media', 'music', 'overlays', 'profile'].includes(k)) throw new TypeError(`unknown pathRef base "${k}"`);
     if (typeof v !== 'string' || !path.isAbsolute(v)) throw new TypeError(`base "${k}" must be an absolute directory`);
     out[k] = path.resolve(v);
   }

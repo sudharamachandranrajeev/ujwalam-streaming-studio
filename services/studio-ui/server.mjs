@@ -80,6 +80,8 @@ import { createYoutubeQuality } from './youtube-quality.mjs';
 import { createGoLiveRoutes } from './golive-routes.mjs';
 import { createSceneBuilderRoutes } from './scene-builder-routes.mjs';
 import { DEFAULT_PRESETS_DIR, createAudioRoutes, sameDeviceRows } from './audio-routes.mjs';
+import { createMusicRoutes } from './music-routes.mjs';
+import { libraryDirOf } from '../project/scene-music.mjs';
 import { createDeviceRoutes } from './device-routes.mjs';
 import { connectTargets, readSetup } from './stream-setup.mjs';
 import { integrationsInEffect } from './integrations.mjs';
@@ -1431,6 +1433,8 @@ export function createStudioServer(opts) {
   });
   // D393 (proposed): the mixer's Add audio, Add to stream and Remove (audio-routes.mjs). No flag; works while live.
   const audioRoutes = createAudioRoutes({ host, json, projectSync, assetsDir, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log });
+  // MU2 scene music (music-routes.mjs): per-scene mood, level and on/off; the library is <dataDir>/music. No flag.
+  const musicRoutes = createMusicRoutes({ host, json, projectSync, log, libraryDir: opts.musicDir ?? (typeof opts.dataDir === 'string' ? libraryDirOf(opts.dataDir) : null), moodsDir: opts.moodsDir, play: opts.playWav });
   // Devices that arrive after the start (2026-11-18 bug report): Connect a placeholder layer, Try again (device-routes.mjs).
   const deviceRoutes = createDeviceRoutes({
     host, json, projectSync, flags, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log,
@@ -1643,6 +1647,7 @@ export function createStudioServer(opts) {
     if (req.method === 'GET' && await settingsRoutes.handle('GET', route, null, res)) return undefined; // D327 pages
     if (req.method === 'GET' && await sceneBuilderRoutes.handle('GET', route, null, res)) return undefined; // Q4 G
     if (req.method === 'GET' && await audioRoutes.handle('GET', route, null, res)) return undefined; // D393 mixer Add audio
+    if (req.method === 'GET' && await musicRoutes.handle('GET', route, null, res)) return undefined; // MU2 scene music
     if (req.method !== 'POST') return text(res, 405, 'method-not-allowed');
     // Mutating: Origin == our origin, CSRF header (timing-safe), JSON body.
     if (req.headers.origin !== origin) return text(res, 403, 'bad-origin');
@@ -1653,6 +1658,7 @@ export function createStudioServer(opts) {
     if (await settingsRoutes.handle('POST', route, body, res)) return undefined;
     if (await sceneBuilderRoutes.handle('POST', route, body, res)) return undefined;
     if (await audioRoutes.handle('POST', route, body, res)) return undefined;
+    if (await musicRoutes.handle('POST', route, body, res)) return undefined;
     if (await deviceRoutes.handle('POST', route, body, res)) return undefined;
 
     if (route === '/ui/api/edits/undo' || route === '/ui/api/edits/redo') {

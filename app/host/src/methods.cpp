@@ -12,6 +12,7 @@
 #include "devices.h"
 #include "log.h"
 #include "obs_runtime.h"
+#include "scene_music.h"
 #include "screen_capture.h"
 #include "stats.h"
 
@@ -82,8 +83,9 @@ Studio::LoadOptions load_options(App &a, const Params &q)
 		o.overlay_port = o.overlay_feed_port = 0; // not running: overlay layers are listed as unavailable
 	if (const json::Value *b = q.obj_opt("bases")) {
 		for (auto &m : b->members()) {
-			if (m.first != "data" && m.first != "luts" && m.first != "media" && m.first != "overlays" && m.first != "profile")
-				throw Error(rpc::INVALID_PARAMS, "bases: keys are data, luts, media, overlays, profile");
+			if (m.first != "data" && m.first != "luts" && m.first != "media" && m.first != "music" && m.first != "overlays" &&
+			    m.first != "profile") // music (MU2): the scene music library, never a project pathRef base
+				throw Error(rpc::INVALID_PARAMS, "bases: keys are data, luts, media, music, overlays, profile");
 			if (!m.second.is_string() || m.second.as_string().empty() || m.second.as_string().size() > 1024 ||
 			    !std::filesystem::u8path(m.second.as_string()).is_absolute())
 				throw Error(rpc::INVALID_PARAMS, "bases: values are absolute directory paths");
@@ -723,6 +725,27 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 			return r;
 		}
 		return audio_tools::list_apps();
+	});
+	// MU2 scene music: a scene's music {on, mood, volumeDb} or null (the UI server sends it after saving the project).
+	add("music.setScene", [&a](const json::Value &p) {
+		Params q(p, {"scene", "music"});
+		const json::Value *m = p.find("music");
+		if (!m)
+			throw Error(rpc::INVALID_PARAMS, "music is required (an object or null)");
+		return a.studio->music_set_scene(q.str("scene", 64), *m);
+	});
+	add("music.status", [&a](const json::Value &p) {
+		(void)Params(p, {});
+		return a.studio->music_status();
+	});
+	// music.testWaitIdle {ms}: waits until no music fade runs. --test-hooks only.
+	add("music.testWaitIdle", [&a](const json::Value &p) {
+		Params q(p, {"ms"});
+		if (!a.test_hooks)
+			throw Error(rpc::FORBIDDEN, "music.testWaitIdle needs a host started with --test-hooks");
+		json::Value r = json::Value::object();
+		r.set("idle", scene_music::wait_idle((uint32_t)q.int_or("ms", 2000, 0, 10000)));
+		return r;
 	});
 	// audio.testMeasure {audio, skipMs, ms}: peak and RMS after the filters of a project audio source. --test-hooks only.
 	add("audio.testMeasure", [&a](const json::Value &p) {
