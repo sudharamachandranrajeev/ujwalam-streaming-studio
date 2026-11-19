@@ -68,20 +68,50 @@ void ApiClient::login(const QString &launchKey, Done done)
 		r->deleteLater();
 		const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 		const QByteArray setCookie = r->rawHeader("Set-Cookie");
+		if (status == 0) { // nothing answered (connection refused): the server is not up yet
+			done(false, {}, QString::fromLatin1(kNoAnswer));
+			return;
+		}
 		if (status != 302 || setCookie.isEmpty()) {
 			done(false, {}, QStringLiteral("login refused (HTTP %1)").arg(status));
 			return;
 		}
 		cookie_ = setCookie.split(';').first().trimmed();
-		get(QStringLiteral("ui/api/session"), [this, done](bool ok, const QJsonObject &b, const QString &err) {
+		sendGet(QStringLiteral("ui/api/session"), [this, done](bool ok, const QJsonObject &b, const QString &err) {
 			if (ok)
 				csrf_ = b.value(QStringLiteral("csrf")).toString().toUtf8();
-			done(ok && !csrf_.isEmpty(), b, ok && csrf_.isEmpty() ? QStringLiteral("no CSRF value") : err);
+			const bool in = ok && !csrf_.isEmpty();
+			if (!in) {
+				done(false, b, ok ? QStringLiteral("no CSRF value") : err);
+				return;
+			}
+			// The caller's own first requests (the saved theme) go out before the ones that waited for the login.
+			hold_ = false;
+			done(true, b, QString());
+			release();
 		});
 	});
 }
 
+void ApiClient::release()
+{
+	hold_ = false;
+	std::vector<std::function<void()>> todo;
+	todo.swap(pending_);
+	for (auto &f : todo)
+		f();
+}
+
 void ApiClient::get(const QString &route, Done done)
+{
+	if (hold_) {
+		pending_.push_back([this, route, done]() { sendGet(route, done); });
+		return;
+	}
+	sendGet(route, done);
+}
+
+void ApiClient::sendGet(const QString &route, Done done)
 {
 	QNetworkRequest req(base_.resolved(QUrl(route)));
 	req.setTransferTimeout(TIMEOUT_MS);
@@ -92,6 +122,10 @@ void ApiClient::get(const QString &route, Done done)
 
 void ApiClient::post(const QString &route, const QJsonObject &body, Done done)
 {
+	if (hold_) {
+		pending_.push_back([this, route, body, done]() { post(route, body, done); });
+		return;
+	}
 	QNetworkRequest req(base_.resolved(QUrl(route)));
 	req.setTransferTimeout(TIMEOUT_MS);
 	req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));

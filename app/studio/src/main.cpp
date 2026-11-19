@@ -3,6 +3,8 @@
 // when the Qt Widgets window was removed.
 // Started by the alpha launcher, which passes the UI server URL and its one-time launch key in the environment
 // (UJWALAM_UI_URL, UJWALAM_UI_LAUNCH_KEY), never on argv. Both are read once and removed from the environment.
+// Early start (2026-11-19): UJWALAM_STUDIO_EARLY=1 and no UJWALAM_UI_URL: started while the host starts; the URL's port
+// comes later as the line "ui <port>" on the stdin pipe (see runQml). The key stays in the environment as before.
 // Window rule (D316, replaces D219): a normal app window. It opens where Windows places it (the main display) and is
 // activated when the user starts it. UJWALAM_HEADLESS=1 (tests): no window ever reaches the screen; it needs one of the
 // two test modes below (anything else exits 64).
@@ -33,7 +35,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QTimer>
+#include <QUrl>
 #include <algorithm>
 #include <cstdio>
 #include <functional>
@@ -76,12 +80,13 @@ static QString testMarker(const wchar_t *name)
 }
 
 // Reads the launcher's control lines from stdin on its own thread and hands each one to the Qt thread (LU4, D346).
-static void startControlReader(QApplication *app, std::function<void(const QString &)> onLine)
+// onEnd (optional): runs on the Qt thread once the input ends (the launcher gone). false: no stdin pipe.
+static bool startControlReader(QApplication *app, std::function<void(const QString &)> onLine, std::function<void()> onEnd = {})
 {
 	HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
 	if (in == nullptr || in == INVALID_HANDLE_VALUE || GetFileType(in) != FILE_TYPE_PIPE)
-		return;
-	std::thread([in, app, onLine]() {
+		return false;
+	std::thread([in, app, onLine, onEnd]() {
 		std::string line;
 		char buf[256];
 		DWORD got = 0;
@@ -95,16 +100,24 @@ static void startControlReader(QApplication *app, std::function<void(const QStri
 					line.push_back(buf[i]);
 			}
 		}
-	}).detach(); // end of input (the launcher gone) ends only this thread
+		if (onEnd)
+			QMetaObject::invokeMethod(app, [onEnd]() { onEnd(); }, Qt::QueuedConnection);
+	}).detach(); // end of input (the launcher gone) ends only this thread (and runs onEnd when given)
+	return true;
 }
 #endif
 
 // Logs in with the launcher's key and applies the saved theme and effects choice (settings.json ui.theme / ui.effects,
 // D293) before any window shows, so it never flashes the default look; UJWALAM_THEME / UJWALAM_EFFECTS (tests) win.
-// Then runs then(). A failed login exits 77.
-static void loginThen(QApplication &app, ApiClient &api, const QString &key, int &code, std::function<void()> then)
+// Then runs then(). A failed login exits 77. A server that does not answer yet (connection refused) is asked again every
+// 100 ms for up to 10 s (early start, 2026-11-19); an answer that refuses the key is never retried.
+static void loginThen(QApplication &app, ApiClient &api, const QString &key, int &code, std::function<void()> then, int triesLeft = 100)
 {
-	api.login(key, [&app, &api, &code, then](bool ok, const QJsonObject &, const QString &err) {
+	api.login(key, [&app, &api, &code, key, then, triesLeft](bool ok, const QJsonObject &, const QString &err) {
+		if (!ok && triesLeft > 0 && err == QLatin1String(ApiClient::kNoAnswer)) {
+			QTimer::singleShot(100, &app, [&app, &api, &code, key, then, triesLeft]() { loginThen(app, api, key, code, then, triesLeft - 1); });
+			return;
+		}
 		startupclock::mark("login");
 		if (!ok) {
 			std::fprintf(stderr, "studio: login failed: %s\n", qPrintable(err));
@@ -138,25 +151,83 @@ static QString shownProbeAction(const QString &a)
 }
 
 // The studio window for every mode: normal, hidden (LU4 tests) and probe (tests); the launcher's lines and the swap close.
-static int runQml(QApplication &app, ApiClient &api, const QString &key, bool headless, bool hidden)
+static void afterReveal(QApplication &app, QmlStudio &studio, QmlStudio::Mode mode, int probeMs);
+
+// early (UJWALAM_STUDIO_EARLY=1, 2026-11-19): started by the launcher while the host starts, before the UI server is
+// up. Main.qml loads at once with nothing on screen (API requests wait for the login); the launcher's line
+// "ui <port>" on stdin says the server listens; then the login, the saved theme and only then the window. No window
+// is ever shown before that. End of input before the line (the launcher gone) exits 0.
+static int runQml(QApplication &app, ApiClient &api, const QString &key, bool headless, bool hidden, bool early)
 {
 	QmlStudio studio(&api);
 	int code = 0;
+	const int probeMs = headless ? qEnvironmentVariableIntValue("UJWALAM_STUDIO_PROBE_MS") : 0;
+	const QmlStudio::Mode mode = probeMs > 0 ? QmlStudio::Mode::Probe : hidden ? QmlStudio::Mode::Hidden : QmlStudio::Mode::Normal;
+	bool loaded = false;
+	auto fail = [&app, &code]() {
+		code = 70;
+		QTimer::singleShot(0, &app, [&app]() { app.exit(70); });
+	};
+	std::function<void()> afterLogin = [&]() {
+		if (loaded)
+			studio.reveal();
+		else if (!studio.begin(mode))
+			return fail();
+		afterReveal(app, studio, mode, probeMs);
+	};
+	bool waiting = early;
 #ifdef Q_OS_WIN
-	if (qEnvironmentVariable("UJWALAM_STUDIO_CONTROL") == QStringLiteral("1"))
-		startControlReader(&app, [&studio](const QString &cmd) {
-			if (cmd == QStringLiteral("swap-close"))
+	const bool control = qEnvironmentVariable("UJWALAM_STUDIO_CONTROL") == QStringLiteral("1");
+	if (control || early) {
+		const bool piped = startControlReader(&app, [&](const QString &cmd) {
+			if (cmd == QStringLiteral("swap-close") && control)
 				studio.swapClose();
+			static const QRegularExpression ui(QStringLiteral("^ui (\\d{1,5})$"));
+			const QRegularExpressionMatch m = ui.match(cmd);
+			if (waiting && m.hasMatch()) {
+				waiting = false;
+				if (!api.setBase(QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(m.captured(1))))) {
+					std::fprintf(stderr, "studio: bad UI server port from the launcher\n");
+					code = 64;
+					QTimer::singleShot(0, &app, [&app]() { app.exit(64); });
+					return;
+				}
+				startupclock::mark("ui");
+				loginThen(app, api, key, code, afterLogin);
+			}
+		}, [&]() {
+			if (waiting) { // the launcher is gone before the UI server was up: nothing to show
+				waiting = false;
+				QTimer::singleShot(0, &app, [&app]() { app.exit(0); });
+			}
 		});
-#endif
-	loginThen(app, api, key, code, [&]() {
-		const int probeMs = headless ? qEnvironmentVariableIntValue("UJWALAM_STUDIO_PROBE_MS") : 0;
-		const QmlStudio::Mode mode = probeMs > 0 ? QmlStudio::Mode::Probe : hidden ? QmlStudio::Mode::Hidden : QmlStudio::Mode::Normal;
-		if (!studio.begin(mode)) {
-			code = 70;
-			QTimer::singleShot(0, &app, [&app]() { app.exit(70); });
-			return;
+		if (early && !piped) {
+			std::fprintf(stderr, "studio: UJWALAM_STUDIO_EARLY needs a stdin pipe from the launcher\n");
+			return 64;
 		}
+	}
+#else
+	if (early) {
+		std::fprintf(stderr, "studio: UJWALAM_STUDIO_EARLY is Windows only\n");
+		return 64;
+	}
+#endif
+	if (early) {
+		api.holdUntilLogin();
+		if (!studio.load(mode))
+			return 70;
+		loaded = true;
+	} else
+		loginThen(app, api, key, code, afterLogin);
+	const int r = app.exec();
+	qInfo("studio exiting with code %d", code ? code : r);
+	return code ? code : r;
+}
+
+// After the window is placed: the probe's actions and its line (probe), the "ready" lines (hidden, normal).
+static void afterReveal(QApplication &app, QmlStudio &studio, QmlStudio::Mode mode, int probeMs)
+{
+	{ // (the body of the old login callback, unchanged)
 		if (mode == QmlStudio::Mode::Probe) {
 			// Actions: the first at 2.5 s (after the first loads and a status poll), then 700 ms apart. Each one also waits
 			// until no API request of the screens is on the way, and the probe is read at UJWALAM_STUDIO_PROBE_MS or later,
@@ -222,10 +293,7 @@ static int runQml(QApplication &app, ApiClient &api, const QString &key, bool he
 		}
 		std::printf("studio attach: ready\n");
 		std::fflush(stdout);
-	});
-	const int r = app.exec();
-	qInfo("studio exiting with code %d", code ? code : r);
-	return code ? code : r;
+	}
 }
 
 int main(int argc, char **argv)
@@ -282,11 +350,13 @@ int main(int argc, char **argv)
 	theme::apply(app);
 	const QString url = takeEnv("UJWALAM_UI_URL");
 	const QString key = takeEnv("UJWALAM_UI_LAUNCH_KEY");
+	// Early start: no URL yet; the launcher sends the port on stdin once the UI server listens.
+	const bool early = takeEnv("UJWALAM_STUDIO_EARLY") == QStringLiteral("1") && url.isEmpty();
 
 	ApiClient api;
-	if (!api.setBase(QUrl(url)) || key.size() < 32) {
+	if ((!early && !api.setBase(QUrl(url))) || key.size() < 32) {
 		std::fprintf(stderr, "studio: start it from the launcher (npm run alpha -- --shell qt); no UI server URL or key\n");
 		return 64;
 	}
-	return runQml(app, api, key, headless, hidden);
+	return runQml(app, api, key, headless, hidden, early);
 }

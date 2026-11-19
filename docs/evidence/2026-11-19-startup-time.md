@@ -80,6 +80,80 @@ Items 2 and 3 do not show in the dev numbers (no unfinished clip job, no venv fo
 their effect on the user's 9 s studio gap is UNVERIFIED until the next installed start's startup lines are read.
 `--live` starts (credential reads, YouTube event calls in the UI server) were not measured: UNVERIFIED.
 
+## Phase 3: early studio start (2026-11-19)
+
+Branch from `claude/alpha0-d1` at c607600. Dev build (`npm run build:host`, `npm run build:studio`), `--alpha`,
+practice mode, devices off (no `--allow-devices`: no device was opened for this measurement), one scratch data folder
+for every run, warm. One warm-up run (after, not counted), then before and after interleaved, 3 runs each, medians.
+Live-check said off air before the builds and runs; the installed studio was not running (checked by its
+%LOCALAPPDATA%\Ujwalam path). "Before" is the same build with `UJWALAM_STUDIO_EARLY=0` (the old order: the studio is
+spawned after the UI server). Window ready = the launcher mark at which the studio was spawned (`shell` before,
+`studio-early` after) + the studio's own `frame` / `flags` marks.
+
+| launcher ms | before (3 runs) | median | after (3 runs) | median |
+|---|---|---|---|---|
+| studio spawned | 3051, 2886, 2890 | 2890 | 83, 81, 82 | 82 |
+| core | 886, 778, 783 | 783 | 848, 836, 871 | 848 |
+| host-ready | 2016, 1888, 1899 | 1899 | 1962, 1962, 1992 | 1962 |
+| project | 2913, 2735, 2743 | 2743 | 2788, 2817, 2843 | 2817 |
+| ui (UI server up) | 3046, 2881, 2886 | 2886 | 2932, 2957, 2986 | 2957 |
+
+| studio ms (since its process started) | before median | after median |
+|---|---|---|
+| qml (Main.qml loaded) | 697 | 707 (while the host starts) |
+| ui (port on its pipe) | - | 2880 |
+| login | 69 | 2902 |
+| shown | 818 | 2947 |
+| frame | 1132 | 3261 |
+| flags | 1137 | 3267 |
+
+| window ready (launcher ms) | before (3 runs) | median | after (3 runs) | median |
+|---|---|---|---|---|
+| first frame | 4181, 4021, 4022 | **4022** | 3301, 3342, 3387 | **3342** |
+| flags (saved look applied) | 4187, 4031, 4027 | **4031** | 3307, 3348, 3394 | **3348** |
+
+Window ready about 0.68 s sooner (-17%). Not the 1.2 s proposed: phase 2 already cut the QML load to about 0.7 s, and
+that load plus Qt's start (about 0.72 s together) is what now overlaps the host start. The first frame still costs about
+0.3 s after the window is shown and cannot start before it. The studio's QML load competes for the CPU with the event
+core and the host: core +65 ms, host ready +63 ms, UI server +71 ms (medians). Outputs are started only by a click, so
+no stream or recording start waits on this.
+
+What changed:
+
+1. `services/studio-ui/launch.mjs`: with the service-swap flag off, on Windows, the studio is spawned right after the
+   flags are read (before the event core), with the one-time key in its environment as before (never on argv) and no
+   URL (`earlyShellSpawnSpec`). Once the UI server listens, the launcher writes `ui <port>` on the studio's stdin pipe
+   (no secret in it) and adopts it: from then on the same `watchShell` handles its exit (user close stops all, crash
+   reopens it with a new key, at most 3 in 10 min). An early studio that ended before the UI server was up is recorded
+   in `studio-exits.jsonl` (`early: true`) and one is started the old way. A launcher that ends before adopting it
+   kills it. `UJWALAM_STUDIO_EARLY=0` switches it off. With the service-swap flag on, the studio slot starts the window
+   exactly as before (no early start), so the update swap path is unchanged.
+2. `app/studio/src/main.cpp`: `UJWALAM_STUDIO_EARLY=1` without a URL: load Main.qml at once with nothing on screen,
+   wait for `ui <port>` (127.0.0.1 only), log in, apply the saved theme, then place the window. End of input before
+   the line exits 0. The login asks again every 100 ms for up to 10 s while nothing answers (connection refused); a
+   refused key exits 77 as before and is never retried.
+3. `app/studio/src/qml_studio.cpp`: `begin()` split into `load()` (engine and Main.qml, no window) and `reveal()` (show,
+   taskbar id and relaunch values (D400), start). `begin()` = both, unchanged for the probe and the normal path.
+4. `app/studio/src/api_client.cpp`: in the early mode, requests the QML makes before the login (the update check) wait
+   and go out after it, after the studio's own settings read.
+
+The window is never shown before the login and the saved theme: there is no new waiting state on screen. Hotkeys, the
+panic key, the replay buffer and outputs are host/launcher side and not touched. The studio swap path (flag on), the
+single-instance guard (outside launch.mjs) and the crash-relaunch logic are unchanged; the early studio joins the
+relaunch logic once adopted.
+
+Tests (one file at a time, `UJWALAM_HEADLESS=1`, BelowNormal): `tests/studio-early-start.test.mjs` 7/7 (spec and
+switch; real studio with the UI server 3 s late, port sent before the server listens, one login, no request without
+the session; end of input before the port exits 0; refused key exits 77 after one try; launcher: early studio adopted,
+window ready after the UI server, killed studio reopened as before; an early crash before adoption is started again
+and repeated crashes stop as before). Unchanged and passing: `studio-swap-launcher` 9/9, `studio-ui-alpha` 39 pass 1
+skipped, `taskbar-id` 2/2, `studio-crash-capture` 4/4, `studio-qml-palette` 7/7, `studio-swap-stream` 1 pass 1
+skipped. `npm run lint`: 0 findings.
+
+UNVERIFIED: the installed (packaged) build and `ujwalam-start.exe` starts; `--live` and `--allow-devices` starts; a
+cold start after a reboot; that the taskbar button and relaunch values look right on a real shown window started early
+(the code path is the same `reveal()`; only the hidden and probe modes were run by tests).
+
 ## Not changed (proposals)
 
 - Project load (about 1.3 s): about 0.7 s is the NVENC session probe inside `project.load` (deferred outputs). Must stay

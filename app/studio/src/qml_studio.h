@@ -31,6 +31,11 @@ public:
 	~QmlStudio() override;
 	// Loads Main.qml, places the window for the mode and starts its loads and polls. false: QML did not load (logged).
 	bool begin(Mode mode);
+	// begin() in two steps (early start, 2026-11-19): load() loads Main.qml with nothing on screen (before the login, while
+	// the host starts); reveal() places the window for the mode and starts its loads and polls, once the saved theme is
+	// applied. reveal() needs a load() that returned true.
+	bool load(Mode mode);
+	void reveal();
 	// LU4 studio swap (D346): exit kSwapExitCode, nothing stopped (the host and its outputs keep running).
 	void swapClose();
 	void close();
@@ -51,6 +56,7 @@ private:
 	QmlApi *qapi_ = nullptr;
 	QmlTheme *theme_ = nullptr;
 	QQuickWindow *win_ = nullptr;
+	Mode mode_ = Mode::Normal;
 	bool taskbarProps_ = false; // the window's taskbar id and relaunch values are set (taskbar_id.h); cleared at the end
 	QJsonArray layoutRuns_;
 };
