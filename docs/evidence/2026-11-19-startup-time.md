@@ -89,3 +89,50 @@ their effect on the user's 9 s studio gap is UNVERIFIED until the next installed
   page at start; pages not shown first could be Loaders (asynchronous).
 - The studio is spawned only after the project load and UI server; spawning it earlier (key given on its stdin) would
   overlap its 1.4 s with the host and project load.
+
+## Phase 2 (2026-11-19, branch of the start-up agent)
+
+Same method as above: dev build, `--alpha --allow-devices`, practice mode, warm, 3 runs each, medians; live-check said
+off air before every build and run. Scratch data folder (a fresh project, not the 1,350-file tree), so the launcher
+numbers are lower than in phase 1 and are compared only with each other.
+
+| launcher ms | before (3 runs) | median | after (3 runs) | median |
+|---|---|---|---|---|
+| core | 768, 791, 775 | 775 | 867, 809, 809 | 809 |
+| host-ready | 1886, 1909, 1892 | 1892 | 2235, 1923, 1923 | 1923 |
+| project | 3322, 3349, 3329 | 3329 | 3680, 3357, 3392 | 3392 |
+| ui | 3502, 3528, 3500 | 3502 | 3857, 3537, 3580 | 3580 |
+| shell | 3510, 3536, 3508 | 3510 | 3866, 3546, 3586 | 3586 |
+
+| studio ms | before (3 runs) | median | after (3 runs) | median |
+|---|---|---|---|---|
+| qml (Main.qml loaded) | 1077, 1100, 1105 | **1100** | 798, 801, 765 | **798** |
+| shown | 1212, 1234, 1243 | 1234 | 936, 937, 896 | 936 |
+| frame | 1442, 1479, 1477 | 1477 | 1284, 1279, 1237 | 1279 |
+| flags (window ready) | 1454, 1491, 1489 | **1489** | 1295, 1289, 1249 | **1289** |
+
+Host `ready` median: before 961, after 954 ms (host code unchanged). The launcher code is unchanged too; its spread
+(after1 was slower from the host's first mark on) is run-to-run noise. Window ready (shell + flags): before about
+5.00 s, after about 4.88 s; the studio's own part is 200 ms shorter (-13%).
+
+What changed: the 19 dialogs and windows that are not on screen at start (Settings, YouTube, Go live, palette, More
+windows, add/rename dialogs, ClipsAsk) are made on their first use (`app/studio/qml/LazyDialog.qml`, a Loader with
+the same calls). A removal experiment first showed they cost about 330 ms of the QML load. ConfirmDialog, CloseDialog,
+TaskCenter, the guide and every panel stay as they were. Hotkeys (Ctrl+K, Ctrl+1..9, window keys) live in Main.qml
+and are unchanged; Settings' Escape shortcut only acts while Settings is open. Outputs, panic key and replay buffer
+are host/launcher side and not touched.
+
+Tests (UJWALAM_HEADLESS=1, one file at a time, BelowNormal): all 29 `studio-qml-*` files pass, plus the new
+`tests/studio-qml-lazy.test.mjs` (nothing made at start; a dialog made on first use, only that one; a window opened
+that way works). Two editing asserts now read "no rename box open" as "not made or not open" (the probe tree only
+lists made dialogs). The first full run caught a real slip (Settings' guide signals resolved to the dialog's own
+`guide` property inside the component); fixed with `win.guideItem()`, and the guide tests pass.
+
+Not changed:
+- NVENC probe (about 0.7 s of `project`): deferring it to the first output start would make that start slower, and
+  overlapping it means an encoder-graph change (Opus + Codex review). Not done.
+- Spawning the studio before the host and UI server: the largest remaining win (about 1.2 s overlap), but the studio
+  needs the UI URL and key at spawn, a login retry, and QML load split from the window show (theme before show). It
+  touches the launcher's crash-relaunch and swap slot paths. Proposed, not done.
+
+UNVERIFIED: the installed (packaged) build and a cold start after a reboot; the effect on `--live` starts.

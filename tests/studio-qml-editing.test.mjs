@@ -535,7 +535,7 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     assert.deepEqual(names(await d.layersOf()), ['Camera', 'Game capture']);
     const un = await probe(['layer-key:Ctrl+D', 'layer-key:F2']);
     assert.match(un.s.note, /^Select a layer first\./);
-    assert.equal(node(un.p, 'renameBox').opened, false);
+    assert.notEqual(node(un.p, 'renameBox')?.opened, true, 'no rename box (never made: dialogs are made on first use, LazyDialog)');
   });
 
   test('right-click on empty space offers only Add layer; Add layer in the menu opens the add window', async () => {
@@ -647,6 +647,6 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     assert.deepEqual(r.done, [true, true, false]);
     const k = await probe(['select-scene:scene-2', 'scene-key:F2'], { live: true });
     assert.match(k.s.note, /^Not while live\./);
-    assert.equal(node(k.p, 'renameBox').opened, false);
+    assert.notEqual(node(k.p, 'renameBox')?.opened, true, 'no rename box (never made: dialogs are made on first use, LazyDialog)');
   });
 });
