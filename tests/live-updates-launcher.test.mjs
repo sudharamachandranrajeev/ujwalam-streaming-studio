@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { killChildTree } from '../services/common/kill-tree.mjs';
 import { folderFiles, releaseParts } from '../services/supervisor/parts.mjs';
+import { parseStartupLine } from '../services/studio-ui/startup-clock.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = path.join(REPO, 'tests', 'fixtures');
@@ -66,6 +67,11 @@ async function launch(t, s, extraEnv = {}) {
   child.stdout.on('data', (d) => { o.out += d; });
   child.stderr.on('data', (d) => { o.out += d; });
   assert.ok(await until(() => /UI at http:\/\/127\.0\.0\.1:\d+\//.test(o.out), 60_000), o.out.slice(-3000));
+  // Start-up line (2026-11-19): one per start, its marks in time order.
+  assert.ok(await until(() => /\[studio\] startup: /.test(o.out), 10_000), o.out.slice(-3000));
+  const marks = parseStartupLine(/\[studio\] startup: .*/.exec(o.out)[0]);
+  assert.ok(marks.length >= 4 && marks[0].name === 'main' && marks.some((m) => m.name === 'ui'), JSON.stringify(marks));
+  for (let i = 1; i < marks.length; i++) assert.ok(marks[i].ms >= marks[i - 1].ms, JSON.stringify(marks));
   let id = 0;
   o.ask = (service, root) => new Promise((resolve) => {
     const my = ++id;

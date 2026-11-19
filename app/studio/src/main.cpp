@@ -230,7 +230,7 @@ static int runQml(QApplication &app, ApiClient &api, const QString &key, bool he
 
 int main(int argc, char **argv)
 {
-	startupclock::start(); // one "startup:" line in the studio log at the first frame (startup_clock.h)
+	startupclock::start(); // one "startup:" line in the studio log after the first frame and flags (startup_clock.h)
 	const bool headless = qEnvironmentVariable("UJWALAM_HEADLESS") == QStringLiteral("1");
 	const bool hidden = headless && qEnvironmentVariable("UJWALAM_STUDIO_HIDDEN") == QStringLiteral("1");
 	const bool probe = headless && qEnvironmentVariableIntValue("UJWALAM_STUDIO_PROBE_MS") > 0;

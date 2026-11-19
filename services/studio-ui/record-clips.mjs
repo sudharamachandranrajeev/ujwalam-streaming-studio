@@ -259,7 +259,7 @@ const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes']
 const pickJob = (j) => Object.fromEntries(JOB_KEYS.filter((k) => j[k] !== undefined).map((k) => [k, j[k]]));
 
 /** The queue and the child. feed(status) is called with each outputs.status. */
-export function createRecordClips({ clipRoot, dataDir, project = null, log, spawnFn = spawn, now = Date.now, postChain = null, killTreeFn = killChildTree, liveClipper = null, trainFlag = () => false }) {
+export function createRecordClips({ clipRoot, dataDir, project = null, log, spawnFn = spawn, now = Date.now, postChain = null, killTreeFn = killChildTree, liveClipper = null, trainFlag = () => false, resumeHoldMs = 0 }) {
   const stateDir = path.join(dataDir, 'clips');
   const statusFile = path.join(stateDir, 'status.json');
   const answerFile = path.join(stateDir, 'answer.json');
@@ -277,7 +277,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     const old = JSON.parse(readFileSync(statusFile, 'utf8'));
     last = old.last ?? null;
     for (const j of [old.running, ...(old.queued ?? [])]) {
-      if (j && (j.type === 'review' || j.type === 'train' || (typeof j.h === 'string' && existsSync(j.h)))) queue.push(pickJob(j));
+      if (j && (j.type === 'review' || j.type === 'train' || (typeof j.h === 'string' && existsSync(j.h)))) queue.push({ ...pickJob(j), resumed: true });
     }
     asks = (old.asks ?? []).filter((a) => a && typeof a.id === 'string' && typeof a.h === 'string' && existsSync(a.h));
     if (queue.length) log(`clips: ${queue.length} unfinished clip job(s) from the last session will run again`);
@@ -338,6 +338,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   const start = () => {
     if (child || stopped || !queue.length) return;
     const job = queue[0];
+    // Start-up time (2026-11-19): a job carried over from the last session waits resumeHoldMs after this start, so its
+    // ffmpeg and Python do not compete with the studio opening. A job of this session starts at once.
+    if (job.resumed === true && now() - createdAt < resumeHoldMs) return;
     const { spec, reason } = clipRunSpec({ clipRoot, dataDir, job, project });
     if (!spec) {
       queue.shift(); last = { name: job.name, kind: job.kind, result: 'not-made', reason, clips: 0 };
