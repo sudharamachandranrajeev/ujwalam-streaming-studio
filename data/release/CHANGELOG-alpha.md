@@ -2,6 +2,18 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.35 — 2026-11-19
+
+- Clip scanning is faster: the recording is decoded on the graphics card while you are off air (a 10-minute stretch took 260 s instead of 426 s, with exactly the same clips found). Going live stops it within two seconds, and an interrupted scan picks up where it stopped.
+- Each mixer strip has a Tools window: noise suppression, gate, EQ, gain, compressor and limiter, with "Clean voice" and "Loud room" presets that change nothing until you click them.
+- Ducking: music or game sound drops while your mic talks ("Duck music under my voice").
+- "Add audio" can also add one app's sound, or a sound file or a folder playlist from your media folder.
+- A mic, capture card or image that was missing when the studio started is picked up once it appears; strips wait for their device instead of vanishing; "Try again" retries at once.
+- Ujwalam-Setup.exe installs and updates; every update backs up your settings first and rolls back as a whole if anything fails. The studio says when an update is available.
+- Lighter when idle: the replay buffer runs only while live or recording, browser overlays draw at 30 fps, hidden previews stop drawing.
+- The Transitions box fits the side column; the colour swatches wrap.
+- The old widget studio is gone; the studio program is a third smaller.
+
 ## 0.1.0-alpha.34 — 2026-11-17
 
 - Every sound gets a strip in the mixer, including the game capture's own sound. A sound that is not in the stream says so, with a one-click "Add to stream".
