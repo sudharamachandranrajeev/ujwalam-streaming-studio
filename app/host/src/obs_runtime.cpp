@@ -5,6 +5,7 @@
 #include "obs_runtime.h"
 #include "startup_clock.h"
 #include "audio_tools.h"
+#include "scene_music.h"
 #include "effects.h"
 #include "log.h"
 
@@ -194,6 +195,7 @@ void shutdown(uint32_t guard_ms)
 			hlog::close_file();
 			TerminateProcess(GetCurrentProcess(), kShutdownGuardExit);
 		});
+	scene_music::shutdown();           // MU2: no fade touches the music strip while sources are destroyed
 	audio_tools::shutdown_playlists(); // no playlist step may open a file while sources are destroyed
 	audio_tools::shutdown_ducks();     // no duck waits to be switched on while filters are destroyed
 	obs_set_output_source(0, nullptr);

@@ -3,6 +3,7 @@
 #include "model.h"
 #include "checks.h"
 #include "audio_tools.h"
+#include "scene_music.h"
 #include "screen_capture.h"
 
 #include <algorithm>
@@ -647,7 +648,7 @@ Plan build(const json::Value &doc, const Options &o)
 	std::map<std::string, LayerRef> layers;
 	const json::Value &scenes = arr(doc, "scenes", 256, "project");
 	for (auto &sc : scenes.as_array()) {
-		chk::only_keys(sc, {"id", "name", "layers", "origin"}, "scene");
+		chk::only_keys(sc, {"id", "name", "layers", "music", "origin"}, "scene");
 		std::string sid = mid(sc.find("id"), "scene");
 		for (auto &l : arr(sc, "layers", 256, "scene " + sid).as_array()) {
 			chk::only_keys(l, {"id", "type", "name", "visible", "locked", "source", "placements", "effects", "origin"},
@@ -881,6 +882,18 @@ Plan build(const json::Value &doc, const Options &o)
 		if (!scene_ids.insert(s.id).second)
 			throw Error(rpc::INVALID_PARAMS, "duplicate scene id " + s.id);
 		s.name = label(sc, "name", "scene " + s.id);
+		if (const json::Value *m = sc.find("music")) { // MU2 (absent = off)
+			const std::string w = "scene " + s.id + ".music";
+			if (!m->is_object())
+				throw Error(rpc::INVALID_PARAMS, w + ": must be an object");
+			chk::only_keys(*m, {"on", "mood", "volumeDb"}, w);
+			chk::require(*m, {"on", "mood", "volumeDb"}, w);
+			s.music_on = chk::get_bool(*m, "on", false, w);
+			s.music_mood = chk::get_str(*m, "mood", "", 32, w);
+			if (!scene_music::mood_ok(s.music_mood))
+				throw Error(rpc::INVALID_PARAMS, w + ".mood: bad mood id");
+			s.music_db = chk::get_num(*m, "volumeDb", 0, -40, 0, w);
+		}
 		for (auto &c : plan.canvases)
 			s.items[c.id];
 		for (auto &l : sc.find("layers")->as_array()) {
@@ -966,8 +979,9 @@ Plan build(const json::Value &doc, const Options &o)
 		plan.warnings.push(std::move(w));
 	}
 	std::set<std::string> bound; // layer sources that already have an audio entry
+	int music_strips = 0;        // MU2: at most one
 	for (auto &a : arr(*au, "sources", 256, "audio").as_array()) { // D245: one per video layer in a Meld session
-		chk::only_keys(a, {"id", "name", "device", "layer", "app", "playback", "volumeDb", "muted", "monitoring", "tracks",
+		chk::only_keys(a, {"id", "name", "device", "layer", "app", "playback", "music", "volumeDb", "muted", "monitoring", "tracks",
 				   "filters", "origin"},
 			       "audio source");
 		chk::require(a, {"id", "name", "volumeDb", "muted", "monitoring", "tracks"}, "audio source");
@@ -991,15 +1005,25 @@ Plan build(const json::Value &doc, const Options &o)
 			x.mixers |= 1u << (uint32_t)(k - tracks.begin());
 		}
 		bool hd = a.find("device") != nullptr, hl = a.find("layer") != nullptr;
-		const bool ha = a.find("app") != nullptr, hp = a.find("playback") != nullptr;
-		if ((int)hd + (int)hl + (int)ha + (int)hp != 1)
-			throw Error(rpc::INVALID_PARAMS, what + ": needs exactly one of device, layer, app or playback");
+		const bool ha = a.find("app") != nullptr, hp = a.find("playback") != nullptr, hm = a.find("music") != nullptr;
+		if ((int)hd + (int)hl + (int)ha + (int)hp + (int)hm != 1)
+			throw Error(rpc::INVALID_PARAMS, what + ": needs exactly one of device, layer, app, playback or music");
 		if (const json::Value *fl = a.find("filters")) {
 			audio_tools::check_filters(*fl, what + ".filters");
 			x.filters = *fl;
 		}
 		Unavail u;
-		if (ha || hp) {
+		if (hm) {
+			// MU2: the scene music strip. Starts with no file (silent); scene_music cues the active scene's bed.
+			const json::Value &mv = *a.find("music");
+			if (!mv.is_object() || mv.size() != 0)
+				throw Error(rpc::INVALID_PARAMS, what + ".music: must be an empty object");
+			if (music_strips++)
+				throw Error(rpc::INVALID_PARAMS, what + ": only one music strip per project");
+			x.music = true;
+			x.obs_type = "ffmpeg_source";
+			x.settings = audio_tools::playback_settings(std::string(), true);
+		} else if (ha || hp) {
 			// AU1: one app's sound or an audio file / folder playlist: a separate global source, like a device's
 			if (ha) {
 				x.app = audio_tools::check_exe(*a.find("app"), what);

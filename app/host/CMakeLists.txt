@@ -110,6 +110,7 @@ add_executable(ujwalam-host
   src/crash.cpp
   src/audio_health.cpp
   src/audio_tools.cpp
+  src/scene_music.cpp
   src/gfx_watch.cpp
   src/ujwalam-host.rc
   src/ujwalam-host.manifest)

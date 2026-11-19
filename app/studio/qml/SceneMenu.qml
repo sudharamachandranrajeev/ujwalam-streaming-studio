@@ -23,6 +23,9 @@ UMenu {
     UMenuItem { objectName: "sceneMenu:addscene"; text: "Add scene…"; enabled: !menu.store.live; tip: menu.lockTip; onTriggered: menu.store.addScene() }
     UMenuItem { objectName: "sceneMenu:add"; visible: !menu.blank; height: visible ? implicitHeight : 0; text: "Add layer…"
                 enabled: menu.editable; tip: menu.lockTip; onTriggered: menu.store.addLayer(menu.sceneId) }
+    // MU2: the scene's music (mood, level, on). Works while live (it changes what the stream hears, never the picture).
+    UMenuItem { objectName: "sceneMenu:music"; visible: !menu.blank; height: visible ? implicitHeight : 0; text: "Music…"
+                enabled: menu.has; onTriggered: menu.store.openSceneMusic(menu.sceneId) }
     MenuSeparator { visible: !menu.blank; height: visible ? implicitHeight : 0 }
     UMenuItem { objectName: "sceneMenu:rename"; visible: !menu.blank; height: visible ? implicitHeight : 0; text: "Rename…"; keys: "F2"
                 enabled: menu.editable; tip: menu.lockTip; onTriggered: menu.store.edit.renameSceneWanted(menu.sceneId) }

@@ -92,6 +92,7 @@ import { createFlags } from '../flags/index.mjs';
 import { loadDevicePresets, matchRoles, overrideProblems } from '../project/device-roles.mjs';
 import { hudCoverage, loadHudZones } from '../project/hud-zones.mjs';
 import { loadProject } from '../project/store.mjs';
+import { libraryDirOf } from '../project/scene-music.mjs';
 import { APP_DATA_DIR, alphaBases, alphaFile, buildAlphaProject, prepareAlphaProject, readProfile, stampOf, upgradeAlphaFile, upgradePresets } from './alpha.mjs';
 import { placeholderRoles, rebindPlaceholders } from '../project/rebind-roles.mjs';
 import { upgradeScenes } from '../project/scene-upgrades.mjs';
@@ -735,7 +736,7 @@ export async function alphaProject({ client, dataDir, args, hostCfg, embedded = 
     for (const u of report.unavailableRoles) console.log(`[studio] role ${u.role}: not bound: ${u.reason}`);
     if (args['allow-devices'] !== true) console.log('[studio] devices off: game capture and facecam are placeholders (run with --allow-devices --rebuild-alpha after "devices ready")');
   }
-  const bases = alphaBases({ profile, overlayRoot: hostCfg.overlayRoot, appDataDir: APP_DATA_DIR });
+  const bases = alphaBases({ profile, overlayRoot: hostCfg.overlayRoot, appDataDir: APP_DATA_DIR, musicDir: libraryDirOf(dataDir) });
   const loaded = await loadFileIntoHost(client, r.file, { bases, skipUnavailable: true });
   console.log(`[studio] alpha project loaded into the host: ${JSON.stringify(loaded.built ?? {})}; not built: ${loaded.unavailable?.length ?? 0}`);
   for (const u of loaded.unavailable ?? []) console.log(`[studio]   not built: ${u.layer ?? u.audio}: ${u.code}: ${u.reason}`);

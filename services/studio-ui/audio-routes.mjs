@@ -98,7 +98,7 @@ export function createAudioRoutes(opts) {
     opts.projectSync.reload(); // pending mixer edits are written first; the cached document is re-read afterwards
     try { return { file, doc: loadProject(file).project }; } catch { return { error: 'project-unreadable' }; }
   }
-  const kindOf = (a) => (a.device ? 'device' : a.app ? 'app' : a.playback ? 'playback' : 'layer');
+  const kindOf = (a) => (a.device ? 'device' : a.app ? 'app' : a.playback ? 'playback' : a.music ? 'music' : 'layer');
   const refuse = (res, code, status = 409, detail) => json(res, status, { error: code, text: AUDIO_ERROR_TEXT[code] ?? code, ...(detail ? { detail } : {}) });
 
   async function listApps() {

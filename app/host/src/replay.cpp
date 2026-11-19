@@ -10,6 +10,7 @@
 //
 // Locking: attach/detach run with op_m_ held (graph changes). replay_save never takes op_m_: it holds a strong
 // libobs reference to the output while it waits, so a detach meanwhile only ends the wait ("replay stopped").
+#include "scene_music.h"
 #include "log.h"
 #include "obs_runtime.h"
 #include "outputs.h"
@@ -262,6 +263,7 @@ void Outputs::replay_attach_locked()
 					std::lock_guard<std::mutex> l(r->m);
 					r->attached = true;
 				}
+				scene_music::Hold gate; // MU2: no Listen while the replay buffer starts (active afterwards)
 				if (obs_output_start(r->out)) {
 					r->started_ms = mono_ms();
 				} else {

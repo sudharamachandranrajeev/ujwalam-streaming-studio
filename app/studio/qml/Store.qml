@@ -65,6 +65,7 @@ QtObject {
     signal addSceneReady(var canvases)
     signal addAudioReady(var choices)  // the mixer's Add audio: what can be added now (audio-routes.mjs)
     signal audioToolsReady(var info, string audio, string name) // AU2: a strip's Tools window (ranges, presets, saved tools)
+    signal sceneMusicReady(var info, string scene, string mood) // MU2: a scene's Music window (moods, its music, what plays)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
     signal goLiveWanted(var options)   // Go live with a YouTube output on and signed in: the chooser opens first (D389)
     signal connectionsWanted(string output) // open Settings > Connections with only this output (the chooser's "Add the key")
@@ -488,6 +489,34 @@ QtObject {
             // AU3: ducking that waits for its sound says why (the host's plain reason)
             const duck = b.duck && b.duck.on && !b.duck.active ? b.duck.reason : "";
             if (then) then(true, [duck, b.saved ? "" : "Live only: not saved to the project file."].filter(Boolean).join(" "));
+        });
+    }
+    // MU2 scene music (music-routes.mjs): a scene's music on / mood / level, applied at once (also on air) and saved.
+    function openSceneMusic(sceneId) {
+        Api.get("ui/api/music", (ok, b, err) => {
+            if (!ok) return say("Music: " + err);
+            const sc = (b.scenes || []).find(s => s.id === sceneId);
+            const n = sc ? sc.name : "";
+            // the default mood for a scene that never had music, by its name (the user's choices, 2026-11-18)
+            const ids = (b.moods || []).map(m => m.id);
+            const rules = [[/start|soon|intro/i, "starting-soon"], [/brb|break|be right back|away/i, "brb"], [/end|outro|bye|thanks/i, "ending"],
+                           [/match|game|play|live/i, "in-match"], [/lobby|chat|talk/i, "lobby"]];
+            let mood = ids.indexOf("lobby") >= 0 ? "lobby" : (ids[0] || "lobby");
+            for (const r of rules) if (r[0].test(n) && ids.indexOf(r[1]) >= 0) { mood = r[1]; break }
+            sceneMusicReady(b, sceneId, mood);
+        });
+    }
+    function setSceneMusic(scene, music, then) {
+        Api.post("ui/api/music", { op: "scene", scene: scene, music: music }, (ok, b, err) => {
+            if (!ok) { then(false, "Not changed: " + ((b && b.text) || err), b); return; }
+            if (b.stripAdded) loadMixer();
+            then(true, b.stripAdded ? "A Music strip was added to the mixer." : "", b);
+        });
+    }
+    function previewSceneMusic(mood, then) {
+        Api.post("ui/api/music", { op: "preview", mood: mood }, (ok, b, err) => {
+            if (!ok) { then(false, (b && b.text) || err); return; }
+            then(true, "");
         });
     }
     function removeAudio(audio, name) {
