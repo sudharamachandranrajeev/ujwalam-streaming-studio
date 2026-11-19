@@ -67,7 +67,9 @@ test('studio window: shown and activated normally, no second-display move (D316 
   assert.match(m, /if \(probe\)\s*\n\s*qputenv\("QT_QPA_PLATFORM", "offscreen"\);/);
   assert.match(m, /if \(headless && !hidden && !probe\) \{[^}]*return 64;/);
   const q = src('app/studio/src/qml_studio.cpp');
-  const begin = body(q, 'bool QmlStudio::begin(Mode mode)');
+  // begin() = load() + reveal(); the window is shown in reveal() (D402: the early studio loads first, shows later)
+  assert.doesNotMatch(body(q, 'bool QmlStudio::load(Mode mode)'), /screens\(\)|show\(\)/, 'load() never shows the window');
+  const begin = body(q, 'void QmlStudio::reveal()');
   assert.doesNotMatch(begin, /screens\(\)/);
   assert.match(begin, /case Mode::Normal:[^\n]*\n\s*win_->show\(\);\s*\n\s*win_->raise\(\);\s*\n\s*win_->requestActivate\(\);/);
   const hidden = begin.slice(begin.indexOf('case Mode::Hidden:'), begin.indexOf('case Mode::Probe:'));

@@ -29,9 +29,9 @@ test('the host and studio lines parse with the same reader', () => {
 });
 
 test('the marks sit in start order in the code', () => {
-  assert.deepEqual(order(src('services/studio-ui/launch.mjs'), /clock\.mark\('([a-z-]+)'\)/g), ['main', 'core', 'plan', 'host-ready', 'project', 'status', 'workers', 'ui', 'shell']);
+  assert.deepEqual(order(src('services/studio-ui/launch.mjs'), /clock\.mark\('([a-z-]+)'\)/g), ['main', 'studio-early', 'core', 'plan', 'host-ready', 'project', 'status', 'workers', 'ui', 'shell']);
   assert.deepEqual(order(src('app/host/src/obs_runtime.cpp'), /startupclock::mark\("([a-z-]+)"\)/g), ['obs-startup', 'video', 'audio', 'modules']);
   assert.deepEqual(order(src('app/host/src/main.cpp'), /startupclock::(?:mark|finish)\("([a-z-]+)"\)/g), ['main', 'obs', 'overlay', 'ready']);
-  assert.deepEqual(order(src('app/studio/src/main.cpp'), /startupclock::mark\("([a-z-]+)"\)/g), ['login', 'settings', 'app']); // loginThen sits above main()
+  assert.deepEqual(order(src('app/studio/src/main.cpp'), /startupclock::mark\("([a-z-]+)"\)/g), ['login', 'settings', 'ui', 'app']); // loginThen and the early studio's port reader sit above main()
   assert.deepEqual(order(src('app/studio/src/qml_studio.cpp'), /startupclock::(?:mark|finishOnce)\("([a-z-]+)"\)/g), ['engine', 'qml', 'shown', 'frame']);
 });
