@@ -215,7 +215,7 @@ test('studio-ui: a rearm sent during a swap waits for it and arms the process th
   assert.equal((await get(fport, `/login?k=${launchKey}`)).status, 302);
   const rearmed = randomBytes(32).toString('hex');
   const swapping = slot.swap(REPO);
-  await sleep(200);
+  // checked at once: a fixed sleep here raced a fast swap (it can finish inside 200 ms; flaked in CI)
   assert.equal(slot.busy(), true, 'the rearm lands during the swap');
   assert.equal(slot.control(`rearm ${rearmed}`), true);
   assert.equal((await swapping).result, 'swapped');
@@ -232,11 +232,12 @@ test('worker (stop-start): 20 swaps; a crashing build restores the old version; 
   const good = path.join(d, 'good.mjs');
   const bad = path.join(d, 'bad.mjs');
   writeFileSync(good, "process.stdin.on('data', () => {}); process.stdin.on('end', () => process.exit(0)); setInterval(() => {}, 1000);\n");
-  writeFileSync(bad, "setTimeout(() => process.exit(4), 50);\n");
+  // exits at once: the health window counts from spawn, and node's own start under CI load ate a 300 ms window (flake)
+  writeFileSync(bad, 'process.exit(4);\n');
   const spawned = [];
   const unexpected = [];
   const slot = createWorkerSlot({
-    name: 'live-clipper', healthMs: 300,
+    name: 'live-clipper', healthMs: 1000,
     spawn: (spec) => { const c = spawn(process.execPath, [spec.script], { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true }); spawned.push(spec.script); t.after(() => killChildTree(c)); return c; },
     onUnexpectedExit: (c, code) => unexpected.push(code),
   });
