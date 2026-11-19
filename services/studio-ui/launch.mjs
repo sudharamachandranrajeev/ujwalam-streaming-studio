@@ -120,6 +120,7 @@ import { INSTAGRAM_FLAG, loadAddon as instagramAddon } from '../outputs/instagra
 import { botUrl, integrationsInEffect } from './integrations.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG } from './settings-routes.mjs';
 import { GUARD_ABORT_EXIT, LIVE_TEST_BUDGET, loadBudget, MAX_TEST_MINUTES, parseMinutes, parseSinkMinutes, runGuard } from './live-guard.mjs';
+import { createStartupClock } from './startup-clock.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // LU3 service swap (D337): off by default; read once at start (the fronts must exist before the services start).
@@ -1204,6 +1205,8 @@ function superviseHost(o) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  const clock = createStartupClock(); // one "[studio] startup:" line once the studio window is started (2026-11-19)
+  clock.mark('main');
   const args = parseArgs(argv);
   const alpha = args.alpha === true;
   const shellMode = shellChoice(args);
@@ -1349,6 +1352,7 @@ export async function main(argv = process.argv.slice(2)) {
     return false;
   };
   if (!(await coreStarted())) return 1;
+  clock.mark('core');
 
   // 2. host (optional). Config (exe, OBS runtime, data) comes from app/host/lib/config.mjs (env or host.local.json).
   // Devices stay off unless --allow-devices is given here; this launcher never opens a device by itself.
@@ -1485,10 +1489,12 @@ export async function main(argv = process.argv.slice(2)) {
       }
     };
     checkCandidate();
+    clock.mark('plan');
     spawnHost();
     hostDiscoveryFile = hostDiscovery;
     // The UI server and the browser start only after the host has written its discovery file (up to 60 s), so the page never meets the fake backend first.
     let disc = await waitForDiscovery(hostDiscovery, hostChild, startupHost ? updateReadyMs() : undefined);
+    clock.mark('host-ready');
     let projectLoaded = false;
     // LU5 startup trial (Codex review of D343): a host release from host-update.json must get ready and load the
     // project; otherwise it is rejected (never tried again) and the next candidate, finally the installed host, starts.
@@ -1527,7 +1533,9 @@ export async function main(argv = process.argv.slice(2)) {
           alphaClient = new HostClient({ port: disc.port, token: hostToken });
           await alphaProject({ client: alphaClient, dataDir, args, hostCfg, embedded: !!shellPaths });
         }
+        clock.mark('project');
         await alphaStatus(alphaClient);
+        clock.mark('status');
         if (lt.bandwidthTest) {
           const bp = bandwidthTestProblems(await alphaClient.call('outputs.status'));
           if (bp.length) {
@@ -1767,7 +1775,8 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   // 3. UI server
-  const uiArgs = [path.join(REPO, 'services', 'studio-ui', 'cli.mjs'), 'serve', '--data-dir', dataDir, '--feedback-dir', feedbackDir];
+  clock.mark('workers');
+  const uiArgs =[path.join(REPO, 'services', 'studio-ui', 'cli.mjs'), 'serve', '--data-dir', dataDir, '--feedback-dir', feedbackDir];
   uiArgs.push('--profile', typeof args.profile === 'string' ? path.resolve(args.profile) : path.join(REPO, 'data', 'profile.local.json'), '--release', path.join(REPO, 'release.json'));
   if (typeof args['ui-port'] === 'string') uiArgs.push('--port', args['ui-port']);
   if (livePlan) uiArgs.push('--live-plan', livePlan);
@@ -1812,6 +1821,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const uiChild = () => uiSlot?.child() ?? ui;
   if (!uiPort) { console.log('[studio] UI server did not start; stopping'); await stopAll(); return 1; }
+  clock.mark('ui');
 
   console.log(`[studio] UI at http://127.0.0.1:${uiPort}/ (the login key is one-time and not printed). ${process.env.UJWALAM_NO_CONSOLE === '1' ? 'Closing the studio window stops everything (started without a console: ujwalam-start.exe).' : 'Ctrl-C stops everything.'}`);
   // Headless (D191): no browser. One exception for scripted runs (F2 real-host test): UJWALAM_BROWSER naming this
@@ -1920,7 +1930,9 @@ export async function main(argv = process.argv.slice(2)) {
       studioSlot.start(REPO, launchKey);
     } else startShell(shellSpec);
     console.log('[studio] Qt studio shell started');
+    clock.mark('shell');
   } else if (args['no-open'] !== true && (!isHeadless() || headlessLoginScript())) openBrowser(`http://127.0.0.1:${uiPort}/login?k=${launchKey}`);
+  console.log(`[studio] ${clock.line()}`);
   if (alphaClient) {
     // One line that answers "are the overlays fed?": bridge counters 10 s after start (counts only, never text).
     // UJWALAM_ALPHA_STATS_MS shortens the wait for tests.
