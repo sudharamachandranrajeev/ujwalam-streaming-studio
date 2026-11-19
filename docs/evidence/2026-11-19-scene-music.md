@@ -31,8 +31,9 @@ until the user listens (D393).
   first track with "Duck music under my voice" (12 dB, 10 ms, 400 ms) under the first microphone, if the mixer has one
   (the user's click is the trigger, D332). `POST {op:'preview'}` asks the host (`music.preview`), which plays a made bed through a
   private ffmpeg_source in no track, on the monitoring device only. An on-air gate (`scene_music::hold`) covers
-  it: every sink holds the gate from the moment it is wanted until it is not (starting, connecting, live, retry waits;
-  `set_want` in outputs.cpp), and replay buffer and NVENC probe starts hold it while they start. Taking the gate
+  it: every sink holds the gate while it is wanted or may still send (Starting, Live, Stopping; retry waits while
+  wanted). A stop while Starting keeps the hold until the stop signal or the failed start confirms the end
+  (`sync_hold` in outputs.cpp, exactly one take and one release per sink), and replay buffer and NVENC probe starts hold it while they start. Taking the gate
   silences the preview at once (its own level filter to 0, an atomic store) and hands the source to retirement; the
   stop and release run later outside the gate. A preview is opened outside the gate at level 0 and only switched up
   when no hold and no active output exist. So an output start never waits on file or device work. One preview at a time; the UI server stops it on close, the host on
@@ -75,6 +76,7 @@ strip's filters, 10 ms bins.
 | Listen, then record.start | preview stopped by the start; refused (-32009) while recording; plays again after | off air only |
 | Listen racing record.start, 8 rounds | never playing while recording | gate |
 | record.start while a Listen open is delayed 1500 ms (test hook) | started in 60 ms; the slow Listen refused | no file work under the gate |
+| Stream stopped while its RTMP connect is pending (loopback listener that never answers) | Listen refused while connecting and after the stop request; plays once the sink is `stopped` | hold until confirmed |
 | Rolled-back strip add | every scene's music equals the document again | music_from_doc |
 
 Notes:
@@ -90,7 +92,7 @@ Notes:
 
 | File | Result |
 |---|---|
-| `app/host/tests/host-scene-music.test.mjs` (new) | 12 pass, 0 fail |
+| `app/host/tests/host-scene-music.test.mjs` (new) | 13 pass, 0 fail |
 | `tests/scene-music-routes.test.mjs` (new) | 10 pass, 0 fail |
 | `tests/studio-qml-scene-music.test.mjs` (new) | 3 pass, 0 fail |
 | `tests/project-schema.test.mjs` | 148/0 |
@@ -110,7 +112,8 @@ Builds: `node app/host/tools/build.mjs`, `node app/studio/tools/build.mjs` (both
 - The 50 ms gap on a cut and the out-then-in change of bed on real music; a true overlap crossfade would need two
   sources mixed into one strip (not built).
 - The stinger mapping (out and in = its switch point) on a real stinger.
-- Listen on a real monitoring device: the tests run without devices, so nobody has heard it. Whether a private
-  ffmpeg_source in no scene feeds the monitor is also unproven. It plays at the bed's own level, not the scene level.
+- Listen on a real monitoring device: the tests run without devices, so nobody has heard it. It plays at the bed's own
+  level, not the scene level. (Codex round 3 read libobs 32.1.2 obs-source.c: audio filters run before audio is
+  forwarded to monitoring, so the gate's level-0 mute silences the monitor.)
   A desktop-audio capture of the monitoring device is harmless: Listen never plays while an output is active.
 - A real microphone for the duck, and use on a real stream.

@@ -101,15 +101,23 @@ struct Outputs::Sink {
 	mutable double kbps = 0;
 };
 
-// MU2: a wanted sink holds the Listen gate (starting, connecting, live, retry waits), so no preview plays on air.
+// MU2: a sink holds the Listen gate while it is wanted or may still send (Starting: rtmp connects on its own thread and
+// obs_output_active() is false until then; Live; Stopping). It lets go only when it is wanted no more and its state
+// says it has ended (Stopped, Failed, Idle, a cancelled retry), so a stop while Starting keeps the hold until the stop
+// signal or the failed start. held makes take and release happen exactly once each.
+static void sync_hold(Outputs::Sink &s)
+{
+	const bool need = s.want || s.state == SinkState::Starting || s.state == SinkState::Live || s.state == SinkState::Stopping;
+	if (need && !s.held)
+		scene_music::hold(true);
+	else if (!need && s.held)
+		scene_music::hold(false);
+	s.held = need;
+}
 static void set_want(Outputs::Sink &s, bool w)
 {
-	if (w && !s.held)
-		scene_music::hold(true);
-	else if (!w && s.held)
-		scene_music::hold(false);
-	s.held = w;
 	s.want = w;
+	sync_hold(s);
 }
 
 namespace {
@@ -453,6 +461,7 @@ void Outputs::on_start(Sink &s)
 	std::lock_guard<std::mutex> l(m_);
 	int64_t now = now_ms();
 	s.state = SinkState::Live;
+	sync_hold(s);
 	s.live_since_ms = now;
 	s.last_change_ms = now;
 	s.sample_bytes = 0;
@@ -499,11 +508,13 @@ void Outputs::on_stop(Sink &s, int code, const char *err)
 	s.stop_pending = false;
 	if (!s.want) {
 		s.state = SinkState::Stopped;
+		sync_hold(s);
 		hlog::info("sink %s stopped (code %d)", s.id.c_str(), code);
 	} else if (s.kind == "record") {
 		// A recording that stops on its own is not retried: a new file would hide the gap.
 		set_want(s, false);
 		s.state = code == OBS_OUTPUT_SUCCESS ? SinkState::Stopped : SinkState::Failed;
+		sync_hold(s);
 		hlog::warn("record sink %s stopped unexpectedly (code %d)", s.id.c_str(), code);
 	} else {
 		hlog::warn("sink %s dropped (code %d, live %lld ms)", s.id.c_str(), code, (long long)live_for);
@@ -553,6 +564,7 @@ void Outputs::schedule_retry_locked(Sink &s, int64_t now)
 	s.fails++;
 	if (policy_.retry_max > 0 && s.fails > policy_.retry_max) {
 		s.state = SinkState::Failed;
+		sync_hold(s);
 		set_want(s, false);
 		hlog::warn("sink %s failed after %d consecutive attempts", s.id.c_str(), s.fails);
 		return;
@@ -562,6 +574,7 @@ void Outputs::schedule_retry_locked(Sink &s, int64_t now)
 	double jitter = 0.5 + 0.5 * std::uniform_real_distribution<double>(0.0, 1.0)(rng);
 	int64_t delay = std::max<int64_t>(100, (int64_t)(base * jitter));
 	s.state = SinkState::Retrying;
+	sync_hold(s);
 	s.next_retry_ms = now + delay;
 	s.last_change_ms = now;
 	hlog::info("sink %s retry %d in %lld ms", s.id.c_str(), s.fails, (long long)delay);
@@ -638,6 +651,7 @@ void Outputs::supervise()
 					continue;
 				s->stop_pending = false;
 				s->state = SinkState::Stopping;
+				sync_hold(*s);
 			}
 			obs_output_stop(s->out);
 		}
@@ -679,7 +693,8 @@ void Outputs::release_graph()
 		audio_kbps_ = 0;
 	}
 	for (auto &s : old) {
-		set_want(*s, false); // MU2: a released sink lets go of the Listen gate
+		s->state = SinkState::Stopped; // MU2: a released sink lets go of the Listen gate (force-stopped below)
+		set_want(*s, false);
 		if (s->out) {
 			signal_handler_t *sh = obs_output_get_signal_handler(s->out);
 			signal_handler_disconnect(sh, "start", on_sink_start, s.get());
@@ -1319,6 +1334,7 @@ void Outputs::start_sink(Sink &s)
 		if (!s.want)
 			return;
 		s.state = SinkState::Starting;
+		sync_hold(s);
 		s.attempts++;
 		s.last_change_ms = now_ms();
 		if (s.kind == "record")
@@ -1354,6 +1370,7 @@ void Outputs::start_sink(Sink &s)
 		if (!missing.empty()) {
 			set_want(s, false);
 			s.state = SinkState::Failed;
+			sync_hold(s);
 			s.last_error = missing;
 			s.last_change_ms = now_ms();
 			hlog::warn("sink %s not started: %s", s.id.c_str(), missing.c_str());
@@ -1372,6 +1389,7 @@ void Outputs::start_sink(Sink &s)
 	if (s.kind == "record") {
 		set_want(s, false);
 		s.state = SinkState::Failed;
+		sync_hold(s);
 		hlog::warn("record sink %s did not start", s.id.c_str());
 	} else {
 		hlog::warn("sink %s did not start", s.id.c_str());
@@ -1422,9 +1440,11 @@ json::Value Outputs::stop(const std::vector<std::string> &ids, const std::string
 			set_want(*s, false);
 			if (s->state == SinkState::Live) {
 				s->state = SinkState::Stopping;
+				sync_hold(*s);
 				call_stop = true;
 			} else if (s->state == SinkState::Retrying || s->state == SinkState::Idle) {
 				s->state = SinkState::Stopped;
+				sync_hold(*s);
 			}
 			// Starting: still connecting. It ends in a stop signal (connect failed) or a start signal, after which
 			// the supervisor stops it (stop_pending).

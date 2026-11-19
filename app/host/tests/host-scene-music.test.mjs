@@ -10,6 +10,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
 import { launchHost, stopHost } from '../lib/launch.mjs';
 import { loadIntoHost } from '../lib/project.mjs';
 import { REPO_ROOT } from '../lib/config.mjs';
@@ -331,6 +332,46 @@ test('Listen racing a recording start never plays on air; a slow Listen never de
   await c.call('record.stop', {});
   await idleOut();
   await c.call('outputs.clear', {});
+});
+
+test('a stream stopped while it connects keeps Listen refused until its stop is confirmed', async () => {
+  // A loopback "ingest" that accepts and never answers the RTMP handshake: the sink stays Starting.
+  const held = [];
+  const srv = net.createServer((sock) => { held.push(sock); sock.on('error', () => {}); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const PORT = srv.address().port;
+  try {
+    const RUNG = { id: 'r', canvas: 'H', codec: 'h264', encoder: 'nvenc', rc: 'cbr', w: 640, h: 360, fps: 30, bitrate: 1500, gopSec: 2 };
+    await c.call('outputs.configure', { rungs: [RUNG], audio: { bitrate: 128, sampleRate: 48000 },
+      sinks: [{ id: 'st', rung: 'r', platform: 'twitch', proto: 'rtmp', priority: 1, target: { transport: 'rtmp', port: PORT, app: 'live', stream: 'x' } }] });
+    await c.call('stream.start', {});
+    let st;
+    for (let i = 0; i < 30 && !held.length; i++) await sleep(100);
+    st = await c.call('outputs.status');
+    assert.equal(st.sinks[0].state, 'starting', 'connecting');
+    await assert.rejects(c.call('music.preview', { mood: 'lobby' }), (e) => e.code === -32009, 'refused while connecting');
+    await c.call('stream.stop', {});
+    st = await c.call('outputs.status');
+    assert.equal(st.sinks[0].state, 'starting', 'stop asked; the connect is still pending');
+    await assert.rejects(c.call('music.preview', { mood: 'lobby' }), (e) => e.code === -32009, 'still refused: the stop is not confirmed');
+    held.forEach((x) => x.destroy()); // the connect fails: the stop is confirmed
+    let ended = false;
+    for (let i = 0; i < 100 && !ended; i++) {
+      st = await c.call('outputs.status');
+      ended = ['stopped', 'failed', 'idle'].includes(st.sinks[0].state) || (st.sinks[0].state === 'retrying' && !st.sinks[0].active);
+      if (!ended) await sleep(100);
+    }
+    assert.ok(ended, `ended: ${st.sinks[0].state}`);
+    const r = await c.call('music.preview', { mood: 'lobby' });
+    assert.equal(r.previewing, 'lobby', 'plays once the stop is confirmed');
+    await c.call('music.preview', { mood: null });
+    RESULTS.stopWhileStarting = { endState: st.sinks[0].state };
+  } finally {
+    held.forEach((x) => x.destroy());
+    srv.close();
+    await c.call('stream.stop', {}).catch(() => {});
+    await c.call('outputs.clear', {}).catch(() => {});
+  }
 });
 
 test('a project with two music strips or a non-empty music value is refused', async () => {
