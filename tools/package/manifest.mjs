@@ -89,6 +89,7 @@ export const REPO_FILES = Object.freeze([
   // watchdog (D374), the audience counters (F7) and the reel length, hook and transition limits (Settings > Clips)
   'data/live/host-watch.json', 'data/counters.json', 'data/clip/reel-length.json', 'data/clip/reel-hook.json', 'data/clip/transitions.json',
   'data/scene-builder/build-rules.json', // the scene builder's placement rules (services/scene-builder/build.mjs)
+  'data/audio-tools/presets.json', // mixer strip tool presets (D399; services/studio-ui/audio-routes.mjs)
 ]);
 // data/luts: the app's own .cube LUTs, base "luts" of the alpha load (D381; services/studio-ui/alpha.mjs LUTS_DIR)
 export const REPO_GLOB_DIRS = Object.freeze([['data/platforms', /\.json$/], ['data/outputs/presets', /\.json$/], ['data/luts', /\.cube$/], ['data/transitions', /\.(json|webm)$/]]);
