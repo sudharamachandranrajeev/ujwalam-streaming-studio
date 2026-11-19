@@ -3,6 +3,7 @@
 #include "api_client.h"
 #include "qml_bridge.h"
 #include "qml_tasks.h"
+#include "taskbar_id.h"
 #include "theme.h"
 
 #include <QCoreApplication>
@@ -29,6 +30,10 @@ QmlStudio::QmlStudio(ApiClient *api, QObject *parent) : QObject(parent), api_(ap
 
 QmlStudio::~QmlStudio()
 {
+#ifdef Q_OS_WIN
+	if (taskbarProps_ && win_) // Windows asks for the window's values to be removed before it is destroyed
+		taskbarid::windowProps(reinterpret_cast<HWND>(win_->winId()), false, {}, {}, {});
+#endif
 	engine_.reset(); // the window and its preview surfaces go first; then the bridge objects they call
 }
 
@@ -88,6 +93,15 @@ bool QmlStudio::begin(Mode mode)
 		break;
 	}
 	}
+#ifdef Q_OS_WIN
+	if (mode != Mode::Probe) { // a real native window: same taskbar button as the pinned shortcut; pinning it pins the launcher
+		std::wstring exe;
+		const std::wstring cmd = taskbarid::relaunchCommand(&exe);
+		taskbarProps_ = taskbarid::windowProps(reinterpret_cast<HWND>(win_->winId()), true, cmd, L"Ujwalam", exe.empty() ? std::wstring() : exe + L",0");
+		std::printf("studio taskbar: id %ls, window %s, relaunch %s\n", taskbarid::kId, taskbarProps_ ? "set" : "NOT set", cmd.empty() ? "none (not started by ujwalam-start.exe)" : "launcher");
+		std::fflush(stdout);
+	}
+#endif
 	QMetaObject::invokeMethod(win_, "start");
 	return true;
 }

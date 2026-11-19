@@ -82,6 +82,7 @@ for (const c of CASES) {
       }
       const log = readdirSync(path.join(dataDir, 'logs')).find((n) => n.startsWith('host-'));
       assert.match(readFileSync(path.join(dataDir, 'logs', log), 'utf8'), /crash reporter: on \(text report to logs\/crash-\*\.txt, no dump; symbols on; 0 earlier reports\)/);
+      assert.match(readFileSync(path.join(dataDir, 'logs', log), 'utf8'), /taskbar id: Ujwalam\.Studio\r?\n/, 'one taskbar button with the studio (2026-11-19)');
     } finally {
       rmSync(dataDir, { recursive: true, force: true, maxRetries: 5 });
     }

@@ -38,6 +38,7 @@ add_executable(ujwalam-studio WIN32
 	../host/src/crash.h
 	src/taskbar.cpp
 	src/taskbar.h
+	src/taskbar_id.h
 	src/tray.cpp
 	src/tray.h
 	src/theme.cpp
@@ -134,7 +135,7 @@ if(WIN32)
 	target_sources(ujwalam-studio PRIVATE res/ujwalam.rc)
 endif()
 if(WIN32)
-	target_link_libraries(ujwalam-studio PRIVATE user32 dbghelp)
+	target_link_libraries(ujwalam-studio PRIVATE user32 dbghelp shell32 ole32)
 endif()
 if(MSVC)
 	target_compile_options(ujwalam-studio PRIVATE /W4 /permissive- /utf-8)

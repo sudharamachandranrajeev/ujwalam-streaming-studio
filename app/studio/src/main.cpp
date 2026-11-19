@@ -23,6 +23,7 @@
 #include "api_client.h"
 #include "qml_studio.h"
 #include "studio_log.h"
+#include "taskbar_id.h"
 #include "theme.h"
 
 #include <QApplication>
@@ -188,6 +189,9 @@ static int runQml(QApplication &app, ApiClient &api, const QString &key, bool he
 				tick->stop();
 				QJsonObject o = studio.probe();
 				o.insert(QStringLiteral("actions"), run->actions);
+#ifdef Q_OS_WIN
+				o.insert(QStringLiteral("appUserModelId"), QString::fromStdWString(taskbarid::current())); // taskbar_id.h
+#endif
 				const QString shot = qEnvironmentVariable("UJWALAM_STUDIO_PROBE_SHOT");
 				if (shot.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive))
 					o.insert(QStringLiteral("shot"), studio.shot(shot));
@@ -252,6 +256,11 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "studio: UJWALAM_HEADLESS=1 needs UJWALAM_STUDIO_PROBE_MS or UJWALAM_STUDIO_HIDDEN=1\n");
 		return 64;
 	}
+#ifdef Q_OS_WIN
+	// One taskbar button with the pinned shortcut (taskbar_id.h): before the first window.
+	if (!taskbarid::applyProcess())
+		std::fprintf(stderr, "studio: the taskbar id could not be set\n");
+#endif
 	// The probe "shows" its window so bindings and layouts run: always on the offscreen platform, never on a screen.
 	if (probe)
 		qputenv("QT_QPA_PLATFORM", "offscreen");

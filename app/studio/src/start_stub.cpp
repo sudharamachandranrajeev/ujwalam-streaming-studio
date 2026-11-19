@@ -10,6 +10,8 @@
 //     <data root>\core\logs\launcher-<UTC time>-p<pid>.log, the data root being UJWALAM_DATA_ROOT or
 //     %LOCALAPPDATA%\Ujwalam\data (as run-installed.mjs); stdin is NUL;
 //   - sets UJWALAM_NO_CONSOLE=1 and UJWALAM_LAUNCH_LOG=<that file> for the launcher;
+//   - sets UJWALAM_RELAUNCH_EXE=<this exe> and UJWALAM_RELAUNCH_ARGS=<its arguments> for the studio window's taskbar
+//     relaunch command (app/studio/src/taskbar_id.h);
 //   - waits for it and exits with its exit code.
 // It shows nothing itself: no window, no message box (a box would take focus). A problem (no Node.js on PATH, a
 // missing version folder) is written to the log file and ends with the same exit codes as Ujwalam.cmd (9, 3).
@@ -171,6 +173,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
 	SetEnvironmentVariableW(L"UJWALAM_NO_CONSOLE", L"1");
 	SetEnvironmentVariableW(L"UJWALAM_LAUNCH_LOG", logFile.empty() ? nullptr : logFile.c_str());
+	// The studio window's relaunch command (taskbar_id.h): pinning the running window pins this exe with these
+	// arguments, not ujwalam-studio.exe. This exe shows no window, so it sets no taskbar id of its own.
+	SetEnvironmentVariableW(L"UJWALAM_RELAUNCH_EXE", std::wstring(self, sn).c_str());
+	SetEnvironmentVariableW(L"UJWALAM_RELAUNCH_ARGS", rest.empty() ? nullptr : rest.c_str());
 	SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
 	HANDLE nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
 	STARTUPINFOW si{};

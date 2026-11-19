@@ -285,7 +285,7 @@ function ps(script, root, ...args) {
     { encoding: 'utf8', windowsHide: true, timeout: 120_000, env: childEnv() });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
-const shortcutDirs = (root) => ['-StartMenuDir', path.join(root, 'start'), '-DesktopDir', path.join(root, 'desk')];
+const shortcutDirs = (root) => ['-StartMenuDir', path.join(root, 'start'), '-DesktopDir', path.join(root, 'desk'), '-TaskbarPinDir', path.join(root, 'pins')];
 
 test('Install-Ujwalam.ps1: install A, write settings, update to B (backup first, nothing lost), roll back (A\'s settings back, B\'s kept), repair, uninstall keeping data', {
   skip: process.platform !== 'win32' && 'Windows only', timeout: 300_000,
@@ -470,7 +470,7 @@ test('Ujwalam-Setup.exe --quiet: install from the zip next to it, update, refuse
   try {
     mkdirSync(dist);
     const za = packageZip(dist, A);
-    let r = setup('--install', '--package', za, '--install-root', ir, '--start-menu', path.join(t, 'start'), '--desktop', path.join(t, 'desk'));
+    let r = setup('--install', '--package', za, '--install-root', ir, '--start-menu', path.join(t, 'start'), '--desktop', path.join(t, 'desk'), '--taskbar-pin-dir', path.join(t, 'pins'));
     if (r.code === 6) return; // prerequisites (Node, VC++ runtime) missing on this machine
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /package checksum ok/);
@@ -516,7 +516,7 @@ test('Ujwalam-Setup.exe --quiet: install from the zip next to it, update, refuse
     assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), A);
     assert.deepEqual(snap(), before, 'A\'s settings back after the rollback'); cfgOk();
 
-    r = setup('--uninstall', '--install-root', ir, '--start-menu', path.join(t, 'start'), '--desktop', path.join(t, 'desk'));
+    r = setup('--uninstall', '--install-root', ir, '--start-menu', path.join(t, 'start'), '--desktop', path.join(t, 'desk'), '--taskbar-pin-dir', path.join(t, 'pins'));
     assert.equal(r.code, 0, r.out);
     assert.ok(!existsSync(path.join(ir, 'current.txt')) && !existsSync(path.join(ir, A)));
     assert.ok(!existsSync(path.join(t, 'start', 'Ujwalam (alpha).lnk')));
