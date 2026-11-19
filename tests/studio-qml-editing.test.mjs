@@ -573,9 +573,9 @@ describe('QML studio editing (headless probe)', { skip }, () => {
 
   test('scene menu: items for a scene, Delete greyed without the flag and for the active scene; with the flag it removes another scene', async () => {
     const off = await probe(['select-scene:scene-2', 'scene-menu:show']);
-    assert.deepEqual(off.s.scenePanel.menu.items.map((i) => [i.text, i.enabled]), [['Add scene…', true], ['Add layer…', true], ['Rename…', true], ['Duplicate scene', true], ['Delete…', false]]);
-    assert.equal(off.s.scenePanel.menu.items[4].tip, 'Turn on scene editing in Settings > Editing');
-    assert.equal(off.s.scenePanel.menu.items[2].keys, 'F2');
+    assert.deepEqual(off.s.scenePanel.menu.items.map((i) => [i.text, i.enabled]), [['Add scene…', true], ['Add layer…', true], ['Music…', true], ['Rename…', true], ['Duplicate scene', true], ['Delete…', false]]);
+    assert.equal(off.s.scenePanel.menu.items.find((i) => i.id === 'delete').tip, 'Turn on scene editing in Settings > Editing');
+    assert.equal(off.s.scenePanel.menu.items.find((i) => i.id === 'rename').keys, 'F2');
     const on = await probe(['select-scene:scene-1', 'scene-menu:delete', 'select-scene:scene-2', 'scene-menu:delete'], { flags: ['scene-edit'] });
     assert.deepEqual(on.done, [true, false, true, true], 'the active scene cannot be deleted');
     assert.equal(on.s.scenes.length, 2);
@@ -588,7 +588,7 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     const off = await probe(['select-scene:scene-1', 'scene-menu:show']);
     assert.ok(!off.s.scenePanel.menu.items.some((i) => i.id === 'realism'));
     const on = await probe(['select-scene:scene-1', 'scene-menu:show'], { flags: ['realism-look'] });
-    assert.deepEqual(on.s.scenePanel.menu.items.map((i) => i.id), ['addscene', 'add', 'rename', 'duplicate', 'realism', 'delete']);
+    assert.deepEqual(on.s.scenePanel.menu.items.map((i) => i.id), ['addscene', 'add', 'music', 'rename', 'duplicate', 'realism', 'delete']);
     // a scene with no game capture: the click reaches the route and the refusal is said in plain words
     const none = await probe(['select-scene:scene-1', 'scene-menu:realism'], { flags: ['realism-look'] });
     assert.deepEqual(none.done, [true, true]);
