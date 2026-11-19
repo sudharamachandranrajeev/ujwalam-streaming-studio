@@ -38,7 +38,7 @@ export const STUDIO_QT = Object.freeze([
   ['studio/Qt6Core.dll', 'bin/Qt6Core.dll'], ['studio/Qt6Gui.dll', 'bin/Qt6Gui.dll'],
   ['studio/Qt6Widgets.dll', 'bin/Qt6Widgets.dll'], ['studio/Qt6Network.dll', 'bin/Qt6Network.dll'],
   ['studio/platforms/qwindows.dll', 'plugins/platforms/qwindows.dll'], ['studio/platforms/qoffscreen.dll', 'plugins/platforms/qoffscreen.dll'],
-  // Qt Quick (D360): the exe links it for the QML studio window (flag studio-qml), so both windows need these.
+  // Qt Quick (D360): the studio window is built in QML (the only studio since 2026-11-18), so it needs these.
   ...['Qml', 'QmlModels', 'QmlMeta', 'QmlWorkerScript', 'Quick', 'QuickControls2', 'QuickControls2Basic', 'QuickControls2BasicStyleImpl',
     'QuickControls2Impl', 'QuickTemplates2', 'OpenGL'].map((m) => [`studio/Qt6${m}.dll`, `bin/Qt6${m}.dll`]),
 ]);

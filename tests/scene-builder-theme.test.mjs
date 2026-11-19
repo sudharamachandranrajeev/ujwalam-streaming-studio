@@ -4,14 +4,13 @@
 // picks the component variants, and every generated pack is schema-valid (v2) and passes the T1 contrast check
 // (services/studio-ui/theme-contrast.mjs, the same check as the shipped packs). A read that fails contrast is pushed
 // until it passes and the pushes are reported. The writer never overwrites and never uses a built-in id; the CLI is a
-// dry run by default and sits behind the scene-builder flag. A headless Qt probe shows a generated pack loading with
-// the flag theme-components on (no stylesheet errors) and falling back to the base look with it off.
+// dry run by default and sits behind the scene-builder flag. (The studio side of a generated pack: the custom-theme
+// tests in studio-qml-themes.test.mjs.)
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { after, before, describe, test } from 'node:test';
+import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { deltaE, hexLab, hueGap } from '../services/scene-builder/colour.mjs';
@@ -19,10 +18,6 @@ import { main as cli } from '../services/scene-builder/cli.mjs';
 import { readReference } from '../services/scene-builder/read.mjs';
 import { builtinIds, canonicalDir, slug, themeFromRead, userThemesDir, writeProblems, writeThemePack } from '../services/scene-builder/theme.mjs';
 import { contrast, failures } from '../services/studio-ui/theme-contrast.mjs';
-import { createFakeBots, createFakeHost } from '../services/studio-ui/backends.mjs';
-import { createFlags } from '../services/flags/index.mjs';
-import { createStudioServer } from '../services/studio-ui/server.mjs';
-import { EXE, qtDir } from '../app/studio/tools/build.mjs';
 import { layoutH, layoutV, paletteBlocks, stylePanels, writePng } from './helpers/sb-fixtures.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -261,70 +256,5 @@ describe('SB4 CLI: theme <reference> behind the scene-builder flag, dry run by d
     assert.equal(await cli(['read', 'a.png', '--name', 'x'], q, q, on), 1);
     assert.equal(await cli(['build', 'a.png', '--project', 'p.json', '--themes-dir', 'x'], q, q, on), 1);
     assert.equal(await cli(['theme', 'a.png', '--name'], q, q, on), 1);
-  });
-});
-
-// Headless Qt probe (the pattern of tests/studio-qt-theme-components.test.mjs). Skipped when the shell is not built.
-const QT = qtDir();
-const skipQt = !existsSync(EXE) || !QT ? 'studio shell not built (npm run build:studio)' : false;
-const NO_ERRORS = /Could not parse|Unknown property|stylesheet/i;
-
-function runShell(env) {
-  return new Promise((resolve) => {
-    const child = spawn(EXE, [], {
-      windowsHide: true,
-      env: { ...process.env, PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}`, UJWALAM_HEADLESS: '1', QT_QPA_FONTDIR: path.join(process.env.WINDIR ?? 'C:\\Windows', 'Fonts'), ...env },
-    });
-    let out = '', err = '';
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { err += d; });
-    const t = setTimeout(() => child.kill(), 40_000);
-    child.on('close', (code) => { clearTimeout(t); resolve({ code, out, err }); });
-  });
-}
-
-describe('SB4 generated pack in the studio (headless Qt probe)', { skip: skipQt }, () => {
-  let themes, pack;
-  before(async () => {
-    themes = mkdtempSync(path.join(dir, 'qt-themes-'));
-    ({ pack } = themeFromRead(await readOf('glow', FIXTURES.glow()), { name: 'Sb4 Probe' }));
-    writeThemePack(pack, themes);
-  });
-  async function probe({ flagOn }) {
-    const dataDir = mkdtempSync(path.join(dir, 'qt-data-'));
-    if (flagOn) writeFileSync(path.join(dataDir, 'flags.local.json'), JSON.stringify({ flags: { 'theme-components': true } }));
-    const fake = createFakeHost({});
-    const host = { describe: () => fake.describe(), call: (m, p) => fake.call(m, p) };
-    const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
-    const key = 'd'.repeat(40);
-    const srv = createStudioServer({ uiRoot: path.join(REPO, 'ui'), core, host, launchKey: key, dataDir, flags: createFlags({ dataDir }), bots: createFakeBots(), limits: { statusPollMs: 50 } });
-    const { port } = await srv.listen();
-    try {
-      const r = await runShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: '7000', UJWALAM_STUDIO_PROBE_ACTIONS: 'settings-open,settings-page:Appearance,settings-specimen', UJWALAM_THEMES_DIR: themes, UJWALAM_THEME: pack.id });
-      assert.equal(r.code, 0, r.err);
-      const m = /^studio probe: (.+)$/m.exec(r.out);
-      assert.ok(m, `no probe line: ${r.out} ${r.err}`);
-      return { ...JSON.parse(m[1]), err: r.err };
-    } finally { srv.close(); }
-  }
-  test('flag theme-components on: the pack loads as a custom theme with its variants and no stylesheet errors', async () => {
-    const p = await probe({ flagOn: true });
-    assert.equal(p.theme.id, pack.id);
-    assert.equal(p.theme.custom, true);
-    assert.ok(p.theme.available.includes(pack.id));
-    assert.equal(p.theme.componentsOn, true);
-    assert.equal(p.theme.components.focus, 'glow');
-    assert.ok(Object.keys(p.theme.components).length >= 9, JSON.stringify(p.theme.components));
-    assert.ok(p.theme.fragmentLength > 0);
-    assert.doesNotMatch(p.err, NO_ERRORS, p.err);
-    assert.equal(p.specimen.open, true);
-  });
-  test('flag off: the same pack falls back to the base look (no components, no fragments), no errors', async () => {
-    const p = await probe({ flagOn: false });
-    assert.equal(p.theme.id, pack.id);
-    assert.equal(p.theme.componentsOn, false);
-    assert.deepEqual(p.theme.components, {});
-    assert.equal(p.theme.fragmentLength, 0);
-    assert.doesNotMatch(p.err, NO_ERRORS, p.err);
   });
 });

@@ -49,7 +49,7 @@ describe('QML studio: task chip, task panel and notifications (headless probe)',
       const r = await new Promise((resolve) => {
         const child = spawn(SHELL_EXE, [], {
           windowsHide: true,
-          env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', UJWALAM_STUDIO_QML: '1',
+          env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1',
             UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: String(ms),
             UJWALAM_STUDIO_PROBE_ACTIONS: actions.join(','), ...env },
         });

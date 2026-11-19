@@ -3,9 +3,8 @@
 // pressed, checked or selected, focus, error), the colours the studio paints are checked: text >= 4.5:1 against what
 // it sits on, control parts and focus indicators >= 3:1 against what they sit next to. Disabled text is exempt
 // (WCAG 1.4.3), and borders that only decorate a filled control are not checked (the fill, the label and the state
-// carry the meaning). The pairs come from the base stylesheet in app/studio/src/theme.cpp, the variant fragments
-// (componentQss) for the variants a pack picks, and the painted Switch; derived() mirrors theme.cpp's derived():
-// change both together. A table for every variant in the schema is required, so a new variant cannot skip the check.
+// carry the meaning). The pairs were taken from the widget studio's base stylesheet, its variant fragments and its
+// painted Switch (removed 2026-11-18; services/studio-ui/theme-contrast.mjs keeps them as the rules). A table for every variant in the schema is required, so a new variant cannot skip the check.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -42,7 +41,7 @@ test('every pack, every state: text >= 4.5:1, controls and focus >= 3:1 (base lo
   assert.deepEqual(bad, KNOWN_BASE_GAPS);
 });
 
-// The base Switch (no variant; switch_widget.cpp paintEvent) paints the knob and ON in the text colour on the accent
+// The base Switch (no variant; the widget Switch's paintEvent) painted the knob and ON in the text colour on the accent
 // track, which is below 3:1 in most packs. It is unchanged with the flag off (the v1 look); every switch variant paints
 // onAccent on the "on" track instead, and this shows each of the three passes on every shipped pack.
 test('base Switch gap: the ON side fails in the base look, every switch variant passes on every pack', () => {
@@ -63,7 +62,7 @@ test('the check sees the variants: a pack whose variant breaks contrast fails it
   assert.ok(failures(p).some((f) => f.includes('ghost button label')), failures(p).join('\n'));
 });
 
-test('derived colours match theme.cpp for a sample (mix rounding)', () => {
+test('derived colours: mix rounding on a sample', () => {
   assert.equal(mix('#000000', '#ffffff', 0.5), '#808080');
   assert.equal(mix('#242132', '#8650f0', 0.18), '#362954');
 });

@@ -75,6 +75,10 @@ the 2026-11-14 handover session.
       file reload, each pack's font really loaded, the rejected-reload toast). Not twinned:
       soft painters, component variants and the specimen page are widget-stylesheet features the QML style does not
       have; they come back as a QML design item if the QML studio needs them (the widget tests keep guarding the widgets)
+- [x] 2026-11-18: the widget studio is removed (the user said yes; this checklist 48/48). The QML window is the only
+      studio, the flag `studio-qml` is gone, and the widget tests went with the widget code (each twin above). The soft
+      painters, the component stylesheet variants and the specimen page are dropped with it (accepted losses); their three
+      widget tests have no twin. Evidence: `docs/evidence/2026-11-18-remove-widget-studio.md`
 
 ## G. New in QML (plan Q4)
 - [x] Command palette, Ctrl+K (`cdd4f11`, `tests/studio-qml-palette.test.mjs` 6/6)

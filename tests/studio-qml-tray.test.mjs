@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// QML twin of tests/studio-tray.test.mjs (plan Q4, checklist A): visible tasks and the tray (user 2026-11-09, D311
-// proposed): nothing runs on unseen after the window closes. The QML studio (UJWALAM_STUDIO_QML=1), headless probe
+// The studio's tray test (plan Q4, checklist A; it replaced the widget tests/studio-tray.test.mjs on 2026-11-18): visible tasks and the tray (user 2026-11-09, D311
+// proposed): nothing runs on unseen after the window closes. The studio, headless probe
 // (offscreen platform: nothing reaches the screen, nothing takes focus; the tray runs unseen: no icon, no notification,
 // no list window), against the real UI server with a fake host. Task files in <dataDir>/tasks/*.json stand in for a
-// clip job or an upload. The tray is the widget studio's own TrayKeeper (tray.cpp) through the QML bridge (qml_tasks.h).
+// clip job or an upload. The tray is TrayKeeper (tray.cpp) through the QML bridge (qml_tasks.h).
 //   - closing with a task running asks: keep in the tray / stop / do not close (each answered by a probe action);
 //   - "stop" ends the window with exit 0 (the launcher then ends every task's whole process tree: tests/kill-tree);
 //   - "tray" hides the window; the tray lists each task with its time, has Open and Stop all; a click opens the list;
@@ -40,7 +40,7 @@ describe('QML studio: close with tasks running, and the tray (D311 proposed)', {
 
   // Runs the shell once. o.prepare(dataDir) writes task files first; o.onStatus(n, dataDir) runs on each status request;
   // o.onOut(out, dataDir) on each stdout chunk. Returns the exit code, output and both probe lines (null when absent).
-  async function run({ ms = 7000, actions = '', show = true, prepare, onStatus, onOut, onRequest, beforeRoute, authority, outputsReady = false, env = {} } = {}) {
+  async function run({ ms = 7000, actions = '', prepare, onStatus, onOut, onRequest, beforeRoute, authority, outputsReady = false, env = {} } = {}) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qmltray-')); dirs.push(dataDir);
     if (prepare) prepare(dataDir);
     const fake = createFakeHost({ outputsReady });
@@ -62,9 +62,9 @@ describe('QML studio: close with tasks running, and the tray (D311 proposed)', {
         const child = spawn(SHELL_EXE, [], {
           windowsHide: true,
           env: {
-            ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', UJWALAM_STUDIO_QML: '1',
+            ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1',
             UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: String(ms),
-            UJWALAM_STUDIO_PROBE_ACTIONS: actions, ...(show ? { UJWALAM_STUDIO_PROBE_SHOW: '1' } : {}), ...env,
+            UJWALAM_STUDIO_PROBE_ACTIONS: actions, ...env,
           },
         });
         let out = '', err = '';

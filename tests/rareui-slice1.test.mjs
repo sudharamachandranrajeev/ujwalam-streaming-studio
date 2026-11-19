@@ -117,7 +117,7 @@ describe('slice 1 in the studio window (headless probe)', { skip }, () => {
       const r = await new Promise((resolve) => {
         const child = spawn(SHELL_EXE, [], {
           windowsHide: true,
-          env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', UJWALAM_STUDIO_QML: '1',
+          env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1',
             UJWALAM_THEMES_DIR: themeDir(style, spinner), UJWALAM_THEME: 'rare-one',
             QT_QPA_FONTDIR: path.join(process.env.WINDIR ?? 'C:\\Windows', 'Fonts'),
             UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: String(ms), UJWALAM_STUDIO_PROBE_ACTIONS: actions.join(',') },

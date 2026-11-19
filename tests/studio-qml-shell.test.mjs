@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Qt Quick studio window (D355/D360, flag studio-qml; plan Q2). Headless probe (UJWALAM_HEADLESS=1, offscreen,
+// The Qt Quick studio window (D355/D360, plan Q2; the only studio since 2026-11-18). Headless probe (UJWALAM_HEADLESS=1, offscreen,
 // software drawing, never on a screen) against a real UI server and the fake host: the window's tree (on-air bar,
-// scenes, layers with eye buttons, mixer strips with full names), real clicks through the same routes as the widget
-// studio, and a picture of the window. Skipped when the shell is not built (npm run build:studio) or no Qt kit is set.
+// scenes, layers with eye buttons, mixer strips with full names), real clicks through the UI server's routes
+// and a picture of the window. Skipped when the shell is not built (npm run build:studio) or no Qt kit is set.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -27,7 +27,7 @@ function runShell(env) {
   return new Promise((resolve) => {
     const child = spawn(SHELL_EXE, [], {
       windowsHide: true,
-      env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', UJWALAM_STUDIO_QML: '1', ...env },
+      env: { ...process.env, ...(QT ? { PATH: `${path.join(QT, 'bin')}${path.delimiter}${process.env.PATH}` } : {}), UJWALAM_HEADLESS: '1', ...env },
     });
     let out = '', err = '';
     child.stdout.on('data', (d) => { out += d; });
