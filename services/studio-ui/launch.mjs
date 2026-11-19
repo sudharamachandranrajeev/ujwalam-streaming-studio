@@ -452,6 +452,23 @@ export function shellSpawnSpec({ uiPort, launchKey, exe, qtBin = null, qtPlugins
   return { cmd: exe, env: { ...clean, UJWALAM_UI_URL: `http://127.0.0.1:${uiPort}/`, UJWALAM_UI_LAUNCH_KEY: launchKey } };
 }
 
+/** Early studio start (2026-11-19, pure; tested): the spawn spec of a studio started while the host starts, before the
+ *  UI server is up. The same environment as shellSpawnSpec (the one-time key in it, never on argv) without the URL, plus
+ *  UJWALAM_STUDIO_EARLY=1; the port follows on its stdin pipe as "ui <port>" (earlyUiLine). null when the exe is missing. */
+export function earlyShellSpawnSpec({ launchKey, exe, qtBin = null, qtPlugins = null, logsDir = null, version = null, env = process.env, exists = existsSync }) {
+  const spec = shellSpawnSpec({ uiPort: 1, launchKey, exe, qtBin, qtPlugins, logsDir, version, env, exists });
+  if (!spec) return null;
+  delete spec.env.UJWALAM_UI_URL;
+  spec.env.UJWALAM_STUDIO_EARLY = '1';
+  return spec;
+}
+/** The line that tells an early studio where the UI server listens (no secret in it). */
+export const earlyUiLine = (uiPort) => `ui ${uiPort}\n`;
+/** Early start on (pure; tested): Windows, a Qt studio to start, the service-swap flag off (its studio slot starts the
+ *  window as before) and not switched off with UJWALAM_STUDIO_EARLY=0. */
+export const earlyStudioOn = ({ shellPaths, swapOn, platform = process.platform, env = process.env }) =>
+  !!shellPaths && !swapOn && platform === 'win32' && env.UJWALAM_STUDIO_EARLY !== '0';
+
 /** The studio exe of a swap root (LU4, pure; tested): <root>/studio/ujwalam-studio.exe (a staged or installed version),
  *  else for this checkout the development build (studioShellPaths). The Qt kit's bin stays on PATH for a staged copy
  *  of a development build; a packaged studio finds its own DLLs beside it first. null when there is none. */
@@ -1320,6 +1337,51 @@ export async function main(argv = process.argv.slice(2)) {
   // launcher owns (services/supervisor/front.mjs). Clients only ever see the front ports, so a swap to a new version
   // (serveSwaps below) changes no port, token or connection. Flag off: started exactly as before.
   const swapOn = (() => { try { return createFlags({ dataDir }).isOn(SERVICE_SWAP_FLAG); } catch { return false; } })();
+  // Early studio start (2026-11-19): the Qt studio starts now, in parallel with the event core and the host, and loads
+  // its QML with nothing on screen. It gets the UI server's port on its stdin once the server listens, then logs in,
+  // applies the saved theme and only then shows its window. Until then it is not watched (no crash relaunch); the
+  // window section below adopts it, or stops it and starts one as before if it ended or the UI server failed.
+  let early = null; // { shell, startedAt, adopted }
+  const dropEarly = () => {
+    if (!early || early.adopted) return;
+    const i = children.indexOf(early.shell);
+    if (i >= 0) children.splice(i, 1);
+    early.dropped = true;
+    if (early.shell.exitCode === null && early.shell.signalCode === null) killChildTree(early.shell);
+    early = null;
+  };
+  if (earlyStudioOn({ shellPaths, swapOn })) {
+    const spec = earlyShellSpawnSpec({ launchKey, ...shellPaths, logsDir: path.join(dataDir, 'logs'), version: releaseVersion() });
+    if (spec) {
+      try {
+        const shell = spawn(spec.cmd, [], {
+          stdio: ['pipe', 'pipe', 'ignore'], env: spec.env,
+          windowsHide: false // GUI window: the Qt studio window (default, D277); a GUI exe, no console
+        });
+        // Its "studio attach: ready" line says the window is placed (logged in, saved theme applied).
+        readline.createInterface({ input: shell.stdout }).on('line', (l) => { if (/^studio attach:/.test(l)) console.log(`[studio] window: ${l}`); });
+        shell.on('error', (e) => console.log(`[studio] Qt shell failed to start early: ${e.code ?? 'error'}`));
+        shell.stdin.on('error', () => { /* the studio is gone: the window section below sees it */ });
+        children.push(shell);
+        const mine = { shell, startedAt: Date.now(), adopted: false };
+        early = mine;
+        // An exit before the window section adopts it (a crash while loading, a failed start) goes to the exits log too;
+        // one the launcher caused (dropEarly, stopAll) does not.
+        shell.once('exit', (code, signal) => {
+          if (mine.adopted || mine.dropped || stopping) return;
+          try {
+            const logs = path.join(dataDir, 'logs');
+            mkdirSync(logs, { recursive: true });
+            const rec = shellExitRecord({ code, signal, startedAt: mine.startedAt, reports: readdirSync(logs).filter((n) => n.startsWith('studio-crash-')) });
+            appendFileSync(path.join(logs, SHELL_EXITS_FILE), `${JSON.stringify({ ...rec, stopping, early: true })}\n`);
+          } catch { /* best effort */ }
+        });
+        // A launcher that ends before the window is adopted leaves no hidden studio behind.
+        process.once('exit', () => { if (early && !early.adopted && early.shell.exitCode === null) try { early.shell.kill(); } catch { /* gone */ } });
+        clock.mark('studio-early');
+      } catch (e) { console.log(`[studio] Qt shell could not start early (${e.code ?? 'error'}); it starts after the UI server`); }
+    }
+  }
   const track = { onSpawn: (c) => children.push(c), onGone: (c) => { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); }, log: (l) => console.log(`[studio] ${l}`) };
   let coreFront = null;
   if (swapOn) { coreFront = createFront({ backendPort: null, name: 'event-core', log: track.log }); fronts.push(coreFront); await coreFront.listen(); }
@@ -1949,7 +2011,19 @@ export async function main(argv = process.argv.slice(2)) {
         ...track,
       });
       studioSlot.start(REPO, launchKey);
-    } else startShell(shellSpec);
+    } else if (early && early.shell.exitCode === null && early.shell.signalCode === null && early.shell.stdin?.writable) {
+      // Early start: the studio has loaded (or is loading) its QML; from now on it is watched like any window (a crash
+      // reopens it as before). The exit check above is synchronous, so an exit not yet seen still reaches watchShell.
+      early.adopted = true;
+      watchShell(early.shell, early.startedAt);
+      try { early.shell.stdin.write(earlyUiLine(uiPort)); } catch { /* gone: its exit is handled by watchShell */ }
+    } else {
+      if (early) {
+        console.log(`[studio] the early studio ended before the UI server was up (exit ${early.shell.exitCode ?? early.shell.signalCode}); starting it again`);
+        dropEarly();
+      }
+      startShell(shellSpec);
+    }
     console.log('[studio] Qt studio shell started');
     clock.mark('shell');
   } else if (args['no-open'] !== true && (!isHeadless() || headlessLoginScript())) openBrowser(`http://127.0.0.1:${uiPort}/login?k=${launchKey}`);

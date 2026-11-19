@@ -40,6 +40,15 @@ QmlStudio::~QmlStudio()
 
 bool QmlStudio::begin(Mode mode)
 {
+	if (!load(mode))
+		return false;
+	reveal();
+	return true;
+}
+
+bool QmlStudio::load(Mode mode)
+{
+	mode_ = mode;
 	// Our own style on Basic, driven only by theme tokens (plan: Style). Basic needs no native style plugin.
 	QQuickStyle::setStyle(QStringLiteral("Basic"));
 	// Off screen (tests) the scene graph draws in software: no GPU, nothing reaches a screen. On screen: the default
@@ -73,6 +82,12 @@ bool QmlStudio::begin(Mode mode)
 		std::fprintf(stderr, "studio: the QML window did not load (see the studio log)\n");
 		return false;
 	}
+	return true;
+}
+
+void QmlStudio::reveal()
+{
+	const Mode mode = mode_;
 	switch (mode) {
 	case Mode::Normal: // a normal window on the main display, activated like any app the user starts (D316)
 		win_->show();
@@ -109,7 +124,6 @@ bool QmlStudio::begin(Mode mode)
 	// The first frame on screen is one of the two ends of the start-up line.
 	connect(win_, &QQuickWindow::frameSwapped, this, []() { startupclock::finishOnce("frame"); }, Qt::SingleShotConnection);
 	QMetaObject::invokeMethod(win_, "start");
-	return true;
 }
 
 void QmlStudio::swapClose()
