@@ -22,6 +22,7 @@
 //     is the UJWALAM_STUDIO_TEST_CRASH kind), for the swap rollback test with a build that crashes.
 #include "api_client.h"
 #include "qml_studio.h"
+#include "startup_clock.h"
 #include "studio_log.h"
 #include "taskbar_id.h"
 #include "theme.h"
@@ -104,6 +105,7 @@ static void startControlReader(QApplication *app, std::function<void(const QStri
 static void loginThen(QApplication &app, ApiClient &api, const QString &key, int &code, std::function<void()> then)
 {
 	api.login(key, [&app, &api, &code, then](bool ok, const QJsonObject &, const QString &err) {
+		startupclock::mark("login");
 		if (!ok) {
 			std::fprintf(stderr, "studio: login failed: %s\n", qPrintable(err));
 			code = 77;
@@ -111,6 +113,7 @@ static void loginThen(QApplication &app, ApiClient &api, const QString &key, int
 			return;
 		}
 		api.get(QStringLiteral("ui/api/settings"), [then](bool okS, const QJsonObject &sb, const QString &) {
+			startupclock::mark("settings");
 			if (okS) {
 				const QJsonObject ui = sb.value(QStringLiteral("settings")).toObject().value(QStringLiteral("ui")).toObject();
 				if (qEnvironmentVariable("UJWALAM_THEME").isEmpty() && !ui.value(QStringLiteral("theme")).toString().isEmpty())
@@ -227,6 +230,7 @@ static int runQml(QApplication &app, ApiClient &api, const QString &key, bool he
 
 int main(int argc, char **argv)
 {
+	startupclock::start(); // one "startup:" line in the studio log at the first frame (startup_clock.h)
 	const bool headless = qEnvironmentVariable("UJWALAM_HEADLESS") == QStringLiteral("1");
 	const bool hidden = headless && qEnvironmentVariable("UJWALAM_STUDIO_HIDDEN") == QStringLiteral("1");
 	const bool probe = headless && qEnvironmentVariableIntValue("UJWALAM_STUDIO_PROBE_MS") > 0;
@@ -265,6 +269,7 @@ int main(int argc, char **argv)
 	if (probe)
 		qputenv("QT_QPA_PLATFORM", "offscreen");
 	QApplication app(argc, argv);
+	startupclock::mark("app");
 	if (logs.crash && !studiolog::reassert())
 		qWarning("crash reporter: Qt start-up had replaced the unhandled-exception filter; ours is back on top");
 	QApplication::setApplicationName(QStringLiteral("Ujwalam Studio"));
