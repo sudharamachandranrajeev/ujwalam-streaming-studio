@@ -156,9 +156,15 @@ void usage()
 
 } // namespace
 
+// The taskbar id of every Ujwalam window (2026-11-19): the preview windows share one taskbar button with the studio and
+// the pinned shortcut. Must match taskbarid::kId in app/studio/src/taskbar_id.h and $AppUserModelId in
+// tools/package/Install-Ujwalam.ps1 (tests/taskbar-id.test.mjs).
+constexpr wchar_t kAppUserModelId[] = L"Ujwalam.Studio";
+
 int wmain(int argc, wchar_t **wargv)
 {
 	SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	const bool aumid_ok = SUCCEEDED(SetCurrentProcessExplicitAppUserModelID(kAppUserModelId)); // before any window
 	App app;
 	g_app = &app;
 	app.start_tick = GetTickCount64();
@@ -433,6 +439,7 @@ int wmain(int argc, wchar_t **wargv)
 			hlog::warn("crash reporter: on, but NO report file will be written: %d crash-*.txt files in logs/ (limit %d; "
 				   "nothing is deleted: move old reports away)",
 				   cs.existing, crash::kMaxReports);
+		hlog::info("taskbar id: %s%s", narrow(kAppUserModelId).c_str(), aumid_ok ? "" : " (NOT set)");
 		if (!test_crash.empty()) {
 			hlog::warn("test-crash %s (--test-hooks)", test_crash.c_str());
 			if (!crash::test_trigger(test_crash)) {

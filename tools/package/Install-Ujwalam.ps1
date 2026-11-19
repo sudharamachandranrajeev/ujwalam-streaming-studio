@@ -51,6 +51,9 @@
                          never touched.
 .PARAMETER AdoptPackage  Used by Ujwalam-Setup.exe: the unzipped build sits in <InstallRoot>\.setup-*\ and is moved into
                          place after its checksums pass, instead of being copied a second time.
+.PARAMETER TaskbarPinDir Default: the user's pinned taskbar folder (...\Quick Launch\User Pinned\TaskBar). A pinned
+                         shortcut there that points at <InstallRoot>\ujwalam-start.exe gets the taskbar id; nothing else
+                         is changed. Tests pass a temporary folder.
 .PARAMETER NoHandOver    Live install: do not hand the new version to the running Ujwalam; it runs from the next start
                          (the studio's Update button uses this).
 
@@ -91,7 +94,8 @@ param(
   [switch]$Uninstall,
   [switch]$DeleteData,
   [switch]$AdoptPackage,
-  [switch]$NoHandOver
+  [switch]$NoHandOver,
+  [string]$TaskbarPinDir
 )
 
 Set-StrictMode -Version 2
@@ -105,6 +109,11 @@ $PracticeShortcutName = 'Ujwalam (alpha, practice).lnk'
 $OldLiveShortcutName = 'Ujwalam (alpha, LIVE).lnk'
 # Start menu only (2026-11-18): Ujwalam-Setup.exe in the install root: update, repair, roll back, uninstall.
 $SetupShortcutName = 'Ujwalam setup (update, repair, uninstall).lnk'
+# The taskbar id (System.AppUserModel.ID, 2026-11-19, docs/evidence/2026-11-19-taskbar-grouping.md). The studio and the
+# host set the same id on their windows, so the running app shares the pinned shortcut's taskbar button. Must match
+# taskbarid::kId in app/studio/src/taskbar_id.h and kAppUserModelId in app/host/src/main.cpp (tests/taskbar-id.test.mjs).
+# The live and practice shortcuts share it (same app); the setup shortcut has none (a different tool).
+$AppUserModelId = 'Ujwalam.Studio'
 
 function Say([string]$m) { Write-Host "[install] $m" }
 function Fail([string]$m, [int]$code) { Write-Host "[install] STOP: $m"; exit $code }
@@ -608,6 +617,55 @@ if ($live -and $NoHandOver) {
   }
 }
 
+# System.AppUserModel.ID on a .lnk: WScript.Shell cannot write it, so IShellLinkW + IPropertyStore through a small C#
+# type (Add-Type, compiled once per run; no window).
+function Initialize-ShortcutAppId {
+  if ('UjwalamShortcutAppId' -as [type]) { return }
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+public static class UjwalamShortcutAppId {
+  [ComImport, Guid("00021401-0000-0000-C000-000000000046")] class CShellLink {}
+  [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+  interface IPropertyStore {
+    [PreserveSig] int GetCount(out uint c);
+    [PreserveSig] int GetAt(uint i, out PropertyKey k);
+    [PreserveSig] int GetValue(ref PropertyKey k, out PropVariant v);
+    [PreserveSig] int SetValue(ref PropertyKey k, ref PropVariant v);
+    [PreserveSig] int Commit();
+  }
+  [StructLayout(LayoutKind.Sequential, Pack = 4)] struct PropertyKey { public Guid fmtid; public uint pid; }
+  [StructLayout(LayoutKind.Explicit, Size = 24)] struct PropVariant { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }
+  [DllImport("ole32.dll")] static extern int PropVariantClear(ref PropVariant v);
+  static PropertyKey Key() { PropertyKey k; k.fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"); k.pid = 5; return k; }
+  static object Open(string path, int mode) { object l = new CShellLink(); ((IPersistFile)l).Load(path, mode); return l; }
+  public static void Set(string path, string id) {
+    object l = Open(path, 2); // STGM_READWRITE
+    try {
+      IPropertyStore s = (IPropertyStore)l;
+      PropertyKey k = Key();
+      PropVariant v = new PropVariant(); v.vt = 31; v.p = Marshal.StringToCoTaskMemUni(id); // VT_LPWSTR
+      try { Marshal.ThrowExceptionForHR(s.SetValue(ref k, ref v)); } finally { PropVariantClear(ref v); }
+      Marshal.ThrowExceptionForHR(s.Commit());
+      ((IPersistFile)l).Save(path, true);
+    } finally { Marshal.ReleaseComObject(l); }
+  }
+  public static string Get(string path) {
+    object l = Open(path, 0); // STGM_READ
+    try {
+      IPropertyStore s = (IPropertyStore)l;
+      PropertyKey k = Key();
+      PropVariant v;
+      if (s.GetValue(ref k, out v) != 0) return null;
+      try { return v.vt == 31 ? Marshal.PtrToStringUni(v.p) : null; } finally { PropVariantClear(ref v); }
+    } finally { Marshal.ReleaseComObject(l); }
+  }
+}
+"@
+}
+function Set-ShortcutAppId([string]$path, [string]$id) { Initialize-ShortcutAppId; [UjwalamShortcutAppId]::Set($path, $id) }
+function Get-ShortcutAppId([string]$path) { Initialize-ShortcutAppId; return [UjwalamShortcutAppId]::Get($path) }
 # ---- shortcuts ----------------------------------------------------------------------------------------------------
 # After the switch nothing is undone (Codex review 2026-11-18): the new version is installed and works; a shortcut that
 # cannot be written is reported, and Repair in Ujwalam setup puts it back.
@@ -626,6 +684,7 @@ if (-not $NoShortcuts) { try {
     $lnk.IconLocation = $iconLoc
     $lnk.Description = 'Ujwalam alpha, stream targets set up (going live still needs a Start stream click)'
     $lnk.Save()
+    Set-ShortcutAppId (Join-Path $dir $ShortcutName) $AppUserModelId
     Say "shortcut: $(Join-Path $dir $ShortcutName)"
     $lnk = $shell.CreateShortcut((Join-Path $dir $PracticeShortcutName))
     $lnk.TargetPath = Join-Path $InstallRoot 'ujwalam-start.exe'
@@ -634,6 +693,7 @@ if (-not $NoShortcuts) { try {
     $lnk.IconLocation = $iconLoc
     $lnk.Description = 'Ujwalam alpha, practice: devices, no streaming (runs the version in current.txt)'
     $lnk.Save()
+    Set-ShortcutAppId (Join-Path $dir $PracticeShortcutName) $AppUserModelId
     Say "shortcut: $(Join-Path $dir $PracticeShortcutName)"
     $old = Join-Path $dir $OldLiveShortcutName
     if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force; Say "removed old shortcut: $old" }
@@ -648,6 +708,20 @@ if (-not $NoShortcuts) { try {
     $lnk.Description = 'Update, repair, roll back or remove Ujwalam (your data is kept)'
     $lnk.Save()
     Say "shortcut: $(Join-Path $StartMenuDir $SetupShortcutName)"
+  }
+  # The app's own pin (Windows keeps a copy of a pinned shortcut here): an earlier install pinned it without the id, so
+  # the running studio got a separate button. Only a .lnk that points at this install's ujwalam-start.exe is touched,
+  # and only its taskbar id is changed. Explorer may show the change only after the next sign-in (or unpin and pin again).
+  if (-not $TaskbarPinDir -and $env:APPDATA) { $TaskbarPinDir = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar' }
+  $startExe = [System.IO.Path]::GetFullPath((Join-Path $InstallRoot 'ujwalam-start.exe'))
+  if ($TaskbarPinDir -and (Test-Path -LiteralPath $TaskbarPinDir -PathType Container)) {
+    foreach ($p in @(Get-ChildItem -LiteralPath $TaskbarPinDir -Filter '*.lnk' -File)) {
+      $target = $shell.CreateShortcut($p.FullName).TargetPath
+      if (-not $target -or [System.IO.Path]::GetFullPath($target) -ne $startExe) { continue }
+      if ((Get-ShortcutAppId $p.FullName) -eq $AppUserModelId) { continue }
+      Set-ShortcutAppId $p.FullName $AppUserModelId
+      Say "pinned taskbar shortcut: taskbar id set on $($p.Name)"
+    }
   }
 } catch {
   Say "WARNING: the shortcuts could not be written ($($_.Exception.Message.Trim())). Ujwalam $version is installed and works; run Ujwalam setup and choose Repair (or this installer again) to put them back."

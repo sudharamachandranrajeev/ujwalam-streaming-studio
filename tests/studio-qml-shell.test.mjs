@@ -75,6 +75,7 @@ describe('QML studio window (headless probe)', { skip }, () => {
     const shot = path.join(dir, 'qml.png');
     const { p } = await probe({ shot });
     assert.equal(p.ui, 'qml');
+    assert.equal(p.appUserModelId, 'Ujwalam.Studio', 'one taskbar button with the pinned shortcut (2026-11-19)');
     assert.deepEqual(p.state.scenes, ['Gameplay', 'Starting soon', 'Gameplay V']);
     assert.equal(p.state.activeScene, 'scene-1');
     assert.deepEqual(p.state.layers.map((l) => l.id), ['game', 'cam', 'chat']);

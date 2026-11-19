@@ -270,9 +270,17 @@ function fakePackage(root, version) {
   return pkg;
 }
 
+/** System.AppUserModel.ID of each shortcut in dir, read through Shell.Application ('' when none). */
+function shortcutAppIds(dir, names) {
+  const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    `$f = (New-Object -ComObject Shell.Application).NameSpace('${dir}'); foreach ($n in ${names.map((n) => `'${n}'`).join(',')}) { '[' + $f.ParseName($n).ExtendedProperty('System.AppUserModel.ID') + ']' }`],
+  { encoding: 'utf8', windowsHide: true });
+  return out.trim().split(/\r?\n/).map((l) => l.trim().slice(1, -1));
+}
+
 function install(pkg, root, ...extra) {
   const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(pkg, 'Install-Ujwalam.ps1'),
-    '-InstallRoot', path.join(root, 'Ujwalam'), '-StartMenuDir', path.join(root, 'start'), '-DesktopDir', path.join(root, 'desk'), ...extra], { encoding: 'utf8', windowsHide: true });
+    '-InstallRoot', path.join(root, 'Ujwalam'), '-StartMenuDir', path.join(root, 'start'), '-DesktopDir', path.join(root, 'desk'), '-TaskbarPinDir', path.join(root, 'pins'), ...extra], { encoding: 'utf8', windowsHide: true });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
 
@@ -281,6 +289,12 @@ test('Install-Ujwalam.ps1 on a fake package: install, shortcuts, tamper refused,
   try {
     const p1 = fakePackage(root, '0.1.0-alpha.1');
     const ir = path.join(root, 'Ujwalam');
+    // A pin from an earlier install (no taskbar id) and someone else's pin: only the app's own gets the id (2026-11-19).
+    const pins = path.join(root, 'pins');
+    mkdirSync(pins, { recursive: true });
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$s = New-Object -ComObject WScript.Shell; $l = $s.CreateShortcut('${path.join(pins, 'Ujwalam (alpha).lnk')}'); $l.TargetPath = '${path.join(ir, 'ujwalam-start.exe')}'; $l.Arguments = '--live --allow-devices'; $l.Save(); $l = $s.CreateShortcut('${path.join(pins, 'Other.lnk')}'); $l.TargetPath = 'C:\\Windows\\notepad.exe'; $l.Save()`],
+    { windowsHide: true });
     let r = install(p1, root);
     if (r.code === 6) { t.skip(`prerequisites missing on this machine: ${r.out}`); return; }
     assert.equal(r.code, 0, r.out);
@@ -300,6 +314,12 @@ test('Install-Ujwalam.ps1 on a fake package: install, shortcuts, tamper refused,
     for (const target of [lnks[1], lnks[4]]) assert.equal(target.toLowerCase(), path.join(ir, 'ujwalam-start.exe').toLowerCase());
     // Both shortcuts carry the app icon (the .ico copied into the install root).
     for (const loc of [lnks[2], lnks[5]]) assert.equal(loc.toLowerCase(), `${path.join(ir, 'ujwalam.ico')},0`.toLowerCase());
+    // Taskbar id (2026-11-19): both app shortcuts and the app's own pin carry it, read back through the shell (not the
+    // installer's own code); someone else's pin is left without one.
+    assert.deepEqual(shortcutAppIds(path.join(root, 'start'), ['Ujwalam (alpha).lnk', 'Ujwalam (alpha, practice).lnk']), ['Ujwalam.Studio', 'Ujwalam.Studio']);
+    assert.deepEqual(shortcutAppIds(path.join(root, 'desk'), ['Ujwalam (alpha).lnk', 'Ujwalam (alpha, practice).lnk']), ['Ujwalam.Studio', 'Ujwalam.Studio']);
+    assert.deepEqual(shortcutAppIds(pins, ['Ujwalam (alpha).lnk', 'Other.lnk']), ['Ujwalam.Studio', '']);
+    assert.match(r.out, /pinned taskbar shortcut: taskbar id set on Ujwalam \(alpha\)\.lnk/);
     // The root launcher follows current.txt to that version's launcher and on to its run-installed.mjs.
     let run = spawnSync('cmd.exe', ['/d', '/c', path.join(ir, 'Ujwalam.cmd')], { encoding: 'utf8', windowsHide: true });
     assert.equal(run.stdout.trim(), 'fake 0.1.0-alpha.1');
