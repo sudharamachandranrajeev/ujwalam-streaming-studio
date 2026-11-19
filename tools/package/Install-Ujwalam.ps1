@@ -5,8 +5,10 @@
 
 .DESCRIPTION
   Run from the unzipped folder:  powershell -ExecutionPolicy Bypass -File .\Install-Ujwalam.ps1
-  1. Checks Node.js (release.json nodeMin, on PATH) and the Microsoft Visual C++ 2015-2022 x64 runtime (registry read).
-     If one is missing it reports it and stops. It never installs anything.
+  1. Builds since 2026-11-19 carry Node.js, Python, ffmpeg and the Visual C++ runtime DLLs (release.json "runtime"):
+     nothing on the PC is checked for those. Older builds: checks Node.js (release.json nodeMin, on PATH) and the
+     Microsoft Visual C++ 2015-2022 x64 runtime (registry read); if one is missing it reports it and stops. It never
+     installs anything system-wide.
   2. Verifies every file against SHA256SUMS.txt (missing, changed or extra files stop the install).
   3. Copies the build to <InstallRoot>\<version> (default %LOCALAPPDATA%\Ujwalam), verifies the copy again, then
      points current.txt at it; the version it replaces is kept and named in previous.txt.
@@ -35,8 +37,9 @@
 .PARAMETER ClipsWhenLive       The same for a live stream.
 .PARAMETER RecordingsFolder    Where recordings are saved ('' = the default). Used from the next start.
 .PARAMETER ClipsFolder         Where finished clips are saved ('' = the default).
-.PARAMETER ClipMaker           Folder that holds services\clip and its Python venv (the zip ships no Python);
-                         written to data\ujwalam.json as clipRoot ('' removes it).
+.PARAMETER ClipMaker           Developer override: a checkout that holds services\clip and its Python venv, used instead
+                         of the build's own clip maker and bundled Python; written to data\ujwalam.json as clipRoot
+                         ('' removes it, so the installed build's own clip maker is used again).
 .PARAMETER SettingsOnly  Only apply the settings above; install nothing.
   The settings are the same ones as Settings in the studio window (data\core\settings.json, D284). Only the settings
   you pass are changed; everything else in the data folder is left as it is.
@@ -315,7 +318,9 @@ function Find-Helper([string[]]$dirs) {
   foreach ($d in $dirs) { if ($d) { $h = Join-Path $d 'tools\package\settings-backup.mjs'; if (Test-Path -LiteralPath $h -PathType Leaf) { return $h } } }
   return $null
 }
-function Find-Node {
+function Find-Node([string[]]$dirs) {
+  # A build's own Node.js (runtime\node\node.exe, bundled since 2026-11-19) first; else Node.js on PATH (older builds).
+  foreach ($d in $dirs) { if ($d) { $b = Join-Path $d 'runtime\node\node.exe'; if (Test-Path -LiteralPath $b -PathType Leaf) { return $b } } }
   $n = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($n) { return $n.Source } else { return $null }
 }
@@ -389,7 +394,7 @@ if ($Rollback) {
   if ($cur -and $hasData) {
     # The settings go back with the version, all or nothing; without the backup of that update the version stays
     # (-Force: switch anyway and keep the current settings as they are).
-    $nodeExe = Find-Node
+    $nodeExe = Find-Node @((Join-Path $InstallRoot $cur), (Join-Path $InstallRoot $prev), $PSScriptRoot)
     $helper = Find-Helper @((Join-Path $InstallRoot $cur), (Join-Path $InstallRoot $prev), $PSScriptRoot)
     if (-not $nodeExe -or -not $helper) {
       if (-not $Force) { Fail 'settings cannot be put back (Node.js or the settings helper was not found); the version was not changed (-Rollback -Force switches anyway and keeps the current settings)' 13 }
@@ -418,22 +423,38 @@ Say "Ujwalam $version -> $InstallRoot\$version"
 
 # ---- prerequisites (read only; nothing is installed) --------------------------------------------------------------
 $problems = @()
-$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $node) {
-  $problems += "Node.js $($release.nodeMin) or newer is not on PATH (install it from nodejs.org, then run this again)"
+# Builds since 2026-11-19 carry their runtimes (release.json "runtime"): Node.js in runtime\node, the Visual C++ runtime
+# DLLs next to every exe, Python and ffmpeg in runtime\. Nothing on the PC is needed or checked for those.
+$bundled = $release.PSObject.Properties.Name -contains 'runtime' -and $release.runtime
+$bundledNode = Join-Path $pkg 'runtime\node\node.exe'
+$nodeExe = $null
+if ($bundled -and (Test-Path -LiteralPath $bundledNode -PathType Leaf)) {
+  $nodeExe = $bundledNode
+  Say "Node.js $($release.runtime.node.version): bundled"
 } else {
-  $nv = (& $node.Source --version 2>$null)
-  $have = [version]((([string]$nv).Trim().TrimStart('v') -split '-')[0])
-  $need = [version]([string]$release.nodeMin)
-  if ($have -lt $need) { $problems += "Node.js $have is too old: $need or newer is needed" } else { Say "Node.js $have (needs $need): ok" }
+  $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $node) {
+    $problems += "Node.js $($release.nodeMin) or newer is not on PATH (install it from nodejs.org, then run this again)"
+  } else {
+    $nodeExe = $node.Source
+    $nv = (& $nodeExe --version 2>$null)
+    $have = [version]((([string]$nv).Trim().TrimStart('v') -split '-')[0])
+    $need = [version]([string]$release.nodeMin)
+    if ($have -lt $need) { $problems += "Node.js $have is too old: $need or newer is needed" } else { Say "Node.js $have (needs $need): ok" }
+  }
 }
 $vc = $null
-foreach ($k in @('HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X64')) {
-  try { $p = Get-ItemProperty -LiteralPath $k -ErrorAction Stop; if ($p.Installed -eq 1) { $vc = $p; break } } catch { }
+if ($bundled -and $release.runtime.PSObject.Properties.Name -contains 'vcRuntime') {
+  $vc = 'bundled'
+  Say "Visual C++ x64 runtime $($release.runtime.vcRuntime.version): bundled next to the programs"
+} else {
+  foreach ($k in @('HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X64')) {
+    try { $p = Get-ItemProperty -LiteralPath $k -ErrorAction Stop; if ($p.Installed -eq 1) { $vc = $p; break } } catch { }
+  }
 }
 if (-not $vc) {
   $problems += 'Microsoft Visual C++ 2015-2022 Redistributable (x64) is not installed (download vc_redist.x64.exe from Microsoft, then run this again)'
-} else {
+} elseif ($vc -ne 'bundled') {
   $vcv = [version]("{0}.{1}.{2}" -f $vc.Major, $vc.Minor, $vc.Bld)
   $min = $null
   if ($release.PSObject.Properties.Name -contains 'vcRuntimeMin' -and $release.vcRuntimeMin) { $min = [version]([string]$release.vcRuntimeMin) }
@@ -576,6 +597,8 @@ $cur = Read-Pointer $currentFile
 # without a backup of the settings and project files; a failed backup stops here with current.txt unchanged.
 $backupDir = $null
 $hasData = (Test-Path -LiteralPath $dataRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $dataRoot -Force | Select-Object -First 1).Count -gt 0
+# The bundled Node.js as installed (with -AdoptPackage the package folder has been moved into $target by now).
+if ($bundled) { $tn = Join-Path $target 'runtime\node\node.exe'; if (Test-Path -LiteralPath $tn -PathType Leaf) { $nodeExe = $tn } }
 if ($hasData) {
   $helper = Find-Helper @($target)
   if (-not $helper) { Fail "tools\package\settings-backup.mjs is missing from $version; current.txt was not changed" 10 }
@@ -584,7 +607,7 @@ if ($hasData) {
   # The backup a rollback of the current version needs is never pruned, however many repairs come after it.
   $prevNow = Read-Pointer $previousFile
   if ($cur -and $prevNow -and $prevNow -ne $cur) { $helperArgs += @('--pin-from', $prevNow, '--pin-to', $cur) }
-  $backupDir = Invoke-Helper $node.Source $helper $helperArgs
+  $backupDir = Invoke-Helper $nodeExe $helper $helperArgs
   if ($script:helperCode -ne 0 -or -not $backupDir) { Fail "the settings backup failed (see above); current.txt was not changed, nothing in your data folder was touched" 13 }
 }
 
@@ -598,7 +621,7 @@ New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
 Say "installed: current $version$(if ($cur -and $cur -ne $version) { ", previous $cur (Install-Ujwalam.ps1 -Rollback switches back)" })"
 foreach ($k in $keptTop) { Say "kept $k in $InstallRoot`: the running Ujwalam uses it (it still starts the version in current.txt); run this installer again after Ujwalam has closed to replace it" }
 if ($backupDir) {
-  [void](Invoke-Helper $node.Source $helper @('verify', '--data', $dataRoot, '--backup', $backupDir))
+  [void](Invoke-Helper $nodeExe $helper @('verify', '--data', $dataRoot, '--backup', $backupDir))
   if ($script:helperCode -ne 0) { Say "WARNING: see the line above; the backup in $backupDir has every file as it was before the install" }
 }
 

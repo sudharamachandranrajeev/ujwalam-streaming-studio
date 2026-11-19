@@ -21,9 +21,14 @@ call "%UJ_HERE%%UJ_VER%\Ujwalam.cmd" %*
 exit /b %ERRORLEVEL%
 
 :run
+rem The build's own Node.js (runtime\node\node.exe, bundled since 2026-11-19); else Node.js on PATH.
+if exist "%UJ_HERE%runtime\node\node.exe" (
+  "%UJ_HERE%runtime\node\node.exe" "%UJ_HERE%tools\package\run-installed.mjs" %*
+  exit /b %ERRORLEVEL%
+)
 "%SystemRoot%\System32\where.exe" node >nul 2>nul
 if errorlevel 1 (
-  echo [ujwalam] Node.js 22.13 or newer is needed on PATH; nothing was started.
+  echo [ujwalam] this build has no runtime\node\node.exe and Node.js is not on PATH; nothing was started.
   exit /b 9
 )
 node "%UJ_HERE%tools\package\run-installed.mjs" %*

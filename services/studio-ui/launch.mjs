@@ -96,7 +96,7 @@ import { libraryDirOf } from '../project/scene-music.mjs';
 import { APP_DATA_DIR, alphaBases, alphaFile, buildAlphaProject, prepareAlphaProject, readProfile, stampOf, upgradeAlphaFile, upgradePresets } from './alpha.mjs';
 import { placeholderRoles, rebindPlaceholders } from '../project/rebind-roles.mjs';
 import { upgradeScenes } from '../project/scene-upgrades.mjs';
-import { createRecordClips, isLive, isRecording } from './record-clips.mjs';
+import { createRecordClips, isLive, isRecording, pythonIn } from './record-clips.mjs';
 import { hasExited, killChildTree } from '../common/kill-tree.mjs';
 import { createPostChain } from '../posting/auto-chain.mjs';
 import { createLearningSignals } from '../learning/signals.mjs';
@@ -163,8 +163,8 @@ export async function planForStart({ live, instagramOn, planOnce, recordPlan, lo
   }
 }
 
-// The folder that holds services/clip and the Python venv (.venv-gpu or .venv): this tree, or for an installed run the
-// clipRoot from ujwalam.json (UJWALAM_CLIP_ROOT; the zip ships no Python, D283).
+// The folder that holds services/clip and its Python (.venv-gpu or .venv in a checkout, runtime\python in an installed
+// build since 2026-11-19): this tree, or a developer override from ujwalam.json clipRoot (UJWALAM_CLIP_ROOT).
 export const CLIP_ROOT = process.env.UJWALAM_CLIP_ROOT || REPO;
 // Record-only plan (H + V .mkv, no stream target): the alpha default when neither --live nor --outputs is given, so a
 // normal start can record and clip (D281). Streaming still needs --live.
@@ -348,8 +348,9 @@ export function faceControlLine({ key, hostPid }) {
 /** Face AI worker child (D295 proposed): services/face/face_worker.py on .venv-gpu (onnxruntime-directml), or null
  *  with the reason. It idles while the face-ai flag is off. */
 export function faceSpec({ dataDir, repo = REPO, exists = existsSync }) {
-  const py = path.join(repo, '.venv-gpu', 'Scripts', 'python.exe');
-  if (!exists(py)) return { spec: null, reason: 'no .venv-gpu (onnxruntime-directml)' };
+  // .venv-gpu in a checkout, else the build's bundled Python (runtime\python, onnxruntime-directml; 2026-11-19).
+  const py = [path.join(repo, '.venv-gpu', 'Scripts', 'python.exe'), path.join(repo, 'runtime', 'python', 'python.exe')].find((p) => exists(p));
+  if (!py) return { spec: null, reason: 'no Python with onnxruntime-directml (.venv-gpu or runtime\\python)' };
   return { spec: { exe: py, argv: ['-I', path.join(repo, 'services', 'face', 'face_worker.py'), '--data-dir', dataDir] } };
 }
 
@@ -380,12 +381,12 @@ export function liveClipsSpec({ project, dataDir, repo = REPO, exists = existsSy
   const game = (project?.scenes ?? []).flatMap((s) => s.layers ?? []).find((l) => l.origin?.id === 'scene-default-h/game');
   if (!game) return { spec: null, reason: 'the main (H) scene has no game layer' };
   if (game.type !== 'capture') return { spec: null, reason: 'the game layer has no capture device (devices are off or none is chosen)' };
-  const venv = ['.venv-gpu', '.venv'].map((v) => path.join(repo, v, 'Scripts', 'python.exe')).find((p) => exists(p));
-  if (!venv) return { spec: null, reason: "the clip maker's Python is missing (no .venv-gpu or .venv)" };
+  const py = pythonIn(repo, exists); // .venv-gpu, .venv, else the build's bundled runtime\python (2026-11-19)
+  if (!py) return { spec: null, reason: "the clip maker's Python is missing (no .venv-gpu, .venv or runtime\\python)" };
   const worker = path.join(repo, LIVE_WORKER);
   if (!exists(worker)) return { spec: null, reason: 'the live clipper is missing (no services\\clip\\live_worker.py)' };
   return {
-    spec: { exe: venv, gpu: venv.includes('.venv-gpu'), argv: [worker, '--layer', game.id, '--data-dir', dataDir] },
+    spec: { exe: py.exe, gpu: py.gpu, argv: [worker, '--layer', game.id, '--data-dir', dataDir] },
     reason: null,
   };
 }

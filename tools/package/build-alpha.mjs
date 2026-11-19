@@ -14,8 +14,9 @@
 // (import closure, listed in notices/OBS-RUNTIME-FILES.txt), the Node services, UI, registry and runtime data at their
 // repo paths, Install-Ujwalam.ps1, Ujwalam.cmd, ujwalam-start.exe (the shortcuts' windowless start), Ujwalam-Setup.exe
 // (app/setup: install, update, repair, roll back, uninstall; also copied next to the zips in out/dist), README.txt, HOW-TO.md (docs/how-to.md), release.json, CHANGELOG-alpha.md (this build's section),
-// notices/ (GPL-3.0 and LGPL-3.0 text, source offer, third-party list) and SHA256SUMS.txt. Node.js is not bundled: the installer
-// and the launcher require Node >= release nodeMin on PATH.
+// notices/ (GPL-3.0 and LGPL-3.0 text, source offer, third-party list) and SHA256SUMS.txt, and the bundled runtimes under
+// runtime/ plus the VC++ DLLs next to the exes (tools/package/runtime-bundle.mjs, data/runtime/bundle.json; 2026-11-19):
+// nothing on the PC is needed. Third-party files (OBS runtime, bundled runtimes) are not private-term scanned.
 // Checks, any failure stops the build and nothing is written to out/dist: allowlist, forbidden paths (legacy/,
 // *.local.*, fonts incl. those named in docs/licence-headers.md, docs/, feedback/, out/, user data, secrets, media),
 // import closure of the packaged .mjs files, private-term scan, and the runtime's obs-nvenc.dll must be the patched
@@ -71,6 +72,7 @@ import {
   OFL_FONTS, OFL_FONT_LICENCE_SHA, allowProblems, dataRefProblems, disabledModules, fontNamesFromLicenceDoc, forbiddenProblems, importProblems, repoFiles, selectObsRuntime,
 } from './manifest.mjs';
 import { readZip, writeZip } from './zip.mjs';
+import { loadBundle, prepareRuntime } from './runtime-bundle.mjs';
 import { releaseParts } from '../../services/supervisor/parts.mjs';
 import { nvencFileState, readManifest, runtimeNvencState } from '../obs-patch/build-obs-nvenc.mjs';
 
@@ -173,9 +175,10 @@ function readme({ version, nodeMin }) {
     '  It checks the zip, keeps your settings (a backup is taken first) and adds the shortcuts. By hand instead:',
     '  1. Unzip this folder anywhere.',
     '  2. In it run:  powershell -ExecutionPolicy Bypass -File .\\Install-Ujwalam.ps1',
-    `     It checks Node.js ${nodeMin}+ on PATH and the Microsoft Visual C++ 2015-2022 x64 runtime, verifies`,
+    '     This build carries everything it needs (Node.js, Python with the clip maker, ffmpeg, the Visual C++ runtime',
+    '     files; runtime\\ and notices\\THIRD-PARTY.txt), so nothing else has to be on the PC. It verifies',
     '     SHA256SUMS.txt, copies this build to %LOCALAPPDATA%\\Ujwalam\\<version>, keeps the previous version and',
-    '     adds Start-menu and desktop shortcuts. It installs nothing else.',
+    `     adds Start-menu and desktop shortcuts. It installs nothing system-wide (older builds needed Node.js ${nodeMin}+).`,
     '  Roll back:  powershell -ExecutionPolicy Bypass -File .\\Install-Ujwalam.ps1 -Rollback',
     '  3. First run only: copy data\\profile.example.json from the installed version folder to',
     '     %LOCALAPPDATA%\\Ujwalam\\data\\profile.local.json and fill in your values. Without it nothing starts.',
@@ -294,6 +297,9 @@ export async function buildAlpha(opts = {}) {
   }
   log(`obs-nvenc.dll: ${nvenc.state}${nvenc.sha ? ` (sha256 ${nvenc.sha})` : ''}`);
   log(`OBS runtime:${obs.files.length} files from ${obs.modules.shipped.length} modules (${obs.modules.shipped.join(', ')}); skipped ${obs.skipped.files} files`);
+  // Bundled runtimes (single-file setup, 2026-11-19): Node.js, Python + packages + OCR models, ffmpeg, VC++ DLLs.
+  const rt = opts.runtimeBundle ?? await prepareRuntime({ repo: REPO, log: (s) => log(`runtime: ${s}`) });
+  log(`bundled runtimes: Node.js ${rt.info.node.version}, Python ${rt.info.python.version} (${rt.info.python.packages} packages), ffmpeg ${rt.info.ffmpeg.version}, VC++ ${rt.info.vcRuntime.version}; ${rt.files.length} files`);
 
   // 2. stage
   const stageRoot = mkdtempSync(path.join(os.tmpdir(), 'ujw-package-'));
@@ -311,6 +317,8 @@ export async function buildAlpha(opts = {}) {
     put('studio/ujwalam-studio.exe', 'host', { src: studioExe });
     for (const f of studioQt) put(f.dest, 'obs', { src: f.src });
     for (const f of obs.files) put(f.dest, 'obs', { src: f.src });
+    const taken = new Set(files.map((f) => f.rel.toLowerCase()));
+    for (const f of rt.files) if (!taken.has(f.dest.toLowerCase())) put(f.dest, 'runtime', { src: f.src });
     // Re-check the bytes actually staged (the runtime file could change between the check above and the copy);
     // release.json records this staged file's state and hash.
     const stagedNvenc = files.find((f) => f.origin === 'obs' && /(^|\/)obs-nvenc\.dll$/i.test(f.rel));
@@ -331,6 +339,9 @@ export async function buildAlpha(opts = {}) {
       obsPatches: nvenc.sha ? [{ file: 'obs-nvenc.dll', state: nvenc.state, sha256: nvenc.sha, upstreamCommit: readManifest().patch.upstreamCommit }] : [],
       // LU1 (D343): a hash per part (host, studio window, services, overlay, data), so a live update knows what it changes.
       parts: releaseParts(files),
+      // What the build carries (Install-Ujwalam.ps1 skips the PC checks for these; data/runtime/bundle.json).
+      runtime: { node: { version: rt.info.node.version, sha256: rt.info.node.sha256 }, python: { version: rt.info.python.version, packages: rt.info.python.packages },
+        ffmpeg: { version: rt.info.ffmpeg.version }, vcRuntime: { version: rt.info.vcRuntime.version } },
     };
     put('release.json', 'generated', { text: `${JSON.stringify(release, null, 2)}\n` });
     put('package.json', 'generated', { text: `${JSON.stringify({ name: 'ujwalam', version, private: true, license: 'GPL-3.0-or-later', type: 'module', engines: { node: `>=${rel.nodeMin}` } }, null, 2)}\n` });
@@ -362,6 +373,14 @@ export async function buildAlpha(opts = {}) {
     }
     for (const [k, list] of [...byComp].sort()) tp.push(`${k}`, ...list.map((f) => `    ${f}`), '');
     tp.push('Data files under obs/data/ come from OBS Studio (GPL-2.0-or-later).', 'Windows system DLLs the runtime imports (not shipped): ' + obs.systemDlls.join(', '), '');
+    const b = loadBundle(REPO);
+    tp.push('Bundled runtimes (data/runtime/bundle.json; each file pinned by SHA-256):',
+      `  Node.js ${b.node.version} (runtime/node/) | ${b.node.licence}; full text: runtime/node/LICENSE`,
+      `  Python ${b.python.version} embeddable (runtime/python/) | ${b.python.licence}; full text: runtime/python/LICENSE.txt`,
+      `  Python packages (runtime/python/Lib/site-packages/, services/clip/requirements-bundle.lock.txt) | each package's licence is in its *.dist-info folder`,
+      `  RapidOCR / PaddleOCR models (runtime/python/Lib/site-packages/rapidocr/models/) | ${b.ocrModels.licence}`,
+      `  FFmpeg ${b.ffmpeg.version} (runtime/ffmpeg/) | ${b.ffmpeg.licence}; full text: runtime/ffmpeg/LICENSE.txt; source: https://github.com/BtbN/FFmpeg-Builds and https://ffmpeg.org`,
+      `  Microsoft Visual C++ runtime ${b.vcRuntime.version} (next to the programs) | ${b.vcRuntime.licence}`, '');
     put('notices/THIRD-PARTY.txt', 'generated', { text: tp.join('\n') });
     const list = ['OBS runtime files copied (package path, bytes, reason). Source: the configured OBS runtime dir.', ''];
     for (const f of obs.files) list.push(`${f.dest}\t${statSync(f.src).size}\t${f.why}`);
@@ -378,9 +397,9 @@ export async function buildAlpha(opts = {}) {
     const fontBad = [...Object.entries(OFL_FONTS).filter(([r, h]) => { const f = files.find((x) => x.rel === r); return !f || sha256(readFileSync(f.abs)) !== h; }).map(([r]) => `font missing or not the pinned file: ${r}`),
       ...Object.entries(OFL_FONT_LICENCE_SHA).filter(([r, h]) => { const f = files.find((x) => x.rel === r); return !f || sha256(readFileSync(f.abs)) !== h; }).map(([r]) => `font licence text missing or not the pinned file: ${r}`)];
     if (fontBad.length) throw new Error(`package checks failed:\n  ${fontBad.join('\n  ')}`);
-    const scan = privateScan(files.filter((f) => f.origin !== 'obs').map((f) => f.abs), profile);
+    const scan = privateScan(files.filter((f) => f.origin !== 'obs' && f.origin !== 'runtime').map((f) => f.abs), profile);
     if (!scan.ok) throw new Error(`private-term scan failed (terms are never printed):\n${scan.out}`);
-    log(`checks passed: allowlist, forbidden paths (fonts: ${fontNames.join(', ')}), import closure, private-term scan over ${files.filter((f) => f.origin !== 'obs').length} non-OBS files`);
+    log(`checks passed: allowlist, forbidden paths (fonts: ${fontNames.join(', ')}), import closure, private-term scan over ${files.filter((f) => f.origin !== 'obs' && f.origin !== 'runtime').length} non-OBS files`);
 
     // 4. checksums, zip
     const sums = files.map((f) => `${sha256(readFileSync(f.abs))}  ${f.rel}`).sort((a, b) => a.slice(66).localeCompare(b.slice(66)));
@@ -405,7 +424,7 @@ export async function buildAlpha(opts = {}) {
     const unpacked = files.reduce((s, f) => s + statSync(f.abs).size, 0);
     const summary = {
       version, zip: zipFile, zipBytes: z.bytes, zipSha256: zipSha, entries: z.entries, unpackedBytes: unpacked,
-      byOrigin: Object.fromEntries(['repo', 'host', 'obs', 'generated'].map((o) => [o, files.filter((f) => f.origin === o).length])),
+      byOrigin: Object.fromEntries(['repo', 'host', 'obs', 'runtime', 'generated'].map((o) => [o, files.filter((f) => f.origin === o).length])),
       obsModules: obs.modules.shipped, systemDlls: obs.systemDlls, skipped: obs.skipped, commit,
     };
     writeFileSync(path.join(outDir, `${name}.files.txt`), `${sums.join('\n')}\n`);

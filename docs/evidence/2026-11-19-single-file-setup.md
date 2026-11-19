@@ -39,3 +39,50 @@ runtime/ffmpeg/ffmpeg.exe, ffprobe.exe, *.dll, LICENSE.txt
 ```
 
 Build inputs are cached under `out/runtime-cache/` (gitignored) with versions and SHA-256s in `data/runtime/bundle.json`.
+
+## Step 2: bundled runtimes, no admin rights (2026-11-19)
+
+Pins: `data/runtime/bundle.json`. Builder: `tools/package/runtime-bundle.mjs` (`prepareRuntime`, called by
+`tools/package/build-alpha.mjs`). Cache: `out/runtime-cache/` (gitignored).
+
+| Runtime | Version | Source | Check |
+|---|---|---|---|
+| Node.js | 26.12.1 | `https://nodejs.org/dist/v26.12.1/node-v26.12.1-win-x64.zip` | zip SHA-256 `b3efd5c7...e2b4` = nodejs.org `SHASUMS256.txt`; the `node.exe` inside (`1c63f141...84ed`, 105,319,752 bytes) is byte-identical to the dev PC's installed 26.12.1 |
+| Python embeddable | 3.14.7 amd64 | `https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip` | SHA-256 `d297e5ff...1f15` computed at first download (python.org shows no SHA-256 on the page; sigstore not checked: UNVERIFIED) |
+| Python packages | 38 wheels (`services/clip/requirements-bundle.lock.txt`) | PyPI, `pip download --only-binary :all:` cp314 win_amd64 | `pip install --no-index --require-hashes --no-deps --target`; every hash shared with the OCR and whisper locks matches them; 3 new: onnxruntime-directml 1.24.4, sympy 1.14.0, mpmath 1.3.0 |
+| RapidOCR models | PP-OCRv6 det/rec small, PP-OCRv4 cls mobile v2.0 | modelscope.cn RapidOCR v3.10.0 | SHA-256s as listed in rapidocr's `default_models.yaml`, equal to the dev `.venv-gpu` copies |
+| FFmpeg | n8.1.3-9-g29e619e767 LGPL shared | build PC (winget BtbN.FFmpeg.LGPL.Shared.8.1) | each of 9 files + LICENSE.txt pinned |
+| VC++ runtime | 14.44.35112 | VS 2022 Build Tools `VC\Redist\MSVC\14.44.35112\x64\Microsoft.VC143.CRT` | 10 DLLs pinned; copied next to the version folder top, `bin/`, `studio/`, `obs/bin/64bit/`, `obs/obs-plugins/64bit/`, `runtime/python/` |
+
+Changes:
+
+- Package: `runtime/node`, `runtime/python` (embeddable + site-packages without package test suites, `python314._pth` =
+  `python314.zip`, `.`, `Lib\site-packages`; no `import site`, no user site), `runtime/ffmpeg`, the CRT DLLs; the clip and
+  face workers' `.py` files, every `data/clip/*.json`, the committed game packs (`data/games/<id>/*.json`; `local/`
+  forbidden), `data/models/face-ai.json`. Allowlist and forbidden rules updated (`tools/package/manifest.mjs`); the
+  extension rule is lifted only inside `runtime/python/Lib/site-packages/` (certifi's public `cacert.pem`). The private
+  term scan skips third-party runtime files, as it skips the OBS runtime.
+- `release.json` gains `runtime` (versions). `notices/THIRD-PARTY.txt` lists the bundled runtimes and their licence files.
+- `Install-Ujwalam.ps1`: for a build with `runtime`, uses `runtime\node\node.exe` (also for the settings backup helper
+  and rollback) and skips the system Node.js and VC++ registry checks. Older builds: unchanged checks.
+- `Ujwalam.cmd` and `ujwalam-start.exe`: run the build's `runtime\node\node.exe`, else Node.js on PATH. `ujwalam-start.exe`
+  now links the C++ runtime statically (imports only KERNEL32, USER32, SHELL32) because its copy in the install root
+  has no app-local DLLs beside it.
+- Launcher (`run-installed.mjs`): `runtime\ffmpeg` first on PATH for every child, and `FFMPEG`/`FFPROBE` set.
+- Python lookup (`record-clips.mjs pythonIn`, `launch.mjs liveClipsSpec/faceSpec`): `.venv-gpu`, `.venv`, then
+  `runtime\python\python.exe` (GPU: onnxruntime-directml). `-ClipMaker` stays only as a developer override.
+
+Evidence (2026-11-19, dev PC, off air):
+
+- `node tools/package/runtime-bundle.mjs`: 4753 runtime files, 749 MiB, 8 s with a warm cache (3432 files after the
+  package test suites are left out).
+- `node tools/package/build-alpha.mjs --force`: exit 0 in 38 s; zip 469.0 MiB, 5210 files, 1111.4 MiB unpacked
+  (alpha.35 without runtimes: 171 MiB).
+- Fresh install with PATH = `C:\Windows\System32;C:\Windows;...\WindowsPowerShell\v1.0` (no Node, no Python, no ffmpeg):
+  `Install-Ujwalam.ps1 -InstallRoot <temp> -NoShortcuts` -> "Node.js 26.12.1: bundled", "Visual C++ x64 runtime
+  14.44.35112: bundled next to the programs", "checksums ok", exit 0.
+- Installed `runtime\python\python.exe -I services\clip\clipper.py --help`: usage printed. With `runtime\ffmpeg` on PATH:
+  `clip_common.find_tool('ffmpeg')` -> the bundled ffmpeg; `RapidOCR()` loads the bundled `PP-OCRv6_det_small.onnx` and
+  runs (no download); `onnxruntime.get_available_providers()` -> `DmlExecutionProvider, CPUExecutionProvider`.
+- Tests (one file each, `UJWALAM_HEADLESS=1`, BelowNormal): package-alpha, record-clips, live-install-launcher,
+  service-swap-launcher, studio-ui-alpha, studio-ui-connect, studio-ui-readiness, instagram-live: all pass.

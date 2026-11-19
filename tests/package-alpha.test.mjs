@@ -52,10 +52,14 @@ test('PE reader: node.exe is x64 PE32+ with KERNEL32 imports', () => {
   assert.ok(pe.imports.some((n) => n.toLowerCase() === 'kernel32.dll'), pe.imports.join(','));
 });
 
-test('repo file set: no tests, docs, Python or local files; every relative import resolves inside the package', () => {
+test('repo file set: no tests, docs or local files, Python only the clip and face workers; every relative import resolves inside the package', () => {
   const files = repoFiles(REPO);
   assert.ok(files.length > 100);
-  for (const f of files) assert.ok(!/(^|\/)(tests?|fixtures)\/|\.md$|\.py$|\.local\.|(^|\/)\./.test(f), f);
+  for (const f of files) assert.ok(!/(^|\/)(tests?|fixtures)\/|\.md$|\.local\.|(^|\/)\./.test(f), f);
+  // single-file setup (2026-11-19): the workers' sources ship for the bundled Python; no other Python, no test module
+  for (const f of files.filter((x) => x.endsWith('.py'))) assert.ok(/^services\/(clip|face)\/[a-z0-9_]+\.py$/.test(f) && !/\/test_/.test(f), f);
+  assert.ok(files.includes('services/clip/clipper.py') && files.includes('services/face/face_worker.py'));
+  assert.ok(files.includes('data/games/codm/detectors.json') && files.includes('data/models/face-ai.json'));
   assert.ok(files.includes('services/studio-ui/launch.mjs'));
   assert.ok(files.includes('tools/diag/bundle.mjs'));
   assert.deepEqual(importProblems(REPO, files), []);
@@ -97,7 +101,7 @@ test('forbidden paths: legacy, local files, Microsoft fonts, any font, private e
   assert.deepEqual(fontNames.sort(), ['Consolas', 'Corbel']);
   const bad = ['legacy/x.js', 'data/profile.local.json', 'data/x.local.json', 'ui/fonts/corbel.ttf', 'ui/fonts/Consolas-Bold.woff2', 'ui/fonts/free.otf',
     'docs/evidence/private/a.png', 'docs/x.md', 'feedback/2026/moment.json', 'out/host/build/ujwalam-host.exe', 'recordings/a.mkv', 'markers/s.jsonl',
-    '.env', 'node_modules/ajv/x.js', 'host.local.json', 'data/labels/a.json', 'data/games/codm/x.json', 'logs/host.log', 'bin/ujwalam-host.pdb'];
+    '.env', 'node_modules/ajv/x.js', 'host.local.json', 'data/labels/a.json', 'data/games/codm/local/x.json', 'logs/host.log', 'bin/ujwalam-host.pdb'];
   for (const p of bad) assert.ok(forbiddenProblems([p], { fontNames }).length > 0, p);
   // D344: the pinned OFL fonts are the only font files that may ship; a same-named file with other bytes is caught at build time, any other font stays forbidden
   for (const p of Object.keys(OFL_FONTS)) assert.deepEqual(forbiddenProblems([p], { fontNames }), [], p);
@@ -182,28 +186,41 @@ test('installed spec: data dirs under the data root, OBS runtime and host exe fr
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-test('clip maker check: the package ships no Python, so an installed copy says so in plain words and names the fix', () => {
-  // the repo part of the zip has no Python, no venv and no clipper (manifest.mjs repoFiles; the allowlist refuses them)
+test('clip maker check: the package carries its Python (runtime/python); a damaged install says so in plain words and names the fix', () => {
+  // the repo part of the zip has the clipper but no venv; the bundled Python lives under runtime/python only
   const files = repoFiles(REPO);
-  for (const f of files) assert.ok(!/(^|\/)\.venv|python\.exe$|\.py$|(^|\/)services\/clip\//.test(f), f);
-  assert.ok(allowProblems(['.venv/Scripts/python.exe']).length > 0 && allowProblems(['python/python.exe']).length > 0, 'a Python in the zip would be refused');
+  for (const f of files) assert.ok(!/(^|\/)\.venv|python\.exe$/.test(f), f);
+  assert.ok(files.includes('services/clip/clipper.py'));
+  assert.ok(allowProblems(['.venv/Scripts/python.exe']).length > 0 && allowProblems(['python/python.exe']).length > 0, 'a Python outside runtime/ would be refused');
+  assert.deepEqual(allowProblems(['runtime/python/python.exe', 'runtime/node/node.exe', 'runtime/ffmpeg/ffmpeg.exe', 'bin/msvcp140.dll', 'studio/vcruntime140.dll', 'msvcp140.dll']), []);
+  assert.ok(allowProblems(['data/msvcp140.dll']).length > 0, 'VC++ DLLs only next to the exes');
   const d = tmp('clipcheck');
   try {
     const install = path.join(d, 'Ujwalam', '0.1.0-alpha.1');
     const dataRoot = path.join(d, 'Ujwalam', 'data');
     mkdirSync(path.join(install, 'services', 'studio-ui'), { recursive: true });
     mkdirSync(dataRoot, { recursive: true });
-    // 1) no clipRoot in ujwalam.json: the launcher uses the install dir, which has no Python
+    // 1) no clipRoot in ujwalam.json: the launcher uses the install dir; here its runtime\python is missing (damaged)
     const spec = installedSpec({ install, dataRoot });
     assert.equal(spec.clipRoot, null);
     const t = clipTools({ clipRoot: spec.clipRoot ?? install });
     assert.deepEqual([t.py, t.missing], [null, 'python']);
-    assert.match(t.reason, /^the clip maker's Python is missing \(the Ujwalam download does not include Python; looked in /);
+    assert.match(t.reason, /^the clip maker's Python is missing \(no runtime\\python\\python\.exe in /);
     assert.equal(t.fix, CLIP_MAKER_FIX);
     const note = clipMakerNote(t);
     assert.match(note, /^\[ujwalam\] Clips can't be made on this PC yet: the clip maker's Python is missing/);
-    assert.ok(note.includes('Install-Ujwalam.ps1 -SettingsOnly -ClipMaker <folder>'), note);
+    assert.ok(note.includes('Repair'), note);
     assert.match(note, /Everything else works\.$/);
+    // 1b) the bundled Python and clipper in place: ready
+    mkdirSync(path.join(install, 'runtime', 'python'), { recursive: true });
+    writeFileSync(path.join(install, 'runtime', 'python', 'python.exe'), '');
+    mkdirSync(path.join(install, 'services', 'clip'), { recursive: true });
+    writeFileSync(path.join(install, 'services', 'clip', 'clipper.py'), '');
+    const ok = clipTools({ clipRoot: install });
+    assert.deepEqual([ok.py, ok.missing], [path.join(install, 'runtime', 'python', 'python.exe'), null]);
+    assert.equal(clipMakerNote(ok), null);
+    rmSync(path.join(install, 'runtime'), { recursive: true, force: true });
+    rmSync(path.join(install, 'services', 'clip'), { recursive: true, force: true });
     // 2) clipRoot names a folder with Python but no clipper: the clipper is named
     const maker = path.join(d, 'checkout');
     mkdirSync(path.join(maker, '.venv', 'Scripts'), { recursive: true });

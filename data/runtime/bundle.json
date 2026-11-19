@@ -1,0 +1,67 @@
+{
+  "$comment": "Runtimes bundled into the package (single-file setup, 2026-11-19; docs/evidence/2026-11-19-single-file-setup.md). tools/package/runtime-bundle.mjs fetches or copies each input into out/runtime-cache/ (gitignored), refuses any file whose SHA-256 differs from this file, and stages them under runtime/ (and the VC++ DLLs next to every exe folder). Checked 2026-11-19.",
+  "version": 1,
+  "checked": "2026-11-19",
+  "node": {
+    "version": "26.12.1",
+    "url": "https://nodejs.org/dist/v26.12.1/node-v26.12.1-win-x64.zip",
+    "sha256": "b3efd5c70cba3308ed46e7e699a9b8aac075bbc6b027fcb39c84c31acc25e2b4",
+    "shaSource": "nodejs.org/dist/v26.12.1/SHASUMS256.txt (matched 2026-11-19)",
+    "take": { "node-v26.12.1-win-x64/node.exe": "node.exe", "node-v26.12.1-win-x64/LICENSE": "LICENSE" },
+    "licence": "MIT (Node.js) plus the bundled third-party licences listed in its LICENSE file"
+  },
+  "python": {
+    "version": "3.14.7",
+    "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip",
+    "sha256": "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15",
+    "shaSource": "computed at the first download from python.org, 2026-11-19 (python.org lists no SHA-256 on the release page; sigstore bundle not checked: UNVERIFIED)",
+    "pth": ["python314.zip", ".", "Lib\\site-packages"],
+    "lock": "services/clip/requirements-bundle.lock.txt",
+    "licence": "PSF-2.0 (Python); package licences in runtime/python/Lib/site-packages/*.dist-info"
+  },
+  "ocrModels": {
+    "dir": "Lib/site-packages/rapidocr/models",
+    "source": "rapidocr 3.10.0 default_models.yaml (URL and SHA-256 as listed there)",
+    "licence": "Apache-2.0 (PaddleOCR models, converted to ONNX by RapidAI)",
+    "files": [
+      { "file": "PP-OCRv6_det_small.onnx", "bytes": 9929594, "sha256": "090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx" },
+      { "file": "PP-OCRv6_rec_small.onnx", "bytes": 21234383, "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx" },
+      { "file": "ch_ppocr_mobile_v2.0_cls_mobile.onnx", "bytes": 585532, "sha256": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c", "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx" }
+    ]
+  },
+  "ffmpeg": {
+    "version": "n8.1.3-9-g29e619e767 (BtbN FFmpeg-Builds, win64-lgpl-shared-8.1)",
+    "source": "the ffmpeg.exe found on the build PC's PATH (winget package BtbN.FFmpeg.LGPL.Shared.8.1, from github.com/BtbN/FFmpeg-Builds); override with UJWALAM_FFMPEG_DIR (the bin folder). Pinned by the SHA-256 of every file.",
+    "licence": "LGPL-2.1-or-later build (no --enable-gpl, no nonfree); LICENSE.txt from the build is shipped",
+    "files": {
+      "ffmpeg.exe": "a3bf949b1262ec9893bd80b681ec6001ba028bc7c8a4885e23c8df5b0ce95b1a",
+      "ffprobe.exe": "fe818a56825e31f39791216977c729ccf1223051e3abfb13acbf8ea16e0e94bd",
+      "avcodec-62.dll": "4f817870cfaeaced3e34a083c50a1b4be0389202d7fb821632d47cf9b3f4d82a",
+      "avdevice-62.dll": "34bc695cfdd3106de29551c6868f1c2cdc0fa36903494506f1708251e6a3075e",
+      "avfilter-11.dll": "28e202431dc0643af97c307dc6437da13f8c08aa016fc28d1f9ec8fd0336e172",
+      "avformat-62.dll": "bcf514a394dc5ec43fe64e4f1624ba63b23e9c25967081ea2d03d95b0dc359ef",
+      "avutil-60.dll": "481620c7b5cd8e831a50762fae55699c821091e96c42226d04fee725a4aae2f5",
+      "swresample-6.dll": "3baad8ac0c8f0050cfd5742f5104603a27127397521409bf7d1742e6d02f955b",
+      "swscale-9.dll": "d217a08bcd92b3a4b7ecb02e841724460a5c94a103d957370cfe75e892ac3dc2"
+    },
+    "licenceFile": { "../LICENSE.txt": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768" }
+  },
+  "vcRuntime": {
+    "version": "14.44.35112 (Microsoft.VC143.CRT, Visual Studio 2022 Build Tools)",
+    "source": "<VS Build Tools>/VC/Redist/MSVC/14.44.35112/x64/Microsoft.VC143.CRT (found through vswhere); override with UJWALAM_VC_CRT_DIR",
+    "licence": "Microsoft Visual Studio redistributable code (app-local deployment of the files in the Redist folder is permitted; docs/licence-headers.md)",
+    "files": {
+      "concrt140.dll": "2405355f0a58067b258f8df33c327e3a3d716eaac5a3a5aebb757842d85bd376",
+      "msvcp140.dll": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9",
+      "msvcp140_1.dll": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d",
+      "msvcp140_2.dll": "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9",
+      "msvcp140_atomic_wait.dll": "640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479",
+      "msvcp140_codecvt_ids.dll": "f2069a52880ec885ee7f0511186100eb7fada0411a2b4948fafea7735b878a18",
+      "vccorlib140.dll": "19839407c3fdbc824e5bce189bf68ddf8097f12ec28b757797ffa0415c144ddd",
+      "vcruntime140.dll": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+      "vcruntime140_1.dll": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f",
+      "vcruntime140_threads.dll": "219915cf20822f34d5e7c1fdd4e21ae7f3396881096c51036225fb8f84b47afa"
+    },
+    "nextTo": ["", "bin", "studio", "obs/bin/64bit", "obs/obs-plugins/64bit", "runtime/python"]
+  }
+}

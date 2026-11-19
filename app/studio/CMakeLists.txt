@@ -148,6 +148,9 @@ endif()
 if(WIN32)
 	add_executable(ujwalam-start WIN32 src/start_stub.cpp res/ujwalam.rc)
 	target_link_libraries(ujwalam-start PRIVATE shell32 user32)
+	# Static C++ runtime (single-file setup, 2026-11-19): a copy runs from the install root, where no app-local VC++ DLLs
+	# sit, on a PC that may have no system-wide VC++ redistributable.
+	set_property(TARGET ujwalam-start PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	if(MSVC)
 		target_compile_options(ujwalam-start PRIVATE /W4 /permissive- /utf-8)
 	endif()

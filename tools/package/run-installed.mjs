@@ -59,7 +59,8 @@ export function installedSpec({ install = INSTALL, dataRoot, userArgs = [] }) {
   const overlayRoot = path.basename(named).toLowerCase() === 'overlays' && existsSync(named) && !existsSync(path.join(named, 'overlays'))
     ? path.dirname(named) : named;
   const profile = fromCfg('profile', path.join(dataRoot, 'profile.local.json'));
-  // clipRoot: a folder holding services/clip and its Python venv (the zip ships no Python). Unset: no clipping (D283).
+  // clipRoot: developer override, a checkout holding services/clip and its Python venv. Unset: the build's own clip
+  // maker and its bundled Python (runtime\python, since 2026-11-19).
   const clipRoot = fromCfg('clipRoot', null);
   // updateFolder: the build folder the studio looks in for a newer package (Update available; Ujwalam-Setup.exe writes
   // the folder it installed from). Unset: no update check.
@@ -68,7 +69,12 @@ export function installedSpec({ install = INSTALL, dataRoot, userArgs = [] }) {
     if (inside(p)) throw new Error(`${k} must not point into the install dir`);
   }
   const dirs = { core: path.join(dataRoot, 'core'), host: path.join(dataRoot, 'host'), feedback: path.join(dataRoot, 'feedback'), diag: path.join(dataRoot, 'diag') };
+  // Bundled ffmpeg/ffprobe (runtime\ffmpeg, 2026-11-19): first on PATH for every child (the clip maker finds them on
+  // PATH) and named in FFMPEG/FFPROBE (posting, scene builder, media info). A build without it keeps the PC's PATH.
+  const ff = path.join(install, 'runtime', 'ffmpeg');
+  const bundledFf = existsSync(path.join(ff, 'ffmpeg.exe'));
   const env = {
+    ...(bundledFf ? { PATH: [ff, path.join(install, 'runtime', 'node'), process.env.PATH ?? ''].filter(Boolean).join(path.delimiter), FFMPEG: path.join(ff, 'ffmpeg.exe'), FFPROBE: path.join(ff, 'ffprobe.exe') } : {}),
     UJWALAM_OBS_RUNTIME: path.join(install, 'obs'),
     UJWALAM_HOST_EXE: path.join(install, 'bin', 'ujwalam-host.exe'),
     UJWALAM_HOST_DATA: dirs.host,
