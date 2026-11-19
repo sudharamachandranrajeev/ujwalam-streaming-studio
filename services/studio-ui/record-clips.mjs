@@ -337,10 +337,14 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   const add = (job, why) => { queue.push(job); log(`clips: ${why}`); };
   const start = () => {
     if (child || stopped || !queue.length) return;
-    const job = queue[0];
     // Start-up time (2026-11-19): a job carried over from the last session waits resumeHoldMs after this start, so its
-    // ffmpeg and Python do not compete with the studio opening. A job of this session starts at once.
-    if (job.resumed === true && now() - createdAt < resumeHoldMs) return;
+    // ffmpeg and Python do not compete with the studio opening. A job of this session starts at once, also when held
+    // jobs are ahead of it in the queue (Codex: no head-of-line block); the held ones keep their order after the hold.
+    const held = (j) => j.resumed === true && now() - createdAt < resumeHoldMs;
+    const at = queue.findIndex((j) => !held(j));
+    if (at < 0) return;
+    const job = queue[at];
+    if (at > 0) { queue.splice(at, 1); queue.unshift(job); }
     const { spec, reason } = clipRunSpec({ clipRoot, dataDir, job, project });
     if (!spec) {
       queue.shift(); last = { name: job.name, kind: job.kind, result: 'not-made', reason, clips: 0 };

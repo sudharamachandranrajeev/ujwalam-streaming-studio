@@ -95,7 +95,7 @@ import { loadProject } from '../project/store.mjs';
 import { APP_DATA_DIR, alphaBases, alphaFile, buildAlphaProject, prepareAlphaProject, readProfile, stampOf, upgradeAlphaFile, upgradePresets } from './alpha.mjs';
 import { placeholderRoles, rebindPlaceholders } from '../project/rebind-roles.mjs';
 import { upgradeScenes } from '../project/scene-upgrades.mjs';
-import { createRecordClips, isLive } from './record-clips.mjs';
+import { createRecordClips, isLive, isRecording } from './record-clips.mjs';
 import { hasExited, killChildTree } from '../common/kill-tree.mjs';
 import { createPostChain } from '../posting/auto-chain.mjs';
 import { createLearningSignals } from '../learning/signals.mjs';
@@ -1566,7 +1566,12 @@ export async function main(argv = process.argv.slice(2)) {
     // after this point, so they do not compete with the studio window opening. Neither is needed before Go live is
     // clicked, and both only act while live or recording.
     const workersFrom = Date.now() + WORKER_START_DELAY_MS;
-    const syncWorkersWhenDue = () => { if (Date.now() >= workersFrom) syncWorkers(); };
+    // A stream or recording that starts inside the delay starts them at once (Codex, 2026-11-19: no missed first moments).
+    let workersDue = false;
+    const syncWorkersWhenDue = (status = null) => {
+      if (!workersDue && (Date.now() >= workersFrom || (status && (isLive(status) || isRecording(status))))) workersDue = true;
+      if (workersDue) syncWorkers();
+    };
     // One flags instance for the 5 s loops: isOn re-reads flags.local.json only when it changed (services/flags).
     let workerFlags = null;
     const flagIsOn = (id) => { try { workerFlags ??= createFlags({ dataDir }); return workerFlags.isOn(id); } catch { return false; } };
@@ -1588,9 +1593,11 @@ export async function main(argv = process.argv.slice(2)) {
         try {
           // The host watch loop reads outputs.status every 2 s; a fresh answer from it is used (one call fewer).
           const recent = hostSup?.recentOutputs?.(2500);
-          if (recent) { recordClips.feed(recent); return; }
+          if (recent) { recordClips.feed(recent); syncWorkersWhenDue(recent); return; }
           const d = JSON.parse(readFileSync(hostDiscovery, 'utf8'));
-          recordClips.feed(await new HostClient({ port: d.port, token: hostToken }).call('outputs.status'));
+          const st = await new HostClient({ port: d.port, token: hostToken }).call('outputs.status');
+          recordClips.feed(st);
+          syncWorkersWhenDue(st);
         } catch { /* host restarting: next tick */ }
       };
       setInterval(clipTick, 5000).unref();

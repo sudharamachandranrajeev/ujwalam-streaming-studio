@@ -136,8 +136,17 @@ function onlySid(dacl, sid, { top }) {
 /** True when the DACL has a full-control allow ACE for `sid` that is not inherited and, for a directory, is inherited by
  *  files and folders made inside it (flags OI and CI, not IO alone). */
 function grantsFull(dacl, sid, dir) {
+  // NP stops the grant after one level, so it is refused (Codex, 2026-11-19)
   return [...dacl.matchAll(ACE)].some((a) => a[1] === 'A' && a[3] === 'FA' && a[6] === sid && !a[2].includes('ID') && !a[2].includes('IO')
-    && (!dir || (a[2].includes('OI') && a[2].includes('CI'))));
+    && !a[2].includes('NP') && (!dir || (a[2].includes('OI') && a[2].includes('CI'))));
+}
+
+/** True when a DACL is not protected and every ACE in it is inherited (ID) and not inherit-only. */
+function onlyInherited(dacl) {
+  const flags = /^D:([A-Z]*)\(/.exec(dacl)?.[1] ?? '';
+  if (flags.includes('P')) return false;
+  const aces = [...dacl.slice(2 + flags.length).matchAll(ACE)];
+  return aces.length > 0 && aces.every((a) => a[2].includes('ID') && !a[2].includes('IO') && !a[2].includes('NP'));
 }
 
 /** Restrict a file or directory to the current user. dir: true uses mode 0700 / an inheritable grant.
@@ -163,7 +172,10 @@ export function protectPath(p, { dir = false } = {}) {
     // The skip also needs what step 1 would have set: full control for the user on the item, and for a directory an
     // inheritable grant (OI and CI), so files made later inherit the user-only DACL and not the token's default one.
     const before = readDacls(p, { tree: dir });
-    if (before?.length && before.every((e, i) => onlySid(e.dacl, sid, { top: i === 0 })) && grantsFull(before[0].dacl, sid, dir)) return 'acl';
+    // Below the top, only inherited ACEs (what step 3's reset leaves): a sub-folder with its own grant could stop the
+    // user-only DACL reaching files made in it later (Codex, 2026-11-19).
+    if (before?.length && before.every((e, i) => onlySid(e.dacl, sid, { top: i === 0 })) && grantsFull(before[0].dacl, sid, dir)
+      && before.slice(1).every((e) => onlyInherited(e.dacl))) return 'acl';
     if (!icacls([p, '/inheritance:r', '/grant:r', dir ? `*${sid}:(OI)(CI)F` : `*${sid}:(F)`, '/Q'])) return 'acl-failed';
     const own = readDacls(p);
     if (!own || own.length !== 1) return 'acl-failed';

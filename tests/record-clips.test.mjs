@@ -283,6 +283,24 @@ test('start-up time: a job left from the last session waits resumeHoldMs; a job 
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
 
+test('start-up time: a job of this session starts at once even with a held job ahead of it (Codex 2026-11-19)', async () => {
+  const s = setup();
+  try {
+    writeSettings(s.dataDir, { clips: { recording: 'after', live: 'off' } });
+    const rc = make(s);
+    rc.feed(s.S('live')); rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1);
+    rc.stop();
+    await tick(); await tick();
+    const rc2 = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, resumeHoldMs: 60_000 });
+    rc2.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1, 'the old job is held');
+    rc2.feed(s.S('live')); rc2.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 2, "the new recording's job is not blocked by the held one");
+    rc2.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
 test('no clip maker: reported in plain words, nothing spawned', () => {
   const s = setup();
   try {
