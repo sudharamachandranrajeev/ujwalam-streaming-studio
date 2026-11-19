@@ -146,6 +146,7 @@ struct DuckWait {
 std::map<std::string, std::string> g_duck_bound;
 std::vector<DuckWait> g_duck_wait;
 bool g_duck_tick = false;
+std::atomic<bool> g_duck_used{false}; // a duck was ever bound or waited for (read by shutdown_ducks off the graphics thread)
 
 std::string sidechain_of(obs_source_t *fl)
 {
@@ -215,6 +216,7 @@ void duck_wait(obs_source_t *fl, const std::string &name)
 	if (!g_duck_tick) {
 		obs_add_tick_callback(duck_tick, nullptr);
 		g_duck_tick = true;
+		g_duck_used = true;
 	}
 }
 
@@ -506,7 +508,14 @@ void shutdown_ducks()
 		g_duck_wait.clear();
 		g_duck_bound.clear();
 	};
-	on_graphics(job);
+	// No duck ever registered: nothing to undo. Without a running video thread (a failed main-video reset) nothing would
+	// run a graphics task, and nothing ticks either: undo it here (obs_remove_tick_callback takes its own mutex).
+	if (!g_duck_used.load())
+		return;
+	if (obs_get_video())
+		on_graphics(job);
+	else
+		job();
 }json::Value duck_status(obs_source_t *src)
 {
 	obs_source_t *fl = src ? obs_source_get_filter_by_name(src, filter_name("duck").c_str()) : nullptr;
@@ -891,15 +900,21 @@ void on_media_ended(void *, calldata_t *cd)
 	advance_locked(w, it->second, it->second->heard.exchange(false));
 }
 
-// The source opened the next file (deferred update ran, or the restart did): its own end counts from now.
+// The source opened the next file (deferred update ran, or the restart did): its own end counts from now. A broken or
+// very short file can end before this signal (its media_ended fell in the opening window and was dropped, as the
+// previous file's late end would be): the media state tells, so that end is counted here, once.
 void on_opened(void *, calldata_t *cd)
 {
 	obs_source_t *src = (obs_source_t *)calldata_ptr(cd, "source");
 	Worker &w = worker();
 	std::lock_guard<std::mutex> lk(w.m);
 	auto it = w.lists.find(src);
-	if (it != w.lists.end() && !it->second->queued)
-		it->second->opening = false;
+	if (it == w.lists.end() || it->second->queued || !it->second->opening || w.stop)
+		return;
+	it->second->opening = false;
+	const enum obs_media_state st = obs_source_media_get_state(src);
+	if (st == OBS_MEDIA_STATE_ENDED || st == OBS_MEDIA_STATE_ERROR)
+		advance_locked(w, it->second, it->second->heard.exchange(false)); // queues again: a later media_ended is dropped
 }
 
 void on_destroy(void *, calldata_t *cd)

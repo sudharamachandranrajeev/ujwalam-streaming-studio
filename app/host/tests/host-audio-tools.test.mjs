@@ -546,3 +546,20 @@ test('a playlist whose other files are gone restarts the same file (no silence)'
   assert.equal(r.playlist?.state, 'playing', JSON.stringify(r.playlist));
   assert.ok(peaks.every((p) => p > -30), `x1 keeps playing after x2 is gone: ${peaks.map((p) => p.toFixed(1))}`);
 });
+test('a broken file between two good ones never stalls the playlist (its early end is counted when it opens)', async () => {
+  const dir = path.join(media, 'midbad');
+  mkdirSync(dir, { recursive: true });
+  wav('a-good.wav', sine(1000, -25), 0.8, dir);
+  writeFileSync(path.join(dir, 'b-bad.wav'), Buffer.from('not a sound file at all'));
+  wav('c-good.wav', sine(1000, -22), 0.8, dir);
+  doc.audio.sources.push({ id: 's-midbad', name: 'midbad', playback: { folder: { base: 'media', rel: 'midbad' }, loop: true },
+    volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] });
+  await c.call('audio.addFromProject', { project: doc, audio: 's-midbad' });
+  const peaks = [];
+  for (let i = 0; i < 14; i++) peaks.push((await c.call('audio.testMeasure', { audio: 's-midbad', skipMs: 0, ms: 450 })).peakDb);
+  const r = await row('s-midbad');
+  RESULTS.midBadPlaylist = { peaks, playlist: r.playlist };
+  assert.equal(r.playlist?.state, 'playing', JSON.stringify(r.playlist));
+  assert.ok(peaks.some((p) => Math.abs(p - -22) < 1), `the file after the broken one plays: ${peaks.map((p) => p.toFixed(1))}`);
+  assert.ok(peaks.slice(-4).every((p) => p > -30), `still playing at the end (looped past the broken file): ${peaks.map((p) => p.toFixed(1))}`);
+});

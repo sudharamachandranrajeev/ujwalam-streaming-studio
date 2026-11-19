@@ -187,3 +187,7 @@ Tests (host-audio-tools, 25 pass, 1 skip (symlink right)):
 - First file broken in a 2-file list: the list goes on to file 2 and plays at -25 dBFS. State "playing".
 - Second file deleted: file 1 restarts, and every 450 ms window has audio at -25 dBFS.
 - Duck timing rerun: dip 11.71 dB, attack 10 ms, recovery 400 ms, latency 90 ms.
+## Review fixes, round 3 (Codex static review of dfef122, 2026-11-19)
+
+1. A broken or very short next file can end before libobs signals "update" or "media_restart". Its media_ended falls in the opening window and is dropped. When the signal arrives, the playlist now reads the media state. If the file has already ended or failed, that end is counted there, once, and the next file is queued. A later media_ended for the same file is dropped because the next step is queued. Test: a good file, a broken file and a good file, looped. The file after the broken one plays, and the list is still playing at the end.
+2. Shutdown: the shutdown guard thread now starts before the playlist and duck cleanup. `shutdown_ducks` does nothing when no duck was ever bound. Without main video (`obs_get_video()` null), it unregisters the tick callback directly instead of queuing a graphics task.
