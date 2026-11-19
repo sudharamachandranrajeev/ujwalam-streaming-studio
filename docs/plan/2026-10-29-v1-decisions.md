@@ -2219,3 +2219,16 @@ Growth plan ED2. Decided:
 - One AppUserModelID `Ujwalam.Studio` for the studio, the host's preview windows and every app shortcut (also an
   existing taskbar pin to the launcher); the studio window's relaunch command pins the launcher. Setup has none.
   UNVERIFIED: the real taskbar, checked by the user after updating.
+
+## D401 — MU2 scene music (2026-11-19)
+
+- Per-scene `music {on, mood, volumeDb}` (-40..0 dB), off by default, no flag. At most one Music strip
+  (`ffmpeg_source`), so the AU tools and ducking apply unchanged. Library `<dataDir>/music/<mood>.wav`, made off air.
+- A host per-sample level filter (added on the graphics thread) does the fades. A fade transition splits its time;
+  a cut is 25+25 ms. The same mood keeps playing. A changed bed is out-then-in on one source.
+- Listen is host-owned (`music.preview`): a private source in no track, on the monitor only. An on-air gate is held
+  by every sink while it is wanted or Starting/Live/Stopping, and by replay and the NVENC probe while they start. A
+  hold mutes the preview at once; Listen is refused while any hold or active output exists. File work never runs
+  under the gate.
+- Codex reviewed it three times (2 P1 + 5 P2, then 2 High + 1 Medium, then 1 High); all fixed with tests.
+  UNVERIFIED: real beds, Listen on a real device, a real stinger, a real mic, a real stream.
