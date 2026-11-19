@@ -133,6 +133,13 @@ function onlySid(dacl, sid, { top }) {
   return aces.every((a) => a[1] === 'A' && a[6] === sid);
 }
 
+/** True when the DACL has a full-control allow ACE for `sid` that is not inherited and, for a directory, is inherited by
+ *  files and folders made inside it (flags OI and CI, not IO alone). */
+function grantsFull(dacl, sid, dir) {
+  return [...dacl.matchAll(ACE)].some((a) => a[1] === 'A' && a[3] === 'FA' && a[6] === sid && !a[2].includes('ID') && !a[2].includes('IO')
+    && (!dir || (a[2].includes('OI') && a[2].includes('CI'))));
+}
+
 /** Restrict a file or directory to the current user. dir: true uses mode 0700 / an inheritable grant.
  *  Returns 'mode-0600' | 'mode-0700' | 'acl' | 'acl-failed'.
  *  Windows (review E8-06): the DACL is set, not edited:
@@ -153,8 +160,10 @@ export function protectPath(p, { dir = false } = {}) {
     // Start-up time (2026-11-19): an item (and tree) that already passes the same final check as step 4 is left as it
     // is: one `icacls /save` instead of five icacls runs over the whole data folder at every start. Anything else
     // (another principal, inheritance on, a deny ACE, an unreadable entry) takes the full path below.
+    // The skip also needs what step 1 would have set: full control for the user on the item, and for a directory an
+    // inheritable grant (OI and CI), so files made later inherit the user-only DACL and not the token's default one.
     const before = readDacls(p, { tree: dir });
-    if (before?.length && before.every((e, i) => onlySid(e.dacl, sid, { top: i === 0 }))) return 'acl';
+    if (before?.length && before.every((e, i) => onlySid(e.dacl, sid, { top: i === 0 })) && grantsFull(before[0].dacl, sid, dir)) return 'acl';
     if (!icacls([p, '/inheritance:r', '/grant:r', dir ? `*${sid}:(OI)(CI)F` : `*${sid}:(F)`, '/Q'])) return 'acl-failed';
     const own = readDacls(p);
     if (!own || own.length !== 1) return 'acl-failed';
