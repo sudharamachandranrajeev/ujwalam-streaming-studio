@@ -68,6 +68,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/CloseDialog.qml
 		qml/AddLayerDialog.qml
 		qml/AddAudioDialog.qml
+		qml/AudioToolsWindow.qml
 		qml/AddSceneDialog.qml
 		qml/UButton.qml
 		qml/UFocusRing.qml

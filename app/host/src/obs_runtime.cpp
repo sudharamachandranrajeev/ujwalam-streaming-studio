@@ -3,6 +3,7 @@
 // (docs/evidence/2026-10-27-p1a-build.md): PATH (not SetDllDirectory) for the runtime bin dir, helper exes next to
 // the host exe, module config under the host data dir.
 #include "obs_runtime.h"
+#include "audio_tools.h"
 #include "effects.h"
 #include "log.h"
 
@@ -173,11 +174,9 @@ bool start(const Options &o, std::string &err)
 
 void shutdown(uint32_t guard_ms)
 {
-	obs_set_output_source(0, nullptr);
-	hlog::info("obs_shutdown begin");
 	// Guard: libobs destroys sources on one destruction thread and obs_shutdown waits for it. A source whose destroy
 	// never returns (seen 2026-11-08: a WASAPI source left on a dead RTWQ queue waits forever in its Stop) would keep
-	// the process alive with nothing to do.
+	// the process alive with nothing to do. It starts before every cleanup step that can wait.
 	HANDLE done = guard_ms ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
 	std::thread guard;
 	if (done)
@@ -190,6 +189,10 @@ void shutdown(uint32_t guard_ms)
 			hlog::close_file();
 			TerminateProcess(GetCurrentProcess(), kShutdownGuardExit);
 		});
+	audio_tools::shutdown_playlists(); // no playlist step may open a file while sources are destroyed
+	audio_tools::shutdown_ducks();     // no duck waits to be switched on while filters are destroyed
+	obs_set_output_source(0, nullptr);
+	hlog::info("obs_shutdown begin");
 	obs_shutdown();
 	if (done) {
 		SetEvent(done);

@@ -71,6 +71,7 @@ ApplicationWindow {
         s.guide = guide.probe();
         s.stats = stats.probe();
         s.addAudio = addAudioDlg.probe();
+        s.audioTools = audioToolsDlg.probe();
         // The frame (alpha.33 layout): each panel's x, y, width, height in window pixels.
         const at = (it) => { const p = it.mapToItem(win.contentItem, 0, 0); return [Math.round(p.x), Math.round(p.y), Math.round(it.width), Math.round(it.height)] };
         s.frame = { scenes: at(scenes), layers: at(layers), side: at(side), stats: at(stats), previews: at(previews), mixer: at(mixer) };
@@ -95,6 +96,7 @@ ApplicationWindow {
         if (String(action).startsWith("volume-type:") || String(action).startsWith("mixer-")) return mixer.probeAction(String(action));
         if (action === "add-audio-open") { studioStore.openAddAudio(); return true }
         if (String(action).startsWith("add-audio-")) return addAudioDlg.probeAction(String(action));
+        if (String(action).startsWith("tools-")) return audioToolsDlg.probeAction(String(action));
         if (String(action).startsWith("inspector-")) return inspector.probeAction(String(action));
         if (String(action).startsWith("look:") || String(action).startsWith("look-") || String(action).startsWith("adv-")) return lookPanel.probeAction(String(action));
         if (String(action).startsWith("outputs-")) return outputsPanel.probeAction(String(action));
@@ -139,6 +141,7 @@ ApplicationWindow {
         onAddLayerReady: (sceneId, sceneName) => addLayerDlg.ask(sceneId, sceneName)
         onAddSceneReady: (canvases) => addSceneDlg.ask(canvases)
         onAddAudioReady: (choices) => addAudioDlg.ask(choices)
+        onAudioToolsReady: (info, audio, name) => audioToolsDlg.ask(info, audio, name)
         onSettingsWanted: (page) => settingsDlg.openAt(page)
         onYoutubeEventsWanted: ytWin.show("presets")
         onGoLiveWanted: (options) => goLiveDlg.ask(options)
@@ -304,6 +307,7 @@ ApplicationWindow {
     AddSceneDialog { id: addSceneDlg; store: studioStore; onScenarioRequested: scenarioDlg.show() }
     ScenarioWindow { id: scenarioDlg; store: studioStore }
     AddAudioDialog { id: addAudioDlg; store: studioStore }
+    AudioToolsWindow { id: audioToolsDlg; store: studioStore }
     NameDialog { id: renameDlg; store: studioStore }
     SettingsDialog {
         id: settingsDlg

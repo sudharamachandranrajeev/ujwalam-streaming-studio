@@ -172,6 +172,11 @@ struct Audio {
 	bool muted = false;
 	uint32_t mixers = 0;
 	std::string monitoring; // off | monitor-only | monitor-and-output
+	json::Value filters;    // AU2 strip tools (audio_tools.h); null = none
+	std::string app;        // AU1: program file name of one app's sound (wasapi_process_output_capture)
+	std::vector<std::string> playlist; // AU1: audio files played in turn (one file: ffmpeg_source loops it)
+	bool playlist_loop = true;
+	std::string playlist_root; // AU1: the media folder (canonical); every playlist file must stay inside it
 };
 
 struct Plan {

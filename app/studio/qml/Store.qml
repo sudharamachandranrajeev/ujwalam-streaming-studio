@@ -64,6 +64,7 @@ QtObject {
     signal addLayerReady(string sceneId, string sceneName)
     signal addSceneReady(var canvases)
     signal addAudioReady(var choices)  // the mixer's Add audio: what can be added now (audio-routes.mjs)
+    signal audioToolsReady(var info, string audio, string name) // AU2: a strip's Tools window (ranges, presets, saved tools)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
     signal goLiveWanted(var options)   // Go live with a YouTube output on and signed in: the chooser opens first (D389)
     signal connectionsWanted(string output) // open Settings > Connections with only this output (the chooser's "Add the key")
@@ -472,6 +473,21 @@ QtObject {
             if (!ok) say("Not added to the stream: " + audioError(b, err));
             else say("Added to the stream." + (b.saved === false ? " Not saved to the project file: the change is live only." : ""));
             loadMixer();
+        });
+    }
+    // AU2 strip tools (audio-routes.mjs op 'filters'): applied on air at once, saved into the project file.
+    function openAudioTools(audio, name) {
+        Api.get("ui/api/audio/tools", (ok, b, err) => {
+            if (!ok) return say("Tools: " + err);
+            audioToolsReady(b, audio, name);
+        });
+    }
+    function setAudioTools(audio, filters, then) {
+        Api.post("ui/api/audio", { op: "filters", audio: audio, filters: filters }, (ok, b, err) => {
+            if (!ok) { const m = "Not changed: " + audioError(b, err); if (then) then(false, m); else say(m); return; }
+            // AU3: ducking that waits for its sound says why (the host's plain reason)
+            const duck = b.duck && b.duck.on && !b.duck.active ? b.duck.reason : "";
+            if (then) then(true, [duck, b.saved ? "" : "Live only: not saved to the project file."].filter(Boolean).join(" "));
         });
     }
     function removeAudio(audio, name) {

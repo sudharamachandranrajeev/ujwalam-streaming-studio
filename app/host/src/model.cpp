@@ -2,6 +2,7 @@
 // ujwalam-host: project v1 -> build plan. See model.h.
 #include "model.h"
 #include "checks.h"
+#include "audio_tools.h"
 #include "screen_capture.h"
 
 #include <algorithm>
@@ -110,7 +111,7 @@ std::string url_path(const std::string &rel)
 }
 
 // pathRef {base, rel} -> absolute existing file under the base directory, or a reason.
-std::string resolve_file(const json::Value &ref, const Options &o, const std::string &what, Unavail &u)
+std::string resolve_file(const json::Value &ref, const Options &o, const std::string &what, Unavail &u, bool dir = false)
 {
 	chk::only_keys(ref, {"base", "rel"}, what + ".file");
 	chk::require(ref, {"base", "rel"}, what + ".file");
@@ -144,8 +145,8 @@ std::string resolve_file(const json::Value &ref, const Options &o, const std::st
 			u = {"unavailable", "file resolves outside its base directory"};
 			return "";
 		}
-	if (!fs::is_regular_file(p, ec)) {
-		u = {"unavailable", "file not found"};
+	if (dir ? !fs::is_directory(p, ec) : !fs::is_regular_file(p, ec)) {
+		u = {"unavailable", dir ? "folder not found" : "file not found"};
 		return "";
 	}
 	return p.generic_u8string();
@@ -966,7 +967,9 @@ Plan build(const json::Value &doc, const Options &o)
 	}
 	std::set<std::string> bound; // layer sources that already have an audio entry
 	for (auto &a : arr(*au, "sources", 256, "audio").as_array()) { // D245: one per video layer in a Meld session
-		chk::only_keys(a, {"id", "name", "device", "layer", "volumeDb", "muted", "monitoring", "tracks", "origin"}, "audio source");
+		chk::only_keys(a, {"id", "name", "device", "layer", "app", "playback", "volumeDb", "muted", "monitoring", "tracks",
+				   "filters", "origin"},
+			       "audio source");
 		chk::require(a, {"id", "name", "volumeDb", "muted", "monitoring", "tracks"}, "audio source");
 		Audio x;
 		x.id = mid(a.find("id"), "audio source");
@@ -988,10 +991,49 @@ Plan build(const json::Value &doc, const Options &o)
 			x.mixers |= 1u << (uint32_t)(k - tracks.begin());
 		}
 		bool hd = a.find("device") != nullptr, hl = a.find("layer") != nullptr;
-		if (hd == hl)
-			throw Error(rpc::INVALID_PARAMS, what + ": needs exactly one of device or layer");
+		const bool ha = a.find("app") != nullptr, hp = a.find("playback") != nullptr;
+		if ((int)hd + (int)hl + (int)ha + (int)hp != 1)
+			throw Error(rpc::INVALID_PARAMS, what + ": needs exactly one of device, layer, app or playback");
+		if (const json::Value *fl = a.find("filters")) {
+			audio_tools::check_filters(*fl, what + ".filters");
+			x.filters = *fl;
+		}
 		Unavail u;
-		if (hl) {
+		if (ha || hp) {
+			// AU1: one app's sound or an audio file / folder playlist: a separate global source, like a device's
+			if (ha) {
+				x.app = audio_tools::check_exe(*a.find("app"), what);
+				x.obs_type = o.test_capture ? "ujw_test_audio" : "wasapi_process_output_capture";
+				x.settings = audio_tools::app_settings(x.app);
+				if (!o.allow_devices && !o.test_capture)
+					u = {"forbidden", "app sound is off (host started without --allow-devices)"};
+				else if (!o.test_capture && audio_tools::app_ambiguous(x.app))
+					u = {"unavailable", "Two different programs named " + x.app +
+								    " are running, so Ujwalam cannot tell which one to capture. Close one, then press Try again."};
+			} else {
+				const json::Value &pb = *a.find("playback");
+				chk::only_keys(pb, {"file", "folder", "loop"}, what + ".playback");
+				chk::require(pb, {"loop"}, what + ".playback");
+				const bool folder = pb.find("folder") != nullptr;
+				if (folder == (pb.find("file") != nullptr))
+					throw Error(rpc::INVALID_PARAMS, what + ".playback: needs exactly one of file or folder");
+				x.playlist_loop = chk::get_bool(pb, "loop", true, what + ".playback");
+				const json::Value &ref = *pb.find(folder ? "folder" : "file");
+				if (const json::Value *b = ref.find("base"); !b || !b->is_string() || b->as_string() != "media")
+					throw Error(rpc::INVALID_PARAMS, what + ".playback: sound files must be in the media folder (base media)");
+				std::string f = resolve_file(ref, o, what + ".playback", u, folder);
+				if (u.code.empty()) {
+					std::error_code ec; // resolve_file found the media base, so it is there
+					x.playlist_root = fs::canonical(fs::u8path(o.bases.at("media")), ec).generic_u8string();
+					x.playlist = folder ? audio_tools::folder_playlist(f, x.playlist_root) : std::vector<std::string>{f};
+					if (x.playlist.empty())
+						u = {"unavailable", "the folder has no audio files"};
+				}
+				x.obs_type = "ffmpeg_source";
+				x.settings = audio_tools::playback_settings(x.playlist.empty() ? std::string() : x.playlist.front(),
+									    x.playlist.size() <= 1 && x.playlist_loop);
+			}
+		} else if (hl) {
 			std::string lid = mid(a.find("layer"), what + ".layer");
 			auto l = layers.find(lid);
 			if (l == layers.end())

@@ -4,6 +4,8 @@
 // same cases. On top of structure it checks cross-references and path safety, which JSON Schema cannot.
 // validateProject(doc) -> { ok, errors: [{ path, message }] }. Reports every problem it finds; never throws.
 
+import { filtersProblems } from './audio-filters.mjs';
+
 export const PROJECT_VERSION = 1;
 export const ID_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 export const REF_RE = /^[a-z][a-z0-9_.-]{0,63}$/;
@@ -26,6 +28,8 @@ export const DISPLAY_ID_RE = /^[ -~]{1,127}$/;
 // D390: OBS window spec "title:class:exe" (':' and '#' inside a part encoded by OBS), exe not empty.
 export const WINDOW_SPEC_RE = /^[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]+$/;
 const MONITORING = ['off', 'monitor-only', 'monitor-and-output'];
+// AU1: a program file name (no folder), as Windows shows it for a running app; never a window title.
+export const EXE_RE = /^[^\\/:*?"<>|#\u0000-\u001f]{1,120}\.exe$/i; // no "#": OBS window specs encode it (#22, #3A)
 const PATH_BASES = ['data', 'luts', 'media', 'overlays', 'profile']; // luts: the app's shipped LUTs (D381)
 // D291 layer effects: key -> [min, max] or [min, max, 'int'], 'color' (#RRGGBB), 'file' (pathRef), 'bool', or
 // [[allowed values]]. All keys are required. Same ranges as app/host/src/model.cpp and data/schemas/project.schema.json.
@@ -470,14 +474,41 @@ export function validateProject(doc) {
         a.sources.forEach((s, i) => {
           const p = `.audio.sources[${i}]`;
           if (!isObj(s)) { err(p, 'must be an object'); return; }
-          noExtra(s, ['id', 'name', 'device', 'layer', 'volumeDb', 'muted', 'monitoring', 'tracks', 'origin'], p);
+          noExtra(s, ['id', 'name', 'device', 'layer', 'app', 'playback', 'volumeDb', 'muted', 'monitoring', 'tracks', 'filters', 'origin'], p);
           req(s, ['id', 'name', 'volumeDb', 'muted', 'monitoring', 'tracks'], p);
           if ('id' in s) idOf(s.id, `${p}.id`);
           if ('name' in s) str(s.name, `${p}.name`, 1, 120);
           if ('device' in s && idOf(s.device, `${p}.device`) && !deviceIds.has(s.device)) err(`${p}.device`, `unknown device "${s.device}"`);
           if ('layer' in s && idOf(s.layer, `${p}.layer`) && !layerIds.has(s.layer)) err(`${p}.layer`, `unknown layer "${s.layer}"`);
-          if ('device' in s && 'layer' in s) err(p, 'device and layer are exclusive');
-          if (!('device' in s) && !('layer' in s)) err(p, 'needs device or layer');
+          // AU1: one app's sound (exe name only, never a window title) or a file / folder playlist
+          const kinds = ['device', 'layer', 'app', 'playback'].filter((k) => k in s);
+          if (kinds.length > 1) err(p, 'device, layer, app and playback are exclusive');
+          if (!kinds.length) err(p, 'needs device, layer, app or playback');
+          if ('app' in s) {
+            if (!isObj(s.app)) err(`${p}.app`, 'must be an object');
+            else {
+              noExtra(s.app, ['exe'], `${p}.app`); req(s.app, ['exe'], `${p}.app`);
+              if ('exe' in s.app && (typeof s.app.exe !== 'string' || !EXE_RE.test(s.app.exe))) err(`${p}.app.exe`, 'must be a program file name ending in .exe');
+            }
+          }
+          if ('playback' in s) {
+            const b = s.playback, bp = `${p}.playback`;
+            if (!isObj(b)) err(bp, 'must be an object');
+            else {
+              noExtra(b, ['file', 'folder', 'loop'], bp); req(b, ['loop'], bp);
+              if (('file' in b) === ('folder' in b)) err(bp, 'needs exactly one of file or folder');
+              for (const k of ['file', 'folder']) {
+                if (!(k in b)) continue;
+                pathRefOk(b[k], `${bp}.${k}`);
+                if (isObj(b[k]) && b[k].base !== 'media') err(`${bp}.${k}.base`, 'must be "media"');
+              }
+              if ('loop' in b && typeof b.loop !== 'boolean') err(`${bp}.loop`, 'must be a boolean');
+            }
+          }
+          if ('filters' in s) for (const e of filtersProblems(s.filters, `${p}.filters`)) err(e.path, e.message);
+          // AU3: a strip never ducks under itself. Another id that is not (or no longer) in the project is allowed: the
+          // host keeps ducking off with a reason until that sound is there.
+          if (isObj(s.filters?.duck) && s.filters.duck.source === s.id) err(`${p}.filters.duck.source`, 'must be another sound');
           if ('volumeDb' in s) num(s.volumeDb, `${p}.volumeDb`, -100, 12);
           if ('muted' in s && typeof s.muted !== 'boolean') err(`${p}.muted`, 'must be a boolean');
           if ('monitoring' in s && !MONITORING.includes(s.monitoring)) err(`${p}.monitoring`, `must be one of ${MONITORING.join(', ')}`);
