@@ -13,6 +13,8 @@ One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the sec
 - Lighter when idle: the replay buffer runs only while live or recording, browser overlays draw at 30 fps, hidden previews stop drawing.
 - The Transitions box fits the side column; the colour swatches wrap.
 - The old widget studio is gone; the studio program is a third smaller.
+- Faster start: the data folder's permissions are no longer rewritten at every start, last session's clip job waits a minute, and the clip and face workers start after the window (or at once when you go live or record). Each part now writes how long its start took.
+- The studio and its preview windows sit under the pinned Ujwalam icon on the taskbar instead of opening a second button (may need a sign-out or an unpin and re-pin once).
 
 ## 0.1.0-alpha.34 — 2026-11-17
 
