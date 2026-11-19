@@ -29,13 +29,26 @@ until the user listens (D393).
 - UI server (`services/studio-ui/music-routes.mjs`): `GET /ui/api/music`; `POST {op:'scene'}` saves a scene's music
   (host first, then the file; undo on a failed save). The first time music goes on, one Music strip is added on the
   first track with "Duck music under my voice" (12 dB, 10 ms, 400 ms) under the first microphone, if the mixer has one
-  (the user's click is the trigger, D332). `POST {op:'preview'}` plays a made bed on this PC's speakers through a hidden
-  PowerShell `System.Media.SoundPlayer` (D191 windowsHide), off air only (any stream or recording sink busy, or an
-  unreadable status, refuses).
+  (the user's click is the trigger, D332). `POST {op:'preview'}` asks the host (`music.preview`), which plays a made bed through a
+  private ffmpeg_source in no track, on the monitoring device only. The host refuses while any libobs output is active,
+  and every output start (sink start, retry, replay buffer, NVENC probe) calls `scene_music::preview_stop()` first under
+  the same lock, so Listen is never captured on air. One preview at a time; the UI server stops it on close, the host on
+  shutdown. (Codex review 2026-11-19 replaced the first SoundPlayer version.)
 - QML: scene menu "Music…" opens `SceneMusicWindow.qml`: a "Music in this scene" switch with its plain-word line, mood
   buttons (with "(not made yet)"), a level slider (greyed while off), Listen / Stop listening (disabled on air), and a
   fixed-height status line. The default mood when first opened follows the scene name (start/soon -> starting-soon,
   brb -> brb, end/outro -> ending, match/game -> in-match, else lobby). No flag: per-scene music is off until switched on.
+
+## Codex review fixes (2026-11-19)
+
+- Ramp command is one 64-bit atomic {seq 16, ms 16, to float}: the audio thread never pairs an old seq with a new target.
+- A `media` mutex is held across every call into the strip's source; detach takes it first; each media call and each
+  ramp publication is refused when its cue is replaced (`pending`) or the strip retired (`gen`). Shutdown join runs
+  inside the obs_runtime shutdown guard.
+- Lost host reply: the UI server reads `music.status` back; applied means saved, not undone. A save that throws after
+  the file is in place is read back and kept.
+- Removing the strip (the UI server's rollback of an add) restores every scene's music from that document
+  (`music_from_doc`).
 
 ## Measured (host test, `app/host/tests/host-scene-music.test.mjs`, 2026-11-19)
 
@@ -52,6 +65,9 @@ strip's filters, 10 ms bins.
 | Music off / no music field / missing bed | peak below -90 dBFS; plain reason in `music.status` | |
 | Live level change (music.setScene -12 dB) | peak -32 dBFS | 300 ms ramp |
 | Duck under the mic on the Music strip | -20.00 -> -31.71 dBFS, dip 11.71 dB | 12 dB, 10 / 400 ms |
+| Switch storm: 12 switches 60 ms apart, fade 400 | largest step 0.80 dB (run 2; 1.19 run 1); ends on in-match at -30 dBFS | last cue wins |
+| Listen, then record.start | preview stopped by the start; refused (-32009) while recording; plays again after | off air only |
+| Rolled-back strip add | every scene's music equals the document again | music_from_doc |
 
 Notes:
 - First draft used a libobs `gain_filter` updated every 5 ms. Measured: ffmpeg_source hands audio over in blocks of about
@@ -66,8 +82,8 @@ Notes:
 
 | File | Result |
 |---|---|
-| `app/host/tests/host-scene-music.test.mjs` (new) | 8 pass, 0 fail |
-| `tests/scene-music-routes.test.mjs` (new) | 8 pass, 0 fail |
+| `app/host/tests/host-scene-music.test.mjs` (new) | 11 pass, 0 fail |
+| `tests/scene-music-routes.test.mjs` (new) | 9 pass, 0 fail |
 | `tests/studio-qml-scene-music.test.mjs` (new) | 3 pass, 0 fail |
 | `tests/project-schema.test.mjs` | 148/0 |
 | `tests/audio-tools-routes.test.mjs` | 15/0 |
@@ -86,6 +102,7 @@ Builds: `node app/host/tools/build.mjs`, `node app/studio/tools/build.mjs` (both
 - The 50 ms gap on a cut and the out-then-in change of bed on real music; a true overlap crossfade would need two
   sources mixed into one strip (not built).
 - The stinger mapping (out and in = its switch point) on a real stinger.
-- Listen: `System.Media.SoundPlayer` plays on the Windows default device, not the monitoring device, at the bed's own
-  level (not the scene level); not heard on this run (the test uses a stub player).
+- Listen on a real monitoring device: the tests run without devices, so nobody has heard it. Whether a private
+  ffmpeg_source in no scene feeds the monitor is also unproven. It plays at the bed's own level, not the scene level.
+  A desktop-audio capture of the monitoring device is harmless: Listen never plays while an output is active.
 - A real microphone for the duck, and use on a real stream.

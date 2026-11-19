@@ -2,8 +2,9 @@
 // Scene music, UI server and project side (MU2, plan 2026-11-18-audio-mixer-music): the scene music value and the Music
 // strip in the schema and the validator; GET /ui/api/music (moods, which beds are made, each scene's music, what the
 // host plays); POST op 'scene' (saved, sent to music.setScene, a Music strip with "Duck music under my voice" added the
-// first time music goes on, refusals save nothing); POST op 'preview' (off air only, a made bed only). Stub host; real
-// project files in a temp folder; a stub player (nothing is played).
+// first time music goes on, refusals save nothing, a lost host reply read back); POST op 'preview' (sent to the host's
+// music.preview, which owns the player and refuses on air; a made bed only). Stub host; real project files in a temp
+// folder; nothing is played.
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -21,7 +22,7 @@ const SAMPLE = path.join(HERE, 'fixtures', 'project', 'sample.project.json');
 const SCHEMA = JSON.parse(readFileSync(path.join(HERE, '..', 'data', 'schemas', 'project.schema.json'), 'utf8'));
 const sample = () => JSON.parse(readFileSync(SAMPLE, 'utf8'));
 
-function setup({ live = false, failHost = null } = {}) {
+function setup({ live = false, failHost = null, lostReply = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ujw-mu-'));
   const file = path.join(dir, 'p.project.json');
   copyFileSync(SAMPLE, file);
@@ -29,18 +30,27 @@ function setup({ live = false, failHost = null } = {}) {
   mkdirSync(lib);
   writeFileSync(path.join(lib, 'lobby.wav'), Buffer.alloc(1000));
   const calls = [], played = [];
+  const scenes = {}; // what the stub host holds (music.setScene)
   const host = {
     call: async (m, p) => {
       calls.push([m, structuredClone(p)]);
       if (m === failHost) throw Object.assign(new Error('refused'), { code: -32602 });
-      if (m === 'music.status') return { attached: true, mood: 'lobby', playing: true, reason: '' };
-      if (m === 'outputs.status') return { sinks: [{ kind: 'stream', active: live }] };
+      if (m === 'music.setScene') {
+        scenes[p.scene] = p.music;
+        if (lostReply) throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); // applied, reply lost
+      }
+      if (m === 'music.status') return { attached: true, mood: 'lobby', playing: true, reason: '', scenes, previewing: null };
+      if (m === 'music.preview') {
+        if (live && p.mood !== null) throw Object.assign(new Error('Listening is only possible off air'), { code: -32009 });
+        played.push(p.mood ?? 'stop');
+        return { previewing: p.mood };
+      }
       return {};
     },
   };
   const json = (res, status, body) => { res.status = status; res.body = body; };
   const projectSync = { status: () => ({ file }), reload() {}, record() { return true; } };
-  const routes = createMusicRoutes({ host, json, projectSync, libraryDir: lib, play: (f) => { played.push(f); return { stop() { played.push('stop'); } }; } });
+  const routes = createMusicRoutes({ host, json, projectSync, libraryDir: lib });
   const req = async (method, body) => { const res = {}; assert.equal(await routes.handle(method, '/ui/api/music', body, res), true); return res; };
   const saved = () => JSON.parse(readFileSync(file, 'utf8'));
   return { req, calls, saved, played, lib };
@@ -146,6 +156,14 @@ test('refusals save nothing: bad scene, mood, level, keys; a host refusal undoes
   assert.equal(f.saved().audio.sources.some((s) => 'music' in s), false);
 });
 
+test('a lost host reply is read back: applied means saved, not undone', async () => {
+  const s = setup({ lostReply: true });
+  const r = await s.req('POST', { op: 'scene', scene: 'scene-main', music: { on: true, mood: 'lobby', volumeDb: -3 } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(s.saved().scenes[0].music, { on: true, mood: 'lobby', volumeDb: -3 });
+  assert.ok(!s.calls.some(([m]) => m === 'audio.removeFromProject'), 'nothing undone');
+});
+
 test('preview: off air only, a made bed only, stop', async () => {
   let s = setup({ live: true });
   let r = await s.req('POST', { op: 'preview', mood: 'lobby' });
@@ -154,9 +172,10 @@ test('preview: off air only, a made bed only, stop', async () => {
   s = setup();
   r = await s.req('POST', { op: 'preview', mood: 'brb' });
   assert.equal(r.body.error, 'not-made');
+  assert.ok(!s.calls.some(([m]) => m === 'music.preview'), 'a bed not made is not sent');
   r = await s.req('POST', { op: 'preview', mood: 'lobby' });
   assert.equal(r.body.previewing, 'lobby');
-  assert.equal(path.basename(s.played[0]), 'lobby.wav');
+  assert.deepEqual(s.played, ['lobby']);
   r = await s.req('POST', { op: 'preview', mood: null });
   assert.equal(r.body.previewing, null);
   assert.equal(s.played.at(-1), 'stop');

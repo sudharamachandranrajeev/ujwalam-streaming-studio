@@ -734,6 +734,14 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 			throw Error(rpc::INVALID_PARAMS, "music is required (an object or null)");
 		return a.studio->music_set_scene(q.str("scene", 64), *m);
 	});
+	// music.preview {mood|null}: Listen to a mood's bed on the monitoring device only (in no track), off air only; null stops.
+	add("music.preview", [&a](const json::Value &p) {
+		Params q(p, {"mood"});
+		const json::Value *m = p.find("mood");
+		if (!m || !(m->is_null() || m->is_string()))
+			throw Error(rpc::INVALID_PARAMS, "mood is required (a mood id or null)");
+		return a.studio->music_preview(m->is_null() ? std::string() : q.str("mood", 32));
+	});
 	add("music.status", [&a](const json::Value &p) {
 		(void)Params(p, {});
 		return a.studio->music_status();

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -27,6 +28,10 @@ constexpr const char *kLevelFilter = "ujw:music:level";
 constexpr uint32_t kStepMs = 5;
 
 struct State {
+	// Lock order: media, then m. media is held across every call into the strip's ffmpeg_source (open, restart,
+	// stop); detach takes it first, so a strip is retired only between media calls, and a call made after retirement
+	// (or for a replaced cue) is refused right before it runs.
+	std::mutex media;
 	std::mutex m;
 	std::condition_variable cv;
 	std::thread th;
@@ -64,11 +69,25 @@ double db_of(double mul)
 
 // The level filter "ujw_music_level": a gain that moves along a straight line (in amplitude) sample by sample, so a
 // fade is smooth inside ffmpeg_source's audio blocks (about 85 ms each; a gain_filter would step once per block). The
-// music thread sets a ramp {to, ms} and a new seq; the audio thread starts it from where the gain is at its next block.
+// music thread publishes one ramp command {seq, ms, to} as one 64-bit atomic (seq 16 bits, ms 16 bits, to as float
+// bits), so the audio thread never pairs a new seq with an old target or duration; it starts the ramp from where the
+// gain is at its next block.
+uint64_t pack_cmd(uint16_t seq, uint16_t ms, float to)
+{
+	uint32_t bits;
+	std::memcpy(&bits, &to, sizeof bits);
+	return ((uint64_t)seq << 48) | ((uint64_t)ms << 32) | bits;
+}
+float cmd_to(uint64_t cmd)
+{
+	const uint32_t bits = (uint32_t)(cmd & 0xffffffffu);
+	float f;
+	std::memcpy(&f, &bits, sizeof f);
+	return f;
+}
 struct Level {
-	std::atomic<float> to{0.0f};
-	std::atomic<uint32_t> ms{0};
-	std::atomic<uint32_t> seq{0};
+	std::atomic<uint64_t> cmd{0}; // pack_cmd(seq, ms, to)
+	uint16_t next_seq = 0;         // music thread only
 	std::atomic<uint32_t> done{0}; // the seq whose ramp has ended
 	std::atomic<float> now{0.0f};  // the gain at the end of the last block
 	// audio thread only
@@ -92,13 +111,14 @@ void level_destroy(void *p)
 struct obs_audio_data *level_audio(void *p, struct obs_audio_data *a)
 {
 	auto *l = static_cast<Level *>(p);
-	const uint32_t seq = l->seq.load(std::memory_order_acquire);
+	const uint64_t cmd = l->cmd.load(std::memory_order_acquire);
+	const uint32_t seq = (uint32_t)(cmd >> 48);
 	if (seq != l->at_seq) {
 		l->at_seq = seq;
 		l->from = l->cur;
-		l->tgt = l->to.load();
+		l->tgt = cmd_to(cmd);
 		const uint32_t rate = audio_output_get_sample_rate(obs_get_audio());
-		l->total = (uint64_t)l->ms.load() * rate / 1000;
+		l->total = (uint64_t)((cmd >> 32) & 0xffffu) * rate / 1000;
 		l->n = 0;
 	}
 	const size_t ch = audio_output_get_channels(obs_get_audio());
@@ -143,11 +163,16 @@ bool ramp(State &s, obs_source_t *fl, double to, uint32_t ms, uint64_t g)
 	auto *l = static_cast<Level *>(obs_obj_get_data(fl));
 	if (!l)
 		return false;
-	l->to.store((float)to);
-	l->ms.store(ms);
-	const uint32_t seq = l->seq.fetch_add(1) + 1;
-	const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms + 1000);
+	ms = std::min<uint32_t>(ms, 0xffffu);
 	std::unique_lock<std::mutex> lk(s.m);
+	if (s.gen != g || s.pending || s.stop) // a replaced cue publishes nothing
+		return false;
+	uint16_t sq = ++l->next_seq;
+	if (sq == 0) // 0 is the filter's start state
+		sq = ++l->next_seq;
+	const uint32_t seq = sq;
+	l->cmd.store(pack_cmd(sq, (uint16_t)ms, (float)to), std::memory_order_release);
+	const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms + 1000);
 	for (;;) {
 		if (s.gen != g)
 			return false;
@@ -163,6 +188,20 @@ bool ramp(State &s, obs_source_t *fl, double to, uint32_t ms, uint64_t g)
 		if (s.cv.wait_for(lk, std::chrono::milliseconds(kStepMs), [&] { return s.pending || s.stop || s.gen != g; }))
 			return false;
 	}
+}
+
+// Runs f (a call into the strip's source) only while cue g is still the newest one and the strip is still attached.
+// media is held across f: detach waits for it, so nothing touches a retired strip.
+template <class F> bool media_op(State &s, uint64_t g, F f)
+{
+	std::lock_guard<std::mutex> mm(s.media);
+	{
+		std::lock_guard<std::mutex> lk(s.m);
+		if (s.gen != g || s.pending || s.stop)
+			return false;
+	}
+	f();
+	return true;
 }
 
 void open_bed(obs_source_t *src, const std::string &file, const std::string &opened)
@@ -219,8 +258,8 @@ void run()
 			playing = s.playing;
 		}
 		if (t.file.empty()) {
-			if (ramp(s, fl, 0.0, out + in, g) && playing) {
-				obs_source_media_stop(src);
+			if (ramp(s, fl, 0.0, out + in, g) && playing &&
+			    media_op(s, g, [&] { obs_source_media_stop(src); })) {
 				std::lock_guard<std::mutex> lk(s.m);
 				if (s.gen == g)
 					s.playing = false;
@@ -229,20 +268,13 @@ void run()
 			ramp(s, fl, mul_of(t.db), out + in, g); // the same bed keeps playing
 		} else {
 			bool ok = !playing || ramp(s, fl, 0.0, out, g);
-			if (ok) {
-				open_bed(src, t.file, opened);
-				bool same;
-				{
-					std::lock_guard<std::mutex> lk(s.m);
-					same = s.gen == g;
-					if (same) {
-						s.file = t.file;
-						s.playing = true;
-					}
-				}
-				if (same)
-					ramp(s, fl, mul_of(t.db), in, g);
-			}
+			if (ok && media_op(s, g, [&] {
+				    open_bed(src, t.file, opened);
+				    std::lock_guard<std::mutex> lk(s.m); // still cue g's strip: media is held, so no detach came between
+				    s.file = t.file;
+				    s.playing = true;
+			    }))
+				ramp(s, fl, mul_of(t.db), in, g);
 		}
 		obs_source_release(fl);
 		obs_source_release(src);
@@ -338,6 +370,7 @@ void detach()
 {
 	State &s = st();
 	{
+		std::lock_guard<std::mutex> mm(s.media); // waits for a media call in flight; later ones see the new gen
 		std::unique_lock<std::mutex> lk(s.m);
 		s.gen++;
 		s.pending = false;
@@ -352,7 +385,8 @@ void detach()
 		s.level_mul = 0;
 		s.now = Target{};
 		s.cv.notify_all();
-		// a fade in progress holds its own references; the new gen ends it at its next step without a write
+		// a fade in progress holds its own references; the new gen ends it at its next step without a write, and
+		// media_op refuses any further call into the old strip
 	}
 }
 
@@ -397,8 +431,91 @@ bool wait_idle(uint32_t timeout_ms)
 	return s.cv.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&] { return !s.pending && !s.busy; });
 }
 
+// ---- Listen (off air only) ----
+
+namespace {
+struct Preview {
+	std::mutex m;
+	obs_source_t *src = nullptr;
+	std::string mood;
+};
+Preview &pv()
+{
+	static Preview p;
+	return p;
+}
+bool output_active()
+{
+	bool any = false;
+	obs_enum_outputs(
+		[](void *p, obs_output_t *o) {
+			if (obs_output_active(o)) {
+				*static_cast<bool *>(p) = true;
+				return false;
+			}
+			return true;
+		},
+		&any);
+	return any;
+}
+void preview_release_locked(Preview &p)
+{
+	if (!p.src)
+		return;
+	obs_source_set_monitoring_type(p.src, OBS_MONITORING_TYPE_NONE);
+	obs_source_media_stop(p.src);
+	obs_source_release(p.src);
+	p.src = nullptr;
+	p.mood.clear();
+}
+} // namespace
+
+bool preview_start(const std::string &file, const std::string &mood, bool monitor, std::string &why)
+{
+	Preview &p = pv();
+	std::lock_guard<std::mutex> lk(p.m);
+	preview_release_locked(p);
+	if (output_active()) { // under p.m: every output start stops the preview first (preview_stop), so none slips in
+		why = "Listening is only possible off air (no stream and no recording running).";
+		return false;
+	}
+	const json::Value st = audio_tools::playback_settings(file, false);
+	obs_data_t *d = obs_data_create_from_json(st.dump().c_str());
+	p.src = obs_source_create_private("ffmpeg_source", "ujw:music:preview", d);
+	obs_data_release(d);
+	if (!p.src) {
+		why = "The music could not be opened for listening.";
+		return false;
+	}
+	obs_source_set_audio_mixers(p.src, 0); // in no track: never in a stream or a recording
+	if (monitor)
+		obs_source_set_monitoring_type(p.src, OBS_MONITORING_TYPE_MONITOR_ONLY); // the monitoring device only
+	p.mood = mood;
+	hlog::info("scene music: listening to %s", mood.c_str());
+	return true;
+}
+
+void preview_stop()
+{
+	Preview &p = pv();
+	std::lock_guard<std::mutex> lk(p.m);
+	if (p.src)
+		hlog::info("scene music: listening stopped");
+	preview_release_locked(p);
+}
+
+std::string previewing()
+{
+	Preview &p = pv();
+	std::lock_guard<std::mutex> lk(p.m);
+	if (p.src && obs_source_media_get_state(p.src) == OBS_MEDIA_STATE_ENDED)
+		preview_release_locked(p);
+	return p.mood;
+}
+
 void shutdown()
 {
+	preview_stop();
 	State &s = st();
 	{
 		std::lock_guard<std::mutex> lk(s.m);

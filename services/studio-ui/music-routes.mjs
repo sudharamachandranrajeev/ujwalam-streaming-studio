@@ -10,13 +10,14 @@
 //   POST /ui/api/music {op: 'scene', scene, music: {on, mood, volumeDb}}
 //                       saves the scene's music. Switching music on when the project has no Music strip adds one (with
 //                       "Duck music under my voice" under the first microphone, when there is one). -> { ok, saved, now }
-//   POST /ui/api/music {op: 'preview', mood}  plays the mood's bed on this PC's speakers (not in the stream), off air
-//                       only (no stream, no recording; fail closed). {op: 'preview', mood: null} stops it.
+//   POST /ui/api/music {op: 'preview', mood}  Listen: the host plays the mood's bed on the monitoring device only (a
+//                       private source in no track), off air only. The host refuses while any output is active and
+//                       stops it before any output starts (scene_music::preview_stop), so it is never heard on air.
+//                       {op: 'preview', mood: null} stops it.
 // The library is <data dir>/music (MU1 makes it off air: services/clip/scene_music.py --out <it>).
-import { spawn } from 'node:child_process';
 import { loadProject, saveProject } from '../project/store.mjs';
 import { validateProject } from '../project/index.mjs';
-import { MOOD_RE, VOLUME_DB, libraryExists, libraryState, listMoods, moodFile, musicStrip, newMusicStrip, sceneMusicProblems } from '../project/scene-music.mjs';
+import { MOOD_RE, VOLUME_DB, libraryExists, libraryState, listMoods, musicStrip, newMusicStrip, sceneMusicProblems } from '../project/scene-music.mjs';
 
 export const MUSIC_ROUTES = Object.freeze(['/ui/api/music']);
 const ID = /^[A-Za-z0-9_.:-]{1,64}$/;
@@ -33,6 +34,7 @@ export const MUSIC_ERROR_TEXT = Object.freeze({
   'on-air': 'Listening is only possible off air (no stream and no recording running).',
   'not-saved': 'The project file could not be saved, so the change was undone. Nothing changed.',
   'not-saved-live': 'The project file could not be saved and the change could not be undone: it is live until Ujwalam restarts.',
+  'host-unsure': 'The studio host did not answer, and what it plays could not be checked. Try again in a moment.',
   invalid: 'The project would not be valid with that change.',
   busy: 'The last music change is still on its way; try again in a moment.',
 });
@@ -65,8 +67,10 @@ export function setSceneMusic(doc, { scene, music, moods }) {
   return { project: p, added, music: sc.music };
 }
 
+const sameMusic = (a, b) => !!a && !!b && a.on === b.on && a.mood === b.mood && Number(a.volumeDb) === Number(b.volumeDb);
+
 /**
- * opts: { host, json, projectSync, dataDir, libraryDir, moodsDir?, log?, play?(file) -> {stop()}, afterEdit?() }
+ * opts: { host, json, projectSync, dataDir, libraryDir, moodsDir?, log?, afterEdit?() }
  */
 export function createMusicRoutes(opts) {
   const { host, json } = opts;
@@ -74,7 +78,6 @@ export function createMusicRoutes(opts) {
   const libraryDir = opts.libraryDir;
   const moods = () => listMoods(opts.moodsDir);
   let busy = false;
-  let preview = null; // { mood, stop() }
   const refuse = (res, code, status = 409, detail) => json(res, status, { error: code, text: MUSIC_ERROR_TEXT[code] ?? code, ...(detail ? { detail } : {}) });
 
   function readDoc() {
@@ -90,11 +93,12 @@ export function createMusicRoutes(opts) {
     const made = libraryDir ? libraryState(libraryDir, ms) : {};
     const r = readDoc();
     const scenes = (r.doc?.scenes ?? []).map((s) => ({ id: s.id, name: s.name, music: s.music ?? null }));
+    const nowCached = now();
     return json(res, 200, {
       moods: ms.map((m) => ({ ...m, made: made[m.id]?.made === true })),
       libraryMade: !!libraryDir && libraryExists(libraryDir) && ms.some((m) => made[m.id]?.made),
-      volumeDb: VOLUME_DB, scenes, strip: musicStrip(r.doc)?.id ?? null, now: await now(),
-      previewing: preview?.mood ?? null, ...(r.error ? { error: r.error } : {}),
+      volumeDb: VOLUME_DB, scenes, strip: musicStrip(r.doc)?.id ?? null, now: await nowCached,
+      previewing: (await nowCached)?.previewing ?? null, ...(r.error ? { error: r.error } : {}),
     });
   }
 
@@ -104,22 +108,40 @@ export function createMusicRoutes(opts) {
     if (r.error) return refuse(res, r.error);
     const x = setSceneMusic(r.doc, { scene: body.scene, music: body.music, moods: moods() });
     if (x.error) return refuse(res, x.error, x.error === 'bad-params' || x.error === 'unknown-mood' ? 400 : 409, x.errors?.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300));
+    const old = (r.doc.scenes ?? []).find((s) => s.id === body.scene)?.music ?? null;
+    // Puts the host back to the file's state. Removing an added strip restores every scene's music from r.doc (host
+    // audio_remove_model -> music_from_doc); otherwise the one scene is set back.
+    const undo = async () => {
+      if (x.added) await host.call('audio.removeFromProject', { project: r.doc, audio: x.added.id }).catch((e) => { if (e?.code !== -32602) throw e; });
+      await host.call('music.setScene', { scene: body.scene, music: old });
+    };
+    // A failed or lost reply may still have been applied: read back what the host holds before deciding.
+    const applied = async () => {
+      const s = await host.call('music.status', {});
+      return sameMusic(s?.scenes?.[body.scene], x.music) && (!x.added || s?.attached === true);
+    };
     try {
       if (x.added) await host.call('audio.addFromProject', { project: x.project, audio: x.added.id });
       await host.call('music.setScene', { scene: body.scene, music: x.music });
     } catch (e) {
-      if (x.added) { try { await host.call('audio.removeFromProject', { project: r.doc, audio: x.added.id }); } catch { /* reported below */ } }
-      return json(res, 502, { error: 'host-error', text: MUSIC_ERROR_TEXT['host-unavailable'], detail: String(e?.message ?? e?.code ?? 'error').slice(0, 200) });
+      let ok = false;
+      try { ok = await applied(); } catch {
+        return json(res, 502, { error: 'host-unsure', text: MUSIC_ERROR_TEXT['host-unsure'], detail: String(e?.message ?? e?.code ?? 'error').slice(0, 200) });
+      }
+      if (!ok) {
+        try { await undo(); } catch { /* the host did not take it; nothing to keep */ }
+        return json(res, 502, { error: 'host-error', text: MUSIC_ERROR_TEXT['host-unavailable'], detail: String(e?.message ?? e?.code ?? 'error').slice(0, 200) });
+      }
+      log('[studio-ui] scene music: the host reply was lost but the change is in place; saving it');
     }
     try { saveProject(r.file, x.project); } catch {
-      let undone = true;
-      try {
-        const old = (r.doc.scenes ?? []).find((s) => s.id === body.scene)?.music ?? null;
-        await host.call('music.setScene', { scene: body.scene, music: old });
-        if (x.added) await host.call('audio.removeFromProject', { project: r.doc, audio: x.added.id });
-      } catch { undone = false; }
-      opts.projectSync.reload();
-      return refuse(res, undone ? 'not-saved' : 'not-saved-live', 500);
+      // saveProject can throw after the new file is in place (a check after the rename): then it is saved.
+      if (!installed(r.file, body.scene, x)) {
+        let undone = true;
+        try { await undo(); } catch { undone = false; }
+        opts.projectSync.reload();
+        return refuse(res, undone ? 'not-saved' : 'not-saved-live', 500);
+      }
     }
     opts.projectSync.reload();
     opts.afterEdit?.();
@@ -127,33 +149,24 @@ export function createMusicRoutes(opts) {
     return json(res, 200, { ok: true, saved: true, scene: body.scene, music: x.music, stripAdded: x.added?.id ?? null, now: await now() });
   }
 
-  // Off air only: any stream or file sink running (or an unreadable status) refuses.
-  async function offAir() {
-    try {
-      const s = await host.call('outputs.status', {});
-      const busy = (k) => k?.active === true || ['starting', 'live', 'retrying', 'stopping', 'reconnecting'].includes(k?.state);
-      return Array.isArray(s?.sinks) && !s.sinks.some(busy);
-    } catch { return false; }
-  }
-
+  // Listen: the host owns the player (one at a time, stopped before any output starts, off air only).
   async function previewEdit(res, body) {
-    if (body.mood === null) {
-      preview?.stop();
-      preview = null;
-      return json(res, 200, { ok: true, previewing: null });
+    if (body.mood !== null) {
+      if (typeof body.mood !== 'string' || !MOOD_RE.test(body.mood) || !moods().some((m) => m.id === body.mood)) return refuse(res, 'unknown-mood', 400);
+      if (!libraryDir || libraryState(libraryDir, [{ id: body.mood }])[body.mood]?.made !== true) return refuse(res, 'not-made');
     }
-    if (typeof body.mood !== 'string' || !MOOD_RE.test(body.mood) || !moods().some((m) => m.id === body.mood)) return refuse(res, 'unknown-mood', 400);
-    if (!(await offAir())) return refuse(res, 'on-air');
-    if (!libraryDir || libraryState(libraryDir, [{ id: body.mood }])[body.mood]?.made !== true) return refuse(res, 'not-made');
-    preview?.stop();
-    const mood = body.mood;
-    const p = (opts.play ?? playWav)(moodFile(libraryDir, mood), () => { if (preview?.mood === mood) preview = null; });
-    preview = { mood, stop: p.stop };
-    return json(res, 200, { ok: true, previewing: mood });
+    try {
+      const r = await host.call('music.preview', { mood: body.mood });
+      return json(res, 200, { ok: true, previewing: r?.previewing ?? null });
+    } catch (e) {
+      if (e?.code === -32009) return refuse(res, 'on-air', 409, String(e?.message ?? '').slice(0, 200));
+      return json(res, 502, { error: 'host-error', text: MUSIC_ERROR_TEXT['host-unavailable'] });
+    }
   }
 
   return {
-    stopPreview() { preview?.stop(); preview = null; },
+    /** Stops Listen (the UI server closing). */
+    async stopPreview() { try { await host.call('music.preview', { mood: null }); } catch { /* host gone: its shutdown stops it */ } },
     /** true when the route was handled. */
     async handle(method, route, body, res) {
       if (route !== '/ui/api/music') return false;
@@ -171,13 +184,11 @@ export function createMusicRoutes(opts) {
   };
 }
 
-// Plays a WAV once on the default output device through Windows' own player (System.Media.SoundPlayer), in a hidden
-// PowerShell (D191: no console window). The path is our own library file with a checked mood id; it is passed through
-// an environment variable, never pasted into the command.
-export function playWav(file, onEnd) {
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(New-Object System.Media.SoundPlayer $env:UJWALAM_PREVIEW_WAV).PlaySync()'],
-    { windowsHide: true, stdio: 'ignore', env: { ...process.env, UJWALAM_PREVIEW_WAV: file } });
-  child.on('exit', () => onEnd?.());
-  child.on('error', () => onEnd?.());
-  return { stop() { try { child.kill(); } catch { /* gone */ } } };
+// True when the file on disk already holds this change (saveProject threw after its rename).
+function installed(file, scene, x) {
+  try {
+    const p = loadProject(file).project;
+    const sc = (p.scenes ?? []).find((s) => s.id === scene);
+    return sameMusic(sc?.music, x.music) && (!x.added || musicStrip(p)?.id === x.added.id);
+  } catch { return false; }
 }

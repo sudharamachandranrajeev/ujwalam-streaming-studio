@@ -1434,7 +1434,7 @@ export function createStudioServer(opts) {
   // D393 (proposed): the mixer's Add audio, Add to stream and Remove (audio-routes.mjs). No flag; works while live.
   const audioRoutes = createAudioRoutes({ host, json, projectSync, assetsDir, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log });
   // MU2 scene music (music-routes.mjs): per-scene mood, level and on/off; the library is <dataDir>/music. No flag.
-  const musicRoutes = createMusicRoutes({ host, json, projectSync, log, libraryDir: opts.musicDir ?? (typeof opts.dataDir === 'string' ? libraryDirOf(opts.dataDir) : null), moodsDir: opts.moodsDir, play: opts.playWav });
+  const musicRoutes = createMusicRoutes({ host, json, projectSync, log, libraryDir: opts.musicDir ?? (typeof opts.dataDir === 'string' ? libraryDirOf(opts.dataDir) : null), moodsDir: opts.moodsDir });
   // Devices that arrive after the start (2026-11-18 bug report): Connect a placeholder layer, Try again (device-routes.mjs).
   const deviceRoutes = createDeviceRoutes({
     host, json, projectSync, flags, profileFile: opts.profileFile, presetsDir: opts.presetsDir ?? DEFAULT_PRESETS_DIR, log,
@@ -2305,6 +2305,7 @@ export function createStudioServer(opts) {
       ytControlSvc?.close(); // D388: the YouTube chat readers and their timers
       stopDataWatch?.(); stopDataWatch = null;
       projectSync?.flush(); // write a pending layer edit now rather than lose it
+      await musicRoutes.stopPreview(); // MU2: Listen stops with the UI server
       for (const c of sseClients) c.write(': bye\n\n');
       server.closeAllConnections?.();
       await new Promise((r) => server.close(() => r()));

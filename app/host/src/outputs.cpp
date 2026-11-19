@@ -18,6 +18,7 @@
 // Locking: op_m_ serialises everything that calls into libobs outputs (configure, start, stop, supervisor
 // retries, probe). m_ guards sink state and is the only lock the libobs signal handlers take. obs_output_start,
 // obs_output_stop and releases are never called with m_ held, and never from a signal handler.
+#include "scene_music.h"
 #include "outputs.h"
 #include "log.h"
 #include "obs_runtime.h"
@@ -1346,6 +1347,7 @@ void Outputs::start_sink(Sink &s)
 			return;
 		}
 	}
+	scene_music::preview_stop(); // MU2: Listen never plays on air
 	bool ok = obs_output_start(s.out);
 	if (ok)
 		return;
@@ -1671,6 +1673,7 @@ json::Value Outputs::probe_locked(const std::string &codec, int max)
 		obs_output_set_video_encoder(o, e);
 		obs_output_set_audio_encoder(o, aac, 0);
 		made.push_back({e, o});
+		scene_music::preview_stop(); // MU2: Listen never plays while an output runs
 		if (!obs_output_start(o)) {
 			const char *le = obs_output_get_last_error(o);
 			const char *ee = obs_encoder_get_last_error(e);

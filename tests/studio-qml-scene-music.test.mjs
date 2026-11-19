@@ -2,8 +2,8 @@
 // Scene music in the QML studio (MU2, plan 2026-11-18-audio-mixer-music): the scene menu's "Music…" opens the scene's
 // Music window with an on switch, the moods (made / not made yet) and a level slider; switching music on saves the
 // scene's music, adds one Music strip and tells the host (music.setScene); a mood and a level change are saved;
-// Listen plays only off air. Headless probe (UJWALAM_HEADLESS=1, offscreen) against a real UI server and the fake host;
-// the preview player is a stub (nothing is played). Skipped when the shell is not built.
+// Listen asks the host (music.preview), which refuses on air. Headless probe (UJWALAM_HEADLESS=1, offscreen) against a
+// real UI server and the fake host; nothing is played. Skipped when the shell is not built.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -53,6 +53,11 @@ describe('QML studio scene music (headless probe)', { skip }, () => {
       calls.push([m, p]);
       if (m === 'music.status') return { attached: true, scene: '', mood: '', playing: false, reason: '' };
       if (m === 'music.setScene' || m === 'audio.addFromProject') return {};
+      if (m === 'music.preview') {
+        if (opts.live && p.mood !== null) throw Object.assign(new Error('Listening is only possible off air'), { code: -32009 });
+        played.push(p.mood ?? 'stop');
+        return { previewing: p.mood };
+      }
       if (m === 'outputs.status' && opts.live) return { sinks: [{ id: 'yt', kind: 'stream', state: 'live' }] };
       return fake.call(m, p);
     } };
@@ -67,7 +72,7 @@ describe('QML studio scene music (headless probe)', { skip }, () => {
     doc.audio.sources.push({ id: 'aud-mic', name: 'Mic', device: 'dev-mic', volumeDb: 0, muted: false, monitoring: 'off', tracks: ['track1'] });
     saveProject(file, doc);
     const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: key, dataDir, flags, authority: null, limits: { statusPollMs: 50 }, log: () => {},
-      projectSync: createProjectSync({ file, delayMs: 5 }), playWav: (f) => { played.push(path.basename(f)); return { stop() { played.push('stop'); } }; } });
+      projectSync: createProjectSync({ file, delayMs: 5 }) });
     const { port } = await srv.listen();
     try {
       const r = await runShell({ UJWALAM_UI_URL: `http://127.0.0.1:${port}/`, UJWALAM_UI_LAUNCH_KEY: key, UJWALAM_STUDIO_PROBE_MS: String(opts.ms ?? 4000 + actions.length * 900),
@@ -109,9 +114,9 @@ describe('QML studio scene music (headless probe)', { skip }, () => {
   test('Listen: plays the bed off air; refused while live', async () => {
     let r = await probe(['scene-music-open:scene-1', 'music-listen'], { ms: 7000 });
     assert.deepEqual(r.done, [true, true]);
-    assert.deepEqual(r.played, ['in-match.wav']);
+    assert.deepEqual(r.played, ['in-match', 'stop'], 'Listen stops when the UI server closes');
     assert.equal(r.s.sceneMusic.previewing, 'in-match');
     r = await probe(['scene-music-open:scene-1', 'music-listen'], { ms: 7000, live: true });
-    assert.deepEqual(r.played, [], 'nothing plays on air');
+    assert.deepEqual(r.played.filter((m) => m !== 'stop'), [], 'nothing plays on air');
   });
 });

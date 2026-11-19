@@ -2089,6 +2089,7 @@ json::Value Studio::audio_remove_model(const json::Value &doc, const std::string
 				}
 	model_doc_ = doc;
 	dirty_ = false;
+	music_from_doc(doc); // MU2: every scene's music as in this document (a rolled-back add restores them all)
 	refresh_ducks(); // AU3: strips that ducked under this sound stop, with a reason
 	hlog::info("audio removed from the project: %s (%s)", aid.c_str(), kind.empty() ? "was not built" : kind.c_str());
 	json::Value r = json::Value::object();
@@ -3498,6 +3499,38 @@ void Studio::music_from_plan(const model::Plan &p)
 		}
 }
 
+// The scenes' music from a project document (the same fields model::build reads), then the active scene's cue.
+void Studio::music_from_doc(const json::Value &doc)
+{
+	music_cfg_.clear();
+	if (const json::Value *ss = doc.find("scenes"); ss && ss->is_array())
+		for (auto &s : ss->as_array()) {
+			const json::Value *id = s.find("id");
+			const json::Value *m = s.find("music");
+			if (!id || !id->is_string())
+				continue;
+			MusicCfg c; // no music field: off (as model::build reads it)
+			if (!m || !m->is_object()) {
+				music_cfg_[id->as_string()] = c;
+				continue;
+			}
+			if (const json::Value *v = m->find("on"); v && v->is_bool())
+				c.on = v->as_bool();
+			if (const json::Value *v = m->find("mood"); v && v->is_string() && scene_music::mood_ok(v->as_string()))
+				c.mood = v->as_string();
+			else
+				c.on = false;
+			if (const json::Value *v = m->find("volumeDb"); v && v->is_number())
+				c.db = std::clamp(v->as_double(), -40.0, 0.0);
+			music_cfg_[id->as_string()] = c;
+		}
+	for (auto &c : canvases_)
+		if (!c.vc && !c.active.empty()) {
+			music_cue(c.active, 0, scene_music::kEditFadeMs);
+			break;
+		}
+}
+
 void Studio::music_cue(const std::string &scene, uint32_t out_ms, uint32_t in_ms)
 {
 	scene_music::Target t;
@@ -3542,6 +3575,29 @@ json::Value Studio::music_set_scene(const std::string &scene, const json::Value 
 	return music_status();
 }
 
+// Listen: mood "" stops. Off air only (scene_music::preview_start refuses while any output is active).
+json::Value Studio::music_preview(const std::string &mood)
+{
+	std::lock_guard<std::recursive_mutex> lk(m_);
+	json::Value r = json::Value::object();
+	if (mood.empty()) {
+		scene_music::preview_stop();
+		r.set("previewing", json::Value());
+		return r;
+	}
+	if (!scene_music::mood_ok(mood))
+		throw Error(rpc::INVALID_PARAMS, "mood: bad mood id");
+	auto b = last_opts_.bases.find("music");
+	std::string why;
+	const std::string file = scene_music::bed_file(b == last_opts_.bases.end() ? std::string() : b->second, mood, why);
+	if (file.empty())
+		throw Error(rpc::CONFLICT, why);
+	if (!scene_music::preview_start(file, mood, flags_.allow_devices, why))
+		throw Error(rpc::CONFLICT, why);
+	r.set("previewing", mood);
+	return r;
+}
+
 json::Value Studio::music_status() const
 {
 	std::lock_guard<std::recursive_mutex> lk(m_);
@@ -3557,5 +3613,7 @@ json::Value Studio::music_status() const
 	r.set("scenes", std::move(sc));
 	auto b = last_opts_.bases.find("music");
 	r.set("library", b != last_opts_.bases.end());
+	const std::string pv = scene_music::previewing();
+	r.set("previewing", pv.empty() ? json::Value() : json::Value(pv));
 	return r;
 }

@@ -54,6 +54,13 @@ json::Value status();
 // Waits until no fade is running (tests); false after timeout_ms.
 bool wait_idle(uint32_t timeout_ms);
 // Ends the music thread (before obs_shutdown).
+// Listen (MU2): plays `file` once on the monitoring device only (in no track), off air only. Refused while any output
+// is active; every output start calls preview_stop() first, under the same lock, so a preview never plays on air.
+// monitor false opens no audio device (tests). false + why when refused.
+bool preview_start(const std::string &file, const std::string &mood, bool monitor, std::string &why);
+void preview_stop();
+std::string previewing(); // the mood being listened to, "" none (an ended preview is released)
+
 void shutdown();
 
 // The bed file of `mood` in the library folder `dir`: "" with a plain reason when it is not there.

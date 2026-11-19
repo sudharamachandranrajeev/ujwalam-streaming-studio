@@ -218,6 +218,86 @@ test('ducking under the voice works on the Music strip (its level runs before th
   assert.equal((await status()).file, 'lobby.wav', 'the bed kept playing');
 });
 
+test('a switch storm: no step above the limit, the last cue wins', async () => {
+  await c.call('transitions.set', { canvas: 'H', type: 'fade', durationMs: 400 });
+  await c.call('scenes.activate', { scene: 'lobby' });
+  await idle();
+  const order = ['match', 'chat', 'lobby', 'match', 'quiet', 'chat', 'match', 'lobby', 'chat', 'match', 'lobby', 'match'];
+  const m = measure(4500);
+  await sleep(300);
+  for (const scene of order) { // faster than any fade: each cue replaces the one before it
+    await c.call('scenes.activate', { scene });
+    await sleep(60);
+  }
+  const r = await m;
+  await idle();
+  const b = r.bins;
+  const jumps = b.map((v, i) => (i && Math.min(v, b[i - 1]) > -35 ? Math.abs(v - b[i - 1]) : 0));
+  const maxStepDb = Math.max(...jumps);
+  const s = await status();
+  const end = median(b.slice(-40));
+  RESULTS.storm = { switches: order.length, maxStepDb, endDb: end, mood: s.mood };
+  assert.ok(maxStepDb < 1.5, `smooth through the storm: largest 10 ms step above -35 dBFS is ${maxStepDb} dB`);
+  assert.equal(s.scene, 'match');
+  assert.equal(s.file, 'in-match.wav', 'the last cue wins');
+  assert.ok(Math.abs(end - -30) < 0.6, `in-match level at the end: ${end}`);
+});
+
+test('a rolled-back strip add restores every scene\'s music from the document', async () => {
+  const before = (await status()).scenes;
+  const proposal = project();
+  proposal.scenes[0].music = music(true, 'lobby', -15);
+  proposal.scenes[1].music = music(false, 'lobby', -9);
+  const old = project();
+  old.audio.sources = old.audio.sources.filter((x) => x.id !== 'scene-music');
+  await c.call('audio.removeFromProject', { project: old, audio: 'scene-music' });
+  assert.equal((await status()).attached, false);
+  await c.call('audio.addFromProject', { project: proposal, audio: 'scene-music' });
+  let s = await status();
+  assert.equal(s.scenes.lobby.volumeDb, -15, 'the proposal is live');
+  await c.call('audio.removeFromProject', { project: old, audio: 'scene-music' }); // the UI server's rollback
+  s = await status();
+  assert.deepEqual(s.scenes, before, 'every scene as in the document again');
+  await c.call('audio.addFromProject', { project: project(), audio: 'scene-music' });
+  await idle();
+  assert.equal((await status()).attached, true);
+});
+
+test('Listen: off air only; a recording that starts stops it first', async () => {
+  await c.call('scenes.activate', { scene: 'lobby' });
+  let r = await c.call('music.preview', { mood: 'lobby' });
+  assert.equal(r.previewing, 'lobby');
+  assert.equal((await status()).previewing, 'lobby');
+  await assert.rejects(c.call('music.preview', { mood: 'brb' }), (e) => e.code === -32009 && /not made yet/.test(e.message));
+  const RUNG = { id: 'r', canvas: 'H', codec: 'h264', encoder: 'nvenc', rc: 'cbr', w: 640, h: 360, fps: 30, bitrate: 1500, gopSec: 2 };
+  await c.call('outputs.configure', { rungs: [RUNG], audio: { bitrate: 128, sampleRate: 48000 },
+    sinks: [{ id: 'rec', rung: 'r', platform: 'local', proto: 'file', priority: 1, target: { transport: 'file', name: 'scene-music-listen.mkv' } }] });
+  r = await c.call('music.preview', { mood: 'lobby' });
+  assert.equal(r.previewing, 'lobby', 'configure alone is not on air');
+  await c.call('record.start', {});
+  assert.equal((await status()).previewing, null, 'the recording start stopped Listen');
+  let st;
+  for (let i = 0; i < 40; i++) {
+    st = await c.call('outputs.status');
+    if (st.sinks[0].state === 'live') break;
+    await sleep(100);
+  }
+  assert.equal(st.sinks[0].state, 'live');
+  await assert.rejects(c.call('music.preview', { mood: 'lobby' }), (e) => e.code === -32009 && /off air/.test(e.message), 'refused while recording');
+  assert.equal((await status()).previewing, null);
+  await c.call('record.stop', {});
+  for (let i = 0; i < 50; i++) {
+    st = await c.call('outputs.status');
+    if (!st.sinks.some((k) => k.active)) break;
+    await sleep(100);
+  }
+  await c.call('outputs.clear', {});
+  r = await c.call('music.preview', { mood: 'lobby' });
+  assert.equal(r.previewing, 'lobby', 'off air again');
+  assert.equal((await c.call('music.preview', { mood: null })).previewing, null);
+  RESULTS.listen = { stoppedByRecord: true, refusedWhileRecording: true };
+});
+
 test('a project with two music strips or a non-empty music value is refused', async () => {
   const two = project();
   two.audio.sources.push({ id: 'm2', name: 'Music 2', music: {}, volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] });

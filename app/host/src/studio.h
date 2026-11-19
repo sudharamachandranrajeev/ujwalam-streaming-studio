@@ -129,6 +129,7 @@ public:
 	// the scenes' settings and the library folder state).
 	json::Value music_set_scene(const std::string &scene, const json::Value &music);
 	json::Value music_status() const;
+	json::Value music_preview(const std::string &mood); // MU2 Listen, "" stops
 	// Mixer remove (D393 proposed): `doc` no longer has audio source `audio`. A device source leaves its channel and is
 	// released (parked instead when the watchdog has it as missing: its destroy may never return); a layer's source is
 	// unbound (no tracks, no monitoring) and stays metered. removed false when the host had not built it.
@@ -381,6 +382,7 @@ private:
 		double db = 0;
 	};
 	std::map<std::string, MusicCfg> music_cfg_; // MU2: scene id -> its music (from the project, music.setScene)
+	void music_from_doc(const json::Value &doc);
 	void music_from_plan(const model::Plan &p);
 	// Cues the bed of `scene` (the main canvas's active scene) with out_ms / in_ms of fade.
 	void music_cue(const std::string &scene, uint32_t out_ms, uint32_t in_ms);
