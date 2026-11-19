@@ -2245,3 +2245,15 @@ Growth plan ED2. Decided:
   10 s deadline, then exits 77 so the launcher starts it the old way or relaunches it (Codex, 2026-11-19).
 - Deferred: overlapping the NVENC probe (about 0.7 s) touches the encoder graph and needs its own review.
   UNVERIFIED: installed build, `ujwalam-start.exe`, `--live`, cold start, and the taskbar on an early window.
+
+## D403 — Single-file Setup, backlog auto-post, recording cleanup (user, 2026-11-19)
+
+- Setup: one `Ujwalam-Setup-<version>.exe` with everything a fresh PC needs (app, Node, VC++ runtime app-local,
+  embeddable Python + clip/face workers). Anything downloadable (AI models) goes through an in-app download manager
+  (resume, checksum, never while live). `out\dist` keeps the newest 2 builds.
+- Auto-post backlog: every clip made so far goes to YouTube as scheduled posts, random 3-6 a day at random times
+  09:00-23:00 local, >= 90 min apart, order shuffled with no two of the same kind back to back; quota and channel
+  posts still respected. Posted clip files are deleted once YouTube has processed them (`post-delete-uploaded` on).
+- Full recordings (H and V files) are deleted for good once every clip from them is rendered and the review run has
+  finished; recordings still to be labelled are kept. Never while live; same safe-delete steps as posted clips; logged.
+- Turned on in the user's install only after the build carrying them is installed.
