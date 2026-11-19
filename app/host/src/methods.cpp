@@ -742,6 +742,14 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 			throw Error(rpc::INVALID_PARAMS, "mood is required (a mood id or null)");
 		return a.studio->music_preview(m->is_null() ? std::string() : q.str("mood", 32));
 	});
+	// music.testPreviewDelay {ms}: the next Listen opens its file this much later. --test-hooks only.
+	add("music.testPreviewDelay", [&a](const json::Value &p) {
+		Params q(p, {"ms"});
+		if (!a.test_hooks)
+			throw Error(rpc::FORBIDDEN, "music.testPreviewDelay needs a host started with --test-hooks");
+		scene_music::test_preview_delay((uint32_t)q.int_or("ms", 0, 0, 10000));
+		return json::Value::object();
+	});
 	add("music.status", [&a](const json::Value &p) {
 		(void)Params(p, {});
 		return a.studio->music_status();

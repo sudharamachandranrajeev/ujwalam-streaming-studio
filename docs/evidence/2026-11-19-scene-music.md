@@ -30,9 +30,12 @@ until the user listens (D393).
   (host first, then the file; undo on a failed save). The first time music goes on, one Music strip is added on the
   first track with "Duck music under my voice" (12 dB, 10 ms, 400 ms) under the first microphone, if the mixer has one
   (the user's click is the trigger, D332). `POST {op:'preview'}` asks the host (`music.preview`), which plays a made bed through a
-  private ffmpeg_source in no track, on the monitoring device only. The host refuses while any libobs output is active,
-  and every output start (sink start, retry, replay buffer, NVENC probe) calls `scene_music::preview_stop()` first under
-  the same lock, so Listen is never captured on air. One preview at a time; the UI server stops it on close, the host on
+  private ffmpeg_source in no track, on the monitoring device only. An on-air gate (`scene_music::hold`) covers
+  it: every sink holds the gate from the moment it is wanted until it is not (starting, connecting, live, retry waits;
+  `set_want` in outputs.cpp), and replay buffer and NVENC probe starts hold it while they start. Taking the gate
+  silences the preview at once (its own level filter to 0, an atomic store) and hands the source to retirement; the
+  stop and release run later outside the gate. A preview is opened outside the gate at level 0 and only switched up
+  when no hold and no active output exist. So an output start never waits on file or device work. One preview at a time; the UI server stops it on close, the host on
   shutdown. (Codex review 2026-11-19 replaced the first SoundPlayer version.)
 - QML: scene menu "Music…" opens `SceneMusicWindow.qml`: a "Music in this scene" switch with its plain-word line, mood
   buttons (with "(not made yet)"), a level slider (greyed while off), Listen / Stop listening (disabled on air), and a
@@ -49,6 +52,9 @@ until the user listens (D393).
   the file is in place is read back and kept.
 - Removing the strip (the UI server's rollback of an add) restores every scene's music from that document
   (`music_from_doc`).
+- Round 2: the gate above replaced "preview_stop before obs_output_start" (a gap between them, and file work under the
+  lock outputs wait on). After a rollback the UI server reads `music.status` back; when the host does not match the
+  file it answers `live-differs` ("What plays now differs from the saved project ... Restart Ujwalam ...").
 
 ## Measured (host test, `app/host/tests/host-scene-music.test.mjs`, 2026-11-19)
 
@@ -67,6 +73,8 @@ strip's filters, 10 ms bins.
 | Duck under the mic on the Music strip | -20.00 -> -31.71 dBFS, dip 11.71 dB | 12 dB, 10 / 400 ms |
 | Switch storm: 12 switches 60 ms apart, fade 400 | largest step 0.80 dB (run 2; 1.19 run 1); ends on in-match at -30 dBFS | last cue wins |
 | Listen, then record.start | preview stopped by the start; refused (-32009) while recording; plays again after | off air only |
+| Listen racing record.start, 8 rounds | never playing while recording | gate |
+| record.start while a Listen open is delayed 1500 ms (test hook) | started in 60 ms; the slow Listen refused | no file work under the gate |
 | Rolled-back strip add | every scene's music equals the document again | music_from_doc |
 
 Notes:
@@ -82,8 +90,8 @@ Notes:
 
 | File | Result |
 |---|---|
-| `app/host/tests/host-scene-music.test.mjs` (new) | 11 pass, 0 fail |
-| `tests/scene-music-routes.test.mjs` (new) | 9 pass, 0 fail |
+| `app/host/tests/host-scene-music.test.mjs` (new) | 12 pass, 0 fail |
+| `tests/scene-music-routes.test.mjs` (new) | 10 pass, 0 fail |
 | `tests/studio-qml-scene-music.test.mjs` (new) | 3 pass, 0 fail |
 | `tests/project-schema.test.mjs` | 148/0 |
 | `tests/audio-tools-routes.test.mjs` | 15/0 |

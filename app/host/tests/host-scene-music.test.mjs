@@ -298,6 +298,41 @@ test('Listen: off air only; a recording that starts stops it first', async () =>
   RESULTS.listen = { stoppedByRecord: true, refusedWhileRecording: true };
 });
 
+test('Listen racing a recording start never plays on air; a slow Listen never delays the start', async () => {
+  const RUNG = { id: 'r', canvas: 'H', codec: 'h264', encoder: 'nvenc', rc: 'cbr', w: 640, h: 360, fps: 30, bitrate: 1500, gopSec: 2 };
+  await c.call('outputs.configure', { rungs: [RUNG], audio: { bitrate: 128, sampleRate: 48000 },
+    sinks: [{ id: 'rec', rung: 'r', platform: 'local', proto: 'file', priority: 1, target: { transport: 'file', name: 'scene-music-race.mkv' } }] });
+  const live = async () => { for (let i = 0; i < 50; i++) { const st = await c.call('outputs.status'); if (st.sinks[0].state === 'live') return true; await sleep(100); } return false; };
+  const idleOut = async () => { for (let i = 0; i < 50; i++) { const st = await c.call('outputs.status'); if (!st.sinks.some((k) => k.active || k.state === 'live' || k.state === 'stopping')) return; await sleep(100); } };
+  let races = 0;
+  for (let i = 0; i < 8; i++) {
+    const pv = c.call('music.preview', { mood: 'lobby' }).then((r) => r.previewing, (e) => e.code);
+    const rs = c.call('record.start', {});
+    await Promise.all([pv, rs]);
+    assert.ok(await live(), 'recording');
+    assert.equal((await status()).previewing, null, `race ${i}: no Listen while recording`);
+    races++;
+    await c.call('record.stop', {});
+    await idleOut();
+  }
+  await c.call('music.testPreviewDelay', { ms: 1500 });
+  const pv = c.call('music.preview', { mood: 'lobby' }).then(() => null, (e) => e);
+  await sleep(200);
+  const t0 = Date.now();
+  await c.call('record.start', {});
+  const startMs = Date.now() - t0;
+  const e = await pv;
+  await c.call('music.testPreviewDelay', { ms: 0 });
+  assert.ok(await live());
+  assert.equal(e?.code, -32009, 'the slow Listen is refused: a recording started while it was opened');
+  assert.equal((await status()).previewing, null);
+  RESULTS.listenRace = { races, startWhileSlowListenMs: startMs };
+  assert.ok(startMs < 1000, `record.start did not wait for the slow Listen (${startMs} ms)`);
+  await c.call('record.stop', {});
+  await idleOut();
+  await c.call('outputs.clear', {});
+});
+
 test('a project with two music strips or a non-empty music value is refused', async () => {
   const two = project();
   two.audio.sources.push({ id: 'm2', name: 'Music 2', music: {}, volumeDb: 0, muted: false, monitoring: 'off', tracks: ['t1'] });

@@ -86,7 +86,8 @@ struct Outputs::Sink {
 	obs_service_t *svc = nullptr;
 
 	SinkState state = SinkState::Idle;
-	bool want = false;        // the user asked for it to run
+	bool want = false;        // the user asked for it to run (set only through set_want)
+	bool held = false;        // MU2: holds the Listen gate (scene_music::hold) while wanted
 	bool stop_pending = false; // went live after a stop request: the supervisor stops it
 	int attempts = 0;         // starts since configure
 	int fails = 0;            // consecutive failures (backoff exponent)
@@ -99,6 +100,17 @@ struct Outputs::Sink {
 	mutable int64_t sample_ms = 0;
 	mutable double kbps = 0;
 };
+
+// MU2: a wanted sink holds the Listen gate (starting, connecting, live, retry waits), so no preview plays on air.
+static void set_want(Outputs::Sink &s, bool w)
+{
+	if (w && !s.held)
+		scene_music::hold(true);
+	else if (!w && s.held)
+		scene_music::hold(false);
+	s.held = w;
+	s.want = w;
+}
 
 namespace {
 
@@ -490,7 +502,7 @@ void Outputs::on_stop(Sink &s, int code, const char *err)
 		hlog::info("sink %s stopped (code %d)", s.id.c_str(), code);
 	} else if (s.kind == "record") {
 		// A recording that stops on its own is not retried: a new file would hide the gap.
-		s.want = false;
+		set_want(s, false);
 		s.state = code == OBS_OUTPUT_SUCCESS ? SinkState::Stopped : SinkState::Failed;
 		hlog::warn("record sink %s stopped unexpectedly (code %d)", s.id.c_str(), code);
 	} else {
@@ -541,7 +553,7 @@ void Outputs::schedule_retry_locked(Sink &s, int64_t now)
 	s.fails++;
 	if (policy_.retry_max > 0 && s.fails > policy_.retry_max) {
 		s.state = SinkState::Failed;
-		s.want = false;
+		set_want(s, false);
 		hlog::warn("sink %s failed after %d consecutive attempts", s.id.c_str(), s.fails);
 		return;
 	}
@@ -667,6 +679,7 @@ void Outputs::release_graph()
 		audio_kbps_ = 0;
 	}
 	for (auto &s : old) {
+		set_want(*s, false); // MU2: a released sink lets go of the Listen gate
 		if (s->out) {
 			signal_handler_t *sh = obs_output_get_signal_handler(s->out);
 			signal_handler_disconnect(sh, "start", on_sink_start, s.get());
@@ -1339,7 +1352,7 @@ void Outputs::start_sink(Sink &s)
 		if (!s.url_ref.empty())
 			s.url_present = up;
 		if (!missing.empty()) {
-			s.want = false;
+			set_want(s, false);
 			s.state = SinkState::Failed;
 			s.last_error = missing;
 			s.last_change_ms = now_ms();
@@ -1347,8 +1360,7 @@ void Outputs::start_sink(Sink &s)
 			return;
 		}
 	}
-	scene_music::preview_stop(); // MU2: Listen never plays on air
-	bool ok = obs_output_start(s.out);
+	bool ok = obs_output_start(s.out); // MU2: the sink holds the Listen gate since it was wanted (set_want)
 	if (ok)
 		return;
 	wipe_sink_secrets(s); // no connect thread was started
@@ -1358,7 +1370,7 @@ void Outputs::start_sink(Sink &s)
 		return; // a stop signal already handled it
 	s.last_error = e && *e ? e : "start failed";
 	if (s.kind == "record") {
-		s.want = false;
+		set_want(s, false);
 		s.state = SinkState::Failed;
 		hlog::warn("record sink %s did not start", s.id.c_str());
 	} else {
@@ -1381,7 +1393,7 @@ json::Value Outputs::start(const std::vector<std::string> &ids, const std::strin
 			if (s->want || s->state == SinkState::Live || s->state == SinkState::Starting ||
 			    s->state == SinkState::Stopping)
 				continue; // already running or on its way
-			s->want = true;
+			set_want(*s, true);
 			s->fails = 0;
 			s->stop_pending = false;
 		}
@@ -1407,7 +1419,7 @@ json::Value Outputs::stop(const std::vector<std::string> &ids, const std::string
 		bool call_stop = false;
 		{
 			std::lock_guard<std::mutex> l(m_);
-			s->want = false;
+			set_want(*s, false);
 			if (s->state == SinkState::Live) {
 				s->state = SinkState::Stopping;
 				call_stop = true;
@@ -1673,7 +1685,7 @@ json::Value Outputs::probe_locked(const std::string &codec, int max)
 		obs_output_set_video_encoder(o, e);
 		obs_output_set_audio_encoder(o, aac, 0);
 		made.push_back({e, o});
-		scene_music::preview_stop(); // MU2: Listen never plays while an output runs
+		scene_music::Hold gate; // MU2: no Listen while the probe output starts (active afterwards)
 		if (!obs_output_start(o)) {
 			const char *le = obs_output_get_last_error(o);
 			const char *ee = obs_encoder_get_last_error(e);

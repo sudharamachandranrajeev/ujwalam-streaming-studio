@@ -263,7 +263,7 @@ void Outputs::replay_attach_locked()
 					std::lock_guard<std::mutex> l(r->m);
 					r->attached = true;
 				}
-				scene_music::preview_stop(); // MU2: Listen never plays on air
+				scene_music::Hold gate; // MU2: no Listen while the replay buffer starts (active afterwards)
 				if (obs_output_start(r->out)) {
 					r->started_ms = mono_ms();
 				} else {

@@ -54,12 +54,21 @@ json::Value status();
 // Waits until no fade is running (tests); false after timeout_ms.
 bool wait_idle(uint32_t timeout_ms);
 // Ends the music thread (before obs_shutdown).
-// Listen (MU2): plays `file` once on the monitoring device only (in no track), off air only. Refused while any output
-// is active; every output start calls preview_stop() first, under the same lock, so a preview never plays on air.
-// monitor false opens no audio device (tests). false + why when refused.
+// Listen (MU2): plays `file` once on the monitoring device only (in no track), off air only: refused while any
+// output holds the gate or is active. monitor false opens no audio device (tests). false + why when refused.
 bool preview_start(const std::string &file, const std::string &mood, bool monitor, std::string &why);
 void preview_stop();
-std::string previewing(); // the mood being listened to, "" none (an ended preview is released)
+std::string previewing(); // the mood being listened to, "" none
+// The on-air gate: an output that may go on air holds it (a sink while wanted, a replay/probe start while starting).
+// Taking it silences a preview at once (atomics only: never waits on file or device work).
+void hold(bool on);
+struct Hold {
+	Hold() { hold(true); }
+	~Hold() { hold(false); }
+	Hold(const Hold &) = delete;
+	Hold &operator=(const Hold &) = delete;
+};
+void test_preview_delay(uint32_t ms); // --test-hooks: a slow preview open
 
 void shutdown();
 

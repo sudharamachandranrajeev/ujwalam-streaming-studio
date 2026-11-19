@@ -17,6 +17,7 @@
 #include <mutex>
 #include <regex>
 #include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -432,12 +433,25 @@ bool wait_idle(uint32_t timeout_ms)
 }
 
 // ---- Listen (off air only) ----
+//
+// The gate: Preview::m guards only flags and pointers, never file or device work. An output that may go on air holds
+// the gate (hold(true): every sink from the moment it is wanted until it is not, including starting, connecting and
+// retry waits; replay buffer and probe starts for the length of their start). Taking a hold silences the preview at
+// once (its own level filter to 0 at the next audio block, an atomic store) and hands the source to retirement; the
+// stop, monitor teardown and release run later on the Listen RPC thread or at shutdown, outside the gate. A preview
+// is made (file open, monitor, filter) outside the gate with its level at 0 and only switched up under the gate when
+// no hold and no active output exist. So an output start never waits on file I/O and no preview is heard on air.
 
 namespace {
 struct Preview {
 	std::mutex m;
-	obs_source_t *src = nullptr;
+	int holds = 0;
+	obs_source_t *src = nullptr; // the playing preview (its level up)
+	obs_source_t *fl = nullptr;  // its level filter
 	std::string mood;
+	std::vector<std::pair<obs_source_t *, obs_source_t *>> retired; // silenced, released outside the gate
+	std::mutex work;             // one Listen request at a time (outside the gate)
+	std::atomic<uint32_t> test_delay_ms{0};
 };
 Preview &pv()
 {
@@ -458,39 +472,109 @@ bool output_active()
 		&any);
 	return any;
 }
-void preview_release_locked(Preview &p)
+void level_set(obs_source_t *fl, float to)
+{
+	auto *l = static_cast<Level *>(obs_obj_get_data(fl));
+	if (!l)
+		return;
+	uint16_t sq = ++l->next_seq;
+	if (sq == 0)
+		sq = ++l->next_seq;
+	l->cmd.store(pack_cmd(sq, 0, to), std::memory_order_release);
+}
+// Silences the preview and moves it to retirement (gate held: atomics and pointers only).
+void silence_locked(Preview &p)
 {
 	if (!p.src)
 		return;
-	obs_source_set_monitoring_type(p.src, OBS_MONITORING_TYPE_NONE);
-	obs_source_media_stop(p.src);
-	obs_source_release(p.src);
+	level_set(p.fl, 0.0f);
+	p.retired.emplace_back(p.src, p.fl);
 	p.src = nullptr;
+	p.fl = nullptr;
 	p.mood.clear();
 }
+void retire(obs_source_t *src, obs_source_t *fl)
+{
+	obs_source_set_monitoring_type(src, OBS_MONITORING_TYPE_NONE);
+	obs_source_media_stop(src);
+	obs_source_release(fl);
+	obs_source_release(src);
+}
+// Releases what was silenced (outside the gate).
+void drain()
+{
+	Preview &p = pv();
+	std::vector<std::pair<obs_source_t *, obs_source_t *>> r;
+	{
+		std::lock_guard<std::mutex> lk(p.m);
+		r.swap(p.retired);
+	}
+	for (auto &x : r)
+		retire(x.first, x.second);
+}
 } // namespace
+
+void hold(bool on)
+{
+	Preview &p = pv();
+	std::lock_guard<std::mutex> lk(p.m);
+	if (on) {
+		if (p.holds++ == 0 && p.src)
+			hlog::info("scene music: an output starts, listening stopped");
+		silence_locked(p);
+	} else if (p.holds > 0) {
+		p.holds--;
+	}
+}
 
 bool preview_start(const std::string &file, const std::string &mood, bool monitor, std::string &why)
 {
 	Preview &p = pv();
-	std::lock_guard<std::mutex> lk(p.m);
-	preview_release_locked(p);
-	if (output_active()) { // under p.m: every output start stops the preview first (preview_stop), so none slips in
-		why = "Listening is only possible off air (no stream and no recording running).";
-		return false;
+	std::lock_guard<std::mutex> one(p.work);
+	{
+		std::lock_guard<std::mutex> lk(p.m);
+		silence_locked(p);
+		if (p.holds > 0 || output_active()) {
+			why = "Listening is only possible off air (no stream and no recording running).";
+		}
 	}
+	drain();
+	if (!why.empty())
+		return false;
+	// made outside the gate, silent (its level filter starts at 0)
+	if (const uint32_t d = p.test_delay_ms.load())
+		std::this_thread::sleep_for(std::chrono::milliseconds(d));
+	register_level_type();
 	const json::Value st = audio_tools::playback_settings(file, false);
 	obs_data_t *d = obs_data_create_from_json(st.dump().c_str());
-	p.src = obs_source_create_private("ffmpeg_source", "ujw:music:preview", d);
+	obs_source_t *src = obs_source_create_private("ffmpeg_source", "ujw:music:preview", d);
 	obs_data_release(d);
-	if (!p.src) {
+	obs_source_t *fl = obs_source_create_private("ujw_music_level", "ujw:music:preview-level", nullptr);
+	if (!src || !fl || !obs_obj_get_data(fl)) {
+		obs_source_release(fl);
+		obs_source_release(src);
 		why = "The music could not be opened for listening.";
 		return false;
 	}
-	obs_source_set_audio_mixers(p.src, 0); // in no track: never in a stream or a recording
+	obs_source_filter_add(src, fl); // a private source in no scene: no video tick reads its filter list
+	obs_source_set_audio_mixers(src, 0); // in no track: never in a stream or a recording
 	if (monitor)
-		obs_source_set_monitoring_type(p.src, OBS_MONITORING_TYPE_MONITOR_ONLY); // the monitoring device only
-	p.mood = mood;
+		obs_source_set_monitoring_type(src, OBS_MONITORING_TYPE_MONITOR_ONLY); // the monitoring device only
+	{
+		std::lock_guard<std::mutex> lk(p.m);
+		if (p.holds == 0 && !output_active()) {
+			level_set(fl, 1.0f);
+			p.src = src;
+			p.fl = fl;
+			p.mood = mood;
+			src = fl = nullptr;
+		}
+	}
+	if (src) { // an output started while it was being made
+		retire(src, fl);
+		why = "Listening is only possible off air (no stream and no recording running).";
+		return false;
+	}
 	hlog::info("scene music: listening to %s", mood.c_str());
 	return true;
 }
@@ -498,19 +582,35 @@ bool preview_start(const std::string &file, const std::string &mood, bool monito
 void preview_stop()
 {
 	Preview &p = pv();
-	std::lock_guard<std::mutex> lk(p.m);
-	if (p.src)
-		hlog::info("scene music: listening stopped");
-	preview_release_locked(p);
+	{
+		std::lock_guard<std::mutex> lk(p.m);
+		if (p.src)
+			hlog::info("scene music: listening stopped");
+		silence_locked(p);
+	}
+	drain();
 }
 
 std::string previewing()
 {
 	Preview &p = pv();
-	std::lock_guard<std::mutex> lk(p.m);
-	if (p.src && obs_source_media_get_state(p.src) == OBS_MEDIA_STATE_ENDED)
-		preview_release_locked(p);
-	return p.mood;
+	bool ended = false;
+	{
+		std::lock_guard<std::mutex> lk(p.m);
+		if (p.src && obs_source_media_get_state(p.src) == OBS_MEDIA_STATE_ENDED) {
+			silence_locked(p);
+			ended = true;
+		}
+		if (!ended)
+			return p.mood;
+	}
+	drain();
+	return "";
+}
+
+void test_preview_delay(uint32_t ms)
+{
+	pv().test_delay_ms.store(ms);
 }
 
 void shutdown()

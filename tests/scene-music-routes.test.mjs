@@ -22,7 +22,7 @@ const SAMPLE = path.join(HERE, 'fixtures', 'project', 'sample.project.json');
 const SCHEMA = JSON.parse(readFileSync(path.join(HERE, '..', 'data', 'schemas', 'project.schema.json'), 'utf8'));
 const sample = () => JSON.parse(readFileSync(SAMPLE, 'utf8'));
 
-function setup({ live = false, failHost = null, lostReply = false } = {}) {
+function setup({ live = false, failHost = null, lostReply = false, failUndo = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ujw-mu-'));
   const file = path.join(dir, 'p.project.json');
   copyFileSync(SAMPLE, file);
@@ -31,15 +31,19 @@ function setup({ live = false, failHost = null, lostReply = false } = {}) {
   writeFileSync(path.join(lib, 'lobby.wav'), Buffer.alloc(1000));
   const calls = [], played = [];
   const scenes = {}; // what the stub host holds (music.setScene)
+  let attached = false; // the Music strip in the stub host
   const host = {
     call: async (m, p) => {
       calls.push([m, structuredClone(p)]);
       if (m === failHost) throw Object.assign(new Error('refused'), { code: -32602 });
+      if (failUndo && m === 'audio.removeFromProject') throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' });
+      if (m === 'audio.addFromProject') attached = true;
+      if (m === 'audio.removeFromProject') attached = false;
       if (m === 'music.setScene') {
         scenes[p.scene] = p.music;
         if (lostReply) throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); // applied, reply lost
       }
-      if (m === 'music.status') return { attached: true, mood: 'lobby', playing: true, reason: '', scenes, previewing: null };
+      if (m === 'music.status') return { attached, mood: 'lobby', playing: true, reason: '', scenes, previewing: null };
       if (m === 'music.preview') {
         if (live && p.mood !== null) throw Object.assign(new Error('Listening is only possible off air'), { code: -32009 });
         played.push(p.mood ?? 'stop');
@@ -154,6 +158,14 @@ test('refusals save nothing: bad scene, mood, level, keys; a host refusal undoes
   assert.equal(r.status, 502);
   assert.ok(f.calls.some(([m]) => m === 'audio.removeFromProject'), 'the added strip is taken out again');
   assert.equal(f.saved().audio.sources.some((s) => 'music' in s), false);
+});
+
+test('a rollback that does not take is reported: live differs from saved', async () => {
+  const s = setup({ failHost: 'music.setScene', failUndo: true });
+  const r = await s.req('POST', { op: 'scene', scene: 'scene-main', music: { on: true, mood: 'lobby', volumeDb: 0 } });
+  assert.equal(r.body.error, 'live-differs', JSON.stringify(r.body));
+  assert.match(r.body.text, /differs from the saved project/);
+  assert.equal(s.saved().audio.sources.some((x) => 'music' in x), false, 'the file keeps the old state');
 });
 
 test('a lost host reply is read back: applied means saved, not undone', async () => {

@@ -34,6 +34,7 @@ export const MUSIC_ERROR_TEXT = Object.freeze({
   'on-air': 'Listening is only possible off air (no stream and no recording running).',
   'not-saved': 'The project file could not be saved, so the change was undone. Nothing changed.',
   'not-saved-live': 'The project file could not be saved and the change could not be undone: it is live until Ujwalam restarts.',
+  'live-differs': 'What plays now differs from the saved project: the change could not be undone. Restart Ujwalam to play what is saved.',
   'host-unsure': 'The studio host did not answer, and what it plays could not be checked. Try again in a moment.',
   invalid: 'The project would not be valid with that change.',
   busy: 'The last music change is still on its way; try again in a moment.',
@@ -67,6 +68,15 @@ export function setSceneMusic(doc, { scene, music, moods }) {
   return { project: p, added, music: sc.music };
 }
 
+// True when the host's music.status holds every scene's music of `doc` (no music = off) and, when asked, the strip.
+function hostMatches(st, doc, strip) {
+  if (!st || typeof st !== 'object') return false;
+  for (const sc of doc.scenes ?? []) {
+    const got = st.scenes?.[sc.id];
+    if (sc.music ? !sameMusic(got, sc.music) : got?.on === true) return false;
+  }
+  return strip === undefined || (st.attached === true) === strip;
+}
 const sameMusic = (a, b) => !!a && !!b && a.on === b.on && a.mood === b.mood && Number(a.volumeDb) === Number(b.volumeDb);
 
 /**
@@ -129,7 +139,14 @@ export function createMusicRoutes(opts) {
         return json(res, 502, { error: 'host-unsure', text: MUSIC_ERROR_TEXT['host-unsure'], detail: String(e?.message ?? e?.code ?? 'error').slice(0, 200) });
       }
       if (!ok) {
-        try { await undo(); } catch { /* the host did not take it; nothing to keep */ }
+        // put back and check: every scene as in the file, the strip as in the file
+        let back = false;
+        try { await undo(); } catch { /* checked below */ }
+        try { back = hostMatches(await host.call('music.status', {}), r.doc, x.added ? !!musicStrip(r.doc) : undefined); } catch { back = false; }
+        if (!back) {
+          log('[studio-ui] scene music: the host could not be put back to the saved project');
+          return refuse(res, 'live-differs', 502);
+        }
         return json(res, 502, { error: 'host-error', text: MUSIC_ERROR_TEXT['host-unavailable'], detail: String(e?.message ?? e?.code ?? 'error').slice(0, 200) });
       }
       log('[studio-ui] scene music: the host reply was lost but the change is in place; saving it');
@@ -139,6 +156,7 @@ export function createMusicRoutes(opts) {
       if (!installed(r.file, body.scene, x)) {
         let undone = true;
         try { await undo(); } catch { undone = false; }
+        try { undone = undone && hostMatches(await host.call('music.status', {}), r.doc, x.added ? !!musicStrip(r.doc) : undefined); } catch { undone = false; }
         opts.projectSync.reload();
         return refuse(res, undone ? 'not-saved' : 'not-saved-live', 500);
       }
