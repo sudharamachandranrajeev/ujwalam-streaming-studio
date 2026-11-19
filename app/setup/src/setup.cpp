@@ -25,7 +25,8 @@
 //
 // Usage: Ujwalam-Setup.exe [--install | --update | --repair | --rollback | --uninstall] [--package <zip>]
 //                          [--install-root <dir>] [--quiet] [--delete-data] [--next-start] [--no-shortcuts]
-//                          [--start-menu <dir>] [--desktop <dir>]
+//                          [--start-menu <dir>] [--desktop <dir>] [--taskbar-pin-dir <dir>] (tests: the pinned taskbar
+//                          folder the installer looks in for the app's own pin; default the user's)
 //   no action: the window offers what fits (Install, Update to, Repair, Roll back, Uninstall).
 //   --quiet: no window; the installer's lines go to this process's stdout (when it has one); the exit code is the
 //            installer's, or 20 no package, 21 checksum problem, 22 unpack failed, 23 bad arguments, 24 nothing
@@ -483,7 +484,7 @@ std::wstring powershellExe() { return system32() + L"\\WindowsPowerShell\\v1.0\\
 
 struct Opts {
 	std::wstring action; // install, update, repair, rollback, uninstall, or empty (the window offers)
-	std::wstring package, root, startMenu, desktop;
+	std::wstring package, root, startMenu, desktop, taskbarPinDir;
 	bool quiet = false, deleteData = false, nextStart = false, noShortcuts = false, confirmed = false;
 	DWORD waitPid = 0;
 };
@@ -575,6 +576,8 @@ std::wstring shortcutArgs()
 		a += L" -StartMenuDir " + quote(fullPath(g_opts.startMenu));
 	if (!g_opts.desktop.empty())
 		a += L" -DesktopDir " + quote(fullPath(g_opts.desktop));
+	if (!g_opts.taskbarPinDir.empty())
+		a += L" -TaskbarPinDir " + quote(fullPath(g_opts.taskbarPinDir));
 	return a;
 }
 
@@ -801,6 +804,8 @@ bool relaunchFromTemp()
 		cmd += L" --start-menu " + quote(fullPath(g_opts.startMenu));
 	if (!g_opts.desktop.empty())
 		cmd += L" --desktop " + quote(fullPath(g_opts.desktop));
+	if (!g_opts.taskbarPinDir.empty())
+		cmd += L" --taskbar-pin-dir " + quote(fullPath(g_opts.taskbarPinDir));
 	STARTUPINFOW si{};
 	si.cb = sizeof(si);
 	PROCESS_INFORMATION pi{};
@@ -944,6 +949,8 @@ bool parseArgs(Opts &o)
 			value(o.startMenu);
 		else if (a == L"--desktop")
 			value(o.desktop);
+		else if (a == L"--taskbar-pin-dir")
+			value(o.taskbarPinDir);
 		else if (a == L"--quiet")
 			o.quiet = true;
 		else if (a == L"--delete-data")
@@ -976,7 +983,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show)
 	if (!parseArgs(g_opts)) {
 		g_opts.quiet = true;
 		post(WM_APP_LINE, L"usage: Ujwalam-Setup.exe [--install|--update|--repair|--rollback|--uninstall] [--package <zip>] [--install-root <dir>] [--quiet] "
-				   L"[--delete-data] [--next-start] [--no-shortcuts] [--start-menu <dir>] [--desktop <dir>]");
+				   L"[--delete-data] [--next-start] [--no-shortcuts] [--start-menu <dir>] [--desktop <dir>] [--taskbar-pin-dir <dir>]");
 		return 23;
 	}
 	if (g_opts.waitPid) {

@@ -56,9 +56,11 @@ test('off air: armed, waiting, no replay output; replay.save and the feedback ca
   assert.deepEqual(r.saved, []);
   assert.match(r.errors[0].error, /^off air: the replay buffer runs only while you are live or recording$/);
   const cap = await c.call('feedback.capture', { note: 'off air' });
+  // 60 s: alone it is done in under a second, but in the full CI next to other GPU work it once took over 20 s
+  // (2026-11-19); the capture has no time limit of its own, so the wait only bounds a hang
   const m = await until(() => {
     try { const x = JSON.parse(readFileSync(path.join(cap.dir, 'moment.json'), 'utf8')); return x.replay.state === 'done' ? x : null; } catch { return null; }
-  });
+  }, 60000);
   assert.ok(m, 'the capture finished (log and status kept)');
   assert.match(m.replay.errors[0].error, /^off air/);
 });
