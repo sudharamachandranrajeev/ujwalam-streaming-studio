@@ -25,6 +25,7 @@ ApplicationWindow {
     function start() { studioStore.start(); guide.start() }
     function probeState() {
         const s = studioStore.probeState();
+        s.lazyMade = lazyMade(); // first: the reads below make every dialog
         s.settings = settingsDlg.ready ? settingsDlg.probe() : null;
         s.flagsInSettings = settingsDlg.opened;
         s.flags = studioStore.flagList.map(f => ({ id: f.id, on: f.on === true }));
@@ -307,30 +308,49 @@ ApplicationWindow {
     }
 
     ConfirmDialog { id: confirm; store: studioStore }
-    AddLayerDialog { id: addLayerDlg; store: studioStore }
-    AddSceneDialog { id: addSceneDlg; store: studioStore; onScenarioRequested: scenarioDlg.show() }
-    ScenarioWindow { id: scenarioDlg; store: studioStore }
-    AddAudioDialog { id: addAudioDlg; store: studioStore }
-    AudioToolsWindow { id: audioToolsDlg; store: studioStore }
-    SceneMusicWindow { id: sceneMusicDlg; store: studioStore }
-    NameDialog { id: renameDlg; store: studioStore }
-    SettingsDialog {
+    // Dialogs and windows not on screen at start are made on their first use (LazyDialog, start-up time 2026-11-19); the
+    // calls on them are the same as before.
+    LazyDialog { id: addLayerDlg; sourceComponent: Component { AddLayerDialog { store: studioStore } } }
+    LazyDialog { id: addSceneDlg; sourceComponent: Component { AddSceneDialog { store: studioStore; onScenarioRequested: scenarioDlg.show() } } }
+    LazyDialog { id: scenarioDlg; sourceComponent: Component { ScenarioWindow { store: studioStore } } }
+    LazyDialog { id: addAudioDlg; sourceComponent: Component { AddAudioDialog { store: studioStore } } }
+    LazyDialog { id: audioToolsDlg; sourceComponent: Component { AudioToolsWindow { store: studioStore } } }
+    LazyDialog { id: sceneMusicDlg; sourceComponent: Component { SceneMusicWindow { store: studioStore } } }
+    LazyDialog { id: renameDlg; sourceComponent: Component { NameDialog { store: studioStore } } }
+    // The guide's choices reach Settings when they change; a Settings made later gets the last ones (guideSent).
+    property bool guideSent: false
+    function guideItem() { return guide }
+    LazyDialog {
         id: settingsDlg
-        store: studioStore
-        onGuideSaved: (part) => guide.takeChoices(part)
-        onReplayTour: Qt.callLater(guide.replayWelcome) // the tour points at the main window: Settings closes first
+        sourceComponent: Component {
+            SettingsDialog {
+                store: studioStore
+                // win.guideItem(): inside this component "guide" is the dialog's own property, not the Guide below.
+                onGuideSaved: (part) => win.guideItem().takeChoices(part)
+                onReplayTour: Qt.callLater(win.guideItem().replayWelcome) // the tour points at the main window: Settings closes first
+            }
+        }
+        onLoaded: if (win.guideSent) item.guideFrom(guide)
     }
-    CommandPalette { id: cmdPalette; store: studioStore; settings: settingsDlg; windows: ({ growth: growthDlg, review: reviewDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg }) }
-    GrowthWindow { id: growthDlg; store: studioStore }
-    ReviewWindow { id: reviewDlg; store: studioStore }
-    FeedbackWindow { id: feedbackDlg; store: studioStore }
-    ReportDialog { id: reportDlg; store: studioStore }
-    ImportWindow { id: importDlg; store: studioStore }
-    SceneBuilderWindow { id: sceneBuilderDlg; store: studioStore }
-    YoutubeWindow { id: ytWin; store: studioStore }
-    GoLiveDialog { id: goLiveDlg; store: studioStore }
-    PostsWindow { id: postsDlg; store: studioStore }
-    ClipsAsk { id: clipsAskDlg; store: studioStore }
+    LazyDialog { id: cmdPalette; sourceComponent: Component { CommandPalette { store: studioStore; settings: settingsDlg.get(); windows: ({ growth: growthDlg, review: reviewDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg }) } } }
+    LazyDialog { id: growthDlg; sourceComponent: Component { GrowthWindow { store: studioStore } } }
+    LazyDialog { id: reviewDlg; sourceComponent: Component { ReviewWindow { store: studioStore } } }
+    LazyDialog { id: feedbackDlg; sourceComponent: Component { FeedbackWindow { store: studioStore } } }
+    LazyDialog { id: reportDlg; sourceComponent: Component { ReportDialog { store: studioStore } } }
+    LazyDialog { id: importDlg; sourceComponent: Component { ImportWindow { store: studioStore } } }
+    LazyDialog { id: sceneBuilderDlg; sourceComponent: Component { SceneBuilderWindow { store: studioStore } } }
+    LazyDialog { id: ytWin; sourceComponent: Component { YoutubeWindow { store: studioStore } } }
+    LazyDialog { id: goLiveDlg; sourceComponent: Component { GoLiveDialog { store: studioStore } } }
+    LazyDialog { id: postsDlg; sourceComponent: Component { PostsWindow { store: studioStore } } }
+    LazyDialog { id: clipsAskDlg; sourceComponent: Component { ClipsAsk { store: studioStore } } }
+    // Probe (tests): which of them were made before the probe was read (the probe itself makes them all).
+    function lazyMade() {
+        const all = { addLayer: addLayerDlg, addScene: addSceneDlg, scenario: scenarioDlg, addAudio: addAudioDlg, audioTools: audioToolsDlg,
+                      sceneMusic: sceneMusicDlg, rename: renameDlg, settings: settingsDlg, palette: cmdPalette, growth: growthDlg, review: reviewDlg,
+                      feedback: feedbackDlg, report: reportDlg, importer: importDlg, sceneBuilder: sceneBuilderDlg, youtube: ytWin, goLive: goLiveDlg,
+                      posts: postsDlg, clipsAsk: clipsAskDlg };
+        return Object.keys(all).filter(k => all[k].made);
+    }
     Connections {
         target: studioStore
         function onClipsAsk(ask) { clipsAskDlg.put(ask) }
@@ -391,7 +411,7 @@ ApplicationWindow {
         unseen: studioUnseen
         anchors.fill: parent
         z: 50
-        onSettingsChanged: settingsDlg.guideFrom(guide)
+        onSettingsChanged: { win.guideSent = true; if (settingsDlg.item) settingsDlg.item.guideFrom(guide) }
     }
 
     CloseDialog {

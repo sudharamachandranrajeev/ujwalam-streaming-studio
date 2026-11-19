@@ -66,6 +66,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/MixerPanel.qml
 		qml/PreviewArea.qml
 		qml/ConfirmDialog.qml
+		qml/LazyDialog.qml
 		qml/CloseDialog.qml
 		qml/AddLayerDialog.qml
 		qml/AddAudioDialog.qml
