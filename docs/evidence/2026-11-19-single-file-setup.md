@@ -86,3 +86,44 @@ Evidence (2026-11-19, dev PC, off air):
   runs (no download); `onnxruntime.get_available_providers()` -> `DmlExecutionProvider, CPUExecutionProvider`.
 - Tests (one file each, `UJWALAM_HEADLESS=1`, BelowNormal): package-alpha, record-clips, live-install-launcher,
   service-swap-launcher, studio-ui-alpha, studio-ui-connect, studio-ui-readiness, instagram-live: all pass.
+
+## Step 3: one file (2026-11-19)
+
+- `app/setup/src/setup.cpp`: `Ujwalam-Setup-<version>.exe` = the setup program + the package zip + a 160-byte trailer
+  (magic, format 1, program size, zip size, the zip's SHA-256, the program part's SHA-256, version, end magic).
+  Setup reads the trailer, hashes the program part, copies the zip out of itself into the private work folder while
+  hashing it, hashes the copy again, and only then unpacks it with Windows' `tar.exe`. A flipped byte, a cut-short file
+  or a missing trailer on a file over 16 MiB gives exit 21: "This setup file is damaged or incomplete (it does not
+  match the checksum built into it). Download or copy Ujwalam-Setup again and check it against its .sha256 file.
+  Nothing was changed." The plain program (the copy in the install root, used for repair, roll back and uninstall)
+  still installs a zip next to it or `--package <zip>`, and now also finds a `Ujwalam-Setup-<version>.exe` in its
+  folder or the update folder (`--package` takes either).
+- `tools/package/single-setup.mjs` writes the exe (temp file, one rename) and `<exe>.sha256`, and keeps the newest 2
+  setups in `out/dist` by version, logging each deletion. `build-alpha.mjs` folds the zip in and deletes it
+  (`--keep-zip` keeps it): the in-app update (`services/studio-ui/setup-update.mjs`) now prefers a single-file setup
+  in the update folder (checked against its `.sha256`) and runs it with `--update --quiet --next-start`; zips still work.
+- Defender: the exe keeps its version info, icon and `asInvoker` manifest; the payload is a plain zip after the PE
+  image (not a PE section, not compressed code). An exe that carries an archive is the shape Defender's ML verdicts
+  have flagged before (`Bearfoos.A!ml` on the host exe, 2026-11): UNVERIFIED until the first real download is scanned.
+
+Measured (dev PC, off air, warm runtime cache): build `node tools/package/build-alpha.mjs --force` 39 s in all, of which
+writing the single file 1.4 s. `Ujwalam-Setup-0.1.0-alpha.35.exe` 469.3 MiB (492,117,149 bytes; the zip inside 469.1 MiB,
+5210 files, 1111.4 MiB unpacked). Install from it, PATH = System32 + Windows + PowerShell only: exit 0 in 37 s.
+
+Solid compression tried: `tar --format 7zip` LZMA2 level 6 on the same tree: 336.3 MiB (-28 %), but 309 s to build and
+15 s to unpack (zip: 4 s). Not used: build and install speed come first, and Windows' `tar.exe` reads the zip fast.
+
+Fresh-install checks (temp install root and temp data root; PATH stripped of Node, Python and ffmpeg):
+
+- the installed launcher (`runtime\node\node.exe tools\package\run-installed.mjs --mock --no-open --stop-on-stdin`,
+  `UJWALAM_HEADLESS=1`) starts, serves, and stops on stdin with exit 0;
+- a clip worker smoke job on the bundled Python: a 6 s 1080p test video made with the bundled ffmpeg (`h264_nvenc`),
+  then `clipper.py detect` -> exit 0, "0 hit(s), 0 with signal, from 6 OCR frames at 1.0 fps in 5.1 s", output files
+  written. The bundled ffmpeg is the LGPL build: no `libx264` (GPL); the clipper encodes with `h264_nvenc` (it has
+  `h264_mf`, `h264_amf` and `h264_qsv` too). `services/clip/build_cache.py` (a developer tool) falls back to `libx264`
+  without NVENC and would need a change on a PC without NVIDIA.
+- Tests: `tests/setup-installer.test.mjs` 13/13 (new: trailer round trip and keep-newest-2; the single-file exe
+  installs what it carries, an update keeps every setting, a flipped payload byte, a flipped program byte and a cut-short
+  file are each refused with exit 21 and nothing changed, also when given to the plain program as `--package`; the
+  installed plain program finds the single file in the update folder). `package-alpha` 20 pass 1 skipped (e2e build),
+  `live-install` 13/13, `live-install-launcher` 1/1.

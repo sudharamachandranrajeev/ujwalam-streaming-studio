@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Builds the Alpha 0 portable zip (D133): out/dist/ujwalam-<base>-alpha.<N>-win64.zip
+// Builds the single-file setup (2026-11-19): out/dist/Ujwalam-Setup-<base>-alpha.<N>.exe (+ .sha256), which carries the
+// package zip ujwalam-<base>-alpha.<N>-win64.zip (D133; kept next to it only with --keep-zip). The newest 2 setups stay.
 //   node tools/package/build-alpha.mjs [--n N] [--host-exe FILE] [--runtime DIR] [--out-dir DIR] [--profile FILE]
-//                                      [--force] [--keep-staging]
+//                                      [--force] [--keep-staging] [--keep-zip]
 //   N         --n, else data/release/alpha.json "current"; data/release/CHANGELOG-alpha.md needs a "## <version>" section.
 //   studio exe  --studio-exe, else out/studio/build/ujwalam-studio.exe (npm run build:studio); required.
 //   host exe  --host-exe, else app/host/lib/config.mjs (UJWALAM_HOST_EXE / host.local.json "exe" / out/host/build).
@@ -13,7 +14,7 @@
 // Contents (tools/package/manifest.mjs): the host exe and its helper exes in bin/, the OBS runtime subset in obs/
 // (import closure, listed in notices/OBS-RUNTIME-FILES.txt), the Node services, UI, registry and runtime data at their
 // repo paths, Install-Ujwalam.ps1, Ujwalam.cmd, ujwalam-start.exe (the shortcuts' windowless start), Ujwalam-Setup.exe
-// (app/setup: install, update, repair, roll back, uninstall; also copied next to the zips in out/dist), README.txt, HOW-TO.md (docs/how-to.md), release.json, CHANGELOG-alpha.md (this build's section),
+// (app/setup: install, update, repair, roll back, uninstall; the install root keeps a copy), README.txt, HOW-TO.md (docs/how-to.md), release.json, CHANGELOG-alpha.md (this build's section),
 // notices/ (GPL-3.0 and LGPL-3.0 text, source offer, third-party list) and SHA256SUMS.txt, and the bundled runtimes under
 // runtime/ plus the VC++ DLLs next to the exes (tools/package/runtime-bundle.mjs, data/runtime/bundle.json; 2026-11-19):
 // nothing on the PC is needed. Third-party files (OBS runtime, bundled runtimes) are not private-term scanned.
@@ -21,7 +22,7 @@
 // *.local.*, fonts incl. those named in docs/licence-headers.md, docs/, feedback/, out/, user data, secrets, media),
 // import closure of the packaged .mjs files, private-term scan, and the runtime's obs-nvenc.dll must be the patched
 // build (tools/obs-patch/obs-nvenc.manifest.json). The same path checks run again on the finished zip.
-// An existing zip of the same version is refused unless --force (then it is moved to out/dist/_old/, never deleted).
+// An existing build of the same version is refused unless --force (an old --keep-zip zip is moved to out/dist/_old/).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -31,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveConfig } from '../../app/host/lib/config.mjs';
 import { EXE as STUDIO_EXE, START_EXE, qtDir as studioQtDir } from '../../app/studio/tools/build.mjs';
 import { SETUP_EXE } from '../../app/setup/tools/build.mjs';
+import { buildSingleSetup, setupName } from './single-setup.mjs';
 
 // The studio shell ships self-contained in studio/ (D277): its exe, the Qt 6.8.3 kit DLLs it imports and the platform
 // plugins (qwindows for the window, qoffscreen for headless probes). Qt finds <exe dir>/platforms by itself; the
@@ -171,8 +173,8 @@ function readme({ version, nodeMin }) {
   return [
     `Ujwalam ${version} (alpha, Windows 11 x64)`,
     '',
-    'Install or update (no admin rights): double-click Ujwalam-Setup.exe next to this zip (in the build folder).',
-    '  It checks the zip, keeps your settings (a backup is taken first) and adds the shortcuts. By hand instead:',
+    'Install or update (no admin rights): double-click Ujwalam-Setup-<version>.exe (one file; it checks itself first).',
+    '  It keeps your settings (a backup is taken first) and adds the shortcuts. By hand instead, from this folder:',
     '  1. Unzip this folder anywhere.',
     '  2. In it run:  powershell -ExecutionPolicy Bypass -File .\\Install-Ujwalam.ps1',
     '     This build carries everything it needs (Node.js, Python with the clip maker, ffmpeg, the Visual C++ runtime',
@@ -200,27 +202,6 @@ function readme({ version, nodeMin }) {
   ].join('\r\n');
 }
 
-/**
- * Puts Ujwalam-Setup.exe next to the zips (out/dist) with its .sha256: a temp copy and one rename. When the one there
- * is running (a setup window is open), it is kept and the build says so; the zip carries the new one either way.
- */
-export function placeSetup(setupExe, outDir, log = () => {}) {
-  const dest = path.join(outDir, 'Ujwalam-Setup.exe');
-  const tmp = `${dest}.${process.pid}.new`;
-  const sha = sha256(readFileSync(setupExe));
-  try {
-    copyFileSync(setupExe, tmp);
-    renameSync(tmp, dest);
-  } catch (e) {
-    rmSync(tmp, { force: true });
-    log(`Ujwalam-Setup.exe in ${outDir} was not replaced (${e.code ?? e.message}: is a setup window open?); the zip has the new one`);
-    return { file: dest, replaced: false };
-  }
-  writeFileSync(`${dest}.sha256`, `${sha}  Ujwalam-Setup.exe\n`);
-  log(`wrote ${dest} (sha256 ${sha})`);
-  return { file: dest, replaced: true, sha256: sha };
-}
-
 function git(args) {
   try { return execFileSync('git', args, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim(); } catch { return null; }
 }
@@ -241,7 +222,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) throw new Error(`unexpected argument ${a}`);
     const k = a.slice(2);
-    if (['force', 'keep-staging'].includes(k)) o[k] = true;
+    if (['force', 'keep-staging', 'keep-zip'].includes(k)) o[k] = true;
     else { o[k] = argv[++i]; if (o[k] === undefined) throw new Error(`${a} needs a value`); }
   }
   return o;
@@ -428,8 +409,17 @@ export async function buildAlpha(opts = {}) {
       obsModules: obs.modules.shipped, systemDlls: obs.systemDlls, skipped: obs.skipped, commit,
     };
     writeFileSync(path.join(outDir, `${name}.files.txt`), `${sums.join('\n')}\n`);
-    summary.setup = placeSetup(setupExe, outDir, log);
-    log(`wrote ${zipFile} (${(z.bytes / 1048576).toFixed(1)} MiB, ${z.entries} files, ${(unpacked / 1048576).toFixed(1)} MiB unpacked) sha256 ${zipSha}`);
+    // 6. the single file (2026-11-19): Ujwalam-Setup-<version>.exe carries the zip; the zip stays only with --keep-zip
+    // (the in-app update installs from the setup exe itself).
+    log(`zip ${path.basename(zipFile)}: ${(z.bytes / 1048576).toFixed(1)} MiB, ${z.entries} files, ${(unpacked / 1048576).toFixed(1)} MiB unpacked, sha256 ${zipSha}`);
+    const t0 = Date.now();
+    summary.single = await buildSingleSetup({ stub: setupExe, zip: zipFile, version, outDir, log });
+    summary.single.seconds = (Date.now() - t0) / 1000;
+    if (!opts.keepZip) {
+      for (const f of [zipFile, `${zipFile}.sha256`]) rmSync(f, { force: true });
+      summary.zip = null;
+      log(`zip folded into ${path.basename(summary.single.file)} and removed (--keep-zip keeps it)`);
+    }
     if (opts.keepStaging) log(`staging kept: ${stage}`);
     return summary;
   } finally {
@@ -442,9 +432,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const a = parseArgs(process.argv.slice(2));
     const s = await buildAlpha({
       n: a.n !== undefined ? Number(a.n) : undefined, hostExe: a['host-exe'], studioExe: a['studio-exe'], startExe: a['start-exe'], setupExe: a['setup-exe'], qtDir: a['qt-dir'], runtime: a.runtime, outDir: a['out-dir'],
-      profile: a.profile, force: a.force === true, keepStaging: a['keep-staging'] === true,
+      profile: a.profile, force: a.force === true, keepStaging: a['keep-staging'] === true, keepZip: a['keep-zip'] === true,
     });
-    console.log(JSON.stringify({ ...s, zip: path.basename(s.zip) }, null, 2));
+    console.log(JSON.stringify({ ...s, zip: s.zip && path.basename(s.zip) }, null, 2));
   } catch (e) {
     console.error(`[package] FAILED: ${e.message}`);
     process.exit(1);

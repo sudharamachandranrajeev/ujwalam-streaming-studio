@@ -2,10 +2,13 @@
 // Ujwalam-Setup.exe (2026-11-18): install, update, repair, roll back and uninstall Ujwalam for the current user (no
 // admin rights). A small window; the work is done by the tested installer, Install-Ujwalam.ps1.
 //
-// The package is NOT inside this exe: it sits next to it (out/dist: ujwalam-<version>-win64.zip and its .zip.sha256),
-// or in the update folder named in <install root>\data\ujwalam.json ("updateFolder"), or is given with --package. An
-// exe that carries an archive and unpacks it is the classic shape Defender's machine-learning verdicts flag; this one
-// only reads files that are already on disk.
+// Single-file setup (2026-11-19, the user's request): Ujwalam-Setup-<version>.exe carries the package zip after the
+// program, with its SHA-256 and the program part's SHA-256 in a trailer (readEmbedded). Setup checks both before it
+// unpacks anything and refuses a damaged or cut-short file in plain words (exit 21). Without a carried package (the
+// plain program, as built), the package sits next to it (ujwalam-<version>-win64.zip and its .zip.sha256), or in the
+// update folder named in <install root>\data\ujwalam.json ("updateFolder"), or is given with --package (a zip, or a
+// single-file setup exe). Defender risk: an exe that carries an archive is the shape its machine-learning verdicts
+// flag; the exe keeps its version info and icon, and the payload is a plain zip unpacked by Windows' own tar.exe.
 //
 // Install / update / repair:
 //   1. a new folder <install root>\.setup-<pid>-<random>\ is made (it must not exist yet: never someone else's folder
@@ -89,6 +92,18 @@ std::wstring fullPath(const std::wstring &p)
 bool startsWithI(const std::wstring &s, const std::wstring &prefix)
 {
 	return s.size() >= prefix.size() && CompareStringOrdinal(s.c_str(), int(prefix.size()), prefix.c_str(), int(prefix.size()), TRUE) == CSTR_EQUAL;
+}
+
+bool endsWithI(const std::wstring &s, const std::wstring &suffix)
+{
+	return s.size() >= suffix.size() &&
+	       CompareStringOrdinal(s.c_str() + s.size() - suffix.size(), int(suffix.size()), suffix.c_str(), int(suffix.size()), TRUE) == CSTR_EQUAL;
+}
+
+unsigned long long fileSize(const std::wstring &p)
+{
+	WIN32_FILE_ATTRIBUTE_DATA d{};
+	return GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &d) ? (unsigned long long(d.nFileSizeHigh) << 32) | d.nFileSizeLow : 0;
 }
 
 std::string readSmall(const std::wstring &file, size_t cap = 1 << 20)
@@ -217,36 +232,48 @@ Ver readPointer(const std::wstring &file)
 }
 
 struct Pkg {
-	std::wstring zip;
+	std::wstring zip; // a zip on disk, or the single-file setup exe that carries it (embedded = true)
 	Ver ver;
+	bool embedded = false;
+	unsigned long long offset = 0, size = 0;
+	std::string sha, stubSha; // embedded: the zip's and the program part's SHA-256 from the trailer
 };
 
-// The newest ujwalam-<version>-win64.zip in dir (by version, never by file date).
+// The newest package in dir (by version, never by file date): a single-file Ujwalam-Setup-<version>.exe (embedded =
+// true; preferred at the same version; its trailer is read by the caller) or a ujwalam-<version>-win64.zip.
 Pkg newestPackage(const std::wstring &dir)
 {
 	Pkg best;
 	if (dir.empty())
 		return best;
-	WIN32_FIND_DATAW fd;
-	HANDLE h = FindFirstFileW((dir + L"\\ujwalam-*-win64.zip").c_str(), &fd);
-	if (h == INVALID_HANDLE_VALUE)
-		return best;
-	do {
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+	const struct {
+		const wchar_t *glob, *pre, *suf;
+		bool embedded;
+	} kinds[] = {{L"\\ujwalam-*-win64.zip", L"ujwalam-", L"-win64.zip", false}, {L"\\Ujwalam-Setup-*.exe", L"Ujwalam-Setup-", L".exe", true}};
+	for (const auto &k : kinds) {
+		WIN32_FIND_DATAW fd;
+		HANDLE h = FindFirstFileW((dir + k.glob).c_str(), &fd);
+		if (h == INVALID_HANDLE_VALUE)
 			continue;
-		std::wstring name = fd.cFileName;
-		const std::wstring pre = L"ujwalam-", suf = L"-win64.zip";
-		if (name.size() <= pre.size() + suf.size())
-			continue;
-		const Ver v = parseVer(name.substr(pre.size(), name.size() - pre.size() - suf.size()));
-		if (!v.ok)
-			continue;
-		if (!best.ver.ok || cmpVer(v, best.ver) > 0) {
-			best.zip = dir + L"\\" + name;
-			best.ver = v;
-		}
-	} while (FindNextFileW(h, &fd));
-	FindClose(h);
+		do {
+			if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				continue;
+			const std::wstring name = fd.cFileName, pre = k.pre, suf = k.suf;
+			if (name.size() <= pre.size() + suf.size())
+				continue;
+			const Ver v = parseVer(name.substr(pre.size(), name.size() - pre.size() - suf.size()));
+			if (!v.ok)
+				continue;
+			const int c = best.ver.ok ? cmpVer(v, best.ver) : 1;
+			if (c > 0 || (c == 0 && k.embedded && !best.embedded)) {
+				best = Pkg{};
+				best.zip = dir + L"\\" + name;
+				best.ver = v;
+				best.embedded = k.embedded;
+			}
+		} while (FindNextFileW(h, &fd));
+		FindClose(h);
+	}
 	return best;
 }
 
@@ -303,7 +330,20 @@ std::wstring jsonString(const std::string &text, const std::string &key)
 
 // ---- hashing ------------------------------------------------------------------------------------------------------
 
-bool sha256File(const std::wstring &file, std::string &hex)
+std::string hexOf(const unsigned char *d, size_t n)
+{
+	static const char *hx = "0123456789abcdef";
+	std::string hex;
+	for (size_t i = 0; i < n; i++) {
+		hex += hx[d[i] >> 4];
+		hex += hx[d[i] & 15];
+	}
+	return hex;
+}
+
+// SHA-256 of `len` bytes of `file` from `offset` (len = ~0: to the end). When `copyTo` is given, the same bytes are
+// written there as they are hashed (the file checked is the file used).
+bool sha256Range(const std::wstring &file, unsigned long long offset, unsigned long long len, std::string &hex, const std::wstring &copyTo = std::wstring())
 {
 	BCRYPT_ALG_HANDLE alg = nullptr;
 	BCRYPT_HASH_HANDLE hash = nullptr;
@@ -312,26 +352,95 @@ bool sha256File(const std::wstring &file, std::string &hex)
 	bool ok = BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) == 0;
 	HANDLE h = ok ? CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr) : INVALID_HANDLE_VALUE;
 	ok = ok && h != INVALID_HANDLE_VALUE;
+	HANDLE out = INVALID_HANDLE_VALUE;
+	if (ok && !copyTo.empty()) {
+		out = CreateFileW(copyTo.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+		ok = out != INVALID_HANDLE_VALUE;
+	}
+	if (ok && offset) {
+		LARGE_INTEGER li;
+		li.QuadPart = LONGLONG(offset);
+		ok = SetFilePointerEx(h, li, nullptr, FILE_BEGIN) != 0;
+	}
 	std::vector<unsigned char> buf(1 << 20);
+	unsigned long long left = len;
 	DWORD got = 0;
-	while (ok && ReadFile(h, buf.data(), DWORD(buf.size()), &got, nullptr) && got > 0)
+	while (ok && left > 0) {
+		const DWORD want = DWORD(std::min<unsigned long long>(buf.size(), left));
+		if (!ReadFile(h, buf.data(), want, &got, nullptr) || got == 0) {
+			ok = len == ~0ULL; // to the end: a short read is the end; a range: the file is too short
+			break;
+		}
 		ok = BCryptHashData(hash, buf.data(), got, 0) == 0;
+		DWORD w = 0;
+		if (ok && out != INVALID_HANDLE_VALUE)
+			ok = WriteFile(out, buf.data(), got, &w, nullptr) && w == got;
+		if (len != ~0ULL)
+			left -= got;
+	}
 	unsigned char digest[32] = {};
 	ok = ok && BCryptFinishHash(hash, digest, 32, 0) == 0;
 	if (h != INVALID_HANDLE_VALUE)
 		CloseHandle(h);
+	if (out != INVALID_HANDLE_VALUE)
+		CloseHandle(out);
 	if (hash)
 		BCryptDestroyHash(hash);
 	BCryptCloseAlgorithmProvider(alg, 0);
 	if (!ok)
 		return false;
-	static const char *hx = "0123456789abcdef";
-	hex.clear();
-	for (unsigned char b : digest) {
-		hex += hx[b >> 4];
-		hex += hx[b & 15];
-	}
+	hex = hexOf(digest, 32);
 	return true;
+}
+
+bool sha256File(const std::wstring &file, std::string &hex) { return sha256Range(file, 0, ~0ULL, hex); }
+
+// ---- the package built into this exe (single-file setup, 2026-11-19) ----------------------------------------------
+// Ujwalam-Setup-<version>.exe = this program + the package zip + a 160-byte trailer (tools/package/single-setup.mjs
+// writes it; little-endian):
+//   0 "UJWSETUP"  8 u32 format (1)  12 u32 0  16 u64 stub size (= zip offset)  24 u64 zip size
+//   32 SHA-256 of the zip (32 bytes)  64 SHA-256 of the stub (32 bytes)  96 version, 56 bytes NUL-padded  152 "UJWPKG01"
+// The exe checks both hashes before it unpacks anything; the whole file's SHA-256 is also in the .sha256 next to it.
+constexpr size_t kTrailer = 160;
+
+struct Embedded {
+	bool ok = false;
+	unsigned long long stubSize = 0, zipSize = 0;
+	std::string zipSha, stubSha;
+	std::wstring version;
+};
+
+Embedded readEmbedded(const std::wstring &self)
+{
+	Embedded e;
+	HANDLE h = CreateFileW(self.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h == INVALID_HANDLE_VALUE)
+		return e;
+	LARGE_INTEGER size{};
+	unsigned char t[kTrailer] = {};
+	DWORD got = 0;
+	bool ok = GetFileSizeEx(h, &size) && size.QuadPart > LONGLONG(kTrailer);
+	if (ok) {
+		LARGE_INTEGER at;
+		at.QuadPart = size.QuadPart - LONGLONG(kTrailer);
+		ok = SetFilePointerEx(h, at, nullptr, FILE_BEGIN) && ReadFile(h, t, DWORD(kTrailer), &got, nullptr) && got == kTrailer;
+	}
+	CloseHandle(h);
+	if (!ok || memcmp(t, "UJWSETUP", 8) != 0 || memcmp(t + 152, "UJWPKG01", 8) != 0)
+		return e;
+	unsigned int format = 0;
+	memcpy(&format, t + 8, 4);
+	memcpy(&e.stubSize, t + 16, 8);
+	memcpy(&e.zipSize, t + 24, 8);
+	if (format != 1 || e.stubSize + e.zipSize + kTrailer != (unsigned long long)size.QuadPart)
+		return e;
+	e.zipSha = hexOf(t + 32, 32);
+	e.stubSha = hexOf(t + 64, 32);
+	std::string v(reinterpret_cast<const char *>(t + 96), 56);
+	v.resize(strnlen(v.c_str(), 56));
+	e.version = widen(v);
+	e.ok = true;
+	return e;
 }
 
 // ---- files --------------------------------------------------------------------------------------------------------
@@ -515,6 +624,31 @@ void refreshState()
 	if (!s.updateFolder.empty() && s.updateFolder.find(L':') == std::wstring::npos && s.updateFolder.rfind(L"\\\\", 0) != 0)
 		s.updateFolder = dataRoot + L"\\" + s.updateFolder; // relative to the data root, like the launcher
 	s.pkg = Pkg{};
+	// The single-file setup: the package this exe carries (or the one in a setup exe given with --package) wins.
+	const std::wstring carrier = !g_opts.package.empty() && endsWithI(g_opts.package, L".exe") ? fullPath(g_opts.package)
+								     : g_opts.package.empty() ? s.self : std::wstring();
+	if (!carrier.empty()) {
+		const Embedded e = readEmbedded(carrier);
+		if (e.ok) {
+			s.pkg.zip = carrier;
+			s.pkg.ver = parseVer(e.version);
+			s.pkg.embedded = s.pkg.ver.ok;
+			s.pkg.offset = e.stubSize;
+			s.pkg.size = e.zipSize;
+			s.pkg.sha = e.zipSha;
+			s.pkg.stubSha = e.stubSha;
+			if (s.pkg.embedded)
+				return;
+			s.pkg = Pkg{};
+		}
+		// The program alone is well under 16 MiB; a bigger exe without a readable trailer is a single-file setup that was
+		// cut short or damaged (a broken download), never a reason to go looking for some other package.
+		if (!g_opts.package.empty() || fileSize(carrier) > (16ull << 20)) {
+			s.pkg.zip = carrier; // a setup exe with no (or a broken) package: doInstall says so
+			s.pkg.embedded = true;
+			return;
+		}
+	}
 	if (!g_opts.package.empty()) {
 		const std::wstring zip = fullPath(g_opts.package);
 		const std::wstring name = zip.substr(dirOf(zip).size() + 1);
@@ -528,6 +662,18 @@ void refreshState()
 	s.pkg = newestPackage(s.selfDir);
 	if (!s.pkg.ver.ok && !s.updateFolder.empty())
 		s.pkg = newestPackage(fullPath(s.updateFolder));
+	if (s.pkg.embedded) {
+		// A single-file setup found in a folder: its trailer must be readable and name the same version, else it is
+		// reported as damaged (never skipped for some other package).
+		const Embedded e = readEmbedded(s.pkg.zip);
+		if (e.ok && cmpVer(parseVer(e.version), s.pkg.ver) == 0) {
+			s.pkg.offset = e.stubSize;
+			s.pkg.size = e.zipSize;
+			s.pkg.sha = e.zipSha;
+			s.pkg.stubSha = e.stubSha;
+		} else
+			s.pkg.ver = Ver{};
+	}
 }
 
 // ---- output ---------------------------------------------------------------------------------------------------------
@@ -584,6 +730,12 @@ std::wstring shortcutArgs()
 int doInstall()
 {
 	const State &s = g_state;
+	const wchar_t *damaged = L"This setup file is damaged or incomplete (it does not match the checksum built into it). "
+				 L"Download or copy Ujwalam-Setup again and check it against its .sha256 file. Nothing was changed.";
+	if (s.pkg.embedded && !s.pkg.ver.ok) {
+		say(damaged);
+		return 21;
+	}
 	if (!s.pkg.ver.ok) {
 		say(L"No Ujwalam package (ujwalam-<version>-win64.zip) was found next to this program" +
 		    std::wstring(s.updateFolder.empty() ? L"." : L" or in the update folder " + s.updateFolder + L"."));
@@ -591,7 +743,16 @@ int doInstall()
 	}
 	const bool repair = s.cur.ok && cmpVer(s.cur, s.pkg.ver) == 0;
 	step(L"Checking the package " + s.pkg.ver.text);
-	std::string want = readSmall(s.pkg.zip + L".sha256", 4096);
+	if (s.pkg.embedded) {
+		// The program part is checked first (its bytes are what is running); then the package is copied out of this
+		// file into the work folder and the COPY is hashed as it is written: the file checked is the file used.
+		std::string stub;
+		if (!sha256Range(s.pkg.zip, 0, s.pkg.offset, stub) || stub != s.pkg.stubSha) {
+			say(damaged);
+			return 21;
+		}
+	}
+	std::string want = s.pkg.embedded ? s.pkg.sha : readSmall(s.pkg.zip + L".sha256", 4096);
 	want = want.substr(0, std::min<size_t>(64, want.size()));
 	std::transform(want.begin(), want.end(), want.begin(), [](char c) { return char(c >= 'A' && c <= 'F' ? c + 32 : c); });
 	if (want.size() != 64 || want.find_first_not_of("0123456789abcdef") != std::string::npos) {
@@ -607,8 +768,10 @@ int doInstall()
 	// The copy is checked and the copy is unpacked: the file checked is the file used.
 	const std::wstring zip = staging + L"\\package.zip";
 	std::string have;
-	if (!CopyFileW(s.pkg.zip.c_str(), zip.c_str(), TRUE) || !sha256File(zip, have) || have != want) {
-		say(L"The package does not match its checksum file (it is damaged or was changed); build it again. Nothing was changed.");
+	const bool copied = s.pkg.embedded ? sha256Range(s.pkg.zip, s.pkg.offset, s.pkg.size, have, zip) && fileSize(zip) == s.pkg.size && sha256File(zip, have)
+					   : CopyFileW(s.pkg.zip.c_str(), zip.c_str(), TRUE) && sha256File(zip, have);
+	if (!copied || have != want) {
+		say(s.pkg.embedded ? damaged : L"The package does not match its checksum file (it is damaged or was changed); build it again. Nothing was changed.");
 		removeTree(staging);
 		return 21;
 	}

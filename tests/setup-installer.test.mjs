@@ -528,6 +528,100 @@ test('Ujwalam-Setup.exe --quiet: install from the zip next to it, update, refuse
   } finally { rmSync(t, { recursive: true, force: true, maxRetries: 5 }); }
 });
 
+test('single-file setup: trailer round trip; only the newest 2 setups stay (each deletion logged)', async () => {
+  const { buildSingleSetup, readTrailer, pruneSetups, setupsIn } = await import('../tools/package/single-setup.mjs');
+  const t = tmp('single-unit');
+  try {
+    const stub = path.join(t, 'stub.exe');
+    writeFileSync(stub, 'MZ stand-in program');
+    const zip = path.join(t, 'p.zip');
+    writeFileSync(zip, 'PK stand-in package');
+    const out = path.join(t, 'dist');
+    mkdirSync(out);
+    const logs = [];
+    for (const v of ['0.1.0-alpha.9', '0.1.0-alpha.10', '0.1.0-alpha.2']) await buildSingleSetup({ stub, zip, version: v, outDir: out, log: (s) => logs.push(s) });
+    const tr = readTrailer(path.join(out, 'Ujwalam-Setup-0.1.0-alpha.10.exe'));
+    assert.deepEqual(tr, { version: '0.1.0-alpha.10', stubSize: 19, zipSize: 19, zipSha: sha(readFileSync(zip)), stubSha: sha(readFileSync(stub)) });
+    const f = path.join(out, 'Ujwalam-Setup-0.1.0-alpha.10.exe');
+    assert.equal(readFileSync(`${f}.sha256`, 'utf8'), `${sha(readFileSync(f))}  Ujwalam-Setup-0.1.0-alpha.10.exe\n`);
+    // alpha.2 was built last but is the oldest by version: it goes, and so would alpha.9 at keep 1
+    assert.deepEqual(setupsIn(out).map((s) => s.version), ['0.1.0-alpha.10', '0.1.0-alpha.9']);
+    assert.ok(!existsSync(path.join(out, 'Ujwalam-Setup-0.1.0-alpha.2.exe.sha256')));
+    assert.ok(logs.some((l) => /deleted old setup Ujwalam-Setup-0\.1\.0-alpha\.2\.exe \(keeping the newest 2\)/.test(l)), logs.join('\n'));
+    assert.deepEqual(pruneSetups(out, { keep: 1 }).map((p) => path.basename(p)), ['Ujwalam-Setup-0.1.0-alpha.9.exe', 'Ujwalam-Setup-0.1.0-alpha.9.exe.sha256']);
+    // the studio's update check: a single file wins over a zip of the same version; a newer zip still wins
+    writeFileSync(path.join(out, 'ujwalam-0.1.0-alpha.10-win64.zip'), 'z');
+    assert.deepEqual(newestPackage(out), { version: '0.1.0-alpha.10', zip: f, single: true });
+    writeFileSync(path.join(out, 'ujwalam-0.1.0-alpha.11-win64.zip'), 'z');
+    assert.equal(newestPackage(out).single, false);
+    writeFileSync(path.join(out, 'cut.exe'), readFileSync(f).subarray(0, 30));
+    assert.equal(readTrailer(path.join(out, 'cut.exe')), null, 'a cut-short file has no trailer');
+  } finally { rmSync(t, { recursive: true, force: true }); }
+});
+
+test('single-file setup exe: installs what it carries, an update keeps settings, a damaged or cut-short file is refused in plain words', {
+  skip: (process.platform !== 'win32' || !existsSync(SETUP_EXE)) && 'Ujwalam-Setup.exe not built (npm run build:setup)', timeout: 600_000,
+}, async () => {
+  const { buildSingleSetup } = await import('../tools/package/single-setup.mjs');
+  const t = tmp('single');
+  const ir = path.join(t, 'Ujwalam');
+  const dist = path.join(t, 'dist');
+  const data = path.join(ir, 'data');
+  const run = (exe, ...args) => { const r = spawnSync(exe, ['--quiet', ...args], { encoding: 'utf8', windowsHide: true, timeout: 180_000, env: childEnv() }); return { code: r.status, out: `${r.stdout}${r.stderr}` }; };
+  const single = async (v, dir = dist) => {
+    const zip = packageZip(t, v);
+    const s = await buildSingleSetup({ stub: SETUP_EXE, zip, version: v, outDir: dir });
+    rmSync(zip); rmSync(`${zip}.sha256`);
+    return s.file;
+  };
+  try {
+    mkdirSync(dist);
+    const ea = await single(A);
+    let r = run(ea, '--install', '--install-root', ir, '--no-shortcuts');
+    if (r.code === 6) return; // prerequisites (Node, VC++ runtime) missing on this machine (the stand-in package bundles none)
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /package checksum ok/);
+    assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), A);
+    writeData(data, { 'ujwalam.json': { overlayRoot: 'C:\\overlays', updateFolder: dist } }).close();
+    const snap = () => { const s = snapshot(data); delete s['ujwalam.json']; return s; };
+    const before = snap();
+
+    // damaged copies of B: one flipped byte in the package, one in the program part, one cut short
+    const other = path.join(t, 'other');
+    mkdirSync(other);
+    const eb = await single(B, other);
+    const bytes = readFileSync(eb);
+    const variants = {
+      payload: (() => { const b = Buffer.from(bytes); b[b.length - 400] ^= 1; return b; })(),
+      program: (() => { const b = Buffer.from(bytes); b[1000] ^= 1; return b; })(),
+      cut: bytes.subarray(0, bytes.length - 1000),
+    };
+    for (const [k, b] of Object.entries(variants)) {
+      const f = path.join(t, k, path.basename(eb));
+      mkdirSync(path.dirname(f));
+      writeFileSync(f, b);
+      r = run(f, '--update', '--install-root', ir, '--no-shortcuts');
+      assert.equal(r.code, 21, `${k}: ${r.out}`);
+      assert.match(r.out, /This setup file is damaged or incomplete .* Nothing was changed\./, k);
+      // the plain program given the damaged file as --package: the same refusal
+      r = setup('--update', '--install-root', ir, '--package', f);
+      assert.equal(r.code, 21, `${k} as --package: ${r.out}`);
+      assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), A, `${k}: nothing changed`);
+      assert.ok(!readdirSync(ir).some((n) => n.startsWith('.setup-')), `${k}: work folder removed`);
+    }
+
+    // the good B, found by the installed plain program in the update folder (as the studio's Update button does it)
+    copyFileSync(eb, path.join(dist, path.basename(eb)));
+    r = setup('--update', '--install-root', ir, '--no-shortcuts');
+    assert.equal(r.code, 0, r.out);
+    assert.equal(readFileSync(path.join(ir, 'current.txt'), 'utf8').trim(), B);
+    assert.deepEqual(snap(), before, 'the update kept every setting');
+    assert.equal(listBackups(data)[0].reason, 'update');
+    r = run(ea, '--update', '--install-root', ir);
+    assert.equal(r.code, 26, 'an older single file is not an update');
+  } finally { rmSync(t, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
 test('Ujwalam-Setup.exe: version info and icon (Defender: no unnamed exe), asInvoker, only Windows DLLs', { skip: !existsSync(SETUP_EXE) && 'not built' }, async () => {
   const { peInfo } = await import('../tools/package/pe.mjs');
   const pe = peInfo(readFileSync(SETUP_EXE));
