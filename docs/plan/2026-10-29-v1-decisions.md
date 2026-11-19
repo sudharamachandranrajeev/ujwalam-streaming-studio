@@ -2232,3 +2232,16 @@ Growth plan ED2. Decided:
   under the gate.
 - Codex reviewed it three times (2 P1 + 5 P2, then 2 High + 1 Medium, then 1 High); all fixed with tests.
   UNVERIFIED: real beds, Listen on a real device, a real stinger, a real mic, a real stream.
+
+## D402 — Start-up phases 2 and 3 (2026-11-19)
+
+- Phase 2: 19 dialogs and windows not on screen at start are made on first use (`LazyDialog.qml`); the studio's
+  own start 1489 -> 1289 ms.
+- Phase 3: the launcher spawns the studio before the event core (Windows, service-swap flag off;
+  `UJWALAM_STUDIO_EARLY=0` turns it off). The key stays in the environment; the port arrives later on the studio's
+  stdin, never from the network. The window shows only after login and the saved theme. Window ready 4031 -> 3348 ms.
+- The early studio exits when its stdin pipe ends (launcher closed, crashed or killed), not through a job object, so
+  helpers that must outlive the launcher are not caught. Login retries only refused/reset connections within one
+  10 s deadline, then exits 77 so the launcher starts it the old way or relaunches it (Codex, 2026-11-19).
+- Deferred: overlapping the NVENC probe (about 0.7 s) touches the encoder graph and needs its own review.
+  UNVERIFIED: installed build, `ujwalam-start.exe`, `--live`, cold start, and the taskbar on an early window.
