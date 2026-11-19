@@ -150,6 +150,21 @@ and repeated crashes stop as before). Unchanged and passing: `studio-swap-launch
 skipped, `taskbar-id` 2/2, `studio-crash-capture` 4/4, `studio-qml-palette` 7/7, `studio-swap-stream` 1 pass 1
 skipped. `npm run lint`: 0 findings.
 
+Codex review of 0af7f23 (two fixes, same day):
+
+- P1, launcher death after adoption: the early studio now exits whenever its stdin pipe ends (the launcher closed,
+  crashed or was killed), before or after its window was placed, so a relaunch never finds a second studio. Chosen over
+  a job object with KILL_ON_JOB_CLOSE: the pipe needs no new Windows object, and it ends only this one process (never
+  something that must outlive the launcher). Without a launcher the host and services are gone too, so the window has
+  nothing to show. Windows reopened after a crash (old start, no pipe) and the swap slot's windows keep the old rule.
+  Test: launcher killed with `taskkill /F` after adoption, studio gone in about 1.6 s.
+- P2, a stalled server: only connection refused or reset is retried; all tries share one 10 s monotonic deadline that
+  includes the time inside each request (the login request's timeout is what is left). A timeout fails at once
+  ("no login answer"), logged in the studio log, exit 77, so the launcher's start-again or relaunch path takes over.
+  Test: a server that accepts and never answers, exit 77 after about 10 s.
+
+`tests/studio-early-start.test.mjs` is now 9/9.
+
 UNVERIFIED: the installed (packaged) build and `ujwalam-start.exe` starts; `--live` and `--allow-devices` starts; a
 cold start after a reboot; that the taskbar button and relaunch values look right on a real shown window started early
 (the code path is the same `reveal()`; only the hidden and probe modes were run by tests).

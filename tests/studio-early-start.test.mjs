@@ -96,10 +96,27 @@ test('real studio: the UI server comes up 3 s late; the window is placed only af
   assert.equal(ui.seen.filter((s) => s.path === '/login').length, 1, 'one login, the key used once');
   const noCookie = ui.seen.filter((s) => s.path !== '/login' && !s.cookie);
   assert.deepEqual(noCookie, [], 'every request waited for the session');
-  // End of input after the window is placed changes nothing (as before: the window stays).
+  // End of input after the window is placed (the launcher gone): the studio exits too, never left open alone.
   st.c.stdin.end();
+  const code = await Promise.race([st.exited, sleep(10_000).then(() => 'timeout')]);
+  assert.equal(code, 0, st.out);
+});
+
+test('real studio: a server that accepts and never answers; the studio gives up within about 10 s (exit 77)', { skip, timeout: 60_000 }, async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'early-stall-'));
+  const socks = [];
+  const srv = net.createServer((s) => { socks.push(s); }); // accepts, reads nothing back
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const st = startStudio(dir);
+  t.after(() => { killChildTree(st.c); for (const s of socks) s.destroy(); srv.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 10 }); });
   await sleep(1000);
-  assert.equal(st.c.exitCode, null, 'the window stays after the pipe ends');
+  const t0 = Date.now();
+  st.c.stdin.write(earlyUiLine(srv.address().port));
+  const code = await Promise.race([st.exited, sleep(25_000).then(() => 'timeout')]);
+  const ms = Date.now() - t0;
+  assert.equal(code, 77, st.out);
+  assert.ok(ms < 13_000, `gave up after ${ms} ms`);
+  assert.match(st.out, /login failed: no login answer/);
 });
 
 test('real studio: the launcher gone before the UI server was up (end of input) ends the early studio, nothing shown', { skip, timeout: 60_000 }, async (t) => {
@@ -173,6 +190,22 @@ test('launcher: the early studio is adopted (logged in after the UI server); a c
   assert.equal(exits[0].early, undefined, 'the adopted window\'s exit is a normal watched one');
   st.child.stdin.end();
   assert.equal(await new Promise((r) => st.child.once('exit', r)), 0);
+});
+
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+test('launcher killed (taskkill /F) after the studio was adopted: the studio exits within 10 s', { skip, timeout: 120_000 }, async (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'early-kill-'));
+  const st = startLauncher(root);
+  let pids = [];
+  t.after(() => { for (const p of pids) if (alive(p)) try { process.kill(p); } catch { /* gone */ } killChildTree(st.child); rmSync(root, { recursive: true, force: true, maxRetries: 10 }); });
+  assert.ok(await st.until(/window: studio attach: ready \(hidden\)/, 60_000), st.out.slice(-3000));
+  pids = studioPids(st.child.pid);
+  assert.equal(pids.length, 1);
+  execFileSync('taskkill.exe', ['/F', '/PID', String(st.child.pid)], { windowsHide: true }); // the launcher only, no handler runs
+  let gone = false;
+  for (let i = 0; i < 100 && !gone; i++) { gone = !alive(pids[0]); if (!gone) await sleep(100); }
+  assert.ok(gone, 'the studio ended with its launcher');
 });
 
 test('launcher: an early studio that crashes before the UI server is up is started again the old way; repeated crashes stop as before', { skip, timeout: 180_000 }, async (t) => {

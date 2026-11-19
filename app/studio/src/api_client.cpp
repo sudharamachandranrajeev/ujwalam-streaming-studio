@@ -6,6 +6,7 @@
 #include <QNetworkRequest>
 #include <QRegularExpression>
 #include <QUrlQuery>
+#include <algorithm>
 
 static const char *CSRF_HEADER = "X-Ujwalam-Csrf";
 static const int TIMEOUT_MS = 10000;
@@ -50,7 +51,7 @@ void ApiClient::finish(QNetworkReply *r, Done done)
 	});
 }
 
-void ApiClient::login(const QString &launchKey, Done done)
+void ApiClient::login(const QString &launchKey, Done done, int timeoutMs)
 {
 	if (base_.isEmpty()) {
 		done(false, {}, QStringLiteral("no server URL"));
@@ -61,15 +62,21 @@ void ApiClient::login(const QString &launchKey, Done done)
 	q.addQueryItem(QStringLiteral("k"), launchKey);
 	u.setQuery(q);
 	QNetworkRequest req(u);
-	req.setTransferTimeout(TIMEOUT_MS);
+	req.setTransferTimeout(timeoutMs > 0 ? std::min(timeoutMs, TIMEOUT_MS) : TIMEOUT_MS);
 	req.setRawHeader("Sec-Fetch-Site", "none");
 	QNetworkReply *r = nam_.get(req);
 	QObject::connect(r, &QNetworkReply::finished, this, [this, r, done]() {
 		r->deleteLater();
 		const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 		const QByteArray setCookie = r->rawHeader("Set-Cookie");
-		if (status == 0) { // nothing answered (connection refused): the server is not up yet
-			done(false, {}, QString::fromLatin1(kNoAnswer));
+		if (status == 0) {
+			// Connection refused or reset: the server is not up yet (the caller may ask again). Anything else (a timeout,
+			// a stalled server) is a plain failure.
+			const auto e = r->error();
+			if (e == QNetworkReply::ConnectionRefusedError || e == QNetworkReply::RemoteHostClosedError)
+				done(false, {}, QString::fromLatin1(kNoAnswer));
+			else
+				done(false, {}, QStringLiteral("no login answer (%1)").arg(r->errorString()));
 			return;
 		}
 		if (status != 302 || setCookie.isEmpty()) {

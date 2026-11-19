@@ -22,7 +22,8 @@ public:
 	explicit ApiClient(QObject *parent = nullptr);
 	// base must be http://127.0.0.1:<port>/ ; returns false (and does nothing) for anything else.
 	bool setBase(const QUrl &base);
-	void login(const QString &launchKey, Done done);
+	// timeoutMs > 0: the login request gives up after that long (at most the usual 10 s).
+	void login(const QString &launchKey, Done done, int timeoutMs = 0);
 	void get(const QString &route, Done done);
 	void post(const QString &route, const QJsonObject &body, Done done);
 	// POST /ui/api/host {method, params}

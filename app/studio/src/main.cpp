@@ -109,18 +109,31 @@ static bool startControlReader(QApplication *app, std::function<void(const QStri
 
 // Logs in with the launcher's key and applies the saved theme and effects choice (settings.json ui.theme / ui.effects,
 // D293) before any window shows, so it never flashes the default look; UJWALAM_THEME / UJWALAM_EFFECTS (tests) win.
-// Then runs then(). A failed login exits 77. A server that does not answer yet (connection refused) is asked again every
-// 100 ms for up to 10 s (early start, 2026-11-19); an answer that refuses the key is never retried.
-static void loginThen(QApplication &app, ApiClient &api, const QString &key, int &code, std::function<void()> then, int triesLeft = 100)
+// Then runs then(). A failed login exits 77. A server that is not up yet (connection refused or reset) is asked again
+// every 100 ms; all tries together, the time inside each request included, end 10 s after the first (one monotonic
+// deadline; early start, 2026-11-19). A timeout or an answer that refuses the key is never retried.
+static constexpr qint64 kLoginDeadlineMs = 10000;
+static void loginThen(QApplication &app, ApiClient &api, const QString &key, int &code, std::function<void()> then,
+	std::shared_ptr<QElapsedTimer> since = nullptr)
 {
-	api.login(key, [&app, &api, &code, key, then, triesLeft](bool ok, const QJsonObject &, const QString &err) {
-		if (!ok && triesLeft > 0 && err == QLatin1String(ApiClient::kNoAnswer)) {
-			QTimer::singleShot(100, &app, [&app, &api, &code, key, then, triesLeft]() { loginThen(app, api, key, code, then, triesLeft - 1); });
-			return;
+	if (!since) {
+		since = std::make_shared<QElapsedTimer>();
+		since->start();
+	}
+	const qint64 left = kLoginDeadlineMs - since->elapsed();
+	api.login(key, [&app, &api, &code, key, then, since](bool ok, const QJsonObject &, const QString &errIn) {
+		QString err = errIn;
+		if (!ok && err == QLatin1String(ApiClient::kNoAnswer)) {
+			if (since->elapsed() + 100 < kLoginDeadlineMs) {
+				QTimer::singleShot(100, &app, [&app, &api, &code, key, then, since]() { loginThen(app, api, key, code, then, since); });
+				return;
+			}
+			err = QStringLiteral("the UI server did not answer within %1 s").arg(kLoginDeadlineMs / 1000);
 		}
 		startupclock::mark("login");
 		if (!ok) {
 			std::fprintf(stderr, "studio: login failed: %s\n", qPrintable(err));
+			qWarning("studio: login failed: %s", qPrintable(err)); // the studio log too
 			code = 77;
 			QTimer::singleShot(0, &app, [&app]() { app.exit(77); });
 			return;
@@ -136,7 +149,7 @@ static void loginThen(QApplication &app, ApiClient &api, const QString &key, int
 			}
 			then();
 		});
-	});
+	}, int(std::max<qint64>(left, 1)));
 }
 
 // A probe action that types a secret into Settings > Connections (a test stream key, server address or app client ID,
@@ -156,7 +169,7 @@ static void afterReveal(QApplication &app, QmlStudio &studio, QmlStudio::Mode mo
 // early (UJWALAM_STUDIO_EARLY=1, 2026-11-19): started by the launcher while the host starts, before the UI server is
 // up. Main.qml loads at once with nothing on screen (API requests wait for the login); the launcher's line
 // "ui <port>" on stdin says the server listens; then the login, the saved theme and only then the window. No window
-// is ever shown before that. End of input before the line (the launcher gone) exits 0.
+// is ever shown before that. End of input at any time (the launcher gone) exits 0.
 static int runQml(QApplication &app, ApiClient &api, const QString &key, bool headless, bool hidden, bool early)
 {
 	QmlStudio studio(&api);
@@ -196,8 +209,13 @@ static int runQml(QApplication &app, ApiClient &api, const QString &key, bool he
 				loginThen(app, api, key, code, afterLogin);
 			}
 		}, [&]() {
-			if (waiting) { // the launcher is gone before the UI server was up: nothing to show
+			// Early start only: the pipe ends when the launcher is gone (closed, crashed or killed). Its host and services go
+			// with it, so the window would be useless, and a new start would open a second one: exit, before or after the
+			// window was placed (Codex review of 0af7f23). Not a user close: no dialog. The swap-control-only mode keeps the
+			// old rule (end of input ignored).
+			if (early) {
 				waiting = false;
+				qWarning("studio: the launcher is gone (end of its pipe): exiting");
 				QTimer::singleShot(0, &app, [&app]() { app.exit(0); });
 			}
 		});
