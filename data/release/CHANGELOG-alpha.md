@@ -14,6 +14,7 @@ One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the sec
 - The Transitions box fits the side column; the colour swatches wrap.
 - The old widget studio is gone; the studio program is a third smaller.
 - Faster start: the data folder's permissions are no longer rewritten at every start, last session's clip job waits a minute, and the clip and face workers start after the window (or at once when you go live or record). Each part now writes how long its start took.
+- Scene music: right-click a scene > Music… to give it a mood and a level. It fades with the transition, keeps playing when the next scene has the same mood, and ducks under your voice. Off until you switch it on. Listen works only off air.
 - The studio and its preview windows sit under the pinned Ujwalam icon on the taskbar instead of opening a second button (may need a sign-out or an unpin and re-pin once).
 
 ## 0.1.0-alpha.34 — 2026-11-17
