@@ -381,7 +381,7 @@ test('LU1: every packaged file has a part; release.json parts tell what changed'
 test('LU7: every feature flag added since 2026-11-10 is off by default (except one the user turned on by decision), and every flag has a since date', () => {
   // D368: the user asked for reel thumbnails on by default (2026-11-12). D389: the outputs cards the user asked for
   // (2026-11-15) are on by default.
-  const ON_BY_DECISION = ['reel-thumbnail', 'outputs-panel', 'scene-builder']; // D390: scene builder on by default (user-requested)
+  const ON_BY_DECISION = ['reel-thumbnail', 'outputs-panel', 'scene-builder', 'download-manager']; // D390: scene builder on by default (user-requested); D403 download manager
   const { flags } = JSON.parse(readFileSync(path.join(REPO, 'data', 'flags.json'), 'utf8'));
   for (const f of flags) assert.match(f.since ?? '', /^\d{4}-\d{2}-\d{2}$/, `${f.id}: since must be a date`);
   const recent = flags.filter((f) => f.since >= '2026-11-10');

@@ -127,3 +127,28 @@ Fresh-install checks (temp install root and temp data root; PATH stripped of Nod
   file are each refused with exit 21 and nothing changed, also when given to the plain program as `--package`; the
   installed plain program finds the single file in the update folder). `package-alpha` 20 pass 1 skipped (e2e build),
   `live-install` 13/13, `live-install-launcher` 1/1.
+
+## Step 4: in-app download manager (2026-11-19)
+
+- Data: `data/downloads/speech-captions.json` (faster-whisper small, 4 files, 463.7 MiB, Systran/faster-whisper-small
+  pinned at revision 536b0662, MIT) and `data/downloads/face-ai.json` (the 7 Face AI files, 30.3 MiB, the same URLs and
+  SHA-256s as `data/models/face-ai.json`; Face Mesh comes from its pinned archive). Each item: name, plain-words purpose,
+  what needs it, size, URL, SHA-256, licence, checked date.
+- Service `services/studio-ui/downloads.mjs`, routes `GET/POST /ui/api/downloads`: one download at a time; resume with
+  HTTP Range from `<data root>\downloads\partial\<id>\`; a server that ignores Range restarts the file; SHA-256 and size
+  checked per file (a miss: deleted, fetched once more, then a plain failure); 3 retries on network errors; Pause keeps
+  the partial files, Cancel deletes them; finished files go to `<data root>\models\...` (never the install folder) with a
+  marker. Never while live: start/resume refused while live, recording or when the host cannot be read; a running
+  download pauses itself when either starts (2 s check, off the stream path). https only (http only on 127.0.0.1).
+- Where the workers look: reel captions `<data root>\models\faster-whisper-small` (unchanged `model_path`); the face
+  worker reads `UJWALAM_MODELS_DIR\face`, which the installed launcher sets to `<data root>\models` (a checkout keeps
+  `data/models/face`).
+- Studio: Settings > Downloads (`DownloadsList.qml`: what each item is for, size, licence, progress bar, Download /
+  Pause / Resume / Cancel, fixed row height, polls once a second only while something downloads). Settings > Clips
+  offers the speech model and Settings > Editing the Face AI models while they are missing.
+- Flag `download-manager`, ON by default (proposed D403).
+
+Tests: `tests/downloads.test.mjs` 7/7, three runs in a row (manifests; dropped connection resumed with Range plus a
+redirect; bad checksum fetched twice then refused with nothing kept; server ignoring Range; pause/resume/cancel; refused
+while live, pauses when the stream starts, host unknown refused, flag off refused; archive members). No real model was
+downloaded from the internet in this session: UNVERIFIED against the real hosts.

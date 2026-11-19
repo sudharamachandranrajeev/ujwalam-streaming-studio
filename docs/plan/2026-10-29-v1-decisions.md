@@ -2245,3 +2245,20 @@ Growth plan ED2. Decided:
   10 s deadline, then exits 77 so the launcher starts it the old way or relaunches it (Codex, 2026-11-19).
 - Deferred: overlapping the NVENC probe (about 0.7 s) touches the encoder graph and needs its own review.
   UNVERIFIED: installed build, `ujwalam-start.exe`, `--live`, cold start, and the taskbar on an early window.
+
+## D403 — Single-file setup with bundled runtimes and an in-app download manager (proposed, 2026-11-19)
+
+User (2026-11-19): "installer needs to be a single file with everything that should be ready to go", "everything", and
+"any downloadable needs to have a download manager within the app".
+
+- `Ujwalam-Setup-<version>.exe` is one file: the setup program, the package zip and a trailer with both SHA-256s. It
+  checks itself before it unpacks anything and refuses a damaged or cut-short file in plain words (exit 21). The build
+  keeps the newest 2 setups in `out/dist` and logs what it deletes; the zip is folded in (`--keep-zip` keeps it).
+- The package carries Node.js 26.12.1, Python 3.14.7 (embeddable) with the clip and face packages and the OCR models,
+  FFmpeg 8.1 (LGPL build) and the Visual C++ runtime app-local: no admin rights, nothing else to install. Pins in
+  `data/runtime/bundle.json`; licences in `docs/licence-headers.md` and the install's `notices/THIRD-PARTY.txt`.
+- The in-app update installs a single-file setup from the update folder (zips still work).
+- `download-manager` is ON by default (user-requested feature): Settings > Downloads fetches the optional models
+  (`data/downloads/*.json`: the speech model for captions, the Face AI models) on a click, with resume, SHA-256 checks,
+  retry, Pause and Cancel; never while live or recording. Settings > Clips and Editing offer the missing model.
+- Evidence: `docs/evidence/2026-11-19-single-file-setup.md`. A run on a fresh PC is still UNVERIFIED.

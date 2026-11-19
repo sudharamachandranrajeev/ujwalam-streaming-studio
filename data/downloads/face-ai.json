@@ -1,0 +1,69 @@
+{
+  "$comment": "Download manager items (services/studio-ui/downloads.mjs). The same files, URLs and SHA-256s as data/models/face-ai.json (checked 2026-11-08); tests/downloads.test.mjs keeps the two equal.",
+  "items": [
+    {
+      "id": "face-ai-models",
+      "name": "Face AI models",
+      "purpose": "Lets a camera layer remove or blur the background, follow your face and pin stickers to it (Face AI). Not needed to stream, record or make clips.",
+      "neededBy": "Face AI",
+      "licence": "Apache-2.0 (MediaPipe, MODNet, Face Mesh), GPL-3.0 (Robust Video Matting), MIT (YuNet)",
+      "licenceSource": "per model in data/models/face-ai.json",
+      "checked": "2026-11-19",
+      "dest": "models/face",
+      "files": [
+        {
+          "name": "selfie_segmentation_landscape.onnx",
+          "url": "https://huggingface.co/onnx-community/mediapipe_selfie_segmentation_landscape/resolve/2497d5bec26c626c7b3c4edc6e1fefc21b64f6c3/onnx/model.onnx",
+          "bytes": 462338,
+          "sha256": "7a0adcfdb1715d3b0ff0f61486d8a181c33f4a208343a5abfccbc6540e872d24"
+        },
+        {
+          "name": "selfie_segmentation.onnx",
+          "url": "https://huggingface.co/onnx-community/mediapipe_selfie_segmentation/resolve/be49485c8e027524be38591817fc5cd31bd9d00e/onnx/model.onnx",
+          "bytes": 462352,
+          "sha256": "3241ac4ad8aa35bdaf33946776db29f7c283a413aa0b0dacb9483594b4531aad"
+        },
+        {
+          "name": "modnet_fp16.onnx",
+          "url": "https://huggingface.co/Xenova/modnet/resolve/fa2fa546052fba4c08921230a26cc69a333fca12/onnx/model_fp16.onnx",
+          "bytes": 12984781,
+          "sha256": "25f165da9bfd30830a575f1f0490f1acd995975cb349bc02f3d79332e1fe5cf6"
+        },
+        {
+          "name": "rvm_mobilenetv3_fp32.onnx",
+          "url": "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx",
+          "bytes": 14975696,
+          "sha256": "88d4531297118f595bf2fd60f6f566aec2e559393802d1f436c380f0cbbd2828"
+        },
+        {
+          "name": "face_detection_yunet_2023mar.onnx",
+          "url": "https://huggingface.co/opencv/face_detection_yunet/resolve/3cc26e7f1014a5ee5d74a42acee58bafc9d0a310/face_detection_yunet_2023mar.onnx",
+          "bytes": 232589,
+          "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+        },
+        {
+          "name": "face_landmark_detector.onnx",
+          "bytes": 312873,
+          "sha256": "ebd4d22b162cfb3f8113fa48908859a4413c45a82a9ae0bd8a1e5a56f1fb9c5f",
+          "archive": {
+            "url": "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/mediapipe_face/releases/v0.66.0/mediapipe_face-onnx-float.zip",
+            "bytes": 2605273,
+            "sha256": "f6d60fdf53ccf6fa2ce1f3b103fcc468b6860b4e707223a0a6d6733b35e0c630",
+            "member": "mediapipe_face-onnx-float/face_landmark_detector.onnx"
+          }
+        },
+        {
+          "name": "face_landmark_detector.data",
+          "bytes": 2396848,
+          "sha256": "7b4be428f66b16768aecb31954848ec9512eb444f13eaf6fc4690acc981d9732",
+          "archive": {
+            "url": "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/mediapipe_face/releases/v0.66.0/mediapipe_face-onnx-float.zip",
+            "bytes": 2605273,
+            "sha256": "f6d60fdf53ccf6fa2ce1f3b103fcc468b6860b4e707223a0a6d6733b35e0c630",
+            "member": "mediapipe_face-onnx-float/face_landmark_detector.data"
+          }
+        }
+      ]
+    }
+  ]
+}

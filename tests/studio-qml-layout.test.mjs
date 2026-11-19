@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runQmlProbe, skipReason } from './helpers/qml-probe.mjs';
 
-const PAGES = ['Appearance', 'Help & tips', 'Stream', 'Transitions', 'Connections', 'Chat & bots', 'Editing', 'Preview', 'Clips', 'Posting & growth', 'Folders', 'Advanced'];
+const PAGES = ['Appearance', 'Help & tips', 'Stream', 'Transitions', 'Connections', 'Chat & bots', 'Editing', 'Preview', 'Clips', 'Posting & growth', 'Folders', 'Downloads', 'Advanced'];
 const ACTIONS = ['layout-check:Main window', 'settings-open', ...PAGES.flatMap((p) => [`settings-page:${p}`, `layout-check:${p}`])];
 
 for (const theme of ['ujwalam-light', 'ujwalam-night']) {

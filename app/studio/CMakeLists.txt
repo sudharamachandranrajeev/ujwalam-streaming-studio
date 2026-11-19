@@ -103,6 +103,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/TaskCenter.qml
 		qml/TaskChip.qml
 		qml/UpdateButton.qml
+		qml/DownloadsList.qml
 		qml/TrayFlow.qml
 		qml/FeedbackWindow.qml
 		qml/ReportDialog.qml

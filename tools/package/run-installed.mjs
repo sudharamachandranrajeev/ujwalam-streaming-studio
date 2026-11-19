@@ -75,6 +75,8 @@ export function installedSpec({ install = INSTALL, dataRoot, userArgs = [] }) {
   const bundledFf = existsSync(path.join(ff, 'ffmpeg.exe'));
   const env = {
     ...(bundledFf ? { PATH: [ff, path.join(install, 'runtime', 'node'), process.env.PATH ?? ''].filter(Boolean).join(path.delimiter), FFMPEG: path.join(ff, 'ffmpeg.exe'), FFPROBE: path.join(ff, 'ffprobe.exe') } : {}),
+    // Downloaded models (the studio's download manager, data/downloads/*.json): in the data root, kept across updates.
+    UJWALAM_MODELS_DIR: path.join(dataRoot, 'models'),
     UJWALAM_OBS_RUNTIME: path.join(install, 'obs'),
     UJWALAM_HOST_EXE: path.join(install, 'bin', 'ujwalam-host.exe'),
     UJWALAM_HOST_DATA: dirs.host,

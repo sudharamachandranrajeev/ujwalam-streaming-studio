@@ -73,6 +73,7 @@ import { ID_RE as YT_ID_RE, cleanCategoryId as ytCleanCategoryId, cleanDescripti
 import { createYoutubeControl, setLive as setYtLive } from '../platform-connect/youtube-control.mjs';
 import { GET_ROUTES as YT_GET_ROUTES, POST_ROUTES as YT_POST_ROUTES, createYoutubeRoutes } from './youtube-routes.mjs';
 import { createSetupUpdate } from './setup-update.mjs';
+import { createDownloads, FLAG as DOWNLOADS_FLAG } from './downloads.mjs';
 import { connectRow as instagramRow, createUseWatcher as createInstagramWatcher, freshnessText as instagramText, INSTAGRAM_FLAG, keyFreshness as instagramFreshness, loadAddon as instagramAddon, noteKeyStarted as instagramStarted } from '../outputs/instagram.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG, createSettingsRoutes } from './settings-routes.mjs';
 import { createYoutubePresets } from './youtube-presets.mjs';
@@ -1489,6 +1490,20 @@ export function createStudioServer(opts) {
     hostStatus: opts.setupUpdate?.hostStatus ?? (() => host.call('host.status', {})),
   });
 
+  // Download manager (single-file setup, 2026-11-19): optional models from data/downloads/*.json into the data root
+  // (<data root>\models, where the clip and face workers look). Never while live or recording. opts.downloads =
+  // { dataRoot, items, hostStatus, retryDelays, watchMs } are test seams.
+  const downloadsRoot = opts.downloads?.dataRoot ?? (process.env.UJWALAM_MODELS_DIR ? path.dirname(path.resolve(process.env.UJWALAM_MODELS_DIR))
+    : typeof opts.dataDir === 'string' ? path.dirname(path.resolve(opts.dataDir)) : null);
+  const downloads = downloadsRoot ? createDownloads({
+    json, log, dataRoot: downloadsRoot, now,
+    ...(opts.downloads?.items ? { items: opts.downloads.items } : {}),
+    ...(opts.downloads?.retryDelays ? { retryDelays: opts.downloads.retryDelays } : {}),
+    ...(opts.downloads?.watchMs ? { watchMs: opts.downloads.watchMs } : {}),
+    isOn: () => !flags || !flags.ids().includes(DOWNLOADS_FLAG) || flags.isOn(DOWNLOADS_FLAG),
+    hostStatus: opts.downloads?.hostStatus ?? (() => host.call('host.status', {})),
+  }) : null;
+
   async function handleCoreOutcome(r, summary) {
     // r: { verdict, reason, confirm?, dispatch? } from the event core. The page gets verdict/reason and, when the core
     // asks for an approval (a rule / remote / system write), a pending id for one Allow click. confirmId and actionHash
@@ -1552,6 +1567,7 @@ export function createStudioServer(opts) {
     }
     if (req.method === 'GET' && route === '/ui/api/youtube/events') return ytEventsRoute(req, res, route, null); // D386
     if (req.method === 'GET' && await setupUpdate.handle('GET', route, res, url)) return undefined; // Update available (2026-11-18)
+    if (req.method === 'GET' && downloads && await downloads.handle('GET', route, res, null)) return undefined; // download manager (2026-11-19)
     if (req.method === 'GET' && await ytPresets.handle('GET', route, null, res)) return undefined; // D388
     if (req.method === 'GET' && await goLive.handle('GET', route, null, res, url)) return undefined; // D389
     if (req.method === 'GET' && YT_GET_ROUTES.includes(route)) return ytRoutes.handle(req, res, route, null, url); // D388
@@ -1806,6 +1822,7 @@ export function createStudioServer(opts) {
     if (route.startsWith('/ui/api/connect/')) return connectRoute(res, route, body);
     if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set' || route === '/ui/api/youtube/event/auto') return ytEventsRoute(req, res, route, body); // D386, D388
     if (await setupUpdate.handle('POST', route, res, null)) return undefined; // Update available (2026-11-18)
+    if (downloads && await downloads.handle('POST', route, res, body)) return undefined; // download manager (2026-11-19)
     if (await ytPresets.handle('POST', route, body, res)) return undefined; // D388
     if (await goLive.handle('POST', route, body, res, null)) return undefined; // D389
     if (YT_POST_ROUTES.includes(route)) return ytRoutes.handle(req, res, route, body, null); // D388
