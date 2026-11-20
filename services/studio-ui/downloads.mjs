@@ -86,12 +86,23 @@ function sha256File(file) {
 
 const sizeOf = (f) => { try { return statSync(f).size; } catch { return -1; } };
 
-/** True when every file of the item is in dest with its size and the marker lists the same SHA-256s (cheap: no hashing). */
+const statOf = (f) => { try { const s = statSync(f); return { size: s.size, mtimeMs: s.mtimeMs }; } catch { return null; } };
+
+/**
+ * True when every file of the item is in dest and matches the marker written right after its SHA-256 was checked:
+ * the same SHA-256 as the manifest, the same size and the same modification time. A file changed in place (even with
+ * the same length) gets a new modification time, so it no longer counts as ready and is downloaded again.
+ * (Codex review 2026-11-20: size alone was trusted.)
+ */
 export function isReady(dataRoot, it) {
   const dest = path.join(dataRoot, ...it.dest.split('/'));
   let m;
   try { m = JSON.parse(readFileSync(path.join(dest, MARKER), 'utf8')); } catch { return false; }
-  return it.files.every((f) => m.files?.[f.name] === f.sha256 && sizeOf(path.join(dest, f.name)) === f.bytes);
+  return it.files.every((f) => {
+    const e = m.files?.[f.name];
+    const s = statOf(path.join(dest, f.name));
+    return !!e && !!s && e.sha256 === f.sha256 && s.size === f.bytes && e.size === s.size && e.mtimeMs === s.mtimeMs;
+  });
 }
 
 function allowedUrl(u) {
@@ -191,8 +202,17 @@ export function createDownloads(opts) {
   async function fetchSource(it, s, src, ctrl) {
     const dir = partialDir(it);
     const done = path.join(dir, src.name);
-    if (sizeOf(done) === src.bytes) return done; // fetched and checked in an earlier run
-    const part = path.join(dir, `${src.name}.part`);
+    if (sizeOf(done) === src.bytes) {
+      // Fetched and checked in an earlier run: checked again now, since it may have changed while it waited (Codex
+      // review 2026-11-20). A mismatch is deleted and fetched again.
+      s.state = 'verifying';
+      const same = (await sha256File(done)) === src.sha256;
+      s.state = 'downloading';
+      if (same) return done;
+      s.done -= src.bytes;
+      rmSync(done, { force: true });
+      log(`downloads: ${it.id}/${src.name} changed since it was checked; fetching it again`);
+    }    const part = path.join(dir, `${src.name}.part`);
     for (let pass = 0; pass < 2; pass++) { // a checksum miss: delete and fetch once more
       let tries = 0;
       for (;;) {
@@ -235,10 +255,17 @@ export function createDownloads(opts) {
         writeFileSync(`${target}.new`, data);
         renameSync(`${target}.new`, target);
       } else {
+        // Checked once more right before it is moved into place: the file checked is the file used.
+        const from = got.get(f.url);
+        if (sizeOf(from) !== f.bytes || (await sha256File(from)) !== f.sha256) {
+          rmSync(from, { force: true });
+          throw Object.assign(new Error(`${f.name} changed after it was checked; it was deleted. Click Download to fetch it again.`), { code: 'sha' });
+        }
         rmSync(target, { force: true });
-        renameSync(got.get(f.url), target);
+        renameSync(from, target);
       }
-      marker.files[f.name] = f.sha256;
+      const st2 = statSync(target);
+      marker.files[f.name] = { sha256: f.sha256, size: st2.size, mtimeMs: st2.mtimeMs };
     }
     writeFileSync(path.join(dest, MARKER), `${JSON.stringify(marker, null, 2)}\n`);
     rmSync(partialDir(it), { recursive: true, force: true });
@@ -280,16 +307,40 @@ export function createDownloads(opts) {
     } finally {
       clearInterval(watch);
       s.ctrl = null;
+      s.why0 = s.why;
       s.why = null;
     }
   }
 
+  // Live, recording or unknown: every waiting item is paused too, not only the running one (Codex review 2026-11-20:
+  // the next item used to start the moment the stream did).
+  function pauseQueue(why) {
+    for (const q of queue.splice(0)) {
+      const s = st.get(q.id);
+      s.state = 'paused';
+      s.message = why === 'live' ? 'Paused because the stream or a recording started. Resume it when you are off air.' : 'Paused.';
+      s.promise = null;
+    }
+  }
+
+  // The host status is read before every start; nothing starts while it says live or recording, or cannot be read.
   function pump() {
     if (running || !queue.length) return;
     const it = queue.shift();
     running = it.id;
-    const p = runOne(it).finally(() => { running = null; pump(); });
-    st.get(it.id).promise = p;
+    const s = st.get(it.id);
+    const p = (async () => {
+      if (await onAir()) {
+        s.state = 'paused';
+        s.message = 'Paused because the stream or a recording started. Resume it when you are off air.';
+        pauseQueue('live');
+        return;
+      }
+      if (s.state !== 'queued') return; // paused or cancelled while the status was read
+      await runOne(it);
+      if (s.state === 'paused' && s.why0 === 'live') pauseQueue('live');
+    })().finally(() => { running = null; pump(); });
+    s.promise = p;
   }
 
   async function act(id, action) {

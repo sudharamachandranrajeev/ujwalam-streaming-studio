@@ -4,13 +4,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDownloads, isReady, itemProblems, loadItems, MARKER } from '../services/studio-ui/downloads.mjs';
 import { writeZip } from '../tools/package/zip.mjs';
+import { safeRoot } from './helpers/data-root-guard.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sha = (b) => createHash('sha256').update(b).digest('hex');
@@ -49,7 +50,7 @@ const item = (base, over = {}) => ({
 function mgr(dataRoot, items, { live = () => false } = {}) {
   const out = [];
   const json = (res, code, body) => { res.code = code; res.body = body; };
-  const d = createDownloads({ json, dataRoot, items, hostStatus: async () => ({ live: live(), recording: false }), retryDelays: [10, 10, 10], watchMs: 20, log: (s) => out.push(s) });
+  const d = createDownloads({ json, dataRoot: safeRoot(dataRoot), items, hostStatus: async () => ({ live: live(), recording: false }), retryDelays: [10, 10, 10], watchMs: 20, log: (s) => out.push(s) });
   const call = async (method, body) => { const res = {}; await d.handle(method, '/ui/api/downloads', res, body); return res; };
   return { d, call, out };
 }
@@ -85,7 +86,9 @@ test('download: a dropped connection resumes with Range, redirects are followed,
     assert.ok(seen.some((x) => x.url === '/big.bin' && /^bytes=\d+-$/.test(x.range ?? '')), 'the second try asked for the rest only');
     assert.deepEqual(readFileSync(path.join(root, 'models', 'test', 'big.bin')), BIG);
     assert.deepEqual(readFileSync(path.join(root, 'models', 'test', 'small.txt')), SMALL);
-    assert.deepEqual(JSON.parse(readFileSync(path.join(root, 'models', 'test', MARKER), 'utf8')).files, { 'big.bin': sha(BIG), 'small.txt': sha(SMALL) });
+    const mk = JSON.parse(readFileSync(path.join(root, 'models', 'test', MARKER), 'utf8')).files;
+    assert.deepEqual(Object.fromEntries(Object.entries(mk).map(([k, v]) => [k, [v.sha256, v.size, typeof v.mtimeMs]])),
+      { 'big.bin': [sha(BIG), BIG.length, 'number'], 'small.txt': [sha(SMALL), SMALL.length, 'number'] });
     assert.ok(!existsSync(path.join(root, 'downloads', 'partial', it.id)), 'partial files removed');
     assert.ok(isReady(root, it));
   } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
@@ -209,4 +212,58 @@ test('archive members: the archive is checked, then each member is checked and p
       assert.deepEqual(readdirSync(path.join(root, 'models', 'test')).sort(), [MARKER, 'a.onnx', 'b.data'].sort());
     } finally { s.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); rmSync(src, { recursive: true, force: true }); }
+});
+
+test('guard: a test data root may never be the real %LOCALAPPDATA%\\Ujwalam', () => {
+  assert.throws(() => safeRoot(path.join(process.env.LOCALAPPDATA ?? os.homedir(), 'Ujwalam', 'data')), /real Ujwalam folder/);
+  assert.throws(() => safeRoot(path.join(process.env.LOCALAPPDATA ?? os.homedir(), 'Ujwalam')), /real Ujwalam folder/);
+  assert.equal(safeRoot(path.join(os.tmpdir(), 'x')), path.join(os.tmpdir(), 'x'));
+});
+
+test('never while live: with 2 queued, the stream starting pauses the whole queue and the second is never requested', async () => {
+  const OTHER = blob(300_000, 5);
+  const { s, seen, base } = await server({ '/big.bin': BIG, '/small.txt': SMALL, '/other.bin': OTHER }, { slow: 10_000 });
+  const root = tmp('queue');
+  try {
+    let live = false;
+    const a = item(base);
+    const b = item(base, { id: 'second-model', dest: 'models/second', files: [{ name: 'other.bin', url: `${base}/other.bin`, bytes: OTHER.length, sha256: sha(OTHER) }] });
+    const { d, call } = mgr(root, [a, b], { live: () => live });
+    assert.equal((await call('POST', { id: a.id, action: 'start' })).code, 200);
+    assert.equal((await call('POST', { id: b.id, action: 'start' })).body.item.state, 'queued');
+    await new Promise((r) => setTimeout(r, 80));
+    live = true;
+    await d.promise(a.id);
+    await new Promise((r) => setTimeout(r, 150));
+    const v = (await call('GET')).body.items;
+    assert.deepEqual(v.map((x) => x.state), ['paused', 'paused']);
+    assert.match(v[1].message, /Paused because the stream or a recording started/);
+    assert.equal(seen.filter((x) => x.url === '/other.bin').length, 0, 'no request for the second download');
+    // the next start is also checked: still live, refused
+    assert.equal((await call('POST', { id: b.id, action: 'resume' })).code, 409);
+  } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a finished part changed with the same length is checked again on resume and fetched again; a ready file changed in place is no longer ready', async () => {
+  const { s, seen, base } = await server({ '/big.bin': BIG, '/small.txt': SMALL });
+  const root = tmp('rehash');
+  try {
+    const it = item(base);
+    const part = path.join(root, 'downloads', 'partial', it.id);
+    mkdirSync(part, { recursive: true });
+    writeFileSync(path.join(part, 'big.bin'), blob(BIG.length, 42)); // "finished" earlier, same length, wrong bytes
+    const { d, call } = mgr(root, [it]);
+    await call('POST', { id: it.id, action: 'start' });
+    await d.promise(it.id);
+    assert.equal((await call('GET')).body.items[0].state, 'ready');
+    assert.equal(seen.filter((x) => x.url === '/big.bin').length, 1, 'fetched again');
+    const f = path.join(root, 'models', 'test', 'big.bin');
+    assert.deepEqual(readFileSync(f), BIG);
+    assert.ok(isReady(root, it));
+    const t0 = new Date(Date.now() + 5000);
+    writeFileSync(f, blob(BIG.length, 43)); // same length, changed in place
+    utimesSync(f, t0, t0);
+    assert.equal(isReady(root, it), false);
+    assert.equal((await call('GET')).body.items[0].state, 'missing');
+  } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
 });
