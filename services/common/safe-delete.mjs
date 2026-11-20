@@ -110,13 +110,16 @@ export function putBack(held, file, reason) {
 /** Windows refuses the rename of a file another program holds open without delete sharing. */
 const IN_USE = new Set(['EBUSY', 'EPERM', 'EACCES']);
 
-export async function safeDeleteFile({ file, folder, expectSha = null, hash = true, beforeUnlink = null, beforeDelete = null }) {
+// expectId (Codex round 1, recordings): { size, dev, ino, mtimeNs } as strings, recorded when the file was processed;
+// the file opened must be exactly that file, or it is kept ('file-changed-since-clipped').
+export async function safeDeleteFile({ file, folder, expectSha = null, expectId = null, hash = true, beforeUnlink = null, beforeDelete = null }) {
   const keep = (reason) => ({ deleted: false, reason });
   const where = checkInFolder(file, folder);
   if (where) return keep(where);
   let first;
   try { first = await hashWithIdentity(file, { hash }); } catch (e) { return keep(e?.code === 'file-changed' ? 'file-changed' : IN_USE.has(e?.code) ? 'file-in-use' : 'file-unreadable'); }
   if (expectSha !== null && first.sha !== expectSha) return keep('sha-mismatch');
+  if (expectId !== null && !(expectId && ['size', 'dev', 'ino', 'mtimeNs'].every((k) => String(first.id[k]) === String(expectId[k])))) return keep('file-changed-since-clipped');
   if (typeof beforeUnlink === 'function') await beforeUnlink(); // test seam: what another program could do meanwhile
   const again = checkInFolder(file, folder) ?? sameFileStill(file, folder, first.id);
   if (again) return keep(again);

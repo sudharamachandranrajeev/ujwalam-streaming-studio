@@ -86,3 +86,16 @@ A recording with no job record counts as processed when
   <dir> --recordings <dir>` lists what would be deleted and kept and changes nothing.
 Tests: `tests/recording-cleanup.test.mjs` 15/15 (fixtures: a qualifying H+V pair, an H whose clips are gone, a V without H,
 a session kept for labelling, a never-clipped H, a run naming another file; dry run in-process and from the command line).
+
+## Codex round 1 fixes (2026-11-20)
+
+- Each `jobs.jsonl` entry carries the identity (size, device, file id, modified time in ns) of the H and V files it
+  used; lines that fail the strict schema are ignored. A file is deleted only when the file at that path now has exactly
+  that identity, checked again through the delete's own handle (`safeDeleteFile` `expectId`). Backfill entries take the
+  identity at backfill time and are marked `backfill: true`.
+- The live/recording state and the clip jobs are read again right before each file (`recheck`); any change stops the
+  batch and the rest is kept.
+- A V file is deleted only when every deciding entry (latest full, latest review) lists it with its current identity.
+- random-daily: every taken time on a local day counts toward the day's maximum, also outside 09:00-23:00, for new and
+  kept slots.
+- Tests: recording-cleanup 18/18, record-clips 27/27, posting-random-daily 9/9, posting-schedule 28/28, posting-e2e 38/38.

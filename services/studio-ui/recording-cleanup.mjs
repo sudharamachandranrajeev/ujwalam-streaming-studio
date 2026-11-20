@@ -38,11 +38,44 @@ export const sessionName = (h) => path.basename(String(h ?? '')).replace(/\.[^.]
 const clipsDir = (dataDir) => path.join(dataDir, 'clips');
 const readLines = (file) => { try { return readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(isPlain); } catch { return []; } };
 
-/** One finished clip job (record-clips.mjs calls this when a job ends). Never throws. */
-export function appendJobRecord(dataDir, rec) {
-  try { mkdirSync(clipsDir(dataDir), { recursive: true }); appendFileSync(path.join(clipsDir(dataDir), JOBS_LOG), `${JSON.stringify(rec)}\n`); } catch { /* the next job writes again */ }
+/** A file's identity (Codex round 1): size, device, file id and modified time in ns, as strings; null when unreadable. */
+export function fileIdentity(file) {
+  try { const s = statSync(file, { bigint: true }); return s.isFile() ? { size: String(s.size), dev: String(s.dev), ino: String(s.ino), mtimeNs: String(s.mtimeNs) } : null; } catch { return null; }
 }
-export const readJobRecords = (dataDir) => readLines(path.join(clipsDir(dataDir), JOBS_LOG));
+const ID_KEYS = ['dev', 'ino', 'mtimeNs', 'size'];
+const isId = (x) => isPlain(x) && Object.keys(x).sort().join() === ID_KEYS.join() && ID_KEYS.every((k) => /^\d{1,40}$/.test(x[k])) && x.ino !== '0';
+export const sameId = (a, b) => isId(a) && isId(b) && ID_KEYS.every((k) => a[k] === b[k]);
+const REC_KEYS = new Set(['h', 'hId', 'v', 'vId', 'type', 'kind', 'name', 'result', 'code', 'reelsNotMade', 'at', 'backfill']);
+/** Strict schema of a jobs.jsonl line; anything else is ignored (never proof). */
+export function validJobRecord(r) {
+  if (!isPlain(r) || Object.keys(r).some((k) => !REC_KEYS.has(k))) return false;
+  const abs = (p) => typeof p === 'string' && p.length < 1024 && path.isAbsolute(p);
+  if (!abs(r.h) || !isId(r.hId)) return false;
+  if (r.v !== null && !(abs(r.v) && isId(r.vId))) return false;
+  if (r.v === null && r.vId !== null && r.vId !== undefined) return false;
+  if (r.type !== 'full' && r.type !== 'review') return false;
+  if (r.result !== 'done' && r.result !== 'failed') return false;
+  if (!(r.code === null || Number.isInteger(r.code))) return false;
+  if (!(r.reelsNotMade === null || typeof r.reelsNotMade === 'string')) return false;
+  if (typeof r.name !== 'string' || !(r.kind === null || typeof r.kind === 'string')) return false;
+  if (typeof r.at !== 'string' || !Number.isFinite(Date.parse(r.at))) return false;
+  if (r.backfill !== undefined && r.backfill !== true) return false;
+  return true;
+}
+
+/** One finished clip job (record-clips.mjs calls this when a job ends), with the identity of the H and V files it
+ *  used, taken now. A job without an H file (a stream without a recording) is not recorded: it made no file to delete.
+ *  Never throws. */
+export function appendJobRecord(dataDir, rec) {
+  try {
+    if (typeof rec?.h !== 'string' || !rec.h) return;
+    const v = typeof rec.v === 'string' && rec.v ? rec.v : null;
+    const full = { ...rec, h: path.resolve(rec.h), hId: rec.hId ?? fileIdentity(rec.h), v: v && path.resolve(v), vId: v ? (rec.vId ?? fileIdentity(v)) : null };
+    if (!validJobRecord(full)) return; // e.g. the H file is gone: nothing to prove
+    mkdirSync(clipsDir(dataDir), { recursive: true }); appendFileSync(path.join(clipsDir(dataDir), JOBS_LOG), `${JSON.stringify(full)}\n`);
+  } catch { /* the next job writes again */ }
+}
+export const readJobRecords = (dataDir) => readLines(path.join(clipsDir(dataDir), JOBS_LOG)).filter(validJobRecord);
 export const readDeletedRecordings = (dataDir) => readLines(path.join(clipsDir(dataDir), DELETED_RECORDINGS_LOG));
 
 /** The Keep for labelling list: session names (lower case). A file that cannot be read keeps EVERYTHING (fail closed). */
@@ -76,42 +109,61 @@ const statusActive = (status) => {
   return sinks.some((s) => (s?.kind === 'stream' || s?.kind === 'record') && ACTIVE.has(s.state));
 };
 
+const pendingKeys = (state = {}) => {
+  const out = new Set();
+  for (const j of [state.running, ...(state.queued ?? []), ...(state.asks ?? [])]) { if (isPlain(j)) { const a = key(j.h); const b = key(j.v); if (a) out.add(a); if (b) out.add(b); } }
+  return out;
+};
+const stateMark = (state = {}) => JSON.stringify([state.running ? [key(state.running.h), key(state.running.v), state.running.name ?? null] : null,
+  ...(state.queued ?? []).map((j) => [key(j?.h), key(j?.v), j?.name ?? null]), ...(state.asks ?? []).map((j) => [key(j?.h), key(j?.v), j?.id ?? null])]);
+
 /**
- * Every processed recording session with its verdict. Pure apart from reading the data dir's logs and the keep list.
- * state: { running, queued: [], asks: [] } from record-clips (jobs that use a file). -> [{ name, h, v, reason }] where
- * reason null = may be deleted now.
+ * Every processed recording session with its verdict. Reads the logs, the keep list and the files' identities.
+ * state: { running, queued: [], asks: [] } from record-clips. -> [{ name, h, hId, v, vId, reason, vReason }]: reason null =
+ * H may be deleted now; v null = no V file qualifies (vReason says why).
+ * Codex round 1: the latest entry of each job type (full, review) decides; H qualifies only when the file at that path
+ * now has the identity those entries recorded; V qualifies only when the same entries all list that V file with the
+ * identity it has now.
  */
-export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(dataDir), keepList = readKeepList(dataDir), deleted = readDeletedRecordings(dataDir) }) {
+export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(dataDir), keepList = readKeepList(dataDir), deleted = readDeletedRecordings(dataDir), idOf = fileIdentity }) {
   const sessions = new Map();
-  for (const r of records) {
-    const h = key(r.h); if (!h) continue; // a stream without a recording made no file to delete
-    if (!sessions.has(h)) sessions.set(h, { h: r.h, v: null, recs: [] });
-    const s = sessions.get(h); s.recs.push(r); if (typeof r.v === 'string' && r.v) s.v = r.v;
+  for (const r of records.filter(validJobRecord)) {
+    const h = key(r.h);
+    if (!sessions.has(h)) sessions.set(h, { h: r.h, recs: [] });
+    sessions.get(h).recs.push(r);
   }
-  const pending = new Set();
-  for (const j of [state.running, ...(state.queued ?? []), ...(state.asks ?? [])]) { if (isPlain(j)) { const a = key(j.h); const b = key(j.v); if (a) pending.add(a); if (b) pending.add(b); } }
+  const pending = pendingKeys(state);
   const gone = new Set(deleted.map((d) => key(d.file)).filter(Boolean));
   const out = [];
   for (const [h, s] of sessions) {
     const name = sessionName(s.h);
-    if (gone.has(h) && (!s.v || gone.has(key(s.v)))) continue; // deleted already
     const latest = new Map();
-    for (const r of s.recs) { const t = r.type === 'review' ? 'review' : 'full'; const p = latest.get(t); if (!p || String(r.at) >= String(p.at)) latest.set(t, r); }
+    for (const r of s.recs) { const p = latest.get(r.type); if (!p || r.at >= p.at) latest.set(r.type, r); }
+    const used = [...latest.values()];
+    const hNow = idOf(s.h);
+    // V: the one file every deciding entry lists, unchanged since.
+    const vPath = used[0].v;
+    let vReason = null;
+    if (used.every((r) => !r.v)) vReason = 'no-v';
+    else if (!vPath || used.some((r) => key(r.v) !== key(vPath))) vReason = 'v-not-in-every-latest-job';
+    else if (!used.every((r) => sameId(r.vId, idOf(vPath)))) vReason = existsSync(vPath) ? 'v-changed-since-clipped' : 'v-gone';
+    if (gone.has(h) && (vReason || gone.has(key(vPath)))) continue; // deleted already
     let reason = null;
-    if ([...latest.values()].some((r) => r.result !== 'done' || r.code !== 0)) reason = 'job-failed';
-    else if (s.v && [...latest.values()].some((r) => typeof r.reelsNotMade === 'string' && r.reelsNotMade)) reason = 'reels-not-made';
-    else if (pending.has(h) || (s.v && pending.has(key(s.v)))) reason = 'job-pending';
+    if (used.some((r) => r.result !== 'done' || r.code !== 0)) reason = 'job-failed';
+    else if (!vReason && used.some((r) => typeof r.reelsNotMade === 'string' && r.reelsNotMade)) reason = 'reels-not-made';
+    else if (pending.has(h) || (vPath && pending.has(key(vPath)))) reason = 'job-pending';
     else if (keepList.all || keepList.names.has(name.toLowerCase())) reason = 'kept-for-labelling';
-    out.push({ name, h: s.h, v: s.v, reason });
+    else if (!hNow) reason = 'file-gone';
+    else if (!used.every((r) => sameId(r.hId, hNow))) reason = 'file-changed-since-clipped';
+    out.push({ name, h: s.h, hId: hNow, v: vReason ? null : vPath, vId: vReason ? null : idOf(vPath), reason, vReason: reason ? reason : vReason });
   }
   return out;
 }
-
 /**
  * One cleanup pass. folder: the configured recordings folder. status: the latest outputs.status (null = unknown: refused).
  * -> { ran, refused?, deleted: [{ file, size }], kept: [{ file, reason }] }.
  */
-export async function runRecordingCleanup({ dataDir, folder, flagOn, status, state = {}, nowMs = Date.now(), log = () => {}, writeTask = null, deleteImpl = safeDeleteFile }) {
+export async function runRecordingCleanup({ dataDir, folder, flagOn, status, state = {}, nowMs = Date.now(), log = () => {}, writeTask = null, deleteImpl = safeDeleteFile, recheck = null }) {
   const res = { ran: false, deleted: [], kept: [] };
   if (flagOn !== true) return { ...res, refused: 'flag-off' };
   if (typeof folder !== 'string' || !folder || !existsSync(folder)) return { ...res, refused: 'no-recordings-folder' };
@@ -121,11 +173,26 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
   // Once: recordings clipped before jobs.jsonl existed get a job record only where the old run files prove it.
   try { const b = backfillJobRecords({ dataDir, folder, nowMs }); if (b.ran) log(`clips: earlier recordings checked: ${b.proven} proven processed, ${b.kept} kept (clips/${BACKFILL_LOG})`); } catch { /* kept */ }
   const logFile = path.join(clipsDir(dataDir), DELETED_RECORDINGS_LOG);
+  // Codex round 1: the live state and the clip jobs are read again right before each file (recheck: () => { status,
+  // state }); the batch stops at the first change, and every file not yet deleted is kept.
+  const mark = stateMark(state);
+  const stillSafe = async () => {
+    if (typeof recheck !== 'function') return null;
+    let now; try { now = await recheck(); } catch { return 'state-unknown'; }
+    if (!isPlain(now?.status)) return 'state-unknown';
+    if (statusActive(now.status)) return 'live-or-recording';
+    if (stateMark(now.state ?? {}) !== mark) return 'jobs-changed';
+    return null;
+  };
   for (const s of cleanupPlan({ dataDir, state })) {
     if (s.reason) { res.kept.push({ file: s.h, reason: s.reason }); continue; }
-    for (const file of [s.h, s.v].filter((f) => typeof f === 'string' && f)) {
+    if (s.vReason && s.vReason !== 'no-v') res.kept.push({ file: `${s.name} (V)`, reason: s.vReason });
+    for (const [file, expectId] of [[s.h, s.hId], [s.v, s.vId]].filter(([f]) => typeof f === 'string' && f)) {
+      if (res.stopped) { res.kept.push({ file, reason: res.stopped }); continue; }
       if (!existsSync(file)) continue; // gone already (deleted by hand, or the other half of a session deleted earlier)
-      const r = await deleteImpl({ file, folder, hash: false });
+      const why = await stillSafe();
+      if (why) { res.stopped = why; res.kept.push({ file, reason: why }); continue; }
+      const r = await deleteImpl({ file, folder, hash: false, expectId });
       if (!r.deleted) { res.kept.push({ file, reason: r.reason }); continue; }
       const at = new Date(nowMs).toISOString();
       res.deleted.push({ file, size: r.size });
@@ -204,7 +271,8 @@ export function planBackfill({ dataDir, folder, nowMs = Date.now(), clipsDirOf =
     const session = sessionName(n);
     verdicts.push({ file: h, size: sizeOf(h), decision: b.proven ? 'proven' : 'kept', reason: b.reason, session });
     if (v) { pairedV.add(vName); verdicts.push({ file: v, size: sizeOf(v), decision: b.proven ? 'proven' : 'kept', reason: b.proven ? 'clips-exist (V of a proven H)' : `its H is kept (${b.reason})`, session }); }
-    if (b.proven) records.push({ h, v, type: 'full', kind: 'recording', name: session, result: 'done', code: 0, reelsNotMade: null, at, backfill: true });
+    // Codex round 1: the identity is taken now, at backfill time, and the entry is marked backfill.
+    if (b.proven) records.push({ h, hId: fileIdentity(h), v, vId: v ? fileIdentity(v) : null, type: 'full', kind: 'recording', name: session, result: 'done', code: 0, reelsNotMade: null, at, backfill: true });
   }
   for (const n of names.filter((x) => vStem(sessionName(x)) && !pairedV.has(x))) {
     const v = path.join(folder, n);

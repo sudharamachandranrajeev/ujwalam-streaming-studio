@@ -456,7 +456,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     cleaning = true;
     setImmediate(() => {
       const folder = typeof recordingsFolder === 'function' ? recordingsFolder() : recordingsFolder;
-      Promise.resolve(cleanupImpl({ dataDir, folder, flagOn: flagOnSafe(), status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] }, nowMs: now(), log, writeTask: writeTaskFile }))
+      Promise.resolve(cleanupImpl({ dataDir, folder, flagOn: flagOnSafe(), status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] }, nowMs: now(), log, writeTask: writeTaskFile,
+        // Codex round 1: read again right before each file's delete (a stream, recording or clip job that starts stops the batch).
+        recheck: () => ({ status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] } }) }))
         .then((r) => { if (r?.deleted?.length) log(`clips: recording cleanup after ${why}: ${r.deleted.length} file(s) deleted`); })
         .catch((e) => log(`clips: recording cleanup failed (${String(e?.code ?? e?.message ?? 'error').slice(0, 60)}); recordings kept`))
         .finally(() => { cleaning = false; });

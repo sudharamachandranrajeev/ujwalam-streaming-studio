@@ -232,3 +232,47 @@ describe('one-time backfill for old recordings (user 2026-11-20: "Delete if clip
     assert.ok(!existsSync(path.join(w.dataDir, 'clips', BACKFILL_LOG)));
   });
 });
+describe('Codex round 1: identity, strict lines, re-checks mid-batch, V only with the deciding jobs', () => {
+  test('a file replaced at the same path after it was clipped is kept; a forged or loose line proves nothing', async () => {
+    const x = fixture({ v: false }); x.job();
+    writeFileSync(x.h, Buffer.alloc(4096, 9)); // same name and size, new content and time
+    const t = new Date(Date.now() + 5000); (await import('node:fs')).utimesSync(x.h, t, t);
+    let r = await x.run(); assert.deepEqual(r.kept.map((k) => k.reason), ['file-changed-since-clipped']); assert.ok(existsSync(x.h));
+    const y = fixture({ v: false });
+    const forged = [
+      { h: y.h, v: null, type: 'full', name: 'n', kind: null, result: 'done', code: 0, reelsNotMade: null, at: '2026-11-18T22:00:00Z' }, // no identity
+      { h: y.h, hId: { size: '4096', dev: '1', ino: '2', mtimeNs: '3' }, v: null, vId: null, type: 'full', name: 'n', kind: null, result: 'done', code: 0, reelsNotMade: null, at: '2026-11-18T22:00:00Z', extra: 1 },
+      { h: 'relative.mkv', hId: { size: '1', dev: '1', ino: '2', mtimeNs: '3' }, v: null, vId: null, type: 'full', name: 'n', kind: null, result: 'done', code: 0, reelsNotMade: null, at: '2026-11-18T22:00:00Z' },
+    ];
+    mkdirSync(path.join(y.dataDir, 'clips'), { recursive: true });
+    writeFileSync(path.join(y.dataDir, 'clips', 'jobs.jsonl'), `${forged.map((l) => JSON.stringify(l)).join('\n')}\n`);
+    r = await y.run(); assert.equal(r.deleted.length, 0); assert.ok(existsSync(y.h));
+    // a well-formed line with a made-up identity is not the file there now
+    const okShape = { ...forged[1] }; delete okShape.extra;
+    writeFileSync(path.join(y.dataDir, 'clips', 'jobs.jsonl'), `${JSON.stringify(okShape)}\n`);
+    r = await y.run(); assert.deepEqual(r.kept.map((k) => k.reason), ['file-changed-since-clipped']); assert.ok(existsSync(y.h));
+  });
+
+  test('a recording or a clip job that starts mid-batch stops it; later files are kept', async () => {
+    for (const [later, why] of [[{ status: { sinks: [{ id: 'rec', kind: 'record', state: 'live' }] }, state: {} }, 'live-or-recording'],
+      [{ status: OFF_AIR, state: { queued: [{ h: 'C:/r/new.mkv', name: 'new' }] } }, 'jobs-changed']]) {
+      const x = fixture(); x.job();
+      let calls = 0;
+      const r = await x.run({ recheck: () => (++calls === 1 ? { status: OFF_AIR, state: {} } : later) });
+      assert.equal(r.deleted.length, 1, why); assert.equal(r.stopped, why);
+      assert.deepEqual(r.kept.map((k) => k.reason), [why]);
+      assert.ok(existsSync(x.vf), 'the V file was kept');
+    }
+  });
+
+  test('a failed H+V run then a finished H-only run deletes H only; V needs every deciding job to list it', async () => {
+    const x = fixture(); x.job({ type: 'full', result: 'failed', code: 1 });
+    x.job({ type: 'full', v: null, at: '2026-11-19T01:00:00.000Z' });
+    let r = await x.run();
+    assert.deepEqual(r.deleted.map((d) => d.file), [x.h]); assert.ok(existsSync(x.vf));
+    const y = fixture(); y.job({ type: 'full' }); y.job({ type: 'review', v: null, at: '2026-11-19T01:00:00.000Z' });
+    r = await y.run();
+    assert.deepEqual(r.deleted.map((d) => d.file), [y.h]); assert.ok(existsSync(y.vf));
+    assert.ok(r.kept.some((k) => k.reason === 'v-not-in-every-latest-job'));
+  });
+});
