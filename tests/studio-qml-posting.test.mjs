@@ -91,7 +91,9 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(ap.loaded, true);
     assert.equal(ap.dirty, false);
     assert.equal(s.settings.dirty, false);
-    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play'], minScore: 3, maxPerDay: 6, intervalHours: 1, maxAheadDays: 60, placement: 'fill-gaps', quotaUnitsPerDay: 10000 });
+    // D405: random-daily is the shipped placement; the card also carries the random-daily and custom-times fields.
+    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play'], minScore: 3, maxPerDay: 6, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000,
+      minGapMinutes: 90, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, skipDates: [] });
     assert.match(ap.fit, /About 6 uploads a day fit/);
     assert.match(ap.flags, /Auto post and Scheduled posting are on/);
     assert.match(ap.flags, /stay in the clips folder/);
@@ -153,7 +155,10 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     const d = done(r.p);
     assert.equal(d['ap-kind:nope:on'], false);
     assert.equal(d['ap-placement:nope'], false);
-    assert.deepEqual(r.ap.card, { autoUpload: false, kinds: ['short', 'montage', 'won-reel', 'impact-play'], minScore: 50, maxPerDay: 2, intervalHours: 48, maxAheadDays: 5, placement: 'after-last', quotaUnitsPerDay: 20000 });
+    // D405: the card also carries the random-daily and custom-times fields (defaults here, untouched by these actions).
+    const empty = { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] };
+    assert.deepEqual(r.ap.card, { autoUpload: false, kinds: ['short', 'montage', 'won-reel', 'impact-play'], minScore: 50, maxPerDay: 2, intervalHours: 48, maxAheadDays: 5, placement: 'after-last', quotaUnitsPerDay: 20000,
+      minGapMinutes: 90, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: empty, skipDates: [] });
     assert.equal(r.ap.dirty, true);
     assert.equal(node(r.p, 'autopostUpload').checked, false);
     assert.equal(node(r.p, 'autopostPlacement').text, 'Always after the last scheduled post');
