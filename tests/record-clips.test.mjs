@@ -627,3 +627,19 @@ test('speech model (Codex review round 2): checked before the job; missing or da
     } finally { rmSync(s.d, { recursive: true, force: true }); }
   }
 });
+test('speech model: each clip job checks again, so captions come back once the model is downloaded', async () => {
+  const s = setup();
+  try {
+    writeSettings(s.dataDir, { clips: { recording: 'after' } });
+    const answers = [false, true];
+    const rc = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, captionsModel: () => answers.shift() });
+    rc.feed(s.S('live')); s.advance(60000); rc.feed(s.S('stopped'));
+    assert.equal(s.spawned[0].o.env.UJWALAM_REEL_CAPTIONS, 'off');
+    s.spawned[0].c.emit('exit', 0);
+    rc.feed(s.S('live', { h: path.join(path.dirname(s.h), 'practice-h-2.mkv') }));
+    writeFileSync(path.join(path.dirname(s.h), 'practice-h-2.mkv'), '');
+    s.advance(60000); rc.feed(s.S('stopped', { h: path.join(path.dirname(s.h), 'practice-h-2.mkv') }));
+    assert.equal(s.spawned.length, 2);
+    assert.equal(s.spawned[1].o.env.UJWALAM_REEL_CAPTIONS, undefined, 'the second job has captions');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});

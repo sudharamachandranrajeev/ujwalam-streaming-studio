@@ -193,7 +193,22 @@ Runs (off air per `tools/live-check.mjs`, one file at a time, BelowNormal, `UJWA
    The face worker start goes through it (`modelUsable('face-ai-models')`, installed builds only: a checkout keeps its
    models in data/models). Test: a file rewritten in place with the same size and its time restored passes the cheap
    check, fails the first-use check and then reads as missing; a re-download passes; a removed file fails the gate.
-   Not yet gated: the speech-captions model (the reel captions step in the Python clip worker); UNVERIFIED there.
+   The speech-captions model is gated too (commit after round 2): each clip job checks it first (ecord-clips.mjs);
+   a failure skips only the captions (UJWALAM_REEL_CAPTIONS=off for that job), the job runs, and the log and task bar
+   say to download the speech model in Settings > Downloads.
 
 Runs (off air, one file at a time, BelowNormal, `UJWALAM_HEADLESS=1`): `downloads` 14/14 five runs in a row,
 `setup-installer` 13/13.
+## Codex review round 3 (2026-11-20)
+
+1. Gate after a download: `createModelGate` re-arms a failed check when the item's ready marker changes (the Downloads
+   page runs in the UI server process, so the launcher watches the marker on its 5 s sync); the face worker then starts.
+   The speech model is checked per clip job, so the next job after a download has captions. Tests: the gate fails,
+   a marker appears, it checks again and passes; a second clip job after a failed one runs with captions.
+2. Marker race: the first-use check removes the marker only when it is still the one it read, and is skipped for an
+   item this process is downloading. Test: a newer marker written during the hash stays.
+3. All or nothing: every file is checked first, then all are moved in one synchronous step, then the marker is written.
+   Test: an abort during the final check of the second file moves nothing; resume fetches nothing again and ends ready.
+
+Runs (off air, one file at a time, BelowNormal, `UJWALAM_HEADLESS=1`): `downloads` 17/17 three runs in a row,
+`record-clips` 25/25, `setup-installer` 13/13.

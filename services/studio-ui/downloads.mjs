@@ -130,18 +130,23 @@ const verifiedFiles = new Set();
  * (cached per process). A mismatch removes the marker, so the item reads as missing and the download is offered again.
  * Resolves true or false; never throws.
  */
-export async function verifyOnUse(dataRoot, it, { log = () => {} } = {}) {
-  if (!isReady(dataRoot, it)) return false;
+export async function verifyOnUse(dataRoot, it, { log = () => {}, between } = {}) {
   const dest = path.join(dataRoot, ...it.dest.split('/'));
+  const markerFile = path.join(dest, MARKER);
+  const seen = readMarker(markerFile); // the marker this check is about (Codex review round 3)
+  if (!isReady(dataRoot, it)) return false;
   try {
     for (const f of it.files) {
       const p = path.join(dest, f.name);
       const s = statOf(p);
       const key = `${p}|${s?.size}|${s?.mtimeMs}|${s?.ino}`;
       if (verifiedFiles.has(key)) continue;
-      if (!s || (await sha256File(p)) !== f.sha256) {
-        rmSync(path.join(dest, MARKER), { force: true });
-        log(`downloads: ${it.id}/${f.name} does not match its checksum; it reads as missing until downloaded again`);
+      if (!s || (await sha256File(p, { between })) !== f.sha256) {
+        // Removed only when it is still the marker that was read: a download that finished meanwhile wrote a new one.
+        if (seen !== null && readMarker(markerFile) === seen) {
+          rmSync(markerFile, { force: true });
+          log(`downloads: ${it.id}/${f.name} does not match its checksum; it reads as missing until downloaded again`);
+        }
         return false;
       }
       verifiedFiles.add(key);
@@ -151,6 +156,45 @@ export async function verifyOnUse(dataRoot, it, { log = () => {} } = {}) {
     log(`downloads: ${it.id} could not be checked (${e.message})`);
     return false;
   }
+}
+
+const readMarker = (f) => { try { return readFileSync(f, 'utf8'); } catch { return null; } };
+
+/**
+ * A worker's model gate (Codex review round 3): check() -> true (usable), false (missing or damaged) or null (being
+ * checked; onChange is called when it settles). After a failure it re-arms by itself when the item's ready marker
+ * changes (the studio's Downloads page finished it, in its own process), so the worker starts after the download.
+ */
+export function createModelGate(id, { modelsDir = process.env.UJWALAM_MODELS_DIR, items, log = () => {}, onChange = () => {}, usable = modelUsable } = {}) {
+  let state = 'unchecked'; // unchecked | checking | true | false
+  let failedMarker = null;
+  const markerFile = () => {
+    if (!modelsDir) return null;
+    let list = items;
+    try { list ??= loadItems(); } catch { return null; }
+    const it = list.find((x) => x.id === id);
+    return it ? path.join(path.dirname(path.resolve(modelsDir)), ...it.dest.split('/'), MARKER) : null;
+  };
+  return {
+    check() {
+      if (state === false) {
+        const f = markerFile();
+        const now = f ? readMarker(f) : null;
+        if (now !== null && now !== failedMarker) state = 'unchecked'; // downloaded again: check again
+      }
+      if (state === true || state === false) return state;
+      if (state === 'checking') return null;
+      state = 'checking';
+      const f = markerFile();
+      const before = f ? readMarker(f) : null;
+      Promise.resolve(usable(id, { modelsDir, items, log })).catch(() => false).then((ok) => {
+        state = ok === true;
+        failedMarker = state ? null : (f ? readMarker(f) : null) ?? before;
+        onChange(state);
+      });
+      return null;
+    },
+  };
 }
 
 /**
@@ -308,6 +352,9 @@ export function createDownloads(opts) {
     const dest = destDir(it);
     mkdirSync(dest, { recursive: true });
     const marker = { id: it.id, checked: new Date(opts.now?.() ?? Date.now()).toISOString(), files: {} };
+    // Every file is checked first and only then are they all moved into place, with no wait in between (Codex review
+    // round 3: an abort between moves left a half-moved item that was fetched again on resume).
+    const moves = [];
     for (const f of it.files) {
       throwIfAborted(signal);
       const target = path.join(dest, f.name);
@@ -319,7 +366,7 @@ export function createDownloads(opts) {
         if (data.length !== f.bytes || createHash('sha256').update(data).digest('hex') !== f.sha256) throw Object.assign(new Error(`${f.name} in the archive did not match its checksum`), { code: 'sha' });
         throwIfAborted(signal);
         writeFileSync(`${target}.new`, data);
-        renameSync(`${target}.new`, target);
+        moves.push([`${target}.new`, target, f]);
       } else {
         // Checked once more right before it is moved into place: the file checked is the file used.
         const from = got.get(f.url);
@@ -327,14 +374,17 @@ export function createDownloads(opts) {
           rmSync(from, { force: true });
           throw Object.assign(new Error(`${f.name} changed after it was checked; it was deleted. Click Download to fetch it again.`), { code: 'sha' });
         }
-        throwIfAborted(signal);
-        rmSync(target, { force: true });
-        renameSync(from, target);
+        moves.push([from, target, f]);
       }
+    }
+    throwIfAborted(signal);
+    rmSync(path.join(dest, MARKER), { force: true }); // the old marker never vouches for half-replaced files
+    for (const [from, target, f] of moves) {
+      rmSync(target, { force: true });
+      renameSync(from, target);
       const st2 = statOf(target);
       marker.files[f.name] = { sha256: f.sha256, size: st2.size, mtimeMs: st2.mtimeMs, ino: st2.ino };
     }
-    throwIfAborted(signal);
     writeFileSync(path.join(dest, MARKER), `${JSON.stringify(marker, null, 2)}\n`);
     rmSync(partialDir(it), { recursive: true, force: true });
   }
@@ -451,7 +501,11 @@ export function createDownloads(opts) {
   }
 
   // verified(id): the full check before first use in this run (verifyOnUse); false also for an unknown id.
-  const verified = async (id) => { const it = items.find((x) => x.id === id); return !!it && verifyOnUse(dataRoot, it, { log }); };
+  const verified = async (id) => {
+    const it = items.find((x) => x.id === id);
+    if (!it || ['queued', 'downloading', 'verifying'].includes(st.get(id)?.state)) return false; // a download is on its way
+    return verifyOnUse(dataRoot, it, { log });
+  };
   return { handle, list, act, verified, promise: (id) => st.get(id)?.promise, ready: (id) => { const it = items.find((x) => x.id === id); return !!it && isReady(dataRoot, it); } };
 }
 

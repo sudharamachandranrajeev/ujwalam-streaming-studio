@@ -103,7 +103,7 @@ import { createLearningSignals } from '../learning/signals.mjs';
 import { folderProblem, readSettings, SETTINGS_FILE } from './user-settings.mjs';
 import { createStatCache } from '../common/stat-cache.mjs';
 import { createWorkerSlot } from './worker-slot.mjs';
-import { modelUsable } from './downloads.mjs';
+import { createModelGate } from './downloads.mjs';
 import { createMediaInfo } from '../project/media-info.mjs';
 import { rpc } from './backends.mjs';
 import { collectDiag, CRASH_LOG_FILE, outputsSafe, SNAPSHOT_FILE } from '../../tools/diag/bundle.mjs';
@@ -1773,29 +1773,28 @@ export async function main(argv = process.argv.slice(2)) {
           faceTell();
         };
         let gaveUp = false;
-        let faceModels = null; // null: not checked yet in this run, 'checking', true or false
+        const faceModels = createModelGate('face-ai-models', {
+          log: (m) => console.log(`[studio] ${m}`),
+          onChange: (ok) => {
+            if (!ok) console.log('[studio] face worker not started: the Face AI models are missing or damaged; download them in Settings > Downloads');
+            else syncFace();
+          },
+        });
         syncFace = () => {
           if (stopping) return;
           const on = flagIsOn('face-ai');
           if (!on) {
             faceChild = null;
             if (faceSlot.stop()) console.log('[studio] face worker stopped (the face-ai switch is off)');
-            restarts = 0; gaveUp = false; if (faceModels === false) faceModels = null; // checked again when switched on
+            restarts = 0; gaveUp = false;
             return;
           }
           if (faceSlot.busy() || gaveUp) return;
           if (restarts >= 5) { gaveUp = true; return; }
           // First use in this run: every Face AI model file is hashed once (Codex review round 2); a mismatch reads as
-          // missing in Settings > Downloads and the worker is not started (face effects show the plain camera).
-          if (faceModels === null) {
-            faceModels = 'checking';
-            modelUsable('face-ai-models', { log: (m) => console.log(`[studio] ${m}`) }).then((ok) => {
-              faceModels = ok;
-              if (!ok) console.log('[studio] face worker not started: the Face AI models are missing or damaged; download them in Settings > Downloads');
-              else syncFace();
-            });
-          }
-          if (faceModels !== true) return;
+          // missing in Settings > Downloads and the worker is not started (face effects show the plain camera). The gate
+          // checks again once the download finishes (its marker changes), and this 5 s sync then starts the worker.
+          if (faceModels.check() !== true) return;
           startFace();
           console.log('[studio] face worker started (the face-ai switch is on)');
         };
