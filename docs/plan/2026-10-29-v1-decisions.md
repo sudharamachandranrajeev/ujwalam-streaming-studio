@@ -2276,9 +2276,10 @@ User (2026-11-19): "installer needs to be a single file with everything that sho
   retry, Pause and Cancel; never while live or recording. Settings > Clips and Editing offer the missing model.
 - Evidence: `docs/evidence/2026-11-19-single-file-setup.md`. A run on a fresh PC is still UNVERIFIED.
 
-## D405 — Backlog auto-post and recording cleanup as built (proposed, 2026-11-19)
+## D405 — Backlog auto-post and recording cleanup as built (decided, 2026-11-19)
 
-Proposed by the coding agent from D403; waits for the user's yes.
+Decided: the user chose these settings on 2026-11-19 (random 3-6 a day, 09:00-23:00, 90 min apart; delete posted clips;
+delete recordings once clipped and reviewed; keep the ones still to be labelled). This records how they were built.
 
 - Schedule: `placement: random-daily` is the new default (`data/posting/schedule.json`): each local day 09:00-23:00
   gets a seeded count of 3-6 posts (`postsPerDayMin`/`Max`), at seeded minute times at least `minGapMinutes` (90)
