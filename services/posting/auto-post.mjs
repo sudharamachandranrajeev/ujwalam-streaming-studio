@@ -57,6 +57,7 @@ export function validateRules(j) {
 export const NOTICE_TASK = 'auto-post-notice';
 export const NOTICE_TEXT = Object.freeze({
   'no-rules': 'Auto-post is on but no rule says what to post: nothing uploads',
+  'unfilled-placeholders': 'Some clips wait: their text has a placeholder your profile does not fill',
   'bad-rules': 'Auto-post is on but the posting rules have a mistake: nothing uploads',
   'not-signed-in': 'Auto-post is on but YouTube is not signed in: nothing uploads',
   'no-oauth-client': 'Auto-post is on but the YouTube app key is missing: nothing uploads',

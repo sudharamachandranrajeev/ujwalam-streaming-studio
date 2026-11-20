@@ -20,7 +20,7 @@ const T0 = Date.parse('2026-11-08T10:00:00Z');
 const RULES = { autoUpload: true, rules: [{ id: 'top', target: 'youtube-shorts', minScore: 5, maxPerDay: 5 }] };
 
 /** One draft post (score 9) per clip in a ledger, plus an uploads.json row for the same bytes. */
-function env({ clips = ['a'] } = {}) {
+function env({ clips = ['a'], description = 'D' } = {}) {
   const dataDir = mk(); const entries = {}; const ids = {}; const clipsDir = mk();
   const rows = [];
   for (const clip of clips) {
@@ -31,9 +31,9 @@ function env({ clips = ['a'] } = {}) {
     writeFileSync(path.join(dir, 'full-crop.mp4'), video);
     const stamp = '2026-11-08T09:00:00.000Z';
     writeFileSync(path.join(dir, 'post.json'), JSON.stringify({
-      version: 1, title: 'T', description: 'D', tags: ['g'], hashtags: ['#Shorts'], target: 'youtube-shorts', privacy: 'private', status: 'draft',
+      version: 1, title: 'T', description, tags: ['g'], hashtags: ['#Shorts'], target: 'youtube-shorts', privacy: 'private', status: 'draft',
       source: { run: 'run1', clipId: clip, layout: 'full-crop', startSec: 1, endSec: 3, score: 9, sha256: sha },
-      video: { file: 'full-crop.mp4', bytes: video.length }, limits: { status: 'unverified', ok: true, checks: [] }, unresolved: [], createdAt: stamp, updatedAt: stamp,
+      video: { file: 'full-crop.mp4', bytes: video.length }, limits: { status: 'unverified', ok: true, checks: [] }, unresolved: [...description.matchAll(/\{([a-z.]+)\}/g)].map((m) => m[1]), createdAt: stamp, updatedAt: stamp,
     }));
     entries[`${sha}:youtube-shorts`] = { sha256: sha, target: 'youtube-shorts', status: 'draft', dir, clipId: clip, createdAt: stamp, updatedAt: stamp };
     ids[clip] = postId({ sha256: sha, target: 'youtube-shorts' });
@@ -76,10 +76,10 @@ function fakeYt({ initStatus = 200 } = {}) {
 }
 const authOk = { status: async () => ({ signedIn: true, hasClient: true }), accessToken: async () => 'fake-access', grantedScopes: async () => [READONLY_SCOPE] };
 
-function chain(e, { yt, auth = authOk, flagsOn = true, time, chunkSize } = {}) {
+function chain(e, { yt, auth = authOk, flagsOn = true, time, chunkSize, profileFile } = {}) {
   const clock = time ?? { t: T0 };
   const c = createPostChain({ dataDir: e.dataDir, flags: { isOn: (id) => flagsOn && id !== 'post-delete-uploaded' }, rulesFile: e.rulesFile, auth, fetchImpl: yt?.fetchImpl, now: () => clock.t, tickEveryMs: 0, chunkSize,
-    profileFile: path.join(e.dataDir, 'none.json'), packageImpl: async () => ({ packaged: [], skipped: [] }) });
+    profileFile: profileFile ?? path.join(e.dataDir, 'none.json'), packageImpl: async () => ({ packaged: [], skipped: [] }) });
   return { c, clock };
 }
 
@@ -120,6 +120,32 @@ describe('chain', () => {
     assert.equal(tasks.length, 1);
     assert.deepEqual([tasks[0].kind, tasks[0].state, tasks[0].title], ['upload', 'done', 'Uploading a clip to YouTube (scheduled)']);
     assert.ok(Number.isFinite(tasks[0].startedAt));
+  });
+
+  test('drafts packaged without the profile get its values and upload; a value the profile lacks waits with a task-bar notice (2026-11-20)', async () => {
+    const e = env({ clips: ['a', 'b'], description: 'Live on {handles.youtube} | chat {links.discord}' });
+    const profileFile = path.join(e.dataDir, 'profile.json');
+    writeFileSync(profileFile, JSON.stringify({ handles: { youtube: '@someone' }, links: { discord: '<your discord link>' } }));
+    const yt = fakeYt(); const { c } = chain(e, { yt, profileFile });
+    await c.afterRun('x', IDLE);
+    // the handle fills in; the angle-bracket template value counts as missing, so links.discord still blocks approval
+    const a = e.store().get(e.ids.a);
+    assert.equal(a.description, 'Live on @someone | chat {links.discord}');
+    assert.deepEqual(a.unresolved, ['links.discord']);
+    assert.equal(a.status, 'draft'); assert.equal(yt.count('init'), 0);
+    const tdir = tasksDir(e.dataDir);
+    const notices = readdirSync(tdir).map((n) => JSON.parse(readFileSync(path.join(tdir, n), 'utf8'))).filter((t) => t.id === 'auto-post-notice');
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].title, 'Some clips wait: their text has a placeholder your profile does not fill');
+    assert.match(notices[0].note, /2 clip\(s\): links\.discord/);
+    assert.doesNotMatch(notices[0].note, /@someone/, 'keys only, never profile values');
+    // the user fills the profile: the next pass fills the drafts, approves and uploads, and the notice goes
+    writeFileSync(profileFile, JSON.stringify({ handles: { youtube: '@someone' }, links: { discord: 'https://discord.invalid/x' } }));
+    await c.tick(IDLE);
+    assert.equal(e.store().get(e.ids.a).description, 'Live on @someone | chat https://discord.invalid/x');
+    assert.ok(yt.count('init') >= 1, 'uploads start');
+    const left = readdirSync(tdir).map((n) => JSON.parse(readFileSync(path.join(tdir, n), 'utf8'))).filter((t) => t.id === 'auto-post-notice');
+    assert.deepEqual(left, [], 'notice cleared');
   });
 
   test('a live stream blocks approval and upload; a running recording does not', async () => {

@@ -529,6 +529,32 @@ export function createPostStore(opts) {
       ledger.setStatus(e.sha256, e.target, 'draft', p.updatedAt);
       return view({ ...e, status: 'draft' }, p);
     },
+    /**
+     * Fills the profile placeholders ({handles.x}, {links.x}) still left in draft packages, from `profile` (2026-11-20:
+     * an install packaged 263 clips without its profile, so none could be approved). Only drafts, only the placeholder
+     * text itself: a value the profile does not have stays literal and still blocks approval. Returns how many changed.
+     */
+    fillPlaceholders(profile) {
+      const prof = cleanProfile(profile ?? {});
+      let filled = 0;
+      for (const e of entries()) {
+        if (e.status !== 'draft') continue;
+        const p = load(e);
+        if (!p || !(p.unresolved ?? []).length) continue;
+        const missing = new Set();
+        const fill = (s) => resolveString(String(s), prof, missing, false);
+        const next = { title: fill(p.title), description: fill(p.description), tags: (p.tags ?? []).map(fill), hashtags: (p.hashtags ?? []).map(fill) };
+        const unresolved = unresolvedKeys(next.title, next.description, ...next.tags, ...next.hashtags);
+        if (unresolved.length === p.unresolved.length) continue;
+        Object.assign(p, next);
+        p.limits = checkLimits({ ...next, target: p.target }, limits());
+        p.unresolved = unresolved;
+        save(e, p);
+        ledger.setStatus(e.sha256, e.target, 'draft', p.updatedAt);
+        filled++;
+      }
+      return filled;
+    },
     /** status: draft | approved | rejected. Approve needs text inside the limits, no unresolved placeholder, an intact video. */
     async setStatus(id, status) {
       if (!STATUSES.includes(status)) return 'bad-status';

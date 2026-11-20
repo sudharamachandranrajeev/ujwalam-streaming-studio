@@ -547,7 +547,8 @@ export function createPostChain(opts) {
     const t = nowMs();
     if (code !== noticeNow) { noticeNow = code; noticeSince = t; }
     writeTaskFile(dataDir, { id: NOTICE_TASK, kind: 'upload', title: NOTICE_TEXT[code], state: 'waiting', startedAt: noticeSince, updatedAt: t,
-      note: code === 'no-rules' || code === 'bad-rules' ? `Settings > Posting & growth > Auto-post${detail ? `: ${detail}` : ''}` : 'Settings > Posting & growth > Auto-post' });
+      note: code === 'no-rules' || code === 'bad-rules' ? `Settings > Posting & growth > Auto-post${detail ? `: ${detail}` : ''}`
+        : code === 'unfilled-placeholders' ? `Posts view, or your profile${detail ? `: ${detail}` : ''}` : 'Settings > Posting & growth > Auto-post' });
   }
 
   /** Approvals by the rules, enqueue of auto-approved posts, then the due uploads. Safe to call often. */
@@ -561,6 +562,12 @@ export function createPostChain(opts) {
     if (!recovered) { recovered = true; queue.recover(); }
     if (opts.scanFolder !== false && nowMs() - lastScan >= (opts.scanEveryMs ?? SCAN_EVERY_MS)) { lastScan = nowMs(); await scanFolder(readProfile()); }
     const store = createPostStore({ ledgerFile, dataDir });
+    // Drafts packaged before the profile was found get its values now; what the profile cannot fill is said, not skipped
+    // in silence (2026-11-20: 263 drafts waited on {handles.youtube} and {links.discord} with no word in the app).
+    const filled = store.fillPlaceholders(readProfile());
+    if (filled) log(`posting: filled the profile placeholders of ${filled} clip(s)`);
+    const blocked = store.list().filter((p) => p.status === 'draft' && p.unresolved.length);
+    if (blocked.length) notice('unfilled-placeholders', `${blocked.length} clip(s): ${[...new Set(blocked.flatMap((p) => p.unresolved))].join(', ')}`);
     // Approvals are local file work, but they share the fail-closed live check (unreadable state -> nothing happens).
     // RP5 (D373): the learned kind order only while the flag self-learning is on and a learned mix is in use
     let kindShares = null;
