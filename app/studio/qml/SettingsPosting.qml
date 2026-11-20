@@ -23,7 +23,7 @@ Column {
     property bool loaded: false
     property bool started: false          // the load is on its way or done (Settings starts it as soon as the flags are known)
     property int gen: 0                   // a newer load or reset drops older answers
-    property var card: ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "fill-gaps", quotaUnitsPerDay: 10000 })
+    property var card: ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 90 })
     property string orig: ""              // the card as loaded, to see a change
     property var quota: ({})
     property int maxPerDayLimit: 100
@@ -36,7 +36,9 @@ Column {
 
     readonly property bool active: box.ready && box.flagOn("posting")
     readonly property bool dirty: loaded && JSON.stringify(card) !== orig
-    readonly property string problem: card.kinds.length === 0 ? "Choose at least one kind of clip to upload." : ""
+    readonly property string problem: card.kinds.length === 0 ? "Choose at least one kind of clip to upload."
+        : card.postsPerDayMin > card.postsPerDayMax ? "The fewest posts a day must not be more than the most."
+        : minutesOf(card.windowEnd, 0) <= minutesOf(card.windowStart, 0) ? "The posting window must end after it starts." : ""
     readonly property bool blocksSave: dirty && problem !== ""
     readonly property string fit: {
         // Same sum as the server (quota-budget.mjs loadQuota): (quota - read reserve) / (upload + thumbnail units); 0 is
@@ -54,6 +56,11 @@ Column {
     visible: active
     enabled: loaded
 
+    readonly property var placements: ["random-daily", "fill-gaps", "after-last"]
+    readonly property bool randomDaily: card.placement === "random-daily"
+    // "HH:MM" <-> minutes after midnight (the window boxes count in minutes, 30-minute steps)
+    function minutesOf(s, def) { const m = /^(\d{2}):(\d{2})$/.exec(String(s || "")); return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : def }
+    function hhmm(n) { return two(Math.floor(n / 60)) + ":" + two(n % 60) }
     function clamp(n, lo, hi, def) { return Math.max(lo, Math.min(hi, typeof n === "number" && !isNaN(n) ? n : def)) }
     function round1(n) { return Math.round(n * 10) / 10 }
     function localTime(iso) {
@@ -66,7 +73,7 @@ Column {
         gen++;
         started = false;
         loaded = false;
-        card = ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "fill-gaps", quotaUnitsPerDay: 10000 });
+        card = ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 90 });
         orig = "";
         quota = ({});
         flagsText = "";
@@ -101,8 +108,13 @@ Column {
             maxPerDay: clamp(c.maxPerDay, 1, maxPerDayLimit, 1),
             intervalHours: clamp(c.intervalHours, 1, 48, 1),
             maxAheadDays: clamp(c.maxAheadDays, 1, 730, 60),
-            placement: c.placement === "after-last" ? "after-last" : "fill-gaps",
-            quotaUnitsPerDay: clamp(c.quotaUnitsPerDay, 1000, 10000000, 10000)
+            placement: placements.includes(c.placement) ? c.placement : "random-daily",
+            quotaUnitsPerDay: clamp(c.quotaUnitsPerDay, 1000, 10000000, 10000),
+            postsPerDayMin: clamp(c.postsPerDayMin, 1, 24, 3),
+            postsPerDayMax: clamp(c.postsPerDayMax, 1, 24, 6),
+            windowStart: hhmm(minutesOf(c.windowStart, 540)),
+            windowEnd: hhmm(minutesOf(c.windowEnd, 1380)),
+            minGapMinutes: clamp(c.minGapMinutes, 15, 1440, 90)
         };
         const off = [];
         if (fl.autoPost !== true) off.push("Auto post");
@@ -140,7 +152,7 @@ Column {
             info = "The channel has not been read yet; the times below may move once it is.";
         else
             info = "Channel read " + (b.channelReadAt ? localTime(b.channelReadAt) : "earlier") + ". Times are in your time zone; each post is at least "
-                + (b.intervalHours || 0) + " h from the next.";
+                + (b.placement === "random-daily" ? (b.minGapMinutes || 0) + " min" : (b.intervalHours || 0) + " h") + " from the next.";
         if (live === "schedule-scope-missing") info += " Could not read the channel: sign in again so YouTube allows reading scheduled posts.";
         else if (live !== "") info += " Could not read the channel just now (" + live + ").";
         timesInfo = info;
@@ -261,7 +273,7 @@ Column {
     UCard {
         title: "AUTO-POST"
         Quiet {
-            text: "Clips from your clips folder go up to YouTube by themselves, oldest first, each as a scheduled post: private until its publish time, then public. "
+            text: "Clips from your clips folder go up to YouTube by themselves, each as a scheduled post (with a few a day at random times the order is mixed, never two of the same kind in a row when another kind is waiting; otherwise oldest first): private until its publish time, then public. "
                 + "Times are picked around the posts already scheduled on your channel, never two at the same time. Changes apply from the next upload pass when you click Save."
         }
         Quiet { objectName: "autopostFlags"; text: ap.flagsText }
@@ -328,10 +340,11 @@ Column {
                     suffix: " h"
                     from: 1
                     to: 48
+                    enabled: !ap.randomDaily
                     want: ap.card.intervalHours
                     onValueModified: ap.setNum("intervalHours", value, 1, 48)
                 }
-                Quiet { text: "Every post, yours from Ujwalam or already on the channel, is at least this far from the next." }
+                Quiet { text: ap.randomDaily ? "Not used with a few a day at random times: the gap below is used instead." : "Every post, yours from Ujwalam or already on the channel, is at least this far from the next." }
             }
             Field {
                 label: "Schedule up to:"
@@ -353,10 +366,83 @@ Column {
                     objectName: "autopostPlacement"
                     width: parent.width
                     label: "Where new posts go"
-                    model: [{ value: "fill-gaps", text: "Fill the free times between posts" }, { value: "after-last", text: "Always after the last scheduled post" }]
-                    want: ap.card.placement === "after-last" ? 1 : 0
+                    model: [{ value: "random-daily", text: "A few a day at random times" }, { value: "fill-gaps", text: "Fill the free times between posts" }, { value: "after-last", text: "Always after the last scheduled post" }]
+                    want: Math.max(0, ap.placements.indexOf(ap.card.placement))
                     onChose: (v) => ap.set("placement", v)
                 }
+            }
+            Field {
+                label: "Posts a day, fewest:"
+                SpinBox2 {
+                    objectName: "autopostDayMin"
+                    label: "Posts a day, fewest"
+                    enabled: ap.randomDaily
+                    from: 1
+                    to: 24
+                    want: ap.card.postsPerDayMin
+                    onValueModified: ap.setNum("postsPerDayMin", value, 1, 24)
+                }
+                Quiet { text: "Each day gets a random number of posts between the fewest and the most." }
+            }
+            Field {
+                label: "Posts a day, most:"
+                SpinBox2 {
+                    objectName: "autopostDayMax"
+                    label: "Posts a day, most"
+                    enabled: ap.randomDaily
+                    from: 1
+                    to: 24
+                    want: ap.card.postsPerDayMax
+                    onValueModified: ap.setNum("postsPerDayMax", value, 1, 24)
+                }
+                Quiet { text: "A day that has no room for that many takes what fits." }
+            }
+            Field {
+                label: "Post from:"
+                SpinBox2 {
+                    objectName: "autopostWindowStart"
+                    label: "Post from"
+                    enabled: ap.randomDaily
+                    from: 0
+                    to: 1410
+                    stepSize: 30
+                    textFromValue: (v) => ap.hhmm(v)
+                    valueFromText: (t) => ap.minutesOf(String(t).trim(), 540)
+                    want: ap.minutesOf(ap.card.windowStart, 540)
+                    onValueModified: ap.set("windowStart", ap.hhmm(value))
+                }
+                Quiet { text: "Your time zone. No post goes up before this time of day." }
+            }
+            Field {
+                label: "Post until:"
+                SpinBox2 {
+                    objectName: "autopostWindowEnd"
+                    label: "Post until"
+                    enabled: ap.randomDaily
+                    from: 30
+                    to: 1439
+                    stepSize: 30
+                    textFromValue: (v) => ap.hhmm(v)
+                    valueFromText: (t) => ap.minutesOf(String(t).trim(), 1380)
+                    want: ap.minutesOf(ap.card.windowEnd, 1380)
+                    onValueModified: ap.set("windowEnd", ap.hhmm(value))
+                }
+                Quiet { text: "No post goes up after this time of day." }
+            }
+            Field {
+                label: "At least apart:"
+                SpinBox2 {
+                    objectName: "autopostGapMinutes"
+                    label: "At least apart"
+                    enabled: ap.randomDaily
+                    suffix: " min"
+                    from: 15
+                    to: 1440
+                    stepSize: 15
+                    want: ap.card.minGapMinutes
+                    onValueModified: ap.setNum("minGapMinutes", value, 15, 1440)
+                }
+                Quiet { text: "Every post, yours from Ujwalam or already on the channel, is at least this far from the next." }
             }
             Field {
                 label: "YouTube quota:"
@@ -459,7 +545,7 @@ Column {
     }
 
     // ap-upload:<on|off> | ap-kind:<id>:<on|off> | ap-score:<n> | ap-perday:<n> | ap-gap:<h> | ap-days:<n> | ap-placement:<id>
-    // | ap-quota:<n> | ap-refresh | ap-move:<id>:<UTC time> | ap-remove:<id>
+    // | ap-daymin:<n> | ap-daymax:<n> | ap-gapmin:<n> | ap-window:<from min>:<until min> | ap-quota:<n> | ap-refresh | ap-move:<id>:<UTC time> | ap-remove:<id>
     function probeAction(p) {
         if (!loaded) return false;
         const a = p[0], arg = p[1];
@@ -472,8 +558,17 @@ Column {
         if (a === "ap-gap" && !isNaN(n)) return setNum("intervalHours", n, 1, 48);
         if (a === "ap-days" && !isNaN(n)) return setNum("maxAheadDays", n, 1, 730);
         if (a === "ap-quota" && !isNaN(n)) return setNum("quotaUnitsPerDay", n, 1000, 10000000);
+        if (a === "ap-daymin" && !isNaN(n)) return setNum("postsPerDayMin", n, 1, 24);
+        if (a === "ap-daymax" && !isNaN(n)) return setNum("postsPerDayMax", n, 1, 24);
+        if (a === "ap-gapmin" && !isNaN(n)) return setNum("minGapMinutes", n, 15, 1440);
+        if (a === "ap-window" && p.length >= 3) { // ap-window:<from minutes>:<until minutes>
+            const s = parseInt(p[1], 10), e = parseInt(p[2], 10);
+            if (isNaN(s) || isNaN(e)) return false;
+            set("windowStart", hhmm(clamp(s, 0, 1439, 540)));
+            return set("windowEnd", hhmm(clamp(e, 0, 1439, 1380)));
+        }
         if (a === "ap-placement") {
-            if (arg !== "fill-gaps" && arg !== "after-last") return false;
+            if (!placements.includes(arg)) return false;
             return set("placement", arg);
         }
         if (a === "ap-refresh") { loadTimes(true); return true }

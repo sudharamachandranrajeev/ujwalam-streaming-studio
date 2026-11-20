@@ -44,15 +44,28 @@ export const USER_SCHEDULE_NAME = 'schedule.json';
 /** The user's own schedule settings (Settings > Posting & growth > Auto-post): <dataDir>/posting/schedule.json. Only the
  *  keys in USER_KEYS are read from it; each replaces the shipped value. It survives app updates (data dir, not repo). */
 export const userScheduleFile = (dataDir) => path.join(dataDir, 'posting', USER_SCHEDULE_NAME);
-export const PLACEMENTS = Object.freeze(['fill-gaps', 'after-last']);
+// 'random-daily' (D403, user 2026-11-19: "spread out randomly"): each local day gets a random number of posts
+// (postsPerDayMin..postsPerDayMax) at random times inside windowStart..windowEnd (local time, DST-safe), at least
+// minGapMinutes apart from each other and from every taken time. Seeded (seed in the user's schedule.json), so a plan is
+// the same on every pass and after a restart. See planRandomDaily below.
+export const PLACEMENTS = Object.freeze(['random-daily', 'fill-gaps', 'after-last']);
 /** What the user may set, and the allowed whole-number ranges (2 days is the widest gap that is still a schedule;
  *  maxAheadDays 730 = the user's 2-year cap, D314; quota from 1,000 units up to a raised Google quota). */
 export const USER_LIMITS = Object.freeze({
   intervalHours: { min: 1, max: 48 },
   maxAheadDays: { min: 1, max: 730 },
   quotaUnitsPerDay: { min: 1000, max: 10000000 },
+  postsPerDayMin: { min: 1, max: 24 },
+  postsPerDayMax: { min: 1, max: 24 },
+  minGapMinutes: { min: 15, max: 1440 },
+  seed: { min: 0, max: 2147483647 },
 });
-export const USER_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay']);
+export const USER_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed']);
+/** The keys the random-daily placement reads (shipped defaults in data/posting/schedule.json, replaced by the user's). */
+export const RANDOM_KEYS = Object.freeze(['postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed']);
+const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+/** 'HH:MM' -> minutes after midnight, or null. */
+export const hhmmMinutes = (s) => { const m = typeof s === 'string' ? HHMM.exec(s) : null; return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
 
 /** Checks a user settings object (only USER_KEYS; any may be missing). -> { values, problems: [{ key, text }] }. Pure. */
 export function checkUserSchedule(j) {
@@ -64,6 +77,12 @@ export function checkUserSchedule(j) {
     else values[k] = j[k];
   }
   if (j.placement !== undefined) { if (PLACEMENTS.includes(j.placement)) values.placement = j.placement; else problems.push({ key: 'placement', text: `placement must be one of ${PLACEMENTS.join(', ')}` }); }
+  for (const k of ['windowStart', 'windowEnd']) {
+    if (j[k] === undefined) continue;
+    if (hhmmMinutes(j[k]) === null) problems.push({ key: k, text: `${k} must be a time like 09:00` }); else values[k] = j[k];
+  }
+  if (values.postsPerDayMin !== undefined && values.postsPerDayMax !== undefined && values.postsPerDayMin > values.postsPerDayMax) problems.push({ key: 'postsPerDayMax', text: 'the most posts a day must not be less than the fewest' });
+  if (values.windowStart !== undefined && values.windowEnd !== undefined && hhmmMinutes(values.windowEnd) <= hhmmMinutes(values.windowStart)) problems.push({ key: 'windowEnd', text: 'the posting window must end after it starts (same day)' });
   return { values, problems };
 }
 const ALIGN_STEPS = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60];
@@ -81,7 +100,7 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
     if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) throw new ScheduleError('schedule-config-bad', `schedule setting ${k} must be a number from ${min} to ${max}`);
     return v;
   };
-  const placement = j?.placement ?? 'fill-gaps';
+  const placement = j?.placement ?? 'random-daily';
   if (!PLACEMENTS.includes(placement)) throw new ScheduleError('schedule-config-bad', `schedule setting placement must be one of ${PLACEMENTS.join(', ')}`);
   const alignMinutes = num('alignMinutes', 1, 60);
   if (!ALIGN_STEPS.includes(alignMinutes)) throw new ScheduleError('schedule-config-bad', `schedule setting alignMinutes must divide an hour (${ALIGN_STEPS.join(', ')})`);
@@ -104,7 +123,19 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
     try { u = JSON.parse(readFileSync(userFile, 'utf8')); } catch { throw new ScheduleError('schedule-config-bad', 'your schedule settings file (posting/schedule.json in the data folder) could not be read'); }
     const { values, problems } = checkUserSchedule(u);
     if (problems.length) throw new ScheduleError('schedule-config-bad', `your schedule settings: ${problems.map((p) => p.text).join('; ')}`);
-    for (const k of ['intervalHours', 'maxAheadDays', 'placement']) if (values[k] !== undefined) { cfg[k] = values[k]; cfg.userKeys.push(k); }
+    for (const k of ['intervalHours', 'maxAheadDays', 'placement', ...RANDOM_KEYS]) if (values[k] !== undefined) { cfg[k] = values[k]; cfg.userKeys.push(k); }
+  }
+  // random-daily (D403): shipped defaults (a missing key = the user's 2026-11-19 choice), then the checks across keys.
+  const rd = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 90, seed: 0 };
+  for (const k of RANDOM_KEYS) if (cfg[k] === undefined) cfg[k] = j?.[k] ?? rd[k];
+  const rc = checkUserSchedule(Object.fromEntries(RANDOM_KEYS.map((k) => [k, cfg[k]])));
+  if (rc.problems.length) throw new ScheduleError('schedule-config-bad', `schedule setting ${rc.problems.map((p) => p.text).join('; ')}`);
+  cfg.timeZone = typeof j?.timeZone === 'string' && j.timeZone ? j.timeZone : null; // null = this PC's own zone
+  cfg.seedSaved = cfg.userKeys.includes('seed');
+  if (cfg.placement === 'random-daily') {
+    // Random minutes, not whole hours; and every gap (channel posts, the queue, a moved clip) is minGapMinutes.
+    cfg.alignMinutes = 1;
+    cfg.intervalHours = cfg.minGapMinutes / 60;
   }
   // A chunk may only start with at least marginMinutes left, and must end chunkDeadlineSeconds before the time:
   // a deadline at or past the margin would stop every final chunk.
@@ -212,6 +243,128 @@ export function itemTimes(i) {
  * Returns [{ id, at: ms | null, retry, reval }] for every item that gets a new slot or must wait: `at` null = beyond
  * maxAheadDays (the item waits without a slot). Items not listed keep what they have.
  */
+// ---------------------------------------------------------------- random-daily (D403)
+
+/** Seeded 32-bit hash (FNV-1a) of the parts, for per-day and per-clip random streams. Pure. */
+export function hash32(...parts) {
+  let h = 0x811c9dc5;
+  for (const ch of parts.join('|')) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h >>> 0;
+}
+/** mulberry32: a small seeded RNG -> () => [0, 1). Pure given the seed. */
+export function rngOf(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+const zoneOf = (cfg) => cfg.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+const fmtCache = new Map();
+const partsFmt = (tz) => {
+  if (!fmtCache.has(tz)) fmtCache.set(tz, new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  return fmtCache.get(tz);
+};
+/** The local wall clock of t in the zone: { y, m (1-12), d, h, min }. */
+export function zonedParts(t, tz) {
+  const o = {}; for (const p of partsFmt(tz).formatToParts(new Date(t))) o[p.type] = p.value;
+  return { y: Number(o.year), m: Number(o.month), d: Number(o.day), h: Number(o.hour) % 24, min: Number(o.minute), s: Number(o.second) };
+}
+const offsetAt = (t, tz) => { const p = zonedParts(t, tz); return Date.UTC(p.y, p.m - 1, p.d, p.h, p.min, p.s) - Math.floor(t / 1000) * 1000; };
+/** UTC ms of a local wall time in the zone. A time that does not exist (DST spring gap) moves forward by the gap; a time
+ *  that exists twice (autumn) is the first. */
+export function zonedToUtc(y, m, d, h, min, tz) {
+  const guess = Date.UTC(y, m - 1, d, h, min);
+  let t = guess - offsetAt(guess, tz);
+  const t2 = guess - offsetAt(t, tz);
+  if (t2 !== t) { const back = guess - offsetAt(t2, tz); t = back === t2 ? Math.min(t, t2) : Math.max(t, t2); }
+  return t;
+}
+/** 'YYYY-MM-DD' of the local day that holds t. */
+export const localDayKey = (t, tz) => { const p = zonedParts(t, tz); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+const nextDayKey = (key) => { const [y, m, d] = key.split('-').map(Number); const n = new Date(Date.UTC(y, m - 1, d + 1)); return n.toISOString().slice(0, 10); };
+/** The posting window of a local day in UTC ms: { start, end } (DST-safe: built from the wall times). */
+export function dayWindow(key, cfg) {
+  const tz = zoneOf(cfg); const [y, m, d] = key.split('-').map(Number);
+  const a = hhmmMinutes(cfg.windowStart); const b = hhmmMinutes(cfg.windowEnd);
+  return { start: zonedToUtc(y, m, d, Math.floor(a / 60), a % 60, tz), end: zonedToUtc(y, m, d, Math.floor(b / 60), b % 60, tz) };
+}
+/** How many posts the day gets (seeded; min..max). */
+export const dayCount = (key, cfg) => cfg.postsPerDayMin + Math.floor(rngOf(hash32(cfg.seed, key, 'count'))() * (cfg.postsPerDayMax - cfg.postsPerDayMin + 1));
+const MINUTE = 60 * 1000;
+/** The day's candidate times (UTC ms, whole minutes), seeded: first `count` times spread over the window at least the gap
+ *  apart (uniform among such spreads), then EXTRA single random times in the window to fall back on when one is taken. */
+export function dayCandidates(key, cfg, count = dayCount(key, cfg), extra = 48) {
+  const { start, end } = dayWindow(key, cfg);
+  const r = rngOf(hash32(cfg.seed, key, 'times'));
+  const gapMin = Math.ceil(cfg.minGapMinutes);
+  const span = Math.floor((end - start) / MINUTE);
+  let n = count; while (n > 1 && (n - 1) * gapMin > span) n--;
+  const free = span - (n - 1) * gapMin;
+  const base = Array.from({ length: n }, () => Math.floor(r() * (free + 1))).sort((x, y) => x - y);
+  const primary = base.map((b, k) => start + (b + k * gapMin) * MINUTE);
+  const more = Array.from({ length: extra }, () => start + Math.floor(r() * (span + 1)) * MINUTE);
+  return [...primary, ...more];
+}
+
+/**
+ * random-daily slots (D403). taken: a slotter with every kept time. moving: items in queue order with their own floor.
+ * For each local day from the first floor on, the day's picks are its seeded candidates, in candidate order, that are at
+ * or after the floor, inside the cap and at least the gap from every taken time and every earlier pick, until the day has
+ * its count (times already taken on that day count too). Items take the picks in time order; a retry with a later
+ * floor takes the first pick at or after it. A day that cannot fit its count takes what fits. Pure.
+ */
+function planRandomDaily(moving, slots, nowMs, cfg) {
+  const cap = maxAheadMs(nowMs, cfg);
+  const tz = zoneOf(cfg);
+  const floorOf = (i) => {
+    const retry = isRetry(i, nowMs, cfg);
+    const next = retry && typeof i.nextAt === 'string' ? Date.parse(i.nextAt) : NaN;
+    return floorFrom(Number.isFinite(next) && next > nowMs ? next : nowMs, cfg);
+  };
+  const floors = moving.map(floorOf);
+  const minFloor = floors.length ? Math.min(...floors) : nowMs;
+  const pool = []; // picks not yet given, ascending
+  let key = localDayKey(minFloor, tz);
+  const lastKey = localDayKey(cap, tz);
+  const fillDay = () => {
+    const { start, end } = dayWindow(key, cfg);
+    const have = slots.times().filter((t) => t >= start && t <= end).length;
+    const want = dayCount(key, cfg) - have;
+    const picks = [];
+    if (want > 0) {
+      for (const c of dayCandidates(key, cfg)) {
+        if (picks.length >= want) break;
+        if (c < minFloor || c > cap || slots.conflict(c) !== null || picks.some((p) => Math.abs(p - c) < cfg.minGapMinutes * MINUTE)) continue;
+        picks.push(c); slots.add(c);
+      }
+    }
+    pool.push(...picks.sort((a, b) => a - b));
+    key = nextDayKey(key);
+  };
+  const out = [];
+  moving.forEach((i, n) => {
+    const f = floors[n];
+    let k = pool.findIndex((t) => t >= f);
+    while (k < 0 && key <= lastKey) { fillDay(); k = pool.findIndex((t) => t >= f); }
+    const retry = isRetry(i, nowMs, cfg);
+    if (k < 0) { out.push({ id: i.id, at: null, retry }); return; }
+    out.push({ id: i.id, at: pool[k], retry }); pool.splice(k, 1);
+  });
+  return out;
+}
+
+/** random-daily: a kept slot must also be inside its day's window, and a day keeps at most its count (earliest first). */
+function randomDailyKeeps(cfg) {
+  const tz = zoneOf(cfg); const kept = new Map();
+  return (t, slots) => {
+    const key = localDayKey(t, tz); const { start, end } = dayWindow(key, cfg);
+    if (t < start || t > end) return false;
+    if (!kept.has(key)) kept.set(key, slots.times().filter((x) => x >= start && x <= end).length);
+    if (kept.get(key) >= dayCount(key, cfg)) return false;
+    kept.set(key, kept.get(key) + 1);
+    return true;
+  };
+}
+
 export function planQueueSlots({ items, channelLast = null, channelTimes = [], nowMs, cfg }) {
   const list = (items ?? []).filter(isPlain);
   const needs = (i) => i.state === 'queued' && (!i.publishAt || isRetry(i, nowMs, cfg));
@@ -220,14 +373,16 @@ export function planQueueSlots({ items, channelLast = null, channelTimes = [], n
   for (const i of list) if (!needs(i) && !held(i)) taken.push(...itemTimes(i));
   const slots = createSlotter(taken, cfg);
   const reval = new Set();
+  const keeps = cfg.placement === 'random-daily' ? randomDailyKeeps(cfg) : null;
   for (const i of list.filter(held).sort((a, b) => ms(a.publishAt) - ms(b.publishAt))) {
     const t = ms(i.publishAt);
-    if (slots.conflict(t) === null) { for (const x of itemTimes(i)) slots.add(x); continue; }
+    if (slots.conflict(t) === null && (!keeps || keeps(t, slots))) { for (const x of itemTimes(i)) slots.add(x); continue; }
     reval.add(i.id);
     // Its other times (an old sent or session time) still count as taken.
     for (const x of itemTimes(i)) if (x !== t) slots.add(x);
   }
   const moving = list.filter((i) => needs(i) || reval.has(i.id));
+  if (cfg.placement === 'random-daily') return planRandomDaily(moving, slots, nowMs, cfg).map((p) => ({ ...p, reval: reval.has(p.id) }));
   const cap = maxAheadMs(nowMs, cfg);
   const gap = cfg.intervalHours * HOUR_MS;
   const out = [];

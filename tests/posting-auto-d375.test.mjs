@@ -21,6 +21,8 @@ import { LEGACY_DAY_NAME, QUOTA_DAY_NAME, createQuotaBudget, pacificDay, utcDay 
 import { readChannelSchedule } from '../services/posting/schedule-read.mjs';
 
 const tmp = [];
+/** The random-daily card values shipped in data/posting/schedule.json (D403). */
+const RD = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 90 };
 const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-d375-')); tmp.push(d); return d; };
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 const HOUR = 3600 * 1000; const DAY = 24 * HOUR;
@@ -136,11 +138,11 @@ describe('auto rules: oldest first, one daily cap, unscored shorts (D375)', () =
 });
 
 describe('auto-post card settings (auto-settings.mjs)', () => {
-  test('defaults: upload on, every kind, the ranker floor, as many a day as the quota fits, 1 h gap, 60 days, fill-gaps', () => {
+  test('defaults: upload on, every kind, the ranker floor, as many a day as the quota fits, 1 h gap, 60 days, random-daily 3-6 a day 09:00-23:00 90 min (D403)', () => {
     const d = defaultCard(mk());
     const q = loadQuota(mk());
     assert.equal(q.uploadsPerDayFit, Math.floor((10000 - 100) / 1650));
-    assert.deepEqual(d, { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore(), maxPerDay: q.uploadsPerDayFit, intervalHours: 1, maxAheadDays: 60, placement: 'fill-gaps', quotaUnitsPerDay: 10000 });
+    assert.deepEqual(d, { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore(), maxPerDay: q.uploadsPerDayFit, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000, ...RD });
     assert.ok(RULE_KINDS.includes('impact-play'));
   });
   test('save: checked first, nothing written on a problem; then both files written whole, read back as the card', () => {
@@ -158,7 +160,8 @@ describe('auto-post card settings (auto-settings.mjs)', () => {
     assert.deepEqual([sched.intervalHours, sched.maxAheadDays, sched.placement, sched.quotaUnitsPerDay], [3, 30, 'after-last', 20000]);
     const s = readAutoPostSettings(dataDir);
     assert.equal(s.custom, false); assert.equal(s.error, null);
-    assert.deepEqual(s.card, card);
+    assert.deepEqual(s.card, { ...card, ...RD });
+    assert.ok(Number.isInteger(sched.seed), 'D403: the random plan seed is made at the first save');
     assert.equal(s.quota.uploadsPerDayFit, Math.floor((20000 - 100) / 1650)); assert.equal(s.quota.userSet, true);
   });
   test('a hand-written rules file shows as custom; a broken one is reported, the defaults still show', () => {
@@ -180,6 +183,9 @@ describe('auto-post card settings (auto-settings.mjs)', () => {
 describe('next posting times, move and remove (auto-settings.mjs)', () => {
   function queueFixture() {
     const dataDir = mk();
+    // These cases are about the fill-gaps rule (D375); random-daily (D403) has tests/posting-random-daily.test.mjs.
+    mkdirSync(path.join(dataDir, 'posting'), { recursive: true });
+    writeFileSync(userScheduleFile(dataDir), JSON.stringify({ placement: 'fill-gaps' }));
     const q = createUploadQueue(path.join(dataDir, 'posting', QUEUE_NAME), () => T0);
     for (const id of ['a', 'b', 'c', 'd']) q.add(id);
     q.patch('a', { state: 'queued', publishAt: '2026-11-13T12:00:00.000Z' });

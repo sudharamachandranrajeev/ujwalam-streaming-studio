@@ -12,7 +12,9 @@ import { READONLY_SCOPE } from '../services/posting/oauth.mjs';
 import { tasksDir } from '../services/studio-ui/tasks.mjs';
 
 const tmp = [];
-const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-d300-')); tmp.push(d); return d; };
+// D403: the shipped placement is random-daily; these cases are about the fill-gaps rule (D375), so every temp data dir
+// holds a user schedule file that keeps it (random-daily: tests/posting-random-daily.test.mjs).
+const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-d300-')); tmp.push(d); mkdirSync(path.join(d, 'posting'), { recursive: true }); writeFileSync(path.join(d, 'posting', 'schedule.json'), JSON.stringify({ placement: 'fill-gaps' })); return d; };
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 const T0 = Date.parse('2026-11-08T10:00:00Z');
 const RULES = { autoUpload: true, rules: [{ id: 'top', target: 'youtube-shorts', minScore: 5, maxPerDay: 5 }] };

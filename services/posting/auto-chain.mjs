@@ -59,6 +59,7 @@ import { READONLY_SCOPE, createYoutubeAuth } from './oauth.mjs';
 import { UploadError, checkUploadStatus, uploadPost } from './youtube.mjs';
 import { DEFAULT_SCHEDULE, SCHEDULE_FLAG, ScheduleError, chunkDeadlineMs, fallbackBps, isRetry, loadScheduleConfig, marginMs, minLeadMs, planQueueSlots, toIso, userScheduleFile } from './schedule.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
+import { ensureScheduleSeed } from './schedule-seed.mjs';
 import { createQuotaBudget } from './quota-budget.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
@@ -257,7 +258,8 @@ export function createPostChain(opts) {
     publishAtOf: (sha) => queue.items().find((i) => i.sha === sha)?.sessionPublishAt ?? null,
   };
   // The shipped settings plus the user's own (Settings > Posting & growth > Auto-post), read again on every pass.
-  const scheduleCfg = () => { try { return loadScheduleConfig(opts.scheduleFile ?? DEFAULT_SCHEDULE, { userFile: userScheduleFile(dataDir) }); } catch { return null; } };
+  // D403: the random-daily plan's seed is made once and saved in the user's schedule.json before the first plan.
+  const scheduleCfg = () => { try { if (opts.ensureSeed !== false) ensureScheduleSeed(dataDir); return loadScheduleConfig(opts.scheduleFile ?? DEFAULT_SCHEDULE, { userFile: userScheduleFile(dataDir) }); } catch { return null; } };
 
   /** post-schedule: every queued item without a usable slot gets the next slot, in queue order. The channel is read once,
    *  and only when some item needs a slot or a due item's slot must be re-checked before its upload starts (dueIds).

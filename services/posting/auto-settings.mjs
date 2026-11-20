@@ -7,7 +7,8 @@
 // Both are read again on the next pass (rules: a live source; schedule: loaded per pass), so nothing needs a restart.
 //   readAutoPostSettings(dataDir)              -> { exists, custom, card, defaults, kinds, schedule, quota, limits }
 //   saveAutoPostSettings(dataDir, body)        -> { ok: true, settings } | { ok: false, problems: [{ key, text }] }
-//   The card: { autoUpload, kinds[], minScore, maxPerDay, intervalHours, maxAheadDays, placement, quotaUnitsPerDay }.
+//   The card: { autoUpload, kinds[], minScore, maxPerDay, intervalHours, maxAheadDays, placement, quotaUnitsPerDay,
+//   postsPerDayMin, postsPerDayMax, windowStart, windowEnd, minGapMinutes } (the last five: placement random-daily, D403).
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { AutoPostError, MAX_PER_DAY, RULE_KINDS, rankerMinScore, userRulesFile, validateRules } from './auto-post.mjs';
@@ -15,12 +16,15 @@ import { DEFAULT_SCHEDULE, HOUR_MS, PLACEMENTS, USER_LIMITS, ScheduleError, alig
 import { QUEUE_NAME, createUploadQueue } from './auto-chain.mjs';
 import { READONLY_SCOPE } from './oauth.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
+import { ensureScheduleSeed } from './schedule-seed.mjs';
 import { DEFAULT_QUOTA, createQuotaBudget, loadQuota } from './quota-budget.mjs';
 
 export { DEFAULT_QUOTA, loadQuota };
 
 /** The two rules the card writes: one per YouTube target (the target is chosen by length and aspect, limits.json). */
 export const CARD_RULES = Object.freeze([{ id: 'auto-shorts', target: 'youtube-shorts' }, { id: 'auto-videos', target: 'youtube-video' }]);
+/** The schedule settings the card shows and saves (D375, D403); the seed is never on the card (made once, kept). */
+export const CARD_SCHEDULE_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes']);
 export const KIND_LABELS = Object.freeze({ short: 'Short clips', montage: 'Montages', 'won-reel': 'Won-round reels', 'impact-play': 'Impact plays' });
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
@@ -52,7 +56,16 @@ export function defaultCard(dataDir) {
   let cfg; // a broken user file is reported by readAutoPostSettings; the defaults still come from the shipped one
   try { cfg = scheduleConfigFor(dataDir); } catch { cfg = loadScheduleConfig(DEFAULT_SCHEDULE); }
   return { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore() ?? 0, maxPerDay: Math.max(1, q.uploadsPerDayFit),
-    intervalHours: cfg.intervalHours, maxAheadDays: cfg.maxAheadDays, placement: cfg.placement, quotaUnitsPerDay: q.quotaUnitsPerDay };
+    intervalHours: cfg.placement === 'random-daily' ? userOr(dataDir, 'intervalHours', cfg) : cfg.intervalHours, maxAheadDays: cfg.maxAheadDays, placement: cfg.placement, quotaUnitsPerDay: q.quotaUnitsPerDay,
+    postsPerDayMin: cfg.postsPerDayMin, postsPerDayMax: cfg.postsPerDayMax, windowStart: cfg.windowStart, windowEnd: cfg.windowEnd, minGapMinutes: cfg.minGapMinutes };
+}
+
+/** intervalHours as saved or shipped (random-daily replaces the one in use by minGapMinutes; the card still shows the
+ *  fill-gaps value so switching back keeps it). */
+function userOr(dataDir, k, cfg) {
+  const u = typeof dataDir === 'string' ? readUserSchedule(dataDir) : {};
+  if (u[k] !== undefined) return u[k];
+  try { return readJson(DEFAULT_SCHEDULE)?.[k] ?? cfg[k]; } catch { return cfg[k]; }
 }
 
 /** The schedule settings in use: the shipped file plus the user's own (throws ScheduleError when either is bad). */
@@ -92,7 +105,7 @@ export function checkCard(body) {
   if (!Number.isFinite(c.minScore) || c.minScore < 0 || c.minScore > 100) add('minScore', 'the minimum clip score must be a number from 0 to 100');
   if (!Number.isInteger(c.maxPerDay) || c.maxPerDay < 1 || c.maxPerDay > MAX_PER_DAY) add('maxPerDay', `uploads per day must be a whole number from 1 to ${MAX_PER_DAY}`);
   const sched = {};
-  for (const k of ['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay']) if (c[k] !== undefined) sched[k] = c[k];
+  for (const k of CARD_SCHEDULE_KEYS) if (c[k] !== undefined) sched[k] = c[k];
   const s = checkUserSchedule(sched);
   problems.push(...s.problems);
   return { card: { autoUpload: c.autoUpload === true, kinds: kinds ?? [], minScore: c.minScore, maxPerDay: c.maxPerDay, ...s.values }, problems };
@@ -139,12 +152,13 @@ export function saveAutoPostSettings(dataDir, body) {
   const doc = rulesFromCard(card);
   validateRules(doc); // the card's own shape always passes; checked again so a bad file can never be written
   const sched = { ...readUserSchedule(dataDir) };
-  for (const k of ['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay']) if (card[k] !== undefined) sched[k] = card[k];
+  for (const k of CARD_SCHEDULE_KEYS) if (card[k] !== undefined) sched[k] = card[k];
   writeJsonAtomic(userScheduleFile(dataDir), {
     $comment: 'Your posting schedule (Settings > Posting & growth > Auto-post, D375). Replaces the shipped values in data/posting/schedule.json and data/posting/quota.json.',
     ...sched,
   });
   writeJsonAtomic(userRulesFile(dataDir), doc);
+  ensureScheduleSeed(dataDir); // D403: the random plan's seed, made once
   return { ok: true, settings: readAutoPostSettings(dataDir) };
 }
 
@@ -178,7 +192,7 @@ export function schedulePreview(dataDir, { nowMs = Date.now(), count = 10, chann
     queue: items.filter((i) => i.state === 'queued' || i.state === 'uploading' || (i.state === 'done' && ms(shown(i)) > nowMs))
       .map((i) => ({ id: i.id, state: i.state, publishAt: shown(i), reason: i.reason ?? null, movable: i.state === 'queued' && !i.session }))
       .sort((a, b) => (ms(a.publishAt) ?? Infinity) - (ms(b.publishAt) ?? Infinity)),
-    next, intervalHours: cfg.intervalHours, placement: cfg.placement, maxAheadDays: cfg.maxAheadDays,
+    next, intervalHours: cfg.intervalHours, placement: cfg.placement, maxAheadDays: cfg.maxAheadDays, minGapMinutes: cfg.minGapMinutes,
     channelReadAt: channel ? (channel.readAt ?? toIso(nowMs)) : (doc.schedule?.readAt ?? null),
     source: channel ? 'live' : doc.schedule ? 'saved' : 'none',
   };
