@@ -677,3 +677,20 @@ test('D403: each finished job is recorded (jobs.jsonl); the recording cleanup ru
     rc2.stop(); rc.stop();
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
+test('Codex round 4: polls during a model check start no second check (P3); a check that ends after going live starts nothing until off air (P1)', async () => {
+  const s = setup();
+  try {
+    writeSettings(s.dataDir, { clips: { recording: 'after', live: 'off' } });
+    let checks = 0; let answer;
+    const rc = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, captionsModel: () => { checks += 1; return new Promise((r) => { answer = r; }); } });
+    rc.feed(s.S('live')); s.advance(60000); rc.feed(s.S('stopped'));
+    rc.feed(s.S('stopped')); rc.feed(s.S('stopped'));
+    assert.equal(checks, 1, 'one check while it runs');
+    rc.feed(s.S('stopped', { stream: 'live' })); // back on air before the check ends
+    answer(true); await tick(); await tick();
+    assert.equal(s.spawned.length, 0, 'no job starts while live');
+    rc.feed(s.S('stopped')); await tick();
+    assert.equal(s.spawned.length >= 1, true, 'starts once off air');
+    rc.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});

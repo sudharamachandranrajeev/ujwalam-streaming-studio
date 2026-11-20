@@ -371,12 +371,14 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     // The speech model check (captions): a failure skips only the captions step, the job still runs.
     if (job.type !== 'train' && job.captionsOk === undefined) {
       const settle = (ok) => { job.captionsOk = ok === true; if (!job.captionsOk) log(`clips: ${CAPTIONS_SKIPPED}`); };
+      // Codex round 4 (P3): while a check runs, a poll does not start another one (each call hashes the model).
+      if (checkingModel) return;
       let r;
       try { r = captionsModel(); } catch { r = false; }
       if (r !== true && r !== false) {
-        if (checkingModel) return;
         checkingModel = true;
-        Promise.resolve(r).catch(() => false).then((ok) => { checkingModel = false; settle(ok); write(); start(); });
+        // Codex round 4 (P1): the check can end after the stream went live; the job then waits for the off-air start.
+        Promise.resolve(r).catch(() => false).then((ok) => { checkingModel = false; settle(ok); write(); if (!liveNow && !stopped) start(); });
         return;
       }
       settle(r);
