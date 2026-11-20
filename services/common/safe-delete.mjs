@@ -112,8 +112,11 @@ const IN_USE = new Set(['EBUSY', 'EPERM', 'EACCES']);
 
 // expectId (Codex round 1, recordings): { size, dev, ino, mtimeNs } as strings, recorded when the file was processed;
 // the file opened must be exactly that file, or it is kept ('file-changed-since-clipped').
-export async function safeDeleteFile({ file, folder, expectSha = null, expectId = null, hash = true, beforeUnlink = null, beforeDelete = null }) {
+// requireId: a null expectId is refused (Codex round 2). gate: a SYNCHRONOUS check called right before the rename, with no
+// await in between; a reason it returns keeps the file.
+export async function safeDeleteFile({ file, folder, expectSha = null, expectId = null, requireId = false, gate = null, hash = true, beforeUnlink = null, beforeDelete = null }) {
   const keep = (reason) => ({ deleted: false, reason });
+  if (requireId && !expectId) return keep('no-identity');
   const where = checkInFolder(file, folder);
   if (where) return keep(where);
   let first;
@@ -126,6 +129,7 @@ export async function safeDeleteFile({ file, folder, expectSha = null, expectId 
   let dir;
   try { dir = holdingDir(folder); } catch { return keep('hold-unsafe'); }
   const held = path.join(dir, `${process.pid}-${randomBytes(8).toString('hex')}-${path.basename(file)}`);
+  if (typeof gate === 'function') { let why; try { why = gate(); } catch { why = 'state-unknown'; } if (why) return keep(why); }
   try { renameSync(file, held); } catch (e) { return keep(e?.code === 'ENOENT' ? 'file-gone' : IN_USE.has(e?.code) ? 'file-in-use' : 'delete-failed'); }
   if (typeof beforeDelete === 'function') await beforeDelete(held); // test seam
   let bad = null;

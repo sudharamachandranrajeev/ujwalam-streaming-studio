@@ -70,7 +70,12 @@ export function appendJobRecord(dataDir, rec) {
   try {
     if (typeof rec?.h !== 'string' || !rec.h) return;
     const v = typeof rec.v === 'string' && rec.v ? rec.v : null;
-    const full = { ...rec, h: path.resolve(rec.h), hId: rec.hId ?? fileIdentity(rec.h), v: v && path.resolve(v), vId: v ? (rec.vId ?? fileIdentity(v)) : null };
+    // Codex round 2: the identity is taken when the job starts reading (record-clips) and must still be the file's now;
+    // a file replaced while the job ran gives no record.
+    const hNow = fileIdentity(rec.h); const vNow = v ? fileIdentity(v) : null;
+    if (rec.hId !== undefined && !sameId(rec.hId, hNow)) return;
+    if (v && rec.vId !== undefined && !sameId(rec.vId, vNow)) return;
+    const full = { ...rec, h: path.resolve(rec.h), hId: hNow, v: v && path.resolve(v), vId: vNow };
     if (!validJobRecord(full)) return; // e.g. the H file is gone: nothing to prove
     mkdirSync(clipsDir(dataDir), { recursive: true }); appendFileSync(path.join(clipsDir(dataDir), JOBS_LOG), `${JSON.stringify(full)}\n`);
   } catch { /* the next job writes again */ }
@@ -143,10 +148,11 @@ export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(data
     const hNow = idOf(s.h);
     // V: the one file every deciding entry lists, unchanged since.
     const vPath = used[0].v;
+    const vNow = vPath ? idOf(vPath) : null; // read once (Codex round 2)
     let vReason = null;
     if (used.every((r) => !r.v)) vReason = 'no-v';
     else if (!vPath || used.some((r) => key(r.v) !== key(vPath))) vReason = 'v-not-in-every-latest-job';
-    else if (!used.every((r) => sameId(r.vId, idOf(vPath)))) vReason = existsSync(vPath) ? 'v-changed-since-clipped' : 'v-gone';
+    else if (!used.every((r) => sameId(r.vId, vNow))) vReason = existsSync(vPath) ? 'v-changed-since-clipped' : 'v-gone';
     if (gone.has(h) && (vReason || gone.has(key(vPath)))) continue; // deleted already
     let reason = null;
     if (used.some((r) => r.result !== 'done' || r.code !== 0)) reason = 'job-failed';
@@ -155,7 +161,7 @@ export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(data
     else if (keepList.all || keepList.names.has(name.toLowerCase())) reason = 'kept-for-labelling';
     else if (!hNow) reason = 'file-gone';
     else if (!used.every((r) => sameId(r.hId, hNow))) reason = 'file-changed-since-clipped';
-    out.push({ name, h: s.h, hId: hNow, v: vReason ? null : vPath, vId: vReason ? null : idOf(vPath), reason, vReason: reason ? reason : vReason });
+    out.push({ name, h: s.h, hId: hNow, v: vReason ? null : vPath, vId: vReason ? null : vNow, reason, vReason: reason ? reason : vReason });
   }
   return out;
 }
@@ -180,12 +186,18 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
   // Codex round 1: the live state and the clip jobs are read again right before each file (recheck: () => { status,
   // state }); the batch stops at the first change, and every file not yet deleted is kept.
   const mark = stateMark(state);
-  const stillSafe = async () => {
-    if (typeof recheck !== 'function') return null;
-    let now; try { now = await recheck(); } catch { return 'state-unknown'; }
-    if (!isPlain(now?.status)) return 'state-unknown';
-    if (statusActive(now.status)) return 'live-or-recording';
-    if (stateMark(now.state ?? {}) !== mark) return 'jobs-changed';
+  // Codex round 2: synchronous, and called by safeDeleteFile right before its rename (no await in between); the Keep for
+  // labelling list is read again there too.
+  const STOPS = new Set(['state-unknown', 'live-or-recording', 'jobs-changed']);
+  const gateFor = (name) => () => {
+    if (typeof recheck === 'function') {
+      let now; try { now = recheck(); } catch { return 'state-unknown'; }
+      if (typeof now?.then === 'function' || !isPlain(now?.status)) return 'state-unknown';
+      if (statusActive(now.status)) return 'live-or-recording';
+      if (stateMark(now.state ?? {}) !== mark) return 'jobs-changed';
+    }
+    const keep = readKeepList(dataDir);
+    if (keep.all || keep.names.has(name.toLowerCase())) return 'kept-for-labelling';
     return null;
   };
   for (const s of cleanupPlan({ dataDir, state })) {
@@ -194,10 +206,8 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
     for (const [file, expectId] of [[s.h, s.hId], [s.v, s.vId]].filter(([f]) => typeof f === 'string' && f)) {
       if (res.stopped) { res.kept.push({ file, reason: res.stopped }); continue; }
       if (!existsSync(file)) continue; // gone already (deleted by hand, or the other half of a session deleted earlier)
-      const why = await stillSafe();
-      if (why) { res.stopped = why; res.kept.push({ file, reason: why }); continue; }
-      const r = await deleteImpl({ file, folder, hash: false, expectId });
-      if (!r.deleted) { res.kept.push({ file, reason: r.reason }); continue; }
+      const r = await deleteImpl({ file, folder, hash: false, expectId, requireId: true, gate: gateFor(s.name) });
+      if (!r.deleted) { if (STOPS.has(r.reason)) res.stopped = r.reason; res.kept.push({ file, reason: r.reason }); continue; }
       const at = new Date(nowMs).toISOString();
       res.deleted.push({ file, size: r.size });
       try {
@@ -236,6 +246,8 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
 // passes add a line for each recording they prove. Every other cleanup condition still applies.
 export const BACKFILL_LOG = 'backfill-recordings.jsonl';
 export const SETTLE_MS = 10 * 60 * 1000;
+/** An old run's render.json may be written a little before the recording's last write is flushed. */
+export const RUN_SLACK_MS = 2 * 60 * 1000;
 const REC_EXT = /\.(mkv|mp4|mov|flv|ts|m4v)$/i;
 const readJson = (f) => { try { const j = JSON.parse(readFileSync(f, 'utf8')); return isPlain(j) ? j : null; } catch { return null; } };
 const STAMP = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/;
@@ -275,11 +287,21 @@ export function backfillVerdict({ dataDir, file, mtimeMs, clipsDirOf = clipsFold
   const render = readJson(path.join(run, 'render.json'));
   if (!render) return { proven: false, reason: start === null ? 'no-run-folder' : 'no-clips-in-its-time-window', clips: 0 };
   if (String(render.recording ?? '').toLowerCase() !== path.basename(file).toLowerCase()) return { proven: false, reason: 'run-is-for-another-file', clips: 0 };
+  // Codex round 2: the name alone could be a newer file. The run must have been made after this file was last written
+  // (render.json createdAt + RUN_SLACK_MS), and after the start in the file's name when it has one.
+  const made = Date.parse(render.createdAt);
+  if (!Number.isFinite(made) || !Number.isFinite(mtimeMs) || mtimeMs > made + RUN_SLACK_MS) return { proven: false, reason: 'run-older-than-file', clips: 0 };
+  if (start !== null && start > made) return { proven: false, reason: 'run-older-than-file', clips: 0 };
   let clips = 0;
   for (const p of [path.join(run, 'published.json'), path.join(run, 'montage', 'published.json')]) {
     const files = readJson(p)?.files;
     if (!Array.isArray(files)) continue;
-    for (const r of files) { const f = typeof r?.file === 'string' ? (path.isAbsolute(r.file) ? r.file : root && path.join(root, r.file)) : null; if (f && existsSync(f)) clips++; }
+    // Codex round 2: only a regular file inside the clips folder by its real path (no .., link, junction or folder).
+    for (const r of files) {
+      const rel = typeof r?.file === 'string' ? r.file : null;
+      if (!rel || !root || path.isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) continue;
+      if (checkInFolder(path.join(root, rel), root) === null) clips++;
+    }
   }
   const okInReport = (readJson(path.join(run, 'report.json'))?.results ?? []).filter((r) => r?.ok === true).length;
   if (clips > 0 || okInReport > 0) return { proven: true, reason: 'clips-exist', clips: Math.max(clips, okInReport) };

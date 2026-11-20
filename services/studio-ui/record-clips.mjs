@@ -35,7 +35,7 @@ import { PARENT_PIPE_ENV } from '../common/parent-pipe.mjs';
 import { killChildTree } from '../common/kill-tree.mjs';
 import { clipsFolder, readSettings, writeSettings } from './user-settings.mjs';
 import { writeTaskFile } from './tasks.mjs';
-import { CLEANUP_FLAG, appendJobRecord, runRecordingCleanup } from './recording-cleanup.mjs';
+import { CLEANUP_FLAG, appendJobRecord, fileIdentity, runRecordingCleanup } from './recording-cleanup.mjs';
 
 const ACTIVE = new Set(['starting', 'live', 'reconnecting', 'retrying']);
 /** The tray's "Stop all" while live or recording (D311 proposed): <dataDir>/clips/<this>, written by the UI server. */
@@ -394,6 +394,8 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     mkdirSync(stateDir, { recursive: true });
     const fd = openSync(logFile, 'a');
     current = job;
+    // Codex round 2: the files' identity when the job starts reading them; the finish record needs the same files.
+    job.hId = typeof job.h === 'string' && job.h ? fileIdentity(job.h) : null; job.vId = typeof job.v === 'string' && job.v ? fileIdentity(job.v) : null;
     progress = null;
     job.activeAt = now(); job.progressAt = null; // the stall warning measures silence from here (tasks.mjs stallOf)
     // stdin: the parent pipe (D234): when the launcher is gone (even hard-killed) the clipper ends itself and its ffmpeg
@@ -433,7 +435,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       last = { name: done.name, kind: done.kind, result: code === 0 ? 'done' : 'failed', code, clips: n, out: spec.out, folder: spec.folder, ...(reels ? { reelsNotMade: reels } : {}) };
       if (reels) log(`clips: reels not made from ${done.name}: ${reels}`);
       // D403: what this job did with which files (the recording cleanup reads it).
-      appendJobRecord(dataDir, { h: done.h ?? null, v: done.v ?? null, type: done.type, kind: done.kind ?? null, name: done.name, result: code === 0 ? 'done' : 'failed', code, reelsNotMade: reels ?? null, at: iso(now()) });
+      appendJobRecord(dataDir, { h: done.h ?? null, hId: done.hId ?? null, v: done.v ?? null, ...(done.v ? { vId: done.vId ?? null } : {}), type: done.type, kind: done.kind ?? null, name: done.name, result: code === 0 ? 'done' : 'failed', code, reelsNotMade: reels ?? null, at: iso(now()) });
       log(code === 0 ? `clips: ${n} clip(s) made from ${done.name} in ${spec.folder}` : `clips: making clips from ${done.name} failed (exit ${code}); see ${logFile}`);
       const capNote = done.captionsOk === false ? `${CAPTIONS_SKIPPED} ` : ''; // first: the task note is cut at 160
       finishTask(done, code === 0, code === 0 ? `${capNote}${n} clip${n === 1 ? '' : 's'} made${reels ? `. Reels not made: ${reels}` : ''}` : `${capNote}Something went wrong; see the log`);

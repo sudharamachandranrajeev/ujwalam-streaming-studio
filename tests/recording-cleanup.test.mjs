@@ -10,7 +10,7 @@ import { after, describe, test } from 'node:test';
 import { safeRoot } from './helpers/data-root-guard.mjs';
 import { safeDeleteFile } from '../services/common/safe-delete.mjs';
 import {
-  BACKFILL_LOG, CLEANUP_FLAG, DELETED_RECORDINGS_LOG, appendJobRecord, backfillVerdict, dryRun, planBackfill, recName, vNameOf, cleanupPlan, readKeepList, runRecordingCleanup, setKeep,
+  BACKFILL_LOG, CLEANUP_FLAG, DELETED_RECORDINGS_LOG, appendJobRecord, backfillVerdict, dryRun, fileIdentity, planBackfill, recName, vNameOf, cleanupPlan, readKeepList, runRecordingCleanup, setKeep,
 } from '../services/studio-ui/recording-cleanup.mjs';
 import { loadDefinitions, DEFAULT_FLAGS_FILE } from '../services/flags/index.mjs';
 
@@ -167,10 +167,11 @@ describe('recordings with no clip job: their clips decide (user 2026-11-20: "Del
   const local = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi).getTime();
   const rec = (folder, name, endMs, n = 3000) => { const f = path.join(folder, name); writeFileSync(f, Buffer.alloc(n, 5)); utimesSync(f, endMs / 1000, endMs / 1000); return f; };
   const clip = (root, day, stamp) => { mkdirSync(path.join(root, day), { recursive: true }); writeFileSync(path.join(root, day, `codm_short_${stamp}_kills-3_01_v.mp4`), 'clip'); };
-  const runFiles = (dataDir, stem, { recording = `${stem}.mkv`, ok = false } = {}) => {
+  const runFiles = (dataDir, stem, { recording = `${stem}.mkv`, ok = false, createdAt = new Date(2026, 10, 6).toISOString(), published = null } = {}) => {
     const run = path.join(dataDir, 'clips', 'runs', stem); mkdirSync(run, { recursive: true });
-    writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', recording, clips: [] }));
+    writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', recording, clips: [], createdAt }));
     writeFileSync(path.join(run, 'report.json'), JSON.stringify({ results: [{ id: 'c01', file: 'stream-v.mp4', ok }] }));
+    if (published) writeFileSync(path.join(run, 'published.json'), JSON.stringify({ files: published.map((file) => ({ file })) }));
   };
   const verdicts = (dataDir) => readFileSync(path.join(dataDir, 'clips', BACKFILL_LOG), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).map((l) => [path.basename(l.file), l.decision, l.reason]);
   function world() {
@@ -261,6 +262,47 @@ describe('recordings with no clip job: their clips decide (user 2026-11-20: "Del
     const out = execFileSync(process.execPath, [path.resolve('services/studio-ui/recording-cleanup.mjs'), '--dry-run', '--data', w.dataDir, '--recordings', w.folder], { encoding: 'utf8', windowsHide: true });
     assert.match(out, /would delete \d+ file\(s\)/); assert.match(out, /Nothing was changed/);
     assert.ok(!existsSync(path.join(w.dataDir, 'clips', BACKFILL_LOG)));
+  });
+  test('Codex round 2: an old run made before the file now at that name proves nothing; published paths must be clips inside the clips folder', () => {
+    const w = world();
+    runFiles(w.dataDir, 'practice-h-1', { ok: true, createdAt: new Date(2026, 10, 4).toISOString() }); // before the file's last write (5 Nov)
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: new Date(2026, 10, 5, 22).getTime(), clipsDirOf: w.clipsDirOf }).reason, 'run-older-than-file');
+    const outside = mk(); writeFileSync(path.join(outside, 'x.mp4'), 'x');
+    const root = w.clipsDirOf();
+    mkdirSync(path.join(root, 'adir'), { recursive: true });
+    runFiles(w.dataDir, 'practice-h-1', { ok: false, published: ['../' + path.basename(outside) + '/x.mp4', path.join(outside, 'x.mp4'), 'adir', '2026-11-01/missing.mp4'] });
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: new Date(2026, 10, 5, 22).getTime(), clipsDirOf: w.clipsDirOf }).reason, 'no-clips');
+    runFiles(w.dataDir, 'practice-h-1', { ok: false, published: ['2026-11-01/codm_short_20261101-203000_kills-3_01_v.mp4'] });
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: new Date(2026, 10, 5, 22).getTime(), clipsDirOf: w.clipsDirOf }).reason, 'clips-exist');
+  });
+});
+
+describe('Codex round 2: identity from the job start, identity required, the gate right before the rename', () => {
+  test('a file replaced while its job ran gives no record; a job record keeps the start identity', () => {
+    const x = fixture({ v: false });
+    const start = fileIdentity(x.h);
+    writeFileSync(x.h, Buffer.alloc(5000, 3));
+    appendJobRecord(x.dataDir, { h: x.h, hId: start, v: null, type: 'full', kind: 'recording', name: 'n', result: 'done', code: 0, reelsNotMade: null, at: '2026-11-18T22:00:00.000Z' });
+    assert.ok(!existsSync(path.join(x.dataDir, 'clips', 'jobs.jsonl')));
+    appendJobRecord(x.dataDir, { h: x.h, hId: null, v: null, type: 'full', kind: 'recording', name: 'n', result: 'done', code: 0, reelsNotMade: null, at: '2026-11-18T22:00:00.000Z' });
+    assert.ok(!existsSync(path.join(x.dataDir, 'clips', 'jobs.jsonl')), 'no start identity: no record');
+  });
+
+  test('safe delete refuses a missing required identity; the gate (state and Keep for labelling) runs right before the rename', async () => {
+    const x = fixture({ v: false }); x.job();
+    assert.equal((await safeDeleteFile({ file: x.h, folder: x.folder, hash: false, expectId: null, requireId: true })).reason, 'no-identity');
+    // ticked Keep for labelling after the plan, before the rename
+    let r = await x.run({ deleteImpl: (o) => safeDeleteFile({ ...o, beforeUnlink: async () => { setKeep(x.dataDir, '2026-11-18 20-00-00 H', true); } }) });
+    assert.deepEqual(r.kept.map((k) => k.reason), ['kept-for-labelling']); assert.ok(existsSync(x.h));
+    setKeep(x.dataDir, '2026-11-18 20-00-00 H', false);
+    // a recording starts after the plan, before the rename
+    let live = false;
+    r = await x.run({ recheck: () => ({ status: live ? { sinks: [{ id: 'rec', kind: 'record', state: 'live' }] } : OFF_AIR, state: {} }),
+      deleteImpl: (o) => safeDeleteFile({ ...o, beforeUnlink: async () => { live = true; } }) });
+    assert.equal(r.stopped, 'live-or-recording'); assert.ok(existsSync(x.h));
+    // an async recheck is not trusted
+    r = await x.run({ recheck: async () => ({ status: OFF_AIR, state: {} }) });
+    assert.equal(r.stopped, 'state-unknown'); assert.ok(existsSync(x.h));
   });
 });
 describe('Codex round 1: identity, strict lines, re-checks mid-batch, V only with the deciding jobs', () => {
