@@ -74,3 +74,13 @@ studio running headless; not run per the no-full-CI rule).
 - `file-in-use` with OBS/libobs writing: tested with a .NET Read/Read-share holder only.
 - Real YouTube scheduled publish at the planned times (fake server only).
 - The user's existing `schedule.json` with `placement: fill-gaps` stays on fill-gaps until switched in the card.
+
+## Backfill for recordings clipped before jobs.jsonl (2026-11-20)
+
+`backfillJobRecords` runs once, inside the first cleanup pass, and logs a verdict per recording to
+`<data>/clips/backfill-recordings.jsonl`. Earlier builds left, per run, `runs/<stem>/render.json` (H file name only),
+`report.json`, `published.json` and `run-<stem>.log`, and `status.json` `last` for the latest job only. None of these
+holds the recording's size or file id or a per-run exit code, and full and review runs share one folder. Under the rule
+"proven only with size or file id AND a finished full run AND a finished review run, exit 0", every older recording is
+kept (reason `no-size-or-file-id-recorded`, or a weaker one). Tests: `tests/recording-cleanup.test.mjs` (13/13), using
+a fixture copy of those files in temp folders.

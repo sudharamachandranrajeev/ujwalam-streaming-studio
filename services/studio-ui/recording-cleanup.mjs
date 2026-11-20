@@ -19,7 +19,7 @@
 // A recording with no clip job at all is never deleted: Ujwalam did not process it.
 // Every deletion: one line in <data>/clips/deleted-recordings.jsonl ({ file, size, fileId, reason, at }); one task bar
 // line per batch ("Deleted N recordings, freed X GB").
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { safeDeleteFile } from '../common/safe-delete.mjs';
 
@@ -116,6 +116,8 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
   if (!isPlain(status)) return { ...res, refused: 'state-unknown' };
   if (statusActive(status)) return { ...res, refused: 'live-or-recording' };
   res.ran = true;
+  // Once: recordings clipped before jobs.jsonl existed get a job record only where the old run files prove it.
+  try { const b = backfillJobRecords({ dataDir, folder, nowMs }); if (b.ran) log(`clips: earlier recordings checked: ${b.proven} proven processed, ${b.kept} kept (clips/${BACKFILL_LOG})`); } catch { /* kept */ }
   const logFile = path.join(clipsDir(dataDir), DELETED_RECORDINGS_LOG);
   for (const s of cleanupPlan({ dataDir, state })) {
     if (s.reason) { res.kept.push({ file: s.h, reason: s.reason }); continue; }
@@ -142,4 +144,71 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
     }
   }
   return res;
+}
+
+// ---- One-time backfill (coordinator 2026-11-20): recordings clipped before jobs.jsonl existed --------------------------
+// What earlier builds left behind, per recording (found 2026-11-20 by reading record-clips.mjs and clipper.py):
+//   <data>/clips/runs/<stem>/render.json   { tool, recording: <H file NAME only>, ... } (full runs and review runs
+//                                          write the same folder, so the two types cannot be told apart)
+//   <data>/clips/runs/<stem>/report.json   { results: [{ id, file, ok }] } (validation)
+//   <data>/clips/runs/<stem>/published.json, montage/published.json (the publish step, the last step of a run)
+//   <data>/clips/run-<stem>.log            the clipper's own output (no exit code; record-clips never wrote it there)
+//   <data>/clips/status.json `last`        the latest job only: { name, result, code } (no path, no size)
+// A job record is written ONLY when that evidence proves, for this exact file, a finished full run AND a finished review
+// run, each with exit 0, and the file's size or file id. Earlier builds recorded no size, no file id and no exit code
+// per run, so the rule is checked field by field and anything missing keeps the recording, with the reason logged to
+// <data>/clips/backfill-recordings.jsonl. The log's existence marks the backfill as done.
+export const BACKFILL_LOG = 'backfill-recordings.jsonl';
+const REC_EXT = /\.(mkv|mp4|mov|flv|ts|m4v)$/i;
+const readJson = (f) => { try { const j = JSON.parse(readFileSync(f, 'utf8')); return isPlain(j) ? j : null; } catch { return null; } };
+
+/** The verdict for one recording from its run folder. -> { proven: bool, reason, found: {...} } (pure apart from reads). */
+export function backfillVerdict({ dataDir, file, stat }) {
+  const stem = sessionName(file);
+  const run = path.join(clipsDir(dataDir), 'runs', stem);
+  const render = readJson(path.join(run, 'render.json'));
+  const report = readJson(path.join(run, 'report.json'));
+  const published = existsSync(path.join(run, 'published.json')) || existsSync(path.join(run, 'montage', 'published.json'));
+  const found = { runFolder: existsSync(run), render: !!render, report: !!report, published };
+  if (!render) return { proven: false, reason: 'no-run-folder', found };
+  if (render.recording !== path.basename(file)) return { proven: false, reason: 'run-is-for-another-file', found };
+  const results = Array.isArray(report?.results) ? report.results : null;
+  if (!results || !results.length || results.some((r) => r?.ok !== true)) return { proven: false, reason: 'not-validated', found };
+  if (!published) return { proven: false, reason: 'not-published', found };
+  // Identity: a size or file id written by the run for its recording (no earlier build wrote one).
+  const id = isPlain(render.recordingFile) ? render.recordingFile : null;
+  const sameSize = id && Number(id.size) === Number(stat.size);
+  const sameId = id && typeof id.fileId === 'string' && id.fileId === `${stat.dev}:${stat.ino}`;
+  if (!sameSize && !sameId) return { proven: false, reason: 'no-size-or-file-id-recorded', found };
+  // Both run types, each with its exit code (no earlier build wrote these either).
+  const runs = Array.isArray(render.runs) ? render.runs : [];
+  const ok = (t) => runs.some((r) => r?.type === t && r?.code === 0);
+  if (!ok('full')) return { proven: false, reason: 'no-finished-full-run', found };
+  if (!ok('review')) return { proven: false, reason: 'no-finished-review-run', found };
+  return { proven: true, reason: 'proven', found };
+}
+
+/** Runs once (no backfill log yet): every recording file directly in the folder that has no job record gets a verdict;
+ *  proven ones get a full and a review job record ({ backfill: true }). -> { ran, proven, kept }. Never throws. */
+export function backfillJobRecords({ dataDir, folder, nowMs = Date.now(), listDir = (d) => readdirSync(d, { withFileTypes: true }) }) {
+  const logFile = path.join(clipsDir(dataDir), BACKFILL_LOG);
+  if (existsSync(logFile)) return { ran: false, proven: 0, kept: 0 };
+  const known = new Set(readJobRecords(dataDir).map((r) => key(r.h)).filter(Boolean));
+  const lines = []; let proven = 0; let kept = 0;
+  let entries = [];
+  try { entries = listDir(folder).filter((e) => e.isFile() && REC_EXT.test(e.name)); } catch { return { ran: false, proven: 0, kept: 0 }; }
+  const at = new Date(nowMs).toISOString();
+  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const file = path.join(folder, e.name);
+    if (known.has(key(file))) continue;
+    let stat; try { stat = statSync(file, { bigint: true }); } catch { continue; }
+    const v = backfillVerdict({ dataDir, file, stat });
+    if (v.proven) {
+      proven++;
+      for (const type of ['full', 'review']) appendJobRecord(dataDir, { h: file, v: null, type, kind: 'recording', name: sessionName(file), result: 'done', code: 0, reelsNotMade: null, at, backfill: true });
+    } else kept++;
+    lines.push(JSON.stringify({ file, size: Number(stat.size), decision: v.proven ? 'proven' : 'kept', reason: v.reason, found: v.found, at }));
+  }
+  try { mkdirSync(path.dirname(logFile), { recursive: true }); writeFileSync(logFile, lines.length ? `${lines.join('\n')}\n` : ''); } catch { /* tried again next start */ }
+  return { ran: true, proven, kept };
 }
