@@ -83,6 +83,9 @@ export const STEPS = [
   // The Qt studio shell (incremental): the Qt suites run the built exe, so a stale one failed them after a merge
   // that changed app/studio (2026-11-09).
   npmRun('build-studio', 'build:studio'),
+  // The setup program, for the same reason: setup-installer runs the built Ujwalam-Setup.exe, and one built before the
+  // single-file mark (D404) failed it after the merge (2026-11-20).
+  npmRun('build-setup', 'build:setup'),
   // Benchmarks fail CI only on a QUIET machine. On a noisy one the bench prints "bench: advisory (noisy: ...)", exits 0,
   // and the step shows as advisory with the reasons (regressions are listed in its output). Until ENFORCE_FROM in
   // tools/bench/run.mjs (v1 window) a quiet-run regression is advisory too: "bench: advisory (v1 window: ...)".
@@ -116,6 +119,7 @@ export const LAPTOP_ONLY = {
   build: 'needs the MSVC + libobs spike build dir (app/spike/build) and the OBS source tree',
   'build-host': 'needs the OBS runtime and source paths from app/host/host.local.json (vendored OBS, not in the repo)',
   'build-studio': 'needs the Qt kit from app/studio/studio.local.json and VS Build Tools',
+  'build-setup': 'needs VS Build Tools (MSVC) for the Windows setup program',
   'test-host': 'starts the libobs host with NVENC on the GPU; no GPU or OBS runtime on the runner',
   'test-py': 'needs the OCR venv packages (numpy, opencv, rapidocr, onnxruntime); no .venv on the runner',
   'test-ocr': 'needs .venv (RapidOCR and onnxruntime wheels)',

@@ -92,7 +92,7 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     const { p, s } = await probe(['settings-open', 'settings-section:Advanced']);
     assert.deepEqual(done(p), [['settings-open', true], ['settings-section:Advanced', true]]);
     assert.deepEqual(s.settings.navGroups, ['GENERAL', 'LIVE', 'STUDIO', 'CLIPS'], 'headings are not pages');
-    assert.deepEqual(s.settings.sections, ['Appearance', 'Help & tips', 'Stream', 'Transitions', 'Connections', 'Chat & bots', 'Editing', 'Preview', 'Clips', 'Posting & growth', 'Folders', 'Advanced']);
+    assert.deepEqual(s.settings.sections, ['Appearance', 'Help & tips', 'Stream', 'Transitions', 'Connections', 'Chat & bots', 'Editing', 'Preview', 'Clips', 'Posting & growth', 'Folders', 'Downloads', 'Advanced']); // Downloads: D404 download manager
     assert.equal(s.settings.motionChoices, 3, 'Follow Windows / Always on / Off');
     assert.equal(s.settings.motion, 'system');
     assert.equal(s.flagsInSettings, true);
@@ -124,7 +124,7 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     const { p, s } = await probe(['click:settingsBtn', 'settings-search:snap', 'settings-search:zzqq', 'settings-search:'], 7000);
     assert.deepEqual(done(p).map((x) => x[1]), [true, true, true, true]);
     assert.equal(s.settings.query, '');
-    assert.equal(s.settings.shownPages.length, 12, 'an empty search shows every page');
+    assert.equal(s.settings.shownPages.length, 13, 'an empty search shows every page');
     const q = await probe(['click:settingsBtn', 'settings-search:snap'], 6000);
     assert.deepEqual(q.s.settings.shownPages, ['Preview']);
     assert.equal(q.s.settings.page, 'Preview', 'the page follows the search');

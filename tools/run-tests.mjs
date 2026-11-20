@@ -29,10 +29,21 @@ export function otherAtOnce(cores = os.availableParallelism()) {
   return Math.max(1, cores - 1 - STUDIO_AT_ONCE);
 }
 
-/** Splits the files into { studio, other } by whether they start the studio exe. */
+/** The tests/helpers files that start the studio exe themselves (they import the build tool). */
+function studioHelpers(root) {
+  let names = [];
+  try { names = readdirSync(path.join(root, 'tests', 'helpers')).filter((f) => f.endsWith('.mjs')); } catch { return []; }
+  return names.filter((f) => STUDIO_MARK.test(readFileSync(path.join(root, 'tests', 'helpers', f), 'utf8')));
+}
+
+/** Splits the files into { studio, other } by whether they start the studio exe, directly or through a helper
+ *  (studio-qml-layout starts it through helpers/qml-probe.mjs; uncapped in the other group it timed out in full
+ *  CI, 2026-11-20). */
 export function splitFiles(files, root = ROOT) {
+  const helpers = studioHelpers(root).map((h) => `helpers/${h}`);
+  const starts = (text) => STUDIO_MARK.test(text) || helpers.some((h) => text.includes(h));
   const studio = [], other = [];
-  for (const f of files) (STUDIO_MARK.test(readFileSync(path.join(root, f), 'utf8')) ? studio : other).push(f);
+  for (const f of files) (starts(readFileSync(path.join(root, f), 'utf8')) ? studio : other).push(f);
   return { studio, other };
 }
 

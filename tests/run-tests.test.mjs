@@ -15,7 +15,7 @@ test('every test file is in exactly one group; the studio files are the ones tha
   assert.equal(new Set([...studio, ...other]).size, files.length);
   assert.ok(files.includes('tests/run-tests.test.mjs'));
   assert.ok(other.includes('tests/run-tests.test.mjs'));
-  for (const f of ['tests/studio-qml-themes.test.mjs', 'tests/studio-qml-shell.test.mjs', 'tests/studio-qml-tray.test.mjs']) assert.ok(studio.includes(f), f);
+  for (const f of ['tests/studio-qml-themes.test.mjs', 'tests/studio-qml-shell.test.mjs', 'tests/studio-qml-tray.test.mjs', 'tests/studio-qml-layout.test.mjs']) assert.ok(studio.includes(f), f);
   assert.ok(files.some((f) => f.startsWith('tests/outputs/')), 'tests/outputs is included');
 });
 
@@ -28,9 +28,15 @@ test('the split reads each file: a stub tree splits by the import of the studio 
     writeFileSync(path.join(root, 'tests', 'b.test.mjs'), "import assert from 'node:assert';\n");
     writeFileSync(path.join(root, 'tests', 'outputs', 'c.test.mjs'), '\n');
     writeFileSync(path.join(root, 'tests', 'notes.md'), '\n');
+    // a file that starts the studio through a helper joins the studio group too
+    mkdirSync(path.join(root, 'tests', 'helpers'));
+    writeFileSync(path.join(root, 'tests', 'helpers', 'probe.mjs'), `import { EXE } from '../../${tool}';\n`);
+    writeFileSync(path.join(root, 'tests', 'helpers', 'plain.mjs'), '\n');
+    writeFileSync(path.join(root, 'tests', 'd.test.mjs'), "import { p } from './helpers/probe.mjs';\n");
+    writeFileSync(path.join(root, 'tests', 'e.test.mjs'), "import { q } from './helpers/plain.mjs';\n");
     const files = testFiles(root);
-    assert.deepEqual(files, ['tests/a.test.mjs', 'tests/b.test.mjs', 'tests/outputs/c.test.mjs']);
-    assert.deepEqual(splitFiles(files, root), { studio: ['tests/a.test.mjs'], other: ['tests/b.test.mjs', 'tests/outputs/c.test.mjs'] });
+    assert.deepEqual(files, ['tests/a.test.mjs', 'tests/b.test.mjs', 'tests/d.test.mjs', 'tests/e.test.mjs', 'tests/outputs/c.test.mjs']);
+    assert.deepEqual(splitFiles(files, root), { studio: ['tests/a.test.mjs', 'tests/d.test.mjs'], other: ['tests/b.test.mjs', 'tests/e.test.mjs', 'tests/outputs/c.test.mjs'] });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
