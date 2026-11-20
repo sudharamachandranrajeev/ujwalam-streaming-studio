@@ -4,10 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CLIP_MAKER_FIX, clipRunSpec, clipTools, countClips, countSaves, createRecordClips, finishedRecording, isLive, jobStages, liveClipperTask, parseProgress, reelsNotMade, stageWords, trainNote } from '../services/studio-ui/record-clips.mjs';
+import { CAPTIONS_SKIPPED, CLIP_MAKER_FIX, clipRunSpec, clipTools, countClips, countSaves, createRecordClips, finishedRecording, isLive, jobStages, liveClipperTask, parseProgress, reelsNotMade, stageWords, trainNote } from '../services/studio-ui/record-clips.mjs';
 import { folderProblem, readSettings, settingsProblems, writeSettings } from '../services/studio-ui/user-settings.mjs';
 
 const RUNGS = [{ id: 'rec-h', canvas: 'H' }, { id: 'rec-v', canvas: 'V' }];
@@ -599,5 +599,47 @@ test('LL4 (D342): trainNote and the check spec in plain words', () => {
     assert.equal(clipRunSpec({ clipRoot: s.root, dataDir: s.dataDir, job }).reason, 'the game pack check is not in the clip maker folder');
     assert.deepEqual(jobStages(job), ['train']);
     assert.equal(stageWords('train', job).measured, false, 'one quiet step: never called stuck');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('speech model (Codex review round 2): checked before the job; missing or damaged skips only the captions, the job runs and says so', async () => {
+  for (const ok of [false, true]) {
+    const s = setup();
+    try {
+      writeSettings(s.dataDir, { clips: { recording: 'after' } });
+      let checks = 0;
+      let answer;
+      const rc = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, captionsModel: () => { checks += 1; return new Promise((r) => { answer = r; }); } });
+      rc.feed(s.S('live')); s.advance(60000); rc.feed(s.S('stopped'));
+      assert.equal(s.spawned.length, 0, 'waits for the check');
+      answer(ok);
+      await tick(); await tick();
+      assert.equal(s.spawned.length, 1, 'the job runs either way');
+      assert.equal(checks, 1);
+      const env = s.spawned[0].o.env;
+      assert.equal(env.UJWALAM_REEL_CAPTIONS, ok ? undefined : 'off');
+      assert.equal(s.lines.some((l) => l.includes(CAPTIONS_SKIPPED)), !ok);
+      assert.match(CAPTIONS_SKIPPED, /Settings > Downloads/);
+      const task = () => { const dir = path.join(s.dataDir, 'tasks'); return readdirSync(dir).map((n) => JSON.parse(readFileSync(path.join(dir, n), 'utf8'))).find((x) => x.kind === 'clips'); };
+      assert.equal(task().note, ok ? null : CAPTIONS_SKIPPED, 'task bar while running');
+      s.spawned[0].c.emit('exit', 0);
+      assert.equal(task().note.includes(CAPTIONS_SKIPPED), !ok, `task bar when done: ${JSON.stringify(task())}`);
+    } finally { rmSync(s.d, { recursive: true, force: true }); }
+  }
+});
+test('speech model: each clip job checks again, so captions come back once the model is downloaded', async () => {
+  const s = setup();
+  try {
+    writeSettings(s.dataDir, { clips: { recording: 'after' } });
+    const answers = [false, true];
+    const rc = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, captionsModel: () => answers.shift() });
+    rc.feed(s.S('live')); s.advance(60000); rc.feed(s.S('stopped'));
+    assert.equal(s.spawned[0].o.env.UJWALAM_REEL_CAPTIONS, 'off');
+    s.spawned[0].c.emit('exit', 0);
+    rc.feed(s.S('live', { h: path.join(path.dirname(s.h), 'practice-h-2.mkv') }));
+    writeFileSync(path.join(path.dirname(s.h), 'practice-h-2.mkv'), '');
+    s.advance(60000); rc.feed(s.S('stopped', { h: path.join(path.dirname(s.h), 'practice-h-2.mkv') }));
+    assert.equal(s.spawned.length, 2);
+    assert.equal(s.spawned[1].o.env.UJWALAM_REEL_CAPTIONS, undefined, 'the second job has captions');
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });

@@ -27,6 +27,7 @@
 // writes a candidate for the user to approve; it never changes the pack.
 
 import { spawn } from 'node:child_process';
+import { modelUsable } from './downloads.mjs';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -271,7 +272,13 @@ const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes']
 const pickJob = (j) => Object.fromEntries(JOB_KEYS.filter((k) => j[k] !== undefined).map((k) => [k, j[k]]));
 
 /** The queue and the child. feed(status) is called with each outputs.status. */
-export function createRecordClips({ clipRoot, dataDir, project = null, log, spawnFn = spawn, now = Date.now, postChain = null, killTreeFn = killChildTree, liveClipper = null, trainFlag = () => false, resumeHoldMs = 0 }) {
+// The speech model for reel captions, checked before the first clip job of each app run (Codex review round 2): an
+// installed build (UJWALAM_MODELS_DIR set) hashes it once (downloads.mjs modelUsable); a checkout keeps its own models.
+// true/false, or a promise of either.
+const speechModelUsable = () => (process.env.UJWALAM_MODELS_DIR ? modelUsable('speech-captions') : true);
+export const CAPTIONS_SKIPPED = 'Captions skipped: download the speech model in Settings > Downloads.';
+
+export function createRecordClips({ clipRoot, dataDir, project = null, log, spawnFn = spawn, now = Date.now, postChain = null, killTreeFn = killChildTree, liveClipper = null, trainFlag = () => false, resumeHoldMs = 0, captionsModel = speechModelUsable }) {
   const stateDir = path.join(dataDir, 'clips');
   const statusFile = path.join(stateDir, 'status.json');
   const answerFile = path.join(stateDir, 'answer.json');
@@ -282,6 +289,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   let prev = null; let child = null; let current = null; let last = null; let stopped = false;
   let halted = false; let lastStatus = null; let progress = null; let liveNow = false; let recStart = null; let recSawLive = false; let liveStart = null; let liveHadRecording = false; let workerOn = null;
   // Live clipper view (LC1): liveClipper() -> { state, reason, restarts, maxRestarts, flagOn } from the launcher.
+  let checkingModel = false;
   let watchSince = null; let watching = false; let watchEnded = false; let savesNow = 0;
 
   // A run cut short by closing Ujwalam (or queued, or still to be answered) comes back at the next start.
@@ -305,7 +313,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       // No progress line yet: the stage is the first one expected, with no count (the panel says "Starting").
       const words = p ? stageWords(st, j) : { stageText: 'Starting', unit: null, measured: true };
       return { ...base, title: `${STAGE_TITLE[st]} ${nm}`, state: 'running', stage: st, done: p?.done ?? null, total: p?.total ?? null, note: p?.note ?? null,
-        stages: jobStages(j), ...words, activeAt: j.activeAt ?? null, progressAt: j.progressAt ?? null };
+        ...(p?.note ? {} : { note: j.captionsOk === false ? CAPTIONS_SKIPPED : null }), stages: jobStages(j), ...words, activeAt: j.activeAt ?? null, progressAt: j.progressAt ?? null };
     }
     return { ...base, title: j.type === 'train' ? 'Game pack check' : `Clips from ${nm}`, state: 'waiting', stage: null, done: null, total: null,
       note: j === current ? 'Paused while the stream runs' : liveNow ? 'Waiting until the stream ends' : 'Waiting for its turn' };
@@ -357,6 +365,19 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     if (at < 0) return;
     const job = queue[at];
     if (at > 0) { queue.splice(at, 1); queue.unshift(job); }
+    // The speech model check (captions): a failure skips only the captions step, the job still runs.
+    if (job.type !== 'train' && job.captionsOk === undefined) {
+      const settle = (ok) => { job.captionsOk = ok === true; if (!job.captionsOk) log(`clips: ${CAPTIONS_SKIPPED}`); };
+      let r;
+      try { r = captionsModel(); } catch { r = false; }
+      if (r !== true && r !== false) {
+        if (checkingModel) return;
+        checkingModel = true;
+        Promise.resolve(r).catch(() => false).then((ok) => { checkingModel = false; settle(ok); write(); start(); });
+        return;
+      }
+      settle(r);
+    }
     const { spec, reason } = clipRunSpec({ clipRoot, dataDir, job, project });
     if (!spec) {
       queue.shift(); last = { name: job.name, kind: job.kind, result: 'not-made', reason, clips: 0 };
@@ -372,7 +393,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     job.activeAt = now(); job.progressAt = null; // the stall warning measures silence from here (tasks.mjs stallOf)
     // stdin: the parent pipe (D234): when the launcher is gone (even hard-killed) the clipper ends itself and its ffmpeg
     // children (clip_common.end_tree_when_parent_gone), so nothing runs on unseen after Ujwalam closed (D311 proposed).
-    child = spawnFn(spec.exe, spec.argv, { stdio: ['pipe', fd, 'pipe'], windowsHide: true, cwd: clipRoot, env: { ...process.env, [PARENT_PIPE_ENV]: '1' } });
+    child = spawnFn(spec.exe, spec.argv, { stdio: ['pipe', fd, 'pipe'], windowsHide: true, cwd: clipRoot, env: { ...process.env, [PARENT_PIPE_ENV]: '1', ...(job.captionsOk === false ? { UJWALAM_REEL_CAPTIONS: 'off' } : {}) } });
     child.stdin?.on?.('error', () => {});
     closeSync(fd);
     // stderr: copied to the log and scanned for `ujwalam-progress {...}` lines (the task bar's progress).
@@ -407,7 +428,8 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       last = { name: done.name, kind: done.kind, result: code === 0 ? 'done' : 'failed', code, clips: n, out: spec.out, folder: spec.folder, ...(reels ? { reelsNotMade: reels } : {}) };
       if (reels) log(`clips: reels not made from ${done.name}: ${reels}`);
       log(code === 0 ? `clips: ${n} clip(s) made from ${done.name} in ${spec.folder}` : `clips: making clips from ${done.name} failed (exit ${code}); see ${logFile}`);
-      finishTask(done, code === 0, code === 0 ? `${n} clip${n === 1 ? '' : 's'} made${reels ? `. Reels not made: ${reels}` : ''}` : 'Something went wrong; see the log');
+      const capNote = done.captionsOk === false ? `${CAPTIONS_SKIPPED} ` : ''; // first: the task note is cut at 160
+      finishTask(done, code === 0, code === 0 ? `${capNote}${n} clip${n === 1 ? '' : 's'} made${reels ? `. Reels not made: ${reels}` : ''}` : `${capNote}Something went wrong; see the log`);
       // D300: package + auto-approve + private upload (flags posting + auto-post; each step fails closed while live).
       if (code === 0 && n > 0 && postChain) void Promise.resolve(postChain.afterRun(spec.out, lastStatus)).catch(() => {});
       // LL4 (D342): after a stream's clip job, the game pack check runs last (flag learning-train, off by default).

@@ -77,22 +77,38 @@ export function loadItems(repo = REPO) {
 export const itemBytes = (it) => it.files.reduce((s, f) => s + (f.archive ? 0 : f.bytes), 0)
   + [...new Map(it.files.filter((f) => f.archive).map((f) => [f.archive.url, f.archive.bytes])).values()].reduce((s, b) => s + b, 0);
 
-function sha256File(file) {
-  return new Promise((resolve, reject) => {
-    const h = createHash('sha256');
-    createReadStream(file).on('error', reject).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex')));
-  });
+const abortedError = () => Object.assign(new Error('aborted'), { code: 'aborted' });
+const throwIfAborted = (signal) => { if (signal?.aborted) throw abortedError(); };
+
+/**
+ * SHA-256 of a file, read in 1 MiB chunks. With a signal, it stops between chunks once the signal is aborted and
+ * rejects with e.code 'aborted' (Codex review round 2: a long hash ran on after Pause, Cancel or the stream starting).
+ * between(): test seam, awaited after each chunk.
+ */
+export async function sha256File(file, { signal, between } = {}) {
+  const h = createHash('sha256');
+  const s = createReadStream(file, { highWaterMark: 1 << 20 });
+  try {
+    for await (const d of s) {
+      throwIfAborted(signal);
+      h.update(d);
+      if (between) await between();
+      throwIfAborted(signal);
+    }
+  } finally { s.destroy(); }
+  return h.digest('hex');
 }
 
 const sizeOf = (f) => { try { return statSync(f).size; } catch { return -1; } };
 
-const statOf = (f) => { try { const s = statSync(f); return { size: s.size, mtimeMs: s.mtimeMs }; } catch { return null; } };
+const statOf = (f) => { try { const s = statSync(f, { bigint: true }); return { size: Number(s.size), mtimeMs: Math.round(Number(s.mtimeMs)), ino: String(s.ino) }; } catch { return null; } };
 
 /**
  * True when every file of the item is in dest and matches the marker written right after its SHA-256 was checked:
- * the same SHA-256 as the manifest, the same size and the same modification time. A file changed in place (even with
- * the same length) gets a new modification time, so it no longer counts as ready and is downloaded again.
- * (Codex review 2026-11-20: size alone was trusted.)
+ * the same SHA-256 as the manifest, the same size, modification time and file id. A file changed in place (even with
+ * the same length) gets a new modification time, a replaced file a new id, so it no longer counts as ready.
+ * (Codex review 2026-11-20: size alone was trusted.) This is the cheap check for the studio's list; it does not prove
+ * the content (a same-size restore can keep the time): verifyOnUse() hashes every file before first use.
  */
 export function isReady(dataRoot, it) {
   const dest = path.join(dataRoot, ...it.dest.split('/'));
@@ -101,8 +117,98 @@ export function isReady(dataRoot, it) {
   return it.files.every((f) => {
     const e = m.files?.[f.name];
     const s = statOf(path.join(dest, f.name));
-    return !!e && !!s && e.sha256 === f.sha256 && s.size === f.bytes && e.size === s.size && e.mtimeMs === s.mtimeMs;
+    return !!e && !!s && e.sha256 === f.sha256 && s.size === f.bytes && e.size === s.size && e.mtimeMs === s.mtimeMs && e.ino === s.ino;
   });
+}
+
+// Per process: files whose full SHA-256 matched, keyed by path + size + mtime + id (a change of any of those hashes
+// again). Codex review round 2.
+const verifiedFiles = new Set();
+
+/**
+ * Full check before a worker or feature first uses the model in this app run: isReady, then the SHA-256 of every file
+ * (cached per process). A mismatch removes the marker, so the item reads as missing and the download is offered again.
+ * Resolves true or false; never throws.
+ */
+export async function verifyOnUse(dataRoot, it, { log = () => {}, between } = {}) {
+  const dest = path.join(dataRoot, ...it.dest.split('/'));
+  const markerFile = path.join(dest, MARKER);
+  const seen = readMarker(markerFile); // the marker this check is about (Codex review round 3)
+  if (!isReady(dataRoot, it)) return false;
+  try {
+    for (const f of it.files) {
+      const p = path.join(dest, f.name);
+      const s = statOf(p);
+      const key = `${p}|${s?.size}|${s?.mtimeMs}|${s?.ino}`;
+      if (verifiedFiles.has(key)) continue;
+      if (!s || (await sha256File(p, { between })) !== f.sha256) {
+        // Removed only when it is still the marker that was read: a download that finished meanwhile wrote a new one.
+        if (seen !== null && readMarker(markerFile) === seen) {
+          rmSync(markerFile, { force: true });
+          log(`downloads: ${it.id}/${f.name} does not match its checksum; it reads as missing until downloaded again`);
+        }
+        return false;
+      }
+      verifiedFiles.add(key);
+    }
+    return true;
+  } catch (e) {
+    log(`downloads: ${it.id} could not be checked (${e.message})`);
+    return false;
+  }
+}
+
+const readMarker = (f) => { try { return readFileSync(f, 'utf8'); } catch { return null; } };
+
+/**
+ * A worker's model gate (Codex review round 3): check() -> true (usable), false (missing or damaged) or null (being
+ * checked; onChange is called when it settles). After a failure it re-arms by itself when the item's ready marker
+ * changes (the studio's Downloads page finished it, in its own process), so the worker starts after the download.
+ */
+export function createModelGate(id, { modelsDir = process.env.UJWALAM_MODELS_DIR, items, log = () => {}, onChange = () => {}, usable = modelUsable } = {}) {
+  let state = 'unchecked'; // unchecked | checking | true | false
+  let failedMarker = null;
+  const markerFile = () => {
+    if (!modelsDir) return null;
+    let list = items;
+    try { list ??= loadItems(); } catch { return null; }
+    const it = list.find((x) => x.id === id);
+    return it ? path.join(path.dirname(path.resolve(modelsDir)), ...it.dest.split('/'), MARKER) : null;
+  };
+  return {
+    check() {
+      if (state === false) {
+        const f = markerFile();
+        const now = f ? readMarker(f) : null;
+        if (now !== null && now !== failedMarker) state = 'unchecked'; // downloaded again: check again
+      }
+      if (state === true || state === false) return state;
+      if (state === 'checking') return null;
+      state = 'checking';
+      const f = markerFile();
+      const before = f ? readMarker(f) : null;
+      Promise.resolve(usable(id, { modelsDir, items, log })).catch(() => false).then((ok) => {
+        state = ok === true;
+        failedMarker = state ? null : (f ? readMarker(f) : null) ?? before;
+        onChange(state);
+      });
+      return null;
+    },
+  };
+}
+
+/**
+ * The first-use check for a managed model, for the code that starts a worker: resolves true (checked, or not a managed
+ * download here: a checkout keeps its models under data/models), or false (missing or not matching: download it in
+ * Settings > Downloads). modelsDir: UJWALAM_MODELS_DIR (<data root>\models), set by the installed launcher.
+ */
+export async function modelUsable(id, { modelsDir = process.env.UJWALAM_MODELS_DIR, items, log = () => {} } = {}) {
+  if (!modelsDir) return true;
+  let list = items;
+  try { list ??= loadItems(); } catch (e) { log(`downloads: ${e.message}`); return false; }
+  const it = list.find((x) => x.id === id);
+  if (!it) return true;
+  return verifyOnUse(path.dirname(path.resolve(modelsDir)), it, { log });
 }
 
 function allowedUrl(u) {
@@ -206,13 +312,14 @@ export function createDownloads(opts) {
       // Fetched and checked in an earlier run: checked again now, since it may have changed while it waited (Codex
       // review 2026-11-20). A mismatch is deleted and fetched again.
       s.state = 'verifying';
-      const same = (await sha256File(done)) === src.sha256;
+      const same = (await sha256File(done, { signal: ctrl.signal, between: opts.hashBetween })) === src.sha256;
       s.state = 'downloading';
       if (same) return done;
       s.done -= src.bytes;
       rmSync(done, { force: true });
       log(`downloads: ${it.id}/${src.name} changed since it was checked; fetching it again`);
-    }    const part = path.join(dir, `${src.name}.part`);
+    }
+    const part = path.join(dir, `${src.name}.part`);
     for (let pass = 0; pass < 2; pass++) { // a checksum miss: delete and fetch once more
       let tries = 0;
       for (;;) {
@@ -229,8 +336,8 @@ export function createDownloads(opts) {
         }
       }
       s.state = 'verifying';
-      const ok = sizeOf(part) === src.bytes && (await sha256File(part)) === src.sha256;
-      if (ctrl.signal.aborted) throw Object.assign(new Error('aborted'), { code: 'aborted' });
+      const ok = sizeOf(part) === src.bytes && (await sha256File(part, { signal: ctrl.signal, between: opts.hashBetween })) === src.sha256;
+      throwIfAborted(ctrl.signal);
       if (ok) { renameSync(part, done); s.state = 'downloading'; return done; }
       s.done -= Math.max(0, sizeOf(part));
       rmSync(part, { force: true });
@@ -240,11 +347,16 @@ export function createDownloads(opts) {
     throw Object.assign(new Error(`${src.name} did not match its checksum after two downloads; nothing was kept. Try again later.`), { code: 'sha' });
   }
 
-  async function install(it, got) {
+  // Every step checks the signal: an abort at any point leaves the item paused or cancelled, never ready.
+  async function install(it, got, signal) {
     const dest = destDir(it);
     mkdirSync(dest, { recursive: true });
     const marker = { id: it.id, checked: new Date(opts.now?.() ?? Date.now()).toISOString(), files: {} };
+    // Every file is checked first and only then are they all moved into place, with no wait in between (Codex review
+    // round 3: an abort between moves left a half-moved item that was fetched again on resume).
+    const moves = [];
     for (const f of it.files) {
+      throwIfAborted(signal);
       const target = path.join(dest, f.name);
       if (f.archive) {
         const zip = got.get(f.archive.url);
@@ -252,20 +364,26 @@ export function createDownloads(opts) {
         if (!e) throw Object.assign(new Error(`${f.name} is not in the downloaded archive`), { code: 'sha' });
         const data = extractEntry(zip, e);
         if (data.length !== f.bytes || createHash('sha256').update(data).digest('hex') !== f.sha256) throw Object.assign(new Error(`${f.name} in the archive did not match its checksum`), { code: 'sha' });
+        throwIfAborted(signal);
         writeFileSync(`${target}.new`, data);
-        renameSync(`${target}.new`, target);
+        moves.push([`${target}.new`, target, f]);
       } else {
         // Checked once more right before it is moved into place: the file checked is the file used.
         const from = got.get(f.url);
-        if (sizeOf(from) !== f.bytes || (await sha256File(from)) !== f.sha256) {
+        if (sizeOf(from) !== f.bytes || (await sha256File(from, { signal, between: opts.hashBetween })) !== f.sha256) {
           rmSync(from, { force: true });
           throw Object.assign(new Error(`${f.name} changed after it was checked; it was deleted. Click Download to fetch it again.`), { code: 'sha' });
         }
-        rmSync(target, { force: true });
-        renameSync(from, target);
+        moves.push([from, target, f]);
       }
-      const st2 = statSync(target);
-      marker.files[f.name] = { sha256: f.sha256, size: st2.size, mtimeMs: st2.mtimeMs };
+    }
+    throwIfAborted(signal);
+    rmSync(path.join(dest, MARKER), { force: true }); // the old marker never vouches for half-replaced files
+    for (const [from, target, f] of moves) {
+      rmSync(target, { force: true });
+      renameSync(from, target);
+      const st2 = statOf(target);
+      marker.files[f.name] = { sha256: f.sha256, size: st2.size, mtimeMs: st2.mtimeMs, ino: st2.ino };
     }
     writeFileSync(path.join(dest, MARKER), `${JSON.stringify(marker, null, 2)}\n`);
     rmSync(partialDir(it), { recursive: true, force: true });
@@ -286,7 +404,8 @@ export function createDownloads(opts) {
       const got = new Map();
       for (const src of sources(it)) got.set(src.url, await fetchSource(it, s, src, ctrl));
       s.state = 'verifying';
-      await install(it, got);
+      await install(it, got, ctrl.signal);
+      throwIfAborted(ctrl.signal);
       s.state = 'ready';
       s.message = null;
       log(`downloads: ${it.id} ready`);
@@ -381,6 +500,12 @@ export function createDownloads(opts) {
     return true;
   }
 
-  return { handle, list, act, promise: (id) => st.get(id)?.promise, ready: (id) => { const it = items.find((x) => x.id === id); return !!it && isReady(dataRoot, it); } };
+  // verified(id): the full check before first use in this run (verifyOnUse); false also for an unknown id.
+  const verified = async (id) => {
+    const it = items.find((x) => x.id === id);
+    if (!it || ['queued', 'downloading', 'verifying'].includes(st.get(id)?.state)) return false; // a download is on its way
+    return verifyOnUse(dataRoot, it, { log });
+  };
+  return { handle, list, act, verified, promise: (id) => st.get(id)?.promise, ready: (id) => { const it = items.find((x) => x.id === id); return !!it && isReady(dataRoot, it); } };
 }
 

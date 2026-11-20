@@ -59,6 +59,10 @@ def load_style(cfg, presets_dir=PRESETS_DIR):
 
 
 def on(data_dir, cfg=None):
+    # The studio checked the speech model before this job and found it missing or damaged (downloads.mjs
+    # modelUsable): captions are skipped for this run, the rest of the job goes on.
+    if os.environ.get("UJWALAM_REEL_CAPTIONS") == "off":
+        return False
     return flag_on(data_dir, (cfg or {}).get("flag") or FLAG)
 
 

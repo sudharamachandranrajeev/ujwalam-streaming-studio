@@ -9,7 +9,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createDownloads, isReady, itemProblems, loadItems, MARKER } from '../services/studio-ui/downloads.mjs';
+import { createDownloads, isReady, itemProblems, loadItems, MARKER, createModelGate, modelUsable, verifyOnUse } from '../services/studio-ui/downloads.mjs';
 import { writeZip } from '../tools/package/zip.mjs';
 import { safeRoot } from './helpers/data-root-guard.mjs';
 
@@ -47,10 +47,10 @@ const item = (base, over = {}) => ({
   ...over,
 });
 
-function mgr(dataRoot, items, { live = () => false } = {}) {
+function mgr(dataRoot, items, { live = () => false, hashBetween } = {}) {
   const out = [];
   const json = (res, code, body) => { res.code = code; res.body = body; };
-  const d = createDownloads({ json, dataRoot: safeRoot(dataRoot), items, hostStatus: async () => ({ live: live(), recording: false }), retryDelays: [10, 10, 10], watchMs: 20, log: (s) => out.push(s) });
+  const d = createDownloads({ json, dataRoot: safeRoot(dataRoot), items, hostStatus: async () => ({ live: live(), recording: false }), retryDelays: [10, 10, 10], watchMs: 20, hashBetween, log: (s) => out.push(s) });
   const call = async (method, body) => { const res = {}; await d.handle(method, '/ui/api/downloads', res, body); return res; };
   return { d, call, out };
 }
@@ -265,5 +265,134 @@ test('a finished part changed with the same length is checked again on resume an
     utimesSync(f, t0, t0);
     assert.equal(isReady(root, it), false);
     assert.equal((await call('GET')).body.items[0].state, 'missing');
+  } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
+});
+for (const how of ['live', 'pause', 'cancel']) {
+  test(`an abort during the rehash of a finished part (${how}) stops it: the item is ${how === 'cancel' ? 'cancelled' : 'paused'}, never ready`, async () => {
+    const HUGE = blob(5 << 20, 9); // 5 chunks of 1 MiB
+    const { s, seen, base } = await server({ '/huge.bin': HUGE });
+    const root = tmp(`abort-${how}`);
+    try {
+      let live = false;
+      const it = item(base, { files: [{ name: 'huge.bin', url: `${base}/huge.bin`, bytes: HUGE.length, sha256: sha(HUGE) }] });
+      const part = path.join(root, 'downloads', 'partial', it.id);
+      mkdirSync(part, { recursive: true });
+      writeFileSync(path.join(part, 'huge.bin'), HUGE); // finished in an earlier run
+      let chunks = 0;
+      let fire;
+      const fired = new Promise((r) => { fire = r; });
+      const { d, call } = mgr(root, [it], { live: () => live, hashBetween: async () => { if (++chunks === 2) fire(); await new Promise((r) => setTimeout(r, 60)); } });
+      await call('POST', { id: it.id, action: 'start' });
+      await fired;
+      assert.equal((await call('GET')).body.items[0].state, 'verifying');
+      if (how === 'live') live = true;
+      else await call('POST', { id: it.id, action: how });
+      await d.promise(it.id);
+      const v = (await call('GET')).body.items[0];
+      assert.equal(v.state, how === 'cancel' ? 'missing' : 'paused');
+      assert.ok(chunks < 5, `the hash stopped early (${chunks} chunks)`);
+      assert.equal(isReady(root, it), false);
+      assert.ok(!existsSync(path.join(root, 'models', 'test', MARKER)), 'no ready marker');
+      assert.ok(!existsSync(path.join(root, 'models', 'test', 'huge.bin')), 'nothing moved into place');
+      assert.equal(seen.length, 0, 'nothing fetched');
+    } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('first use: a file replaced with the same size and time but other bytes is caught by the full check and reads as missing', async () => {
+  const { s, base } = await server({ '/big.bin': BIG, '/small.txt': SMALL });
+  const root = tmp('use');
+  try {
+    const it = item(base);
+    const { d, call } = mgr(root, [it]);
+    await call('POST', { id: it.id, action: 'start' });
+    await d.promise(it.id);
+    const f =path.join(root, 'models', 'test', 'big.bin');
+    const { mtimeMs, atimeMs } = (await import('node:fs')).statSync(f);
+    const fd = (await import('node:fs')).openSync(f, 'r+'); // same file id, same size
+    (await import('node:fs')).writeSync(fd, blob(BIG.length, 44), 0, BIG.length, 0);
+    (await import('node:fs')).closeSync(fd);
+    utimesSync(f, atimeMs / 1000, mtimeMs / 1000); // a restore that keeps the time
+    assert.equal(isReady(root, it), true, 'the cheap check cannot see it');
+    assert.equal(await d.verified(it.id), false, 'the first use in this run hashes it');
+    assert.equal((await call('GET')).body.items[0].state, 'missing', 'the download is offered again');
+    // the per-process cache: a good file is hashed only once per run
+    await call('POST', { id: it.id, action: 'start' });
+    await d.promise(it.id);
+    assert.equal(await verifyOnUse(root, it), true);
+    assert.equal(await verifyOnUse(root, it), true);
+    // the worker gate: a checkout (no UJWALAM_MODELS_DIR) keeps its own models; an installed one checks the item
+    assert.equal(await modelUsable('test-model', { modelsDir: '', items: [it] }), true);
+    assert.equal(await modelUsable('test-model', { modelsDir: path.join(root, 'models'), items: [it] }), true);
+    rmSync(path.join(root, 'models', 'test', 'small.txt'));
+    assert.equal(await modelUsable('test-model', { modelsDir: path.join(root, 'models'), items: [it] }), false);
+  } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
+});
+test('round 3: a failed model gate checks again once the download has finished, and the worker can start', async () => {
+  const root = tmp('gate');
+  try {
+    const it = { id: 'm', dest: 'models/m', files: [] };
+    const marker = path.join(root, 'models', 'm', MARKER);
+    let answer = false;
+    const seen = [];
+    const g = createModelGate('m', { modelsDir: path.join(root, 'models'), items: [it], usable: async () => answer, onChange: (ok) => seen.push(ok) });
+    assert.equal(g.check(), null, 'checking');
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(seen, [false]);
+    assert.equal(g.check(), false, 'stays failed while nothing changed');
+    mkdirSync(path.dirname(marker), { recursive: true });
+    writeFileSync(marker, '{"id":"m","files":{}}'); // the Downloads page finished it
+    answer = true;
+    assert.equal(g.check(), null, 'checks again');
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(seen, [false, true]);
+    assert.equal(g.check(), true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('round 3: a mismatch found while a new download wrote a newer marker leaves that marker alone', async () => {
+  const { s, base } = await server({ '/big.bin': BIG, '/small.txt': SMALL });
+  const root = tmp('race');
+  try {
+    const it = item(base);
+    const { d, call } = mgr(root, [it]);
+    await call('POST', { id: it.id, action: 'start' });
+    await d.promise(it.id);
+    const f = path.join(root, 'models', 'test', 'big.bin');
+    const fs = await import('node:fs');
+    const { mtimeMs, atimeMs } = fs.statSync(f);
+    const fd = fs.openSync(f, 'r+'); fs.writeSync(fd, blob(BIG.length, 45), 0, BIG.length, 0); fs.closeSync(fd);
+    utimesSync(f, atimeMs / 1000, mtimeMs / 1000);
+    const mf = path.join(root, 'models', 'test', MARKER);
+    const newer = `${readFileSync(mf, 'utf8').trim()}\n\n`;
+    assert.equal(await verifyOnUse(root, it, { between: async () => { writeFileSync(mf, newer); } }), false);
+    assert.equal(readFileSync(mf, 'utf8'), newer, 'the newer marker stays');
+    // with no race the mismatch removes the marker
+    assert.equal(await verifyOnUse(root, it), false);
+    assert.ok(!existsSync(mf));
+  } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('round 3: every file is checked before any is moved; an abort during the final check moves none, and resume needs no new fetch', async () => {
+  const { s, seen, base } = await server({ '/big.bin': BIG, '/small.txt': SMALL });
+  const root = tmp('allornone');
+  try {
+    let live = false;
+    let n = 0;
+    const it = item(base);
+    // hashes in order: big part, small part, then the final check of big (3), small (4)
+    const { d, call } = mgr(root, [it], { live: () => live, hashBetween: async () => { if (++n === 4) { live = true; await new Promise((r) => setTimeout(r, 80)); } } });
+    await call('POST', { id: it.id, action: 'start' });
+    await d.promise(it.id);
+    assert.equal((await call('GET')).body.items[0].state, 'paused');
+    const dest = path.join(root, 'models', 'test');
+    assert.ok(!existsSync(path.join(dest, 'big.bin')) && !existsSync(path.join(dest, 'small.txt')), 'nothing moved');
+    const fetched = seen.length;
+    live = false;
+    await call('POST', { id: it.id, action: 'resume' });
+    await d.promise(it.id);
+    assert.equal((await call('GET')).body.items[0].state, 'ready');
+    assert.equal(seen.length, fetched, 'resume fetched nothing again');
+    assert.deepEqual(readFileSync(path.join(dest, 'big.bin')), BIG);
   } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
 });
