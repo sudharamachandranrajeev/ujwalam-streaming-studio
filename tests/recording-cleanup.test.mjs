@@ -172,6 +172,7 @@ describe('recordings with no clip job: their clips decide (user 2026-11-20: "Del
     writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', recording, clips: [], createdAt }));
     writeFileSync(path.join(run, 'report.json'), JSON.stringify({ results: [{ id: 'c01', file: 'stream-v.mp4', ok }] }));
     if (published) writeFileSync(path.join(run, 'published.json'), JSON.stringify({ files: published.map((file) => ({ file })) }));
+    else rmSync(path.join(run, 'published.json'), { force: true });
   };
   const verdicts = (dataDir) => readFileSync(path.join(dataDir, 'clips', BACKFILL_LOG), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).map((l) => [path.basename(l.file), l.decision, l.reason]);
   function world() {
@@ -187,7 +188,8 @@ describe('recordings with no clip job: their clips decide (user 2026-11-20: "Del
     clip(clipsRoot, '2026-11-01', '20261101-203000'); clip(clipsRoot, '2026-11-01', '20261101-213000');
     clip(clipsRoot, '2026-11-02', '20261102-233000'); // after that recording ended: outside its window
     clip(clipsRoot, '2026-11-04', '20261104-201500');
-    runFiles(dataDir, 'practice-h-1', { ok: true });
+    clip(clipsRoot, '2026-11-05', '20261105-120000'); // made by the practice run; outside every alpha window
+    runFiles(dataDir, 'practice-h-1', { ok: true, published: ['2026-11-05/codm_short_20261105-120000_kills-3_01_v.mp4'] });
     return { dataDir, folder, clipsDirOf: () => clipsRoot, f };
   }
 
@@ -274,6 +276,22 @@ describe('recordings with no clip job: their clips decide (user 2026-11-20: "Del
     assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: new Date(2026, 10, 5, 22).getTime(), clipsDirOf: w.clipsDirOf }).reason, 'no-clips');
     runFiles(w.dataDir, 'practice-h-1', { ok: false, published: ['2026-11-01/codm_short_20261101-203000_kills-3_01_v.mp4'] });
     assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: new Date(2026, 10, 5, 22).getTime(), clipsDirOf: w.clipsDirOf }).reason, 'clips-exist');
+  });
+  test('Codex round 3: a clip belongs to one recording only; equal starts are ambiguous; report ok alone or a run made before the last write proves nothing', () => {
+    const w = world();
+    const mt = (h, m) => new Date(2026, 10, 10, h, m).getTime();
+    const A = path.join(w.folder, 'alpha-20261110-200000.mkv'); const B = path.join(w.folder, 'alpha-20261110-210000.mkv');
+    const wins = [{ file: A, start: mt(20, 0), end: mt(23, 0) }, { file: B, start: mt(21, 0), end: mt(22, 0) }];
+    // a clip at 21:30 is in both windows: it belongs to B (latest start), so A is not proven by it
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: A, mtimeMs: mt(23, 0), clipsDirOf: w.clipsDirOf, times: [mt(21, 30)], windows: wins }).proven, false);
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: B, mtimeMs: mt(22, 0), clipsDirOf: w.clipsDirOf, times: [mt(21, 30)], windows: wins }).proven, true);
+    const C = path.join(w.folder, 'other-20261110-200000.mkv');
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: A, mtimeMs: mt(23, 0), clipsDirOf: w.clipsDirOf, times: [mt(20, 30)], windows: [...wins, { file: C, start: mt(20, 0), end: mt(23, 0) }] }).reason, 'ambiguous-window');
+    const old = new Date(2026, 10, 5, 22).getTime();
+    runFiles(w.dataDir, 'practice-h-1', { ok: true }); // report ok, no clip of the run left
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: old, clipsDirOf: w.clipsDirOf }).reason, 'no-clips');
+    runFiles(w.dataDir, 'practice-h-1', { ok: true, createdAt: new Date(old - 60 * 1000).toISOString(), published: ['2026-11-05/codm_short_20261105-120000_kills-3_01_v.mp4'] });
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: old, clipsDirOf: w.clipsDirOf }).reason, 'run-older-than-file', 'no slack');
   });
 });
 

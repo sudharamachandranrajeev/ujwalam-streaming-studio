@@ -155,3 +155,15 @@ Tests: `tests/recording-cleanup.test.mjs` 20/20. The fixtures cover:
   28/28, posting-auto-d375 46/46, posting-auto-chain 14/14, studio-ui-posting-auto 8/8.
 - UNVERIFIED: the QML card was compiled, not run; `tests/studio-qml-posting.test.mjs` skips here because the studio
   shell is not built in this worktree.
+## Codex round 3 fixes (2026-11-20)
+
+- A clip proves only one recording: the one whose window holds it with the latest start at or before the clip time;
+  two with the same start keep both (`ambiguous-window`).
+- Run-folder proof needs a clip of that run still in the clips folder (report.json ok alone is not enough), and the run
+  made at or after the file's last write (no slack).
+- The card never replaces a rules file it cannot read: it shows "Your rules file has a problem: <reason>; fix it or
+  reset it" with a Reset button. Save sends `keepRules` unless the card's own rule controls changed.
+- Custom times: a time that does not exist on a spring-forward day is skipped; a repeated autumn time is its first
+  occurrence. An impossible day off is a problem (400), not an error.
+- Tests: recording-cleanup 24/24, posting-custom-schedule 15/15, posting-random-daily 9/9, studio-ui-posting-auto 8/8,
+  posting-auto-d375 46/46.

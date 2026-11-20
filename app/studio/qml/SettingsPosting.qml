@@ -41,12 +41,16 @@ Column {
     property var notices: []              // never silent: why nothing uploads, in plain words
     property string skipText: ""
     property string skipProblem: ""
+    property string rulesProblem: ""      // Codex round 3: a rules file that cannot be read; only Reset replaces it
     readonly property var weekDays: [{ id: "mon", text: "Mon" }, { id: "tue", text: "Tue" }, { id: "wed", text: "Wed" }, { id: "thu", text: "Thu" }, { id: "fri", text: "Fri" }, { id: "sat", text: "Sat" }, { id: "sun", text: "Sun" }]
 
     readonly property bool active: box.ready && box.flagOn("posting")
     readonly property bool cardDirty: loaded && JSON.stringify(card) !== orig
     readonly property bool rulesDirty: loaded && rulesOwn && JSON.stringify(rulesEdit) !== rulesOrig
     readonly property bool dirty: cardDirty || rulesDirty
+    // The card's own rule controls (kinds, upload, score, per day) changed: only then may Save write the rules file.
+    function ruleKeys(o) { return JSON.stringify({ a: o.autoUpload, k: o.kinds, s: o.minScore, m: o.maxPerDay }) }
+    readonly property bool ruleKeysDirty: loaded && orig !== "" && ruleKeys(card) !== ruleKeys(JSON.parse(orig))
     readonly property bool customOn: card.placement === "custom"
     readonly property var customNext: customOn ? customPreview(10) : []
     readonly property string problem: !rulesOwn && card.kinds.length === 0 ? "Choose at least one kind of clip to upload."
@@ -101,6 +105,7 @@ Column {
         rulesOwn = false;
         rulesEdit = ({ autoUpload: false, maxUploadsPerDay: 1, rules: [] });
         rulesOrig = "";
+        rulesProblem = "";
         notices = [];
         skipText = "";
     }
@@ -165,9 +170,9 @@ Column {
         t += fl.deleteUploaded === true
             ? " Delete posted clips forever is on: each clip file is deleted permanently once YouTube has processed its upload."
             : " Posted clip files stay in the clips folder.";
-        if (b.custom === true) t += " Your rules file was edited by hand; Save replaces it with these values.";
-        const bad = String(b.error || "") + String(b.scheduleError || "");
-        if (bad !== "") t += " Your saved settings could not be read (" + bad + "); the defaults are shown, and Save writes them again.";
+        rulesProblem = b.error ? "Your rules file has a problem: " + String(b.error) + "; fix it or reset it." : "";
+        const bad = String(b.scheduleError || "");
+        if (bad !== "") t += " Your saved schedule settings could not be read (" + bad + "); the defaults are shown, and Save writes them again.";
         flagsText = t;
         orig = JSON.stringify(card);
         loaded = true;
@@ -320,13 +325,24 @@ Column {
         }
         if (!cardDirty) return;
         const body = JSON.parse(JSON.stringify(card));
-        Api.post("ui/api/posts/auto/settings", rulesOwn ? { card: body, keepRules: true } : { card: body }, (ok, b, err) => {
+        Api.post("ui/api/posts/auto/settings", rulesOwn || !ruleKeysDirty ? { card: body, keepRules: true } : { card: body }, (ok, b, err) => {
             if (ok) {
                 if (g === gen) orig = JSON.stringify(body);
                 return store.say("Auto-post settings saved; the next upload pass uses them.");
             }
             const why = problemsText(b && b.problems);
             store.say("Auto-post settings not saved: " + (why !== "" ? why : err));
+        });
+    }
+
+    // Reset: one click replaces a rules file that cannot be read with the card's own rules (D332, no confirm).
+    function resetRules() {
+        const g = gen;
+        Api.post("ui/api/posts/auto/settings", { card: JSON.parse(JSON.stringify(card)), resetRules: true }, (ok, b, err) => {
+            if (g !== gen) return;
+            if (ok) { message = "Rules reset to the card's values."; rulesProblem = ""; load(); return }
+            const why = problemsText(b && b.problems);
+            message = "Not reset: " + (why !== "" ? why : err);
         });
     }
 
@@ -406,6 +422,27 @@ Column {
                 + "Times are picked around the posts already scheduled on your channel, never two at the same time. Changes apply from the next upload pass when you click Save."
         }
         Quiet { objectName: "autopostFlags"; text: ap.flagsText }
+        Row {
+            visible: ap.rulesProblem !== ""
+            width: parent.width
+            spacing: Theme.sp.s
+            Text {
+                objectName: "autopostRulesProblem"
+                width: parent.width - resetBtn.width - Theme.sp.s
+                wrapMode: Text.Wrap
+                text: ap.rulesProblem
+                color: Theme.c.danger
+                font.family: Theme.family
+                font.pixelSize: Theme.ty.body
+            }
+            UButton {
+                id: resetBtn
+                objectName: "autopostRulesReset"
+                text: "Reset"
+                tip: "Replaces your rules file with the values on this card."
+                onClicked: ap.resetRules()
+            }
+        }
         Repeater {
             model: ap.notices
             delegate: Text {
@@ -818,7 +855,7 @@ Column {
     // ---- probe (tests): the same names and values as the widget card's probe ----
     function probe() {
         return { loaded: loaded, card: JSON.parse(JSON.stringify(card)), dirty: dirty, fit: fit, flags: flagsText, problem: problem,
-            rulesOwn: rulesOwn, rules: JSON.parse(JSON.stringify(rulesEdit)), notices: notices.slice(), customNext: customNext.slice(),
+            rulesOwn: rulesOwn, rulesProblem: rulesProblem, rules: JSON.parse(JSON.stringify(rulesEdit)), notices: notices.slice(), customNext: customNext.slice(),
             timesInfo: timesInfo, times: times.map(t => t.text), message: message };
     }
 
@@ -853,6 +890,7 @@ Column {
         if (a === "ap-time-add" && p.length >= 3) return addTime(arg, p.slice(2).join(":"));
         if (a === "ap-time-remove" && p.length >= 3) return removeTime(arg, p.slice(2).join(":"));
         if (a === "ap-copyday") return copyDay(arg);
+        if (a === "ap-rules-reset") { resetRules(); return true }
         if (a === "ap-skip") return setSkip(p.slice(1).join(":"));
         if (a === "ap-rule-kind" && p.length === 4) return setRuleKind(arg, p[2], on(p[3]));
         if (a === "ap-rule-max" && p.length === 3) return setRuleMax(arg, parseInt(p[2], 10));

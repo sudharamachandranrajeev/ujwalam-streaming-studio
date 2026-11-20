@@ -1939,8 +1939,8 @@ export function createStudioServer(opts) {
     if (route === '/ui/api/posts/auto/settings') {      // D375: one click saves the card (D332, no confirm). Every value is checked first; nothing is written on a problem.
       // The rules and the schedule settings go to the user's files in the data dir; the next pass uses them (no restart).
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
-      if (Object.keys(body).some((k) => k !== 'card' && k !== 'doc' && k !== 'keepRules') || (body.card === undefined) === (body.doc === undefined)
-        || (body.keepRules !== undefined && (typeof body.keepRules !== 'boolean' || body.card === undefined))) return json(res, 400, { error: 'bad-params' });
+      if (Object.keys(body).some((k) => !['card', 'doc', 'keepRules', 'resetRules'].includes(k)) || (body.card === undefined) === (body.doc === undefined)
+        || ['keepRules', 'resetRules'].some((k) => body[k] !== undefined && (typeof body[k] !== 'boolean' || body.card === undefined)) || (body.keepRules === true && body.resetRules === true)) return json(res, 400, { error: 'bad-params' });
       let r;
       try { r = saveAutoPostSettings(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
       return r.ok ? json(res, 200, { ok: true, ...r.settings }) : json(res, 400, { error: 'invalid', problems: r.problems });

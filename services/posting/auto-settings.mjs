@@ -152,6 +152,12 @@ export function saveAutoPostSettings(dataDir, body) {
   // keepRules (user 2026-11-20): the rules file is the user's own shape; "What gets posted" edits it (saveRulesEdit), so the
   // card writes only the schedule and never replaces those rules.
   const keepRules = body.keepRules === true;
+  // Codex round 3: an existing rules file that cannot be read or checked is never replaced, unless the user clicked Reset.
+  if (!keepRules && body.resetRules !== true && existsSync(userRulesFile(dataDir))) {
+    let why = null;
+    try { validateRules(JSON.parse(readFileSync(userRulesFile(dataDir), 'utf8'))); } catch (e) { why = e instanceof AutoPostError ? e.message : 'not valid JSON'; }
+    if (why) return { ok: false, problems: [{ key: 'rules-file', text: `Your rules file has a problem: ${why}; fix it or reset it` }] };
+  }
   const doc = keepRules ? null : rulesFromCard(card);
   if (doc) validateRules(doc); // the card's own shape always passes; checked again so a bad file can never be written
   const sched = { ...readUserSchedule(dataDir) };

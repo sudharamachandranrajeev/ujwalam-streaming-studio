@@ -73,6 +73,8 @@ const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 export const hhmmMinutes = (s) => { const m = typeof s === 'string' ? HHMM.exec(s) : null; return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
 
 /** Checks a user settings object (only USER_KEYS; any may be missing). -> { values, problems: [{ key, text }] }. Pure. */
+/** 'YYYY-MM-DD' that is a real calendar date (Codex round 3: never throws). */
+const realDate = (s) => { const t = Date.parse(`${s}T00:00:00Z`); return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === s; };
 export function checkUserSchedule(j) {
   const values = {}; const problems = [];
   if (j === null || typeof j !== 'object' || Array.isArray(j)) return { values, problems: [{ key: null, text: 'not a settings object' }] };
@@ -102,7 +104,7 @@ export function checkUserSchedule(j) {
     else values.customTimes = Object.fromEntries(WEEKDAYS.filter((d) => ct[d] !== undefined).map((d) => [d, [...ct[d]].sort((x, y) => hhmmMinutes(x) - hhmmMinutes(y))]));
   }
   if (j.skipDates !== undefined) {
-    const ok = Array.isArray(j.skipDates) && j.skipDates.length <= CUSTOM_LIMITS.skipDates && j.skipDates.every((s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s);
+    const ok = Array.isArray(j.skipDates) && j.skipDates.length <= CUSTOM_LIMITS.skipDates && j.skipDates.every((s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && realDate(s));
     if (ok) values.skipDates = [...new Set(j.skipDates)].sort(); else problems.push({ key: 'skipDates', text: `days off must be dates like 2026-12-25 (up to ${CUSTOM_LIMITS.skipDates})` });
   }
   return { values, problems };
@@ -399,7 +401,15 @@ export function customDayTimes(key, cfg) {
   const [y, m, d] = key.split('-').map(Number);
   const wd = WEEKDAYS[(new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7];
   const tz = zoneOf(cfg);
-  return (cfg.customTimes?.[wd] ?? []).map((s) => { const n = hhmmMinutes(s); return zonedToUtc(y, m, d, Math.floor(n / 60), n % 60, tz); }).sort((a, b) => a - b);
+  // Codex round 3: a time that does not exist that day (spring forward) is skipped; a repeated autumn time is the first.
+  return (cfg.customTimes?.[wd] ?? []).flatMap((s) => {
+    const n = hhmmMinutes(s); const h = Math.floor(n / 60); const mi = n % 60;
+    let t = zonedToUtc(y, m, d, h, mi, tz);
+    const same = (x) => { const q = zonedParts(x, tz); return q.y === y && q.m === m && q.d === d && q.h === h && q.min === mi; };
+    if (same(t - HOUR_MS)) t -= HOUR_MS; // the repeated autumn hour: its first occurrence
+    const p = zonedParts(t, tz);
+    return p.y === y && p.m === m && p.d === d && p.h === h && p.min === mi ? [t] : [];
+  }).sort((a, b) => a - b);
 }
 /** custom: every listed time of the day that is free (gap from channel posts and taken times), in order; a taken or too
  *  close time is skipped, never moved. */

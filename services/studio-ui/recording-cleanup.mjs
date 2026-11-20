@@ -237,8 +237,8 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
 // An H recording with no jobs.jsonl entry counts as processed when either
 //   (a) at least one clip still in the clips folder has a name time inside [the time in the recording's name, the
 //       recording's last write], or
-//   (b) a run folder runs/<stem>/render.json names exactly that file and that run made a clip that still exists or that
-//       report.json lists as ok (older record-clips runs);
+//   (b) a run folder runs/<stem>/render.json names exactly that file, was made at or after its last write, and a clip of that run
+//       still exists in the clips folder (older record-clips runs; report.json alone is not enough, Codex round 3);
 // AND it is finished: not a file an output is writing now, last written at least SETTLE_MS ago, and the live clipper is
 // not running (record-clips passes clipperBusy while it watches). Its V file is the same session's (alpha-v-<ts>, or
 // <stem>-v), taken only with a qualifying H; a V file with no H is kept. Each one gets a job record with the files'
@@ -246,8 +246,8 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
 // passes add a line for each recording they prove. Every other cleanup condition still applies.
 export const BACKFILL_LOG = 'backfill-recordings.jsonl';
 export const SETTLE_MS = 10 * 60 * 1000;
-/** An old run's render.json may be written a little before the recording's last write is flushed. */
-export const RUN_SLACK_MS = 2 * 60 * 1000;
+/** Codex round 3: no slack; the run must be made at or after the recording's last write. */
+export const RUN_SLACK_MS = 0;
 const REC_EXT = /\.(mkv|mp4|mov|flv|ts|m4v)$/i;
 const readJson = (f) => { try { const j = JSON.parse(readFileSync(f, 'utf8')); return isPlain(j) ? j : null; } catch { return null; } };
 const STAMP = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/;
@@ -276,11 +276,21 @@ export function clipTimes(root) {
 }
 
 /** Is `file` (an H recording) proven processed by its clips or an old run? -> { proven, reason, clips }. Reads only. */
-export function backfillVerdict({ dataDir, file, mtimeMs, clipsDirOf = clipsFolder, times = null }) {
+export function backfillVerdict({ dataDir, file, mtimeMs, clipsDirOf = clipsFolder, times = null, windows = null }) {
   let root = null; try { root = clipsDirOf(dataDir); } catch { /* unknown clips folder */ }
   const start = stampMs(recName(path.basename(file))?.stamp);
   if (start !== null && Number.isFinite(mtimeMs) && root) {
-    const n = (times ?? clipTimes(root)).filter((t) => t >= start && t <= mtimeMs).length;
+    // Codex round 3: each clip belongs to one recording only: the one whose window holds it with the latest start at or
+    // before the clip time. Two such recordings with the same start = ambiguous: both kept.
+    const all = [...(windows ?? []).filter((w) => w.file !== file), { file, start, end: mtimeMs }];
+    let n = 0; let ambiguous = false;
+    for (const t of (times ?? clipTimes(root)).filter((x) => x >= start && x <= mtimeMs)) {
+      const holders = all.filter((w) => Number.isFinite(w.start) && Number.isFinite(w.end) && t >= w.start && t <= w.end);
+      const latest = Math.max(...holders.map((w) => w.start));
+      const owners = holders.filter((w) => w.start === latest);
+      if (owners.length > 1) ambiguous = true; else if (owners[0].file === file) n++;
+    }
+    if (ambiguous) return { proven: false, reason: 'ambiguous-window', clips: 0 };
     if (n > 0) return { proven: true, reason: `clips-exist (${n} clip${n === 1 ? '' : 's'} in its time window)`, clips: n };
   }
   const run = path.join(clipsDir(dataDir), 'runs', sessionName(file));
@@ -303,8 +313,8 @@ export function backfillVerdict({ dataDir, file, mtimeMs, clipsDirOf = clipsFold
       if (checkInFolder(path.join(root, rel), root) === null) clips++;
     }
   }
-  const okInReport = (readJson(path.join(run, 'report.json'))?.results ?? []).filter((r) => r?.ok === true).length;
-  if (clips > 0 || okInReport > 0) return { proven: true, reason: 'clips-exist', clips: Math.max(clips, okInReport) };
+  // Codex round 3: report.json ok alone proves nothing; a clip of the run must still exist in the clips folder.
+  if (clips > 0) return { proven: true, reason: 'clips-exist', clips };
   return { proven: false, reason: 'no-clips', clips: 0 };
 }
 
@@ -323,6 +333,7 @@ export function planBackfill({ dataDir, folder, nowMs = Date.now(), clipsDirOf =
   const times = root ? clipTimes(root) : [];
   const at = new Date(nowMs).toISOString();
   const verdicts = []; const records = []; const pairedV = new Set();
+  const windows = names.filter((x) => !isVName(x)).map((x) => { const f = path.join(folder, x); return { file: f, start: stampMs(recName(x)?.stamp), end: statOf(f)?.mtimeMs ?? null }; }).filter((w) => w.start !== null && w.end !== null);
   for (const n of names.filter((x) => !isVName(x))) {
     const h = path.join(folder, n);
     if (known.has(key(h))) continue;
@@ -335,7 +346,7 @@ export function planBackfill({ dataDir, folder, nowMs = Date.now(), clipsDirOf =
     if (busy.has(key(h)) || (v && busy.has(key(v)))) b = { proven: false, reason: 'being-recorded' };
     else if (clipperBusy) b = { proven: false, reason: 'live-clipper-running' };
     else if (!st || nowMs - Math.max(st.mtimeMs, vst?.mtimeMs ?? 0) < SETTLE_MS) b = { proven: false, reason: 'just-recorded' };
-    else b = backfillVerdict({ dataDir, file: h, mtimeMs: st.mtimeMs, clipsDirOf, times });
+    else b = backfillVerdict({ dataDir, file: h, mtimeMs: st.mtimeMs, clipsDirOf, times, windows });
     verdicts.push({ file: h, size: st?.size ?? null, decision: b.proven ? 'proven' : 'kept', reason: b.reason, session });
     if (v) verdicts.push({ file: v, size: vst?.size ?? null, decision: b.proven ? 'proven' : 'kept', reason: b.proven ? `${b.reason} (V of a proven H)` : `its H is kept (${b.reason})`, session });
     // The identity is taken now, at backfill time, and the entry is marked backfill (Codex round 1).

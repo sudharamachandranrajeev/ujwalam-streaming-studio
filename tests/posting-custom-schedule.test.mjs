@@ -224,3 +224,31 @@ describe('Settings > Posting & growth QML', () => {
     assert.ok(existsSync(out));
   });
 });
+describe('Codex round 3', () => {
+  test('a custom time missing on the spring-forward day is skipped; the repeated autumn time is its first occurrence', () => {
+    const cfg = { customTimes: { sun: ['00:30', '01:30', '02:30'] }, skipDates: [], timeZone: 'Europe/London' };
+    assert.deepEqual(customDayTimes('2027-03-28', cfg).map(iso), ['2027-03-28T00:30:00.000Z', '2027-03-28T01:30:00.000Z']); // 01:30 does not exist; 02:30 BST
+    assert.deepEqual(customDayTimes('2026-10-25', cfg).map(iso), ['2026-10-24T23:30:00.000Z', '2026-10-25T00:30:00.000Z', '2026-10-25T02:30:00.000Z']);
+  });
+
+  test('an impossible day off is a problem (400), never a thrown RangeError', async () => {
+    assert.equal(checkUserSchedule({ skipDates: ['2026-13-45'] }).problems[0].key, 'skipDates');
+    const d = mk();
+    const card = { autoUpload: true, kinds: ['short'], minScore: 0, maxPerDay: 6, placement: 'fill-gaps', skipDates: ['2026-13-45'] };
+    const r = saveAutoPostSettings(d, { card, keepRules: true });
+    assert.equal(r.ok, false); assert.equal(r.problems[0].key, 'skipDates');
+  });
+
+  test('a rules file that cannot be read is never replaced by the card; Reset replaces it', () => {
+    const d = mk();
+    writeFileSync(userRulesFile(d), '{ broken');
+    const card = { autoUpload: true, kinds: ['short'], minScore: 0, maxPerDay: 6, placement: 'fill-gaps' };
+    const r = saveAutoPostSettings(d, { card });
+    assert.equal(r.ok, false); assert.match(r.problems[0].text, /^Your rules file has a problem: .*; fix it or reset it$/);
+    assert.equal(readFileSync(userRulesFile(d), 'utf8'), '{ broken');
+    assert.equal(saveAutoPostSettings(d, { card, keepRules: true }).ok, true);
+    assert.equal(readFileSync(userRulesFile(d), 'utf8'), '{ broken');
+    assert.equal(saveAutoPostSettings(d, { card, resetRules: true }).ok, true);
+    assert.equal(JSON.parse(readFileSync(userRulesFile(d), 'utf8')).rules.length, 2);
+  });
+});
