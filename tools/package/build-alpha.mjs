@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Builds the Alpha 0 portable zip (D133): out/dist/ujwalam-<base>-alpha.<N>-win64.zip
+// Builds the single-file setup (2026-11-19): out/dist/Ujwalam-Setup-<base>-alpha.<N>.exe (+ .sha256), which carries the
+// package zip ujwalam-<base>-alpha.<N>-win64.zip (D133). The zip and its .sha256 stay next to it by default:
+// installs from before the single file (alpha.35 and older) update only from ujwalam-*-win64.zip (Codex review
+// 2026-11-20); --drop-zip removes them once no such install is left. The newest 2 setups stay.
 //   node tools/package/build-alpha.mjs [--n N] [--host-exe FILE] [--runtime DIR] [--out-dir DIR] [--profile FILE]
-//                                      [--force] [--keep-staging]
+//                                      [--force] [--keep-staging] [--drop-zip]
 //   N         --n, else data/release/alpha.json "current"; data/release/CHANGELOG-alpha.md needs a "## <version>" section.
 //   studio exe  --studio-exe, else out/studio/build/ujwalam-studio.exe (npm run build:studio); required.
 //   host exe  --host-exe, else app/host/lib/config.mjs (UJWALAM_HOST_EXE / host.local.json "exe" / out/host/build).
@@ -13,14 +16,15 @@
 // Contents (tools/package/manifest.mjs): the host exe and its helper exes in bin/, the OBS runtime subset in obs/
 // (import closure, listed in notices/OBS-RUNTIME-FILES.txt), the Node services, UI, registry and runtime data at their
 // repo paths, Install-Ujwalam.ps1, Ujwalam.cmd, ujwalam-start.exe (the shortcuts' windowless start), Ujwalam-Setup.exe
-// (app/setup: install, update, repair, roll back, uninstall; also copied next to the zips in out/dist), README.txt, HOW-TO.md (docs/how-to.md), release.json, CHANGELOG-alpha.md (this build's section),
-// notices/ (GPL-3.0 and LGPL-3.0 text, source offer, third-party list) and SHA256SUMS.txt. Node.js is not bundled: the installer
-// and the launcher require Node >= release nodeMin on PATH.
+// (app/setup: install, update, repair, roll back, uninstall; the install root keeps a copy), README.txt, HOW-TO.md (docs/how-to.md), release.json, CHANGELOG-alpha.md (this build's section),
+// notices/ (GPL-3.0 and LGPL-3.0 text, source offer, third-party list) and SHA256SUMS.txt, and the bundled runtimes under
+// runtime/ plus the VC++ DLLs next to the exes (tools/package/runtime-bundle.mjs, data/runtime/bundle.json; 2026-11-19):
+// nothing on the PC is needed. Third-party files (OBS runtime, bundled runtimes) are not private-term scanned.
 // Checks, any failure stops the build and nothing is written to out/dist: allowlist, forbidden paths (legacy/,
 // *.local.*, fonts incl. those named in docs/licence-headers.md, docs/, feedback/, out/, user data, secrets, media),
 // import closure of the packaged .mjs files, private-term scan, and the runtime's obs-nvenc.dll must be the patched
 // build (tools/obs-patch/obs-nvenc.manifest.json). The same path checks run again on the finished zip.
-// An existing zip of the same version is refused unless --force (then it is moved to out/dist/_old/, never deleted).
+// An existing build of the same version is refused unless --force (an old zip is moved to out/dist/_old/).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -30,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveConfig } from '../../app/host/lib/config.mjs';
 import { EXE as STUDIO_EXE, START_EXE, qtDir as studioQtDir } from '../../app/studio/tools/build.mjs';
 import { SETUP_EXE } from '../../app/setup/tools/build.mjs';
+import { buildSingleSetup, setupName } from './single-setup.mjs';
 
 // The studio shell ships self-contained in studio/ (D277): its exe, the Qt 6.8.3 kit DLLs it imports and the platform
 // plugins (qwindows for the window, qoffscreen for headless probes). Qt finds <exe dir>/platforms by itself; the
@@ -44,6 +49,9 @@ export const STUDIO_QT = Object.freeze([
 ]);
 // The Qt Quick imports the QML window loads (D360), copied from the kit's qml/ into studio/qml/ (qml_studio.cpp adds
 // that folder to the import path). [folder under qml/, with its subfolders]. Debug builds (*d.dll) and .pdb files stay out.
+/** The package zip stays next to the single setup unless dropZip: alpha.35 and older update only from the zip. */
+export const keepZipFor = (opts = {}) => opts.dropZip !== true;
+
 export const STUDIO_QML = Object.freeze([
   ['QtQml', false], ['QtQml/Models', true], ['QtQml/WorkerScript', true],
   ['QtQuick', false], ['QtQuick/Window', true], ['QtQuick/Templates', true],
@@ -71,6 +79,7 @@ import {
   OFL_FONTS, OFL_FONT_LICENCE_SHA, allowProblems, dataRefProblems, disabledModules, fontNamesFromLicenceDoc, forbiddenProblems, importProblems, repoFiles, selectObsRuntime,
 } from './manifest.mjs';
 import { readZip, writeZip } from './zip.mjs';
+import { loadBundle, prepareRuntime } from './runtime-bundle.mjs';
 import { releaseParts } from '../../services/supervisor/parts.mjs';
 import { nvencFileState, readManifest, runtimeNvencState } from '../obs-patch/build-obs-nvenc.mjs';
 
@@ -169,13 +178,14 @@ function readme({ version, nodeMin }) {
   return [
     `Ujwalam ${version} (alpha, Windows 11 x64)`,
     '',
-    'Install or update (no admin rights): double-click Ujwalam-Setup.exe next to this zip (in the build folder).',
-    '  It checks the zip, keeps your settings (a backup is taken first) and adds the shortcuts. By hand instead:',
+    'Install or update (no admin rights): double-click Ujwalam-Setup-<version>.exe (one file; it checks itself first).',
+    '  It keeps your settings (a backup is taken first) and adds the shortcuts. By hand instead, from this folder:',
     '  1. Unzip this folder anywhere.',
     '  2. In it run:  powershell -ExecutionPolicy Bypass -File .\\Install-Ujwalam.ps1',
-    `     It checks Node.js ${nodeMin}+ on PATH and the Microsoft Visual C++ 2015-2022 x64 runtime, verifies`,
+    '     This build carries everything it needs (Node.js, Python with the clip maker, ffmpeg, the Visual C++ runtime',
+    '     files; runtime\\ and notices\\THIRD-PARTY.txt), so nothing else has to be on the PC. It verifies',
     '     SHA256SUMS.txt, copies this build to %LOCALAPPDATA%\\Ujwalam\\<version>, keeps the previous version and',
-    '     adds Start-menu and desktop shortcuts. It installs nothing else.',
+    `     adds Start-menu and desktop shortcuts. It installs nothing system-wide (older builds needed Node.js ${nodeMin}+).`,
     '  Roll back:  powershell -ExecutionPolicy Bypass -File .\\Install-Ujwalam.ps1 -Rollback',
     '  3. First run only: copy data\\profile.example.json from the installed version folder to',
     '     %LOCALAPPDATA%\\Ujwalam\\data\\profile.local.json and fill in your values. Without it nothing starts.',
@@ -195,27 +205,6 @@ function readme({ version, nodeMin }) {
     'Licences: LICENSE (Ujwalam), notices\\ (GPL-3.0 and LGPL-3.0 text, source offer, third-party components).',
     '',
   ].join('\r\n');
-}
-
-/**
- * Puts Ujwalam-Setup.exe next to the zips (out/dist) with its .sha256: a temp copy and one rename. When the one there
- * is running (a setup window is open), it is kept and the build says so; the zip carries the new one either way.
- */
-export function placeSetup(setupExe, outDir, log = () => {}) {
-  const dest = path.join(outDir, 'Ujwalam-Setup.exe');
-  const tmp = `${dest}.${process.pid}.new`;
-  const sha = sha256(readFileSync(setupExe));
-  try {
-    copyFileSync(setupExe, tmp);
-    renameSync(tmp, dest);
-  } catch (e) {
-    rmSync(tmp, { force: true });
-    log(`Ujwalam-Setup.exe in ${outDir} was not replaced (${e.code ?? e.message}: is a setup window open?); the zip has the new one`);
-    return { file: dest, replaced: false };
-  }
-  writeFileSync(`${dest}.sha256`, `${sha}  Ujwalam-Setup.exe\n`);
-  log(`wrote ${dest} (sha256 ${sha})`);
-  return { file: dest, replaced: true, sha256: sha };
 }
 
 function git(args) {
@@ -238,7 +227,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) throw new Error(`unexpected argument ${a}`);
     const k = a.slice(2);
-    if (['force', 'keep-staging'].includes(k)) o[k] = true;
+    if (['force', 'keep-staging', 'drop-zip'].includes(k)) o[k] = true;
     else { o[k] = argv[++i]; if (o[k] === undefined) throw new Error(`${a} needs a value`); }
   }
   return o;
@@ -294,6 +283,9 @@ export async function buildAlpha(opts = {}) {
   }
   log(`obs-nvenc.dll: ${nvenc.state}${nvenc.sha ? ` (sha256 ${nvenc.sha})` : ''}`);
   log(`OBS runtime:${obs.files.length} files from ${obs.modules.shipped.length} modules (${obs.modules.shipped.join(', ')}); skipped ${obs.skipped.files} files`);
+  // Bundled runtimes (single-file setup, 2026-11-19): Node.js, Python + packages + OCR models, ffmpeg, VC++ DLLs.
+  const rt = opts.runtimeBundle ?? await prepareRuntime({ repo: REPO, log: (s) => log(`runtime: ${s}`) });
+  log(`bundled runtimes: Node.js ${rt.info.node.version}, Python ${rt.info.python.version} (${rt.info.python.packages} packages), ffmpeg ${rt.info.ffmpeg.version}, VC++ ${rt.info.vcRuntime.version}; ${rt.files.length} files`);
 
   // 2. stage
   const stageRoot = mkdtempSync(path.join(os.tmpdir(), 'ujw-package-'));
@@ -311,6 +303,8 @@ export async function buildAlpha(opts = {}) {
     put('studio/ujwalam-studio.exe', 'host', { src: studioExe });
     for (const f of studioQt) put(f.dest, 'obs', { src: f.src });
     for (const f of obs.files) put(f.dest, 'obs', { src: f.src });
+    const taken = new Set(files.map((f) => f.rel.toLowerCase()));
+    for (const f of rt.files) if (!taken.has(f.dest.toLowerCase())) put(f.dest, 'runtime', { src: f.src });
     // Re-check the bytes actually staged (the runtime file could change between the check above and the copy);
     // release.json records this staged file's state and hash.
     const stagedNvenc = files.find((f) => f.origin === 'obs' && /(^|\/)obs-nvenc\.dll$/i.test(f.rel));
@@ -331,6 +325,9 @@ export async function buildAlpha(opts = {}) {
       obsPatches: nvenc.sha ? [{ file: 'obs-nvenc.dll', state: nvenc.state, sha256: nvenc.sha, upstreamCommit: readManifest().patch.upstreamCommit }] : [],
       // LU1 (D343): a hash per part (host, studio window, services, overlay, data), so a live update knows what it changes.
       parts: releaseParts(files),
+      // What the build carries (Install-Ujwalam.ps1 skips the PC checks for these; data/runtime/bundle.json).
+      runtime: { node: { version: rt.info.node.version, sha256: rt.info.node.sha256 }, python: { version: rt.info.python.version, packages: rt.info.python.packages },
+        ffmpeg: { version: rt.info.ffmpeg.version }, vcRuntime: { version: rt.info.vcRuntime.version } },
     };
     put('release.json', 'generated', { text: `${JSON.stringify(release, null, 2)}\n` });
     put('package.json', 'generated', { text: `${JSON.stringify({ name: 'ujwalam', version, private: true, license: 'GPL-3.0-or-later', type: 'module', engines: { node: `>=${rel.nodeMin}` } }, null, 2)}\n` });
@@ -362,6 +359,14 @@ export async function buildAlpha(opts = {}) {
     }
     for (const [k, list] of [...byComp].sort()) tp.push(`${k}`, ...list.map((f) => `    ${f}`), '');
     tp.push('Data files under obs/data/ come from OBS Studio (GPL-2.0-or-later).', 'Windows system DLLs the runtime imports (not shipped): ' + obs.systemDlls.join(', '), '');
+    const b = loadBundle(REPO);
+    tp.push('Bundled runtimes (data/runtime/bundle.json; each file pinned by SHA-256):',
+      `  Node.js ${b.node.version} (runtime/node/) | ${b.node.licence}; full text: runtime/node/LICENSE`,
+      `  Python ${b.python.version} embeddable (runtime/python/) | ${b.python.licence}; full text: runtime/python/LICENSE.txt`,
+      `  Python packages (runtime/python/Lib/site-packages/, services/clip/requirements-bundle.lock.txt) | each package's licence is in its *.dist-info folder`,
+      `  RapidOCR / PaddleOCR models (runtime/python/Lib/site-packages/rapidocr/models/) | ${b.ocrModels.licence}`,
+      `  FFmpeg ${b.ffmpeg.version} (runtime/ffmpeg/) | ${b.ffmpeg.licence}; full text: runtime/ffmpeg/LICENSE.txt; source: https://github.com/BtbN/FFmpeg-Builds and https://ffmpeg.org`,
+      `  Microsoft Visual C++ runtime ${b.vcRuntime.version} (next to the programs) | ${b.vcRuntime.licence}`, '');
     put('notices/THIRD-PARTY.txt', 'generated', { text: tp.join('\n') });
     const list = ['OBS runtime files copied (package path, bytes, reason). Source: the configured OBS runtime dir.', ''];
     for (const f of obs.files) list.push(`${f.dest}\t${statSync(f.src).size}\t${f.why}`);
@@ -378,9 +383,9 @@ export async function buildAlpha(opts = {}) {
     const fontBad = [...Object.entries(OFL_FONTS).filter(([r, h]) => { const f = files.find((x) => x.rel === r); return !f || sha256(readFileSync(f.abs)) !== h; }).map(([r]) => `font missing or not the pinned file: ${r}`),
       ...Object.entries(OFL_FONT_LICENCE_SHA).filter(([r, h]) => { const f = files.find((x) => x.rel === r); return !f || sha256(readFileSync(f.abs)) !== h; }).map(([r]) => `font licence text missing or not the pinned file: ${r}`)];
     if (fontBad.length) throw new Error(`package checks failed:\n  ${fontBad.join('\n  ')}`);
-    const scan = privateScan(files.filter((f) => f.origin !== 'obs').map((f) => f.abs), profile);
+    const scan = privateScan(files.filter((f) => f.origin !== 'obs' && f.origin !== 'runtime').map((f) => f.abs), profile);
     if (!scan.ok) throw new Error(`private-term scan failed (terms are never printed):\n${scan.out}`);
-    log(`checks passed: allowlist, forbidden paths (fonts: ${fontNames.join(', ')}), import closure, private-term scan over ${files.filter((f) => f.origin !== 'obs').length} non-OBS files`);
+    log(`checks passed: allowlist, forbidden paths (fonts: ${fontNames.join(', ')}), import closure, private-term scan over ${files.filter((f) => f.origin !== 'obs' && f.origin !== 'runtime').length} non-OBS files`);
 
     // 4. checksums, zip
     const sums = files.map((f) => `${sha256(readFileSync(f.abs))}  ${f.rel}`).sort((a, b) => a.slice(66).localeCompare(b.slice(66)));
@@ -405,12 +410,20 @@ export async function buildAlpha(opts = {}) {
     const unpacked = files.reduce((s, f) => s + statSync(f.abs).size, 0);
     const summary = {
       version, zip: zipFile, zipBytes: z.bytes, zipSha256: zipSha, entries: z.entries, unpackedBytes: unpacked,
-      byOrigin: Object.fromEntries(['repo', 'host', 'obs', 'generated'].map((o) => [o, files.filter((f) => f.origin === o).length])),
+      byOrigin: Object.fromEntries(['repo', 'host', 'obs', 'runtime', 'generated'].map((o) => [o, files.filter((f) => f.origin === o).length])),
       obsModules: obs.modules.shipped, systemDlls: obs.systemDlls, skipped: obs.skipped, commit,
     };
     writeFileSync(path.join(outDir, `${name}.files.txt`), `${sums.join('\n')}\n`);
-    summary.setup = placeSetup(setupExe, outDir, log);
-    log(`wrote ${zipFile} (${(z.bytes / 1048576).toFixed(1)} MiB, ${z.entries} files, ${(unpacked / 1048576).toFixed(1)} MiB unpacked) sha256 ${zipSha}`);
+    // 6. the single file (2026-11-19): Ujwalam-Setup-<version>.exe carries the zip. The zip stays too (keepZipFor).
+    log(`zip ${path.basename(zipFile)}: ${(z.bytes / 1048576).toFixed(1)} MiB, ${z.entries} files, ${(unpacked / 1048576).toFixed(1)} MiB unpacked, sha256 ${zipSha}`);
+    const t0 = Date.now();
+    summary.single = await buildSingleSetup({ stub: setupExe, zip: zipFile, version, outDir, log });
+    summary.single.seconds = (Date.now() - t0) / 1000;
+    if (!keepZipFor(opts)) {
+      for (const f of [zipFile, `${zipFile}.sha256`]) rmSync(f, { force: true });
+      summary.zip = null;
+      log(`zip folded into ${path.basename(summary.single.file)} and removed (--drop-zip)`);
+    }
     if (opts.keepStaging) log(`staging kept: ${stage}`);
     return summary;
   } finally {
@@ -423,9 +436,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const a = parseArgs(process.argv.slice(2));
     const s = await buildAlpha({
       n: a.n !== undefined ? Number(a.n) : undefined, hostExe: a['host-exe'], studioExe: a['studio-exe'], startExe: a['start-exe'], setupExe: a['setup-exe'], qtDir: a['qt-dir'], runtime: a.runtime, outDir: a['out-dir'],
-      profile: a.profile, force: a.force === true, keepStaging: a['keep-staging'] === true,
+      profile: a.profile, force: a.force === true, keepStaging: a['keep-staging'] === true, dropZip: a['drop-zip'] === true,
     });
-    console.log(JSON.stringify({ ...s, zip: path.basename(s.zip) }, null, 2));
+    console.log(JSON.stringify({ ...s, zip: s.zip && path.basename(s.zip) }, null, 2));
   } catch (e) {
     console.error(`[package] FAILED: ${e.message}`);
     process.exit(1);

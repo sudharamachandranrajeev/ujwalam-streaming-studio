@@ -158,14 +158,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 		say(log, "[ujwalam-start] " + utf8(script) + " is missing: run Install-Ujwalam.ps1 again, or Install-Ujwalam.ps1 -Rollback\n");
 		return 3;
 	}
-	wchar_t node[MAX_PATH * 2];
-	const std::wstring path = env(L"PATH"); // PATH only (as where.exe in Ujwalam.cmd), never this folder first
-	if (path.empty() || !SearchPathW(path.c_str(), L"node.exe", nullptr, MAX_PATH * 2, node, nullptr)) {
-		say(log, "[ujwalam-start] Node.js 22.13 or newer is needed on PATH; nothing was started.\n");
-		return 9;
+	// The build's own Node.js (runtime\node\node.exe, bundled since 2026-11-19); else PATH only (as where.exe in
+	// Ujwalam.cmd), never this folder first.
+	std::wstring nodeExe = build + L"\\runtime\\node\\node.exe";
+	if (!isFile(nodeExe)) {
+		wchar_t node[MAX_PATH * 2];
+		const std::wstring path = env(L"PATH");
+		if (path.empty() || !SearchPathW(path.c_str(), L"node.exe", nullptr, MAX_PATH * 2, node, nullptr)) {
+			say(log, "[ujwalam-start] this build has no runtime\\node\\node.exe and Node.js is not on PATH; nothing was started.\n");
+			return 9;
+		}
+		nodeExe = node;
 	}
 
-	std::wstring cmd = L"\"" + std::wstring(node) + L"\" \"" + script + L"\"";
+	std::wstring cmd = L"\"" + nodeExe + L"\" \"" + script + L"\"";
 	const std::wstring rest = tailArgs();
 	if (!rest.empty())
 		cmd += L" " + rest;

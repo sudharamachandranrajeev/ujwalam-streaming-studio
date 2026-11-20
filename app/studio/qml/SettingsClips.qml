@@ -61,6 +61,13 @@ Column {
         }
     }
 
+    // Spoken captions need the speech model (download manager, 2026-11-19): offered here while it is missing.
+    UCard {
+        title: "SPOKEN CAPTIONS"
+        visible: captionsOffer.visible
+        DownloadsList { id: captionsOffer; objectName: "captionsOffer"; only: "speech-captions" }
+    }
+
     UCard {
         title: "WHILE I STREAM"
         USwitch {

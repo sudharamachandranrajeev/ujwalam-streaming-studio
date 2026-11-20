@@ -31,12 +31,12 @@ Dialog {
         { heading: "GENERAL", pages: ["Appearance", "Help & tips"] },
         { heading: "LIVE", pages: ["Stream", "Transitions", "Connections", "Chat & bots"] },
         { heading: "STUDIO", pages: ["Editing", "Preview"] },
-        { heading: "CLIPS", pages: ["Clips", "Posting & growth", "Folders"] },
+        { heading: "CLIPS", pages: ["Clips", "Posting & growth", "Folders", "Downloads"] },
         { heading: "", pages: ["Advanced"] }
     ]
     readonly property var pageIds: ({ "Appearance": "appearance", "Help & tips": "", "Stream": "stream", "Transitions": "transitions",
         "Connections": "connections", "Chat & bots": "chat", "Editing": "editing", "Preview": "preview", "Clips": "clips",
-        "Posting & growth": "posting", "Folders": "", "Advanced": "advanced" })
+        "Posting & growth": "posting", "Folders": "", "Downloads": "", "Advanced": "advanced" })
     readonly property var pageWords: ({
         "Appearance": "theme colours colors look dark light effects reduce high performance animations motion",
         "Help & tips": "help tips tour welcome don't show again",
@@ -49,6 +49,7 @@ Dialog {
         "Clips": "clips reels record live matches top 3 kills length opening teaser transition",
         "Posting & growth": "posting posts auto-post schedule growth",
         "Folders": "folders recordings clips where files saved",
+        "Downloads": "downloads download models speech captions whisper face ai background pause resume cancel",
         "Advanced": "advanced developer"
     })
     readonly property var knownPages: ["clips", "posting", "stream", "transitions", "connections", "chat", "editing", "preview", "appearance", "advanced"]
@@ -626,6 +627,11 @@ Dialog {
                 anchors.fill: parent
                 title: "Editing"
                 pageId: "editing"
+                UCard {
+                    title: "FACE AI MODELS"
+                    visible: faceOffer.visible
+                    DownloadsList { id: faceOffer; objectName: "faceOffer"; only: "face-ai-models" }
+                }
             }
 
             SettingsPage {
@@ -727,6 +733,17 @@ Dialog {
                         font.family: Theme.family
                         font.pixelSize: Theme.ty.small
                     }
+                }
+            }
+
+            SettingsPage {
+                box: dlg
+                anchors.fill: parent
+                title: "Downloads"
+                lead: "Ujwalam's setup carries everything to stream, record and make clips. These optional models are downloaded only when you click, never while you are live or recording, and each file is checked before it is used."
+                UCard {
+                    title: "OPTIONAL MODELS"
+                    DownloadsList { objectName: "downloadsList" }
                 }
             }
 

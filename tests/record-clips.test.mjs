@@ -80,10 +80,14 @@ test('clipRunSpec: whole recording (after) and moments found while it ran (while
   const gpu = path.join(root, '.venv-gpu', 'Scripts', 'python.exe');
   assert.match(clipRunSpec({ clipRoot: null, dataDir: 'D', job: { type: 'full', h: 'a', name: 'a' } }).reason, /not set up/);
   assert.match(clipRunSpec({ clipRoot: root, dataDir: 'D', job: { type: 'full', h: 'a', name: 'a' }, exists: has([script]) }).reason, /missing/);
-  // the zip ships no Python (D283): plain reason, a fix, and which part is missing
+  // no Python in the root (a damaged install; builds carry runtime\python since 2026-11-19): plain reason, a fix, which part
   const noPy = clipTools({ clipRoot: root, exists: has([script]) });
   assert.deepEqual([noPy.py, noPy.missing, noPy.fix], [null, 'python', CLIP_MAKER_FIX]);
-  assert.match(noPy.reason, /Python is missing \(the Ujwalam download does not include Python/);
+  assert.match(noPy.reason, /Python is missing \(no runtime\\python\\python\.exe in /);
+  // the bundled Python is used when there is no developer venv; a venv wins in a checkout
+  const bundled = path.join(root, 'runtime', 'python', 'python.exe');
+  assert.equal(clipTools({ clipRoot: root, exists: has([script, bundled]) }).py, bundled);
+  assert.equal(clipTools({ clipRoot: root, exists: has([script, bundled, gpu]) }).py, gpu);
   assert.deepEqual([clipTools({ clipRoot: root, exists: has([gpu]) }).missing, clipTools({ clipRoot: null }).missing, clipTools({ clipRoot: root, exists: has([script, gpu]) }).missing], ['script', 'root', null]);
   const r = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { type: 'full', h: 'C:/r/h.mkv', v: 'C:/r/v.mkv', name: 'h' }, exists: has([script, gpu]) });
   assert.equal(r.spec.exe, gpu);

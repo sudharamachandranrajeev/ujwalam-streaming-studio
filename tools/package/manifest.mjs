@@ -92,7 +92,15 @@ export const REPO_FILES = Object.freeze([
   'data/audio-tools/presets.json', // mixer strip tool presets (D399; services/studio-ui/audio-routes.mjs)
 ]);
 // data/luts: the app's own .cube LUTs, base "luts" of the alpha load (D381; services/studio-ui/alpha.mjs LUTS_DIR)
-export const REPO_GLOB_DIRS = Object.freeze([['data/platforms', /\.json$/], ['data/outputs/presets', /\.json$/], ['data/luts', /\.cube$/], ['data/transitions', /\.(json|webm)$/]]);
+// Single-file setup (2026-11-19): the clip maker and face worker ship with the bundled Python, so their data ships too:
+// every data/clip/*.json, the committed game packs (data/games/<id>/*.json and the pack schemas; never local/), the
+// face-model list and the download manager's list (data/downloads).
+export const REPO_GLOB_DIRS = Object.freeze([['data/platforms', /\.json$/], ['data/outputs/presets', /\.json$/], ['data/luts', /\.cube$/], ['data/transitions', /\.(json|webm)$/],
+  ['data/clip', /^[a-z0-9-]+\.json$/], ['data/games', /^([a-z0-9-]+\/)?[a-z0-9-]+(\.schema)?\.json$/], ['data/models', /^[a-z0-9-]+\.json$/], ['data/downloads', /^[a-z0-9-]+\.json$/]]);
+// Python sources of the clip maker and the face worker (run by runtime/python): .py only, no tests.
+export const PY_DIRS = Object.freeze(['services/clip', 'services/face']);
+const PY_FILE = /^[a-z0-9_]+\.py$/;
+const PY_TEST = /^(test_.*|.*_test)\.py$/;
 // D391: the generated cyberpunk stingers (data/transitions/stingers/<id>-<h|v>.webm) are the only media that ships
 export const STINGER_WEBM = /^data\/transitions\/stingers\/[a-z][a-z0-9-]*-[hv]\.webm$/;
 
@@ -126,7 +134,11 @@ export function repoFiles(repo) {
     out.add(f);
   }
   for (const [d, re] of REPO_GLOB_DIRS) {
+    if (!existsSync(path.join(repo, d))) continue;
     for (const r of walk(path.join(repo, d))) if (re.test(r) && !SKIP_IN_DIRS.some((x) => x.test(r))) out.add(`${d}/${r}`);
+  }
+  for (const d of PY_DIRS) {
+    for (const n of readdirSync(path.join(repo, d))) if (PY_FILE.test(n) && !PY_TEST.test(n)) out.add(`${d}/${n}`);
   }
   return [...out].sort();
 }
@@ -304,7 +316,7 @@ export function allowProblems(paths) {
   const dirPrefixes = REPO_DIRS.map((d) => `${d}/`);
   const ok = (p) => exact.has(p)
     || dirPrefixes.some((d) => p.startsWith(d))
-    || REPO_GLOB_DIRS.some(([d, re]) => p.startsWith(`${d}/`) && re.test(p))
+    || REPO_GLOB_DIRS.some(([d, re]) => p.startsWith(`${d}/`) && re.test(p.slice(d.length + 1)))
     || /^notices\/[A-Za-z0-9._-]+$/.test(p)
     || new RegExp(`^bin/(ujwalam-host\\.exe|${HELPER_EXES.map((h) => h.replace(/[.-]/g, '\\$&')).join('|')})$`).test(p)
     || /^obs\/bin\/64bit\/[^/]+\.(dll|exe)$/i.test(p)
@@ -313,7 +325,12 @@ export function allowProblems(paths) {
     || /^studio\/Qt6(Qml|QmlModels|QmlMeta|QmlWorkerScript|Quick|QuickControls2|QuickControls2Basic|QuickControls2BasicStyleImpl|QuickControls2Impl|QuickTemplates2|OpenGL)\.dll$/.test(p)
     || /^studio\/qml\/(QtQml|QtQuick)(\/[A-Za-z0-9_.-]+)*\/[A-Za-z0-9_.-]+\.(dll|qml|qmltypes|js|mjs|json|png|svg)$|^studio\/qml\/(QtQml|QtQuick)(\/[A-Za-z0-9_.-]+)*\/qmldir$/.test(p)
     || /^obs\/obs-plugins\/64bit\/([^/]+\.(dll|exe|pak|dat|bin)|locales\/[A-Za-z-]+\.pak)$/i.test(p)
-    || /^obs\/data\/(libobs|obs-plugins)\/[^]+$/.test(p);
+    || /^obs\/data\/(libobs|obs-plugins)\/[^]+$/.test(p)
+    // Single-file setup (2026-11-19): bundled runtimes (data/runtime/bundle.json), the Python workers' sources, and the
+    // Visual C++ runtime DLLs next to the top folder, bin/ and studio/ (obs/ folders are covered above).
+    || /^runtime\/(node|python|ffmpeg)\/[^]+$/.test(p)
+    || PY_DIRS.some((d) => p.startsWith(`${d}/`) && PY_FILE.test(p.slice(d.length + 1)) && !PY_TEST.test(p.slice(d.length + 1)))
+    || /^((bin|studio)\/)?(concrt140|msvcp140(_1|_2|_atomic_wait|_codecvt_ids)?|vccorlib140|vcruntime140(_1|_threads)?)\.dll$/i.test(p);
   return paths.filter((p) => !ok(p)).map((p) => `not on the allowlist: ${p}`);
 }
 
@@ -330,14 +347,20 @@ const FORBIDDEN = [
   [/(^|\/)(\.git|\.claude|\.venv|node_modules|secrets|session file)(\/|$)/i, 'repo-internal or secret folder'],
   [/(^|\/)(\.env[^/]*|\.agent-lock|host\.local\.json|flags\.local\.json|host-config\.json|outputs-params\.json|system\.json|host\.json)$/i, 'local state or secret file'],
   [/\.(mkv|mp4|mov|flv|ts|webm|wav|m4a|mp3|log|pdb|pem|key|pfx|p12|sqlite|db)$/i, 'media, log, symbols, key or database file'],
-  [/(^|\/)data\/(labels|datasets|games)(\/|$)/i, 'labels, datasets or game packs'],
+  [/(^|\/)data\/(labels|datasets)(\/|$)/i, 'labels or datasets'],
+  // Committed game packs ship (the clip maker reads them, 2026-11-19); a pack's local/ folder (training data) never does.
+  [/(^|\/)data\/games\/[^/]+\/local(\/|$)/i, 'local game-pack data (training footage, crops)'],
 ];
+// Third-party package files inside the bundled Python (e.g. certifi's public CA bundle cacert.pem) are not user media,
+// keys or logs: only the extension rule is lifted there; every other rule still applies.
+const SITE_PACKAGES = /^runtime\/python\/Lib\/site-packages\//;
+const EXT_RULE = FORBIDDEN.find(([, why]) => why.startsWith('media'))[0];
 
 export function forbiddenProblems(paths, { fontNames = [] } = {}) {
   const out = [];
   const fontRes = fontNames.map((n) => new RegExp(`(^|/)${n.toLowerCase().slice(0, 6)}[^/]*$`, 'i'));
   for (const p of paths) {
-    for (const [re, why] of FORBIDDEN) if (re.test(p) && !STINGER_WEBM.test(p)) out.push(`forbidden (${why}): ${p}`);
+    for (const [re, why] of FORBIDDEN) if (re.test(p) && !STINGER_WEBM.test(p) && !(re === EXT_RULE && SITE_PACKAGES.test(p))) out.push(`forbidden (${why}): ${p}`);
     if (FONT_EXT.test(p) && !Object.hasOwn(OFL_FONTS, p)) out.push(`forbidden (font file not on the OFL allowlist OFL_FONTS; Microsoft fonts are never redistributable): ${p}`);
     if (fontRes.some((re) => re.test(p)) && (FONT_EXT.test(p) || !/\.(m?js|json|css|html|txt)$/i.test(p))) out.push(`forbidden (Microsoft font named in docs/licence-headers.md): ${p}`);
   }

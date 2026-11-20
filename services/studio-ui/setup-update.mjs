@@ -9,10 +9,12 @@
 //                                        | 500 { error: not-started, message } (Setup could not be started)
 //
 // The update folder is data\ujwalam.json "updateFolder" (UJWALAM_UPDATE_DIR, set by run-installed.mjs; Ujwalam-Setup.exe
-// writes the folder it installed from). A package counts only when its SHA-256 matches its .zip.sha256 file (cached by
-// path, size and time). The install runs Ujwalam-Setup.exe --update --quiet --next-start (hidden, below-normal
-// priority; it checks the zip again and Install-Ujwalam.ps1 checks every file and backs the settings up first). Never
-// while live or recording (or when that cannot be read): the new version runs from the next start.
+// writes the folder it installed from). A package is a single-file Ujwalam-Setup-<version>.exe (2026-11-19; preferred)
+// or an older ujwalam-<version>-win64.zip; it counts only when its SHA-256 matches the .sha256 file next to it (cached by
+// path, size and time). The install runs that setup exe itself (a zip: the build folder's or installed Ujwalam-Setup.exe
+// with --package) with --update --quiet --next-start (hidden, below-normal priority; Setup checks the package again and
+// Install-Ujwalam.ps1 checks every file and backs the settings up first). Never while live or recording (or when that
+// cannot be read): the new version runs from the next start.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -22,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 export const ROUTE = '/ui/api/setup/update';
 const ZIP_RE = /^ujwalam-(\d{1,6}\.\d{1,6}\.\d{1,6}-alpha\.\d{1,6})-win64\.zip$/;
+const EXE_RE = /^Ujwalam-Setup-(\d{1,6}\.\d{1,6}\.\d{1,6}-alpha\.\d{1,6})\.exe$/;
 const HERE_INSTALL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** Compares "X.Y.Z-alpha.N" versions (pure). */
@@ -32,14 +35,17 @@ export function cmpVersion(a, b) {
   return 0;
 }
 
-/** The newest ujwalam-<version>-win64.zip in dir by version: { version, zip } or null. */
+/** The newest package in dir by version: { version, zip, single } (single: a setup exe that carries it; preferred at the same version) or null. */
 export function newestPackage(dir) {
   let names = [];
   try { names = readdirSync(dir); } catch { return null; }
   let best = null;
   for (const n of names) {
-    const m = ZIP_RE.exec(n);
-    if (m && (!best || cmpVersion(m[1], best.version) > 0)) best = { version: m[1], zip: path.join(dir, n) };
+    const m = ZIP_RE.exec(n) ?? EXE_RE.exec(n);
+    if (!m) continue;
+    const single = EXE_RE.test(n);
+    const c = best ? cmpVersion(m[1], best.version) : 1;
+    if (c > 0 || (c === 0 && single && !best.single)) best = { version: m[1], zip: path.join(dir, n), single };
   }
   return best;
 }
@@ -59,7 +65,7 @@ const MESSAGES = {
   13: 'Your settings could not be backed up, so nothing was changed.',
   14: 'Another Ujwalam setup is working right now; try again when it has finished.',
   20: 'No package was found in the build folder.',
-  21: 'The package does not match its checksum file; build it again.',
+  21: 'The package does not match its checksum (it is damaged or incomplete); build or download it again.',
   22: 'The package could not be unpacked; nothing was changed.',
   26: 'The package is not newer than the installed version.',
 };
@@ -120,7 +126,7 @@ export function createSetupUpdate(opts) {
     if (!newer) return { ...base, latest: { version: pkg.version, verified: null }, reason: 'up-to-date' };
     const ok = await verified(pkg.zip, fresh);
     if (!ok) return { ...base, latest: { version: pkg.version, verified: false }, reason: 'not-verified' };
-    const exe = await setupExe(fresh);
+    const exe = pkg.single ? pkg.zip : await setupExe(fresh);
     if (!exe) return { ...base, latest: { version: pkg.version, verified: true }, reason: 'no-setup' };
     return { ...base, latest: { version: pkg.version, verified: true }, available: true, reason: null, zip: pkg.zip, exe };
   }
@@ -135,7 +141,8 @@ export function createSetupUpdate(opts) {
 
   // Starts Setup; throws when it cannot be started (the caller clears `installing`).
   function runSetup(exe, zip, version) {
-    const args = ['--update', '--quiet', '--next-start', '--package', zip, '--install-root', root];
+    // A single-file setup installs what it carries; a zip is handed to Setup.
+    const args = ['--update', '--quiet', '--next-start', ...(exe === zip ? [] : ['--package', zip]), '--install-root', root];
     const c = spawnImpl(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     if (!c || typeof c.on !== 'function') throw new Error('Ujwalam-Setup.exe did not start');
     try { os.setPriority(c.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* it still runs */ }

@@ -59,21 +59,33 @@ export function finishedRecording(prev, cur) {
   return files.h ? files : null;
 }
 
-// What to do when the clip maker cannot run. The Alpha zip ships no Python (D283), so an installed copy needs a folder
-// that has services/clip and its venv (a checkout): the updater writes it to ujwalam.json as clipRoot. No install.
-export const CLIP_MAKER_FIX = 'To make clips, point Ujwalam at a folder that has the clip maker and its Python: Install-Ujwalam.ps1 -SettingsOnly -ClipMaker <folder>';
+// What to do when the clip maker cannot run. Builds since 2026-11-19 carry their own Python (runtime\python, with the
+// clip and face packages and the OCR models), so this only shows for a damaged install or an older build.
+export const CLIP_MAKER_FIX = 'Run Ujwalam setup and choose Repair (it puts the clip maker and its Python back)';
+
+/**
+ * The Python for the clip and face workers in root: a developer venv (.venv-gpu, then .venv) when present, else the
+ * build's bundled one (runtime\python\python.exe; onnxruntime-directml, so GPU). { exe, gpu } or null.
+ */
+export function pythonIn(root, exists = existsSync) {
+  if (!root) return null;
+  for (const [rel, gpu] of [[['.venv-gpu', 'Scripts', 'python.exe'], true], [['.venv', 'Scripts', 'python.exe'], false], [['runtime', 'python', 'python.exe'], true]]) {
+    const p = path.join(root, ...rel);
+    if (exists(p)) return { exe: p, gpu };
+  }
+  return null;
+}
 
 /**
  * Python + clipper in clipRoot, or the plain reason clips cannot be made: { py, script, reason, fix, missing }.
- * missing: null (ready) | 'root' (no clip root set) | 'python' (no .venv-gpu / .venv python.exe) | 'script' (no clipper.py).
+ * missing: null (ready) | 'root' (no clip root set) | 'python' (no .venv-gpu / .venv / runtime\python python.exe) | 'script' (no clipper.py).
  */
 export function clipTools({ clipRoot, exists = existsSync }) {
   const no = (missing, reason) => ({ py: null, script: null, reason, fix: CLIP_MAKER_FIX, missing });
   if (!clipRoot) return no('root', 'the clip maker is not set up on this PC');
-  const py = ['.venv-gpu', '.venv'].map((x) => path.join(clipRoot, x, 'Scripts', 'python.exe')).find((p) => exists(p));
+  const py = pythonIn(clipRoot, exists)?.exe ?? null;
   const script = path.join(clipRoot, 'services', 'clip', 'clipper.py');
-  // Python first: an installed copy has neither, and Python is the part the download cannot bring.
-  if (!py) return no('python', `the clip maker's Python is missing (the Ujwalam download does not include Python; looked in ${clipRoot})`);
+  if (!py) return no('python', `the clip maker's Python is missing (no runtime\\python\\python.exe in ${clipRoot})`);
   if (!exists(script)) return no('script', `the clip maker is missing in ${clipRoot} (no services\\clip\\clipper.py)`);
   return { py, script, reason: null, fix: null, missing: null };
 }

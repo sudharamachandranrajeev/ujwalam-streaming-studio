@@ -33,6 +33,11 @@ def load_manifest(path=MANIFEST):
 
 
 def models_dir(manifest, repo=REPO):
+    # An installed Ujwalam (2026-11-19): the launcher sets UJWALAM_MODELS_DIR = <data root>\models, where the studio's
+    # download manager puts the models (never the install folder). A checkout keeps data/models/face.
+    env = os.environ.get("UJWALAM_MODELS_DIR")
+    if env:
+        return os.path.join(env, "face")
     return os.path.join(repo, *manifest["dir"].split("/"))
 
 

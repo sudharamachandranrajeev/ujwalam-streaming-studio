@@ -2257,3 +2257,21 @@ Growth plan ED2. Decided:
 - Full recordings (H and V files) are deleted for good once every clip from them is rendered and the review run has
   finished; recordings still to be labelled are kept. Never while live; same safe-delete steps as posted clips; logged.
 - Turned on in the user's install only after the build carrying them is installed.
+
+## D404 — Single-file setup as built: bundled runtimes and the in-app download manager (2026-11-19)
+
+User (2026-11-19): "installer needs to be a single file with everything that should be ready to go", "everything", and
+"any downloadable needs to have a download manager within the app".
+
+- `Ujwalam-Setup-<version>.exe` is one file: the setup program, the package zip and a trailer with both SHA-256s. It
+  checks itself before it unpacks anything and refuses a damaged or cut-short file in plain words (exit 21). The build
+  keeps the newest 2 setups in `out/dist` and logs what it deletes. The package zip and its .sha256 stay next to it
+  so older installs (alpha.35's updater) find the update; `--drop-zip` removes them once none is left (Codex round 1).
+- The package carries Node.js 26.12.1, Python 3.14.7 (embeddable) with the clip and face packages and the OCR models,
+  FFmpeg 8.1 (LGPL build) and the Visual C++ runtime app-local: no admin rights, nothing else to install. Pins in
+  `data/runtime/bundle.json`; licences in `docs/licence-headers.md` and the install's `notices/THIRD-PARTY.txt`.
+- The in-app update installs a single-file setup from the update folder (zips still work).
+- `download-manager` is ON by default (user-requested feature): Settings > Downloads fetches the optional models
+  (`data/downloads/*.json`: the speech model for captions, the Face AI models) on a click, with resume, SHA-256 checks,
+  retry, Pause and Cancel; never while live or recording. Settings > Clips and Editing offer the missing model.
+- Evidence: `docs/evidence/2026-11-19-single-file-setup.md`. A run on a fresh PC is still UNVERIFIED.
