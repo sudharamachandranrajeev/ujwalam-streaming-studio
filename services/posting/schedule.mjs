@@ -48,7 +48,12 @@ export const userScheduleFile = (dataDir) => path.join(dataDir, 'posting', USER_
 // (postsPerDayMin..postsPerDayMax) at random times inside windowStart..windowEnd (local time, DST-safe), at least
 // minGapMinutes apart from each other and from every taken time. Seeded (seed in the user's schedule.json), so a plan is
 // the same on every pass and after a restart. See planRandomDaily below.
-export const PLACEMENTS = Object.freeze(['random-daily', 'fill-gaps', 'after-last']);
+// 'custom' (user 2026-11-20: "add the ability to setup custom schedule in app as well"): a weekly plan of exact local times
+// per weekday (customTimes { mon: ['18:00', ...], ... }), DST-safe, filled in order; a time too close to a channel post or
+// already taken is skipped, never moved; skipDates ['YYYY-MM-DD'] are days off. See planCustom below.
+export const PLACEMENTS = Object.freeze(['random-daily', 'fill-gaps', 'after-last', 'custom']);
+export const WEEKDAYS = Object.freeze(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
+export const CUSTOM_LIMITS = Object.freeze({ timesPerDay: 24, skipDates: 400 });
 /** What the user may set, and the allowed whole-number ranges (2 days is the widest gap that is still a schedule;
  *  maxAheadDays 730 = the user's 2-year cap, D314; quota from 1,000 units up to a raised Google quota). */
 export const USER_LIMITS = Object.freeze({
@@ -60,7 +65,7 @@ export const USER_LIMITS = Object.freeze({
   minGapMinutes: { min: 15, max: 1440 },
   seed: { min: 0, max: 2147483647 },
 });
-export const USER_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed']);
+export const USER_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed', 'customTimes', 'skipDates']);
 /** The keys the random-daily placement reads (shipped defaults in data/posting/schedule.json, replaced by the user's). */
 export const RANDOM_KEYS = Object.freeze(['postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed']);
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -83,6 +88,23 @@ export function checkUserSchedule(j) {
   }
   if (values.postsPerDayMin !== undefined && values.postsPerDayMax !== undefined && values.postsPerDayMin > values.postsPerDayMax) problems.push({ key: 'postsPerDayMax', text: 'the most posts a day must not be less than the fewest' });
   if (values.windowStart !== undefined && values.windowEnd !== undefined && hhmmMinutes(values.windowEnd) <= hhmmMinutes(values.windowStart)) problems.push({ key: 'windowEnd', text: 'the posting window must end after it starts (same day)' });
+  if (j.customTimes !== undefined) {
+    const ct = j.customTimes; let bad = null;
+    if (!isPlain(ct) || Object.keys(ct).some((k) => !WEEKDAYS.includes(k))) bad = 'custom times must list weekdays (mon to sun)';
+    else {
+      for (const d of WEEKDAYS) {
+        const a = ct[d]; if (a === undefined) continue;
+        if (!Array.isArray(a) || a.length > CUSTOM_LIMITS.timesPerDay || a.some((t) => hhmmMinutes(t) === null)) { bad = `${d}: up to ${CUSTOM_LIMITS.timesPerDay} times like 18:00`; break; }
+        if (new Set(a).size !== a.length) { bad = `${d}: a time is listed twice`; break; }
+      }
+    }
+    if (bad) problems.push({ key: 'customTimes', text: bad });
+    else values.customTimes = Object.fromEntries(WEEKDAYS.filter((d) => ct[d] !== undefined).map((d) => [d, [...ct[d]].sort((x, y) => hhmmMinutes(x) - hhmmMinutes(y))]));
+  }
+  if (j.skipDates !== undefined) {
+    const ok = Array.isArray(j.skipDates) && j.skipDates.length <= CUSTOM_LIMITS.skipDates && j.skipDates.every((s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s);
+    if (ok) values.skipDates = [...new Set(j.skipDates)].sort(); else problems.push({ key: 'skipDates', text: `days off must be dates like 2026-12-25 (up to ${CUSTOM_LIMITS.skipDates})` });
+  }
   return { values, problems };
 }
 const ALIGN_STEPS = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60];
@@ -123,7 +145,7 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
     try { u = JSON.parse(readFileSync(userFile, 'utf8')); } catch { throw new ScheduleError('schedule-config-bad', 'your schedule settings file (posting/schedule.json in the data folder) could not be read'); }
     const { values, problems } = checkUserSchedule(u);
     if (problems.length) throw new ScheduleError('schedule-config-bad', `your schedule settings: ${problems.map((p) => p.text).join('; ')}`);
-    for (const k of ['intervalHours', 'maxAheadDays', 'placement', ...RANDOM_KEYS]) if (values[k] !== undefined) { cfg[k] = values[k]; cfg.userKeys.push(k); }
+    for (const k of ['intervalHours', 'maxAheadDays', 'placement', ...RANDOM_KEYS, 'customTimes', 'skipDates']) if (values[k] !== undefined) { cfg[k] = values[k]; cfg.userKeys.push(k); }
   }
   // random-daily (D403): shipped defaults (a missing key = the user's 2026-11-19 choice), then the checks across keys.
   const rd = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 90, seed: 0 };
@@ -132,7 +154,9 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
   if (rc.problems.length) throw new ScheduleError('schedule-config-bad', `schedule setting ${rc.problems.map((p) => p.text).join('; ')}`);
   cfg.timeZone = typeof j?.timeZone === 'string' && j.timeZone ? j.timeZone : null; // null = this PC's own zone
   cfg.seedSaved = cfg.userKeys.includes('seed');
-  if (cfg.placement === 'random-daily') {
+  cfg.customTimes ??= {}; cfg.skipDates ??= [];
+  if (cfg.placement === 'random-daily' || cfg.placement === 'custom') {
+    if (cfg.placement === 'custom' && !WEEKDAYS.some((d) => (cfg.customTimes[d] ?? []).length)) throw new ScheduleError('schedule-config-bad', 'custom times: add at least one posting time');
     // Random minutes, not whole hours; and every gap (channel posts, the queue, a moved clip) is minGapMinutes.
     cfg.alignMinutes = 1;
     cfg.intervalHours = cfg.minGapMinutes / 60;
@@ -312,7 +336,7 @@ export function dayCandidates(key, cfg, count = dayCount(key, cfg), extra = 48) 
  * its count (times already taken on that day count too). Items take the picks in time order; a retry with a later
  * floor takes the first pick at or after it. A day that cannot fit its count takes what fits. Pure.
  */
-function planRandomDaily(moving, slots, nowMs, cfg) {
+function planRandomDaily(moving, slots, nowMs, cfg, pickDay = null) {
   const cap = maxAheadMs(nowMs, cfg);
   const tz = zoneOf(cfg);
   const floorOf = (i) => {
@@ -326,6 +350,7 @@ function planRandomDaily(moving, slots, nowMs, cfg) {
   let key = localDayKey(minFloor, tz);
   const lastKey = localDayKey(cap, tz);
   const fillDay = () => {
+    if (pickDay) { pool.push(...pickDay(key, minFloor, cap, slots)); key = nextDayKey(key); return; }
     // Codex round 1 (P2): every taken time on that local day counts (channel posts and queue items outside the window too).
     const have = slots.times().filter((t) => localDayKey(t, tz) === key).length;
     const want = dayCount(key, cfg) - have;
@@ -366,6 +391,32 @@ function randomDailyKeeps(cfg) {
   };
 }
 
+// ---------------------------------------------------------------- custom (user 2026-11-20)
+
+/** The day's custom times in UTC ms, ascending: its weekday's times, none on a skip date. DST-safe (wall times). */
+export function customDayTimes(key, cfg) {
+  if ((cfg.skipDates ?? []).includes(key)) return [];
+  const [y, m, d] = key.split('-').map(Number);
+  const wd = WEEKDAYS[(new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7];
+  const tz = zoneOf(cfg);
+  return (cfg.customTimes?.[wd] ?? []).map((s) => { const n = hhmmMinutes(s); return zonedToUtc(y, m, d, Math.floor(n / 60), n % 60, tz); }).sort((a, b) => a - b);
+}
+/** custom: every listed time of the day that is free (gap from channel posts and taken times), in order; a taken or too
+ *  close time is skipped, never moved. */
+const customPicks = (cfg) => (key, minFloor, cap, slots) => {
+  const picks = [];
+  for (const c of customDayTimes(key, cfg)) {
+    if (c < minFloor || c > cap || slots.conflict(c) !== null) continue;
+    picks.push(c); slots.add(c);
+  }
+  return picks;
+};
+/** custom: a kept slot must be one of its day's custom times. */
+function customKeeps(cfg) {
+  const tz = zoneOf(cfg);
+  return (t) => customDayTimes(localDayKey(t, tz), cfg).includes(t);
+}
+
 export function planQueueSlots({ items, channelLast = null, channelTimes = [], nowMs, cfg }) {
   const list = (items ?? []).filter(isPlain);
   const needs = (i) => i.state === 'queued' && (!i.publishAt || isRetry(i, nowMs, cfg));
@@ -374,7 +425,7 @@ export function planQueueSlots({ items, channelLast = null, channelTimes = [], n
   for (const i of list) if (!needs(i) && !held(i)) taken.push(...itemTimes(i));
   const slots = createSlotter(taken, cfg);
   const reval = new Set();
-  const keeps = cfg.placement === 'random-daily' ? randomDailyKeeps(cfg) : null;
+  const keeps = cfg.placement === 'random-daily' ? randomDailyKeeps(cfg) : cfg.placement === 'custom' ? customKeeps(cfg) : null;
   for (const i of list.filter(held).sort((a, b) => ms(a.publishAt) - ms(b.publishAt))) {
     const t = ms(i.publishAt);
     if (slots.conflict(t) === null && (!keeps || keeps(t, slots))) { for (const x of itemTimes(i)) slots.add(x); continue; }
@@ -384,6 +435,7 @@ export function planQueueSlots({ items, channelLast = null, channelTimes = [], n
   }
   const moving = list.filter((i) => needs(i) || reval.has(i.id));
   if (cfg.placement === 'random-daily') return planRandomDaily(moving, slots, nowMs, cfg).map((p) => ({ ...p, reval: reval.has(p.id) }));
+  if (cfg.placement === 'custom') return planRandomDaily(moving, slots, nowMs, cfg, customPicks(cfg)).map((p) => ({ ...p, reval: reval.has(p.id) }));
   const cap = maxAheadMs(nowMs, cfg);
   const gap = cfg.intervalHours * HOUR_MS;
   const out = [];

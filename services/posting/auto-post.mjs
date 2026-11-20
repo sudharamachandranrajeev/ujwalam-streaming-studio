@@ -52,6 +52,17 @@ export function validateRules(j) {
   return { autoUpload: j.autoUpload === true, rules, ...(j.maxUploadsPerDay !== undefined ? { maxUploadsPerDay: j.maxUploadsPerDay } : {}) };
 }
 
+/** Never silent (user 2026-11-20): what the Auto-post card and the task bar say when auto-post is on but nothing can
+ *  upload. Plain words; one id on the task bar (NOTICE_TASK) so a new notice replaces the old one. */
+export const NOTICE_TASK = 'auto-post-notice';
+export const NOTICE_TEXT = Object.freeze({
+  'no-rules': 'Auto-post is on but no rule says what to post: nothing uploads',
+  'bad-rules': 'Auto-post is on but the posting rules have a mistake: nothing uploads',
+  'not-signed-in': 'Auto-post is on but YouTube is not signed in: nothing uploads',
+  'no-oauth-client': 'Auto-post is on but the YouTube app key is missing: nothing uploads',
+  'schedule-scope-missing': 'Auto-post is on but YouTube needs a new sign-in to read scheduled posts: nothing uploads',
+});
+
 /** Where the user's own rules live: <dataDir>/posting/auto-post-rules.json (survives app updates). */
 export function userRulesFile(dataDir) { return path.join(dataDir, 'posting', RULES_NAME); }
 

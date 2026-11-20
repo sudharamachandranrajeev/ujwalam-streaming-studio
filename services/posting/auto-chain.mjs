@@ -50,7 +50,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { LEDGER_NAME, POSTING_FLAG, createPostStore, packageRun, packageUploads, sha256File } from './index.mjs';
-import { AUTO_FLAG, AUTO_LOG_NAME, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
+import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
 import { scanClipsFolder } from './clips-source.mjs';
 import { DELETED_LOG_NAME, DELETE_FLAG, FINAL_KEEP, deleteUploadedFile } from './delete-uploaded.mjs';
 import { clipsFolder } from '../studio-ui/user-settings.mjs';
@@ -281,6 +281,7 @@ export function createPostChain(opts) {
     const recheck = queued.filter((i) => dueIds.has(i.id) && i.publishAt && !i.session && !isRetry(i, t, cfg));
     if (!need.some((i) => !capWait(i)) && !recheck.length) return cfg;
     const wait = (code, delay) => {
+      if (NOTICE_TEXT[code]) notice(code);
       // A too-close slot is dropped here (it can no longer be used) and marked for the D314 retry; nothing else is released.
       for (const i of need) queue.patch(i.id, { publishAt: null, reason: code, nextAt: new Date(t + delay).toISOString(), ...(isRetry(i, t, cfg) ? { reslot: true } : {}) });
       // A slot that could not be re-checked is kept but not used: the item waits for the next read.
@@ -334,7 +335,7 @@ export function createPostChain(opts) {
    *  kind from the clip queued last. */
   function backlogOrderFn(store) {
     const cfg = scheduleCfg();
-    if (!cfg || cfg.placement !== 'random-daily') return null;
+    if (!cfg || (cfg.placement !== 'random-daily' && cfg.placement !== 'custom')) return null; // custom times post the backlog in the same mixed order
     const items = queue.items();
     const lastId = items.length ? items[items.length - 1].id : null;
     const lastPost = lastId ? store.list().find((p) => p.id === lastId) ?? null : null;
@@ -538,13 +539,25 @@ export function createPostChain(opts) {
     return names.length;
   }
 
+  /** Never silent (user 2026-11-20): one task-bar line while auto-post is on but cannot upload; null clears it. */
+  // Written again on every pass while it holds (the task bar drops a task not updated for 10 minutes).
+  let noticeNow = null; let noticeSince = 0;
+  function notice(code, detail = null) {
+    if (!code) { if (noticeNow) removeTaskFile(dataDir, NOTICE_TASK); noticeNow = null; return; }
+    const t = nowMs();
+    if (code !== noticeNow) { noticeNow = code; noticeSince = t; }
+    writeTaskFile(dataDir, { id: NOTICE_TASK, kind: 'upload', title: NOTICE_TEXT[code], state: 'waiting', startedAt: noticeSince, updatedAt: t,
+      note: code === 'no-rules' || code === 'bad-rules' ? `Settings > Posting & growth > Auto-post${detail ? `: ${detail}` : ''}` : 'Settings > Posting & growth > Auto-post' });
+  }
+
   /** Approvals by the rules, enqueue of auto-approved posts, then the due uploads. Safe to call often. */
   async function step() {
     if (!flagsOn()) return { skipped: 'flag-off' };
     if (halted) return { skipped: 'stopped' };
     let rules;
-    try { rules = rulesSrc.get(); } catch (e) { return { skipped: 'bad-rules', detail: e?.code ?? 'error' }; }
-    if (!rules.rules.length) return { skipped: 'no-rules' };
+    try { rules = rulesSrc.get(); } catch (e) { notice('bad-rules', e?.message); return { skipped: 'bad-rules', detail: e?.code ?? 'error' }; }
+    if (!rules.rules.length) { notice('no-rules'); return { skipped: 'no-rules' }; }
+    notice(null); // rules fine; a sign-in wait below says so again
     if (!recovered) { recovered = true; queue.recover(); }
     if (opts.scanFolder !== false && nowMs() - lastScan >= (opts.scanEveryMs ?? SCAN_EVERY_MS)) { lastScan = nowMs(); await scanFolder(readProfile()); }
     const store = createPostStore({ ledgerFile, dataDir });

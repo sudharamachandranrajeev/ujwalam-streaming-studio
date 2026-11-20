@@ -35,10 +35,10 @@ import { createFlags } from '../flags/index.mjs';
 import { LEDGER_NAME, POSTING_FLAG, createPostStore } from '../posting/index.mjs';
 import { createYoutubeAuth } from '../posting/oauth.mjs';
 import { QUEUE_NAME, createUploadQueue, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
-import { AUTO_FLAG, AUTO_LOG_NAME, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
+import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
 import { previewRules } from '../posting/preview.mjs';
 import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
-import { moveQueueItem, readAutoPostSettings, readChannelForPreview, removeQueueItem, saveAutoPostSettings, schedulePreview } from '../posting/auto-settings.mjs';
+import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, schedulePreview } from '../posting/auto-settings.mjs';
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
 import { SCHEDULE_FLAG } from '../posting/schedule.mjs';
 import { UploadError, checkPostStatus, uploadPost } from '../posting/youtube.mjs';
@@ -58,7 +58,7 @@ import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
 import { clipsFolder, guideOnly, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
-import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, writeTaskFile } from './tasks.mjs';
+import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
 import { READINESS_FLAG, createReadiness, diskFreeBytes, lastCiPass, listProcessNames, loadReadinessConfig, logOverride, planTargets, readinessSummary } from './readiness.mjs';
 import { STOP_TASKS_FILE, clipTools } from './record-clips.mjs';
@@ -1628,6 +1628,26 @@ export function createStudioServer(opts) {
         return json(res, 200, { ...readAutoPostSettings(opts.dataDir), flags: { autoPost: on(AUTO_FLAG), schedule: on(SCHEDULE_FLAG), deleteUploaded: on(DELETE_FLAG) } });
       } catch { return json(res, 500, { error: 'settings-unreadable' }); }
     }
+    if (req.method === 'GET' && route === '/ui/api/posts/auto/rules') {      // user 2026-11-20 "What gets posted": the rules in use, unchanged, plus what stops uploads (never silent). Read only.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      const on = (id) => !!flags && flags.isOn(id);
+      let view;
+      try { view = readRulesEditor(opts.dataDir); } catch { return json(res, 500, { error: 'rules-unreadable' }); }
+      const notices = [];
+      if (on(AUTO_FLAG)) {
+        if (view.notice) notices.push(view.notice);
+        const auth = youtubeAuth();
+        let st = { signedIn: false, hasClient: false };
+        try { st = (await auth.status?.()) ?? st; } catch { /* shown as not signed in */ }
+        if (st.hasClient === false) notices.push(NOTICE_TEXT['no-oauth-client']);
+        else if (st.signedIn !== true) notices.push(NOTICE_TEXT['not-signed-in']);
+        // The read scope needs a token refresh (a Google call), so the card shows what the upload pass last found instead.
+        let chain = null;
+        try { chain = readTaskFiles(opts.dataDir, now()).find((t) => t.id === NOTICE_TASK) ?? null; } catch { chain = null; }
+        if (chain && !notices.includes(chain.title)) notices.push(chain.title);
+      }
+      return json(res, 200, { ...view, autoPostOn: on(AUTO_FLAG), notices });
+    }
     if (req.method === 'GET' && route === '/ui/api/posts/auto/schedule') {
       // D375 "Next posting times": the channel's scheduled posts, the queue's times and the next free slots. fresh=1 reads
       // the channel again (read-only scope, at most every 10 minutes); otherwise the times saved at the chain's last read.
@@ -1919,10 +1939,17 @@ export function createStudioServer(opts) {
     if (route === '/ui/api/posts/auto/settings') {      // D375: one click saves the card (D332, no confirm). Every value is checked first; nothing is written on a problem.
       // The rules and the schedule settings go to the user's files in the data dir; the next pass uses them (no restart).
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
-      if (Object.keys(body).some((k) => k !== 'card' && k !== 'doc') || (body.card === undefined) === (body.doc === undefined)) return json(res, 400, { error: 'bad-params' });
+      if (Object.keys(body).some((k) => k !== 'card' && k !== 'doc' && k !== 'keepRules') || (body.card === undefined) === (body.doc === undefined)
+        || (body.keepRules !== undefined && (typeof body.keepRules !== 'boolean' || body.card === undefined))) return json(res, 400, { error: 'bad-params' });
       let r;
       try { r = saveAutoPostSettings(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
       return r.ok ? json(res, 200, { ok: true, ...r.settings }) : json(res, 400, { error: 'invalid', problems: r.problems });
+    }
+    if (route === '/ui/api/posts/auto/rules') {      // user 2026-11-20: one click saves "What gets posted" (D332). Only the listed fields change; unknown rules and keys stay.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      let r;
+      try { r = saveRulesEdit(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return r.ok ? json(res, 200, { ok: true, ...r.rules }) : json(res, 400, { error: 'invalid', problems: r.problems });
     }
     if (route === '/ui/api/posts/auto/queue/move' || route === '/ui/api/posts/auto/queue/remove') {
       // D375: move a queued clip to another free time, or take it out of the queue. Local file only; nothing is sent.

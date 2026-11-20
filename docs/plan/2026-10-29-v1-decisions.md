@@ -2307,4 +2307,8 @@ delete recordings once clipped and reviewed; keep the ones still to be labelled)
   and every 15 min off air). Verdicts in `<data>/clips/backfill-recordings.jsonl` (`clips-exist (N clips in its time
   window)` or why kept). Dry run: `node services/studio-ui/recording-cleanup.mjs --dry-run --data <dir> --recordings
   <dir>` lists what would be deleted and kept, with sizes and reasons, and changes nothing.
+- Custom posting times (user, 2026-11-20: "add the ability to setup custom schedule in app as well"): placement
+  `custom` with exact local times per weekday and days off, filled in order, a clashing time skipped not moved; the
+  Auto-post card edits them, and "What gets posted" edits the user's own rules in place (unknown rules and keys kept).
+  Auto-post never fails silently: the card and the task bar say why nothing uploads.
 - Evidence: `docs/evidence/2026-11-19-autopost-backlog-cleanup.md`.

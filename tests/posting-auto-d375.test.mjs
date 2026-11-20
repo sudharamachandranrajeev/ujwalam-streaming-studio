@@ -22,7 +22,7 @@ import { readChannelSchedule } from '../services/posting/schedule-read.mjs';
 
 const tmp = [];
 /** The random-daily card values shipped in data/posting/schedule.json (D403). */
-const RD = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 90 };
+const RD = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 90, customTimes: {}, skipDates: [] }; // custom times: user 2026-11-20
 const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-d375-')); tmp.push(d); return d; };
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 const HOUR = 3600 * 1000; const DAY = 24 * HOUR;

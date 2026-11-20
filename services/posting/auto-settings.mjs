@@ -11,7 +11,7 @@
 //   postsPerDayMin, postsPerDayMax, windowStart, windowEnd, minGapMinutes } (the last five: placement random-daily, D403).
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { AutoPostError, MAX_PER_DAY, RULE_KINDS, rankerMinScore, userRulesFile, validateRules } from './auto-post.mjs';
+import { AutoPostError, MAX_PER_DAY, NOTICE_TEXT, RULE_KINDS, rankerMinScore, rulesFileFor, userRulesFile, validateRules } from './auto-post.mjs';
 import { DEFAULT_SCHEDULE, HOUR_MS, PLACEMENTS, USER_LIMITS, ScheduleError, alignUp, checkUserSchedule, floorFrom, itemTimes, loadScheduleConfig, maxAheadMs, nextFreeSlots, savedChannelTimes, toIso, userScheduleFile } from './schedule.mjs';
 import { QUEUE_NAME, createUploadQueue } from './auto-chain.mjs';
 import { READONLY_SCOPE } from './oauth.mjs';
@@ -24,7 +24,7 @@ export { DEFAULT_QUOTA, loadQuota };
 /** The two rules the card writes: one per YouTube target (the target is chosen by length and aspect, limits.json). */
 export const CARD_RULES = Object.freeze([{ id: 'auto-shorts', target: 'youtube-shorts' }, { id: 'auto-videos', target: 'youtube-video' }]);
 /** The schedule settings the card shows and saves (D375, D403); the seed is never on the card (made once, kept). */
-export const CARD_SCHEDULE_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes']);
+export const CARD_SCHEDULE_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'customTimes', 'skipDates']);
 export const KIND_LABELS = Object.freeze({ short: 'Short clips', montage: 'Montages', 'won-reel': 'Won-round reels', 'impact-play': 'Impact plays' });
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
@@ -56,8 +56,8 @@ export function defaultCard(dataDir) {
   let cfg; // a broken user file is reported by readAutoPostSettings; the defaults still come from the shipped one
   try { cfg = scheduleConfigFor(dataDir); } catch { cfg = loadScheduleConfig(DEFAULT_SCHEDULE); }
   return { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore() ?? 0, maxPerDay: Math.max(1, q.uploadsPerDayFit),
-    intervalHours: cfg.placement === 'random-daily' ? userOr(dataDir, 'intervalHours', cfg) : cfg.intervalHours, maxAheadDays: cfg.maxAheadDays, placement: cfg.placement, quotaUnitsPerDay: q.quotaUnitsPerDay,
-    postsPerDayMin: cfg.postsPerDayMin, postsPerDayMax: cfg.postsPerDayMax, windowStart: cfg.windowStart, windowEnd: cfg.windowEnd, minGapMinutes: cfg.minGapMinutes };
+    intervalHours: cfg.placement === 'random-daily' || cfg.placement === 'custom' ? userOr(dataDir, 'intervalHours', cfg) : cfg.intervalHours, maxAheadDays: cfg.maxAheadDays, placement: cfg.placement, quotaUnitsPerDay: q.quotaUnitsPerDay,
+    postsPerDayMin: cfg.postsPerDayMin, postsPerDayMax: cfg.postsPerDayMax, windowStart: cfg.windowStart, windowEnd: cfg.windowEnd, minGapMinutes: cfg.minGapMinutes, customTimes: cfg.customTimes ?? {}, skipDates: cfg.skipDates ?? [] };
 }
 
 /** intervalHours as saved or shipped (random-daily replaces the one in use by minGapMinutes; the card still shows the
@@ -149,17 +149,79 @@ export function saveAutoPostSettings(dataDir, body) {
   }
   const { card, problems } = checkCard(body.card);
   if (problems.length) return { ok: false, problems };
-  const doc = rulesFromCard(card);
-  validateRules(doc); // the card's own shape always passes; checked again so a bad file can never be written
+  // keepRules (user 2026-11-20): the rules file is the user's own shape; "What gets posted" edits it (saveRulesEdit), so the
+  // card writes only the schedule and never replaces those rules.
+  const keepRules = body.keepRules === true;
+  const doc = keepRules ? null : rulesFromCard(card);
+  if (doc) validateRules(doc); // the card's own shape always passes; checked again so a bad file can never be written
   const sched = { ...readUserSchedule(dataDir) };
   for (const k of CARD_SCHEDULE_KEYS) if (card[k] !== undefined) sched[k] = card[k];
   writeJsonAtomic(userScheduleFile(dataDir), {
     $comment: 'Your posting schedule (Settings > Posting & growth > Auto-post, D375). Replaces the shipped values in data/posting/schedule.json and data/posting/quota.json.',
     ...sched,
   });
-  writeJsonAtomic(userRulesFile(dataDir), doc);
+  if (doc) writeJsonAtomic(userRulesFile(dataDir), doc);
   ensureScheduleSeed(dataDir); // D403: the random plan's seed, made once
   return { ok: true, settings: readAutoPostSettings(dataDir) };
+}
+
+// ---------------------------------------------------------------- "What gets posted" (user 2026-11-20)
+
+const TARGET_LABELS = Object.freeze({ 'youtube-shorts': 'YouTube Shorts', 'youtube-video': 'YouTube videos' });
+
+/** The rules for the editor, read from the file in use (the user's, else the shipped template), unchanged. Never throws:
+ *  a bad file gives error and no rules. notice: the plain-words line when nothing would upload because of the rules. */
+export function readRulesEditor(dataDir) {
+  const file = rulesFileFor(dataDir);
+  const own = file === userRulesFile(dataDir);
+  let raw = null; let v = null; let error = null;
+  try { raw = JSON.parse(readFileSync(file, 'utf8')); v = validateRules(raw); } catch (e) { error = e instanceof AutoPostError ? e.message : 'rules file: missing or not valid JSON'; }
+  const rules = v ? v.rules.map((r) => ({ id: r.id, target: r.target, targetLabel: TARGET_LABELS[r.target] ?? r.target, kinds: [...r.kinds], maxPerDay: r.maxPerDay, minScore: r.minScore })) : [];
+  return {
+    own, error,
+    autoUpload: v ? v.autoUpload : false,
+    maxUploadsPerDay: v?.maxUploadsPerDay ?? null,
+    rules,
+    notice: error ? NOTICE_TEXT['bad-rules'] : !rules.length ? NOTICE_TEXT['no-rules'] : null,
+    kinds: RULE_KINDS.map((id) => ({ id, label: KIND_LABELS[id] ?? id })),
+    limits: { maxPerDay: MAX_PER_DAY },
+  };
+}
+
+/** Checks an editor save: { autoUpload, maxUploadsPerDay, rules: [{ id, kinds, maxPerDay }] }. -> problems. Pure. */
+export function checkRulesEdit(e) {
+  const problems = []; const add = (key, text) => problems.push({ key, text });
+  if (!isPlain(e) || Object.keys(e).some((k) => !['autoUpload', 'maxUploadsPerDay', 'rules'].includes(k))) return [{ key: null, text: 'nothing to save' }];
+  if (typeof e.autoUpload !== 'boolean') add('autoUpload', 'upload automatically must be on or off');
+  if (!Number.isInteger(e.maxUploadsPerDay) || e.maxUploadsPerDay < 1 || e.maxUploadsPerDay > MAX_PER_DAY) add('maxUploadsPerDay', `uploads per day must be a whole number from 1 to ${MAX_PER_DAY}`);
+  if (!Array.isArray(e.rules) || e.rules.length > 50) { add('rules', 'rules must be a list'); return problems; }
+  const seen = new Set();
+  for (const r of e.rules) {
+    if (!isPlain(r) || Object.keys(r).some((k) => !['id', 'kinds', 'maxPerDay'].includes(k)) || typeof r.id !== 'string' || seen.has(r.id)) { add('rules', 'a rule is not valid'); continue; }
+    seen.add(r.id);
+    if (!Array.isArray(r.kinds) || !r.kinds.length || new Set(r.kinds).size !== r.kinds.length || !r.kinds.every((k) => RULE_KINDS.includes(k))) add(`rule:${r.id}`, `choose at least one of ${RULE_KINDS.map((k) => KIND_LABELS[k]).join(', ')}`);
+    if (!Number.isInteger(r.maxPerDay) || r.maxPerDay < 1 || r.maxPerDay > MAX_PER_DAY) add(`rule:${r.id}`, `posts per day must be a whole number from 1 to ${MAX_PER_DAY}`);
+  }
+  return problems;
+}
+
+/** Saves the editor (one click, D332): only the given fields of the given rules change; every other key and every rule
+ *  not listed stay as they are. Written atomically to the user's file after validateRules; nothing is written on a problem. */
+export function saveRulesEdit(dataDir, edit) {
+  const problems = checkRulesEdit(edit);
+  if (problems.length) return { ok: false, problems };
+  const file = rulesFileFor(dataDir);
+  let doc;
+  try { doc = JSON.parse(readFileSync(file, 'utf8')); validateRules(doc); } catch (e) { return { ok: false, problems: [{ key: 'doc', text: `the rules file in use has a mistake, fix it by hand first (${e instanceof AutoPostError ? e.message : 'not valid JSON'})` }] }; }
+  const ids = new Set(doc.rules.map((r) => r.id));
+  const unknown = edit.rules.filter((r) => !ids.has(r.id));
+  if (unknown.length) return { ok: false, problems: [{ key: 'rules', text: `no rule named ${unknown.map((r) => r.id).join(', ')}` }] };
+  const byId = new Map(edit.rules.map((r) => [r.id, r]));
+  const next = { ...doc, autoUpload: edit.autoUpload, maxUploadsPerDay: edit.maxUploadsPerDay,
+    rules: doc.rules.map((r) => (byId.has(r.id) ? { ...r, kinds: [...byId.get(r.id).kinds], maxPerDay: byId.get(r.id).maxPerDay } : r)) };
+  validateRules(next);
+  writeJsonAtomic(userRulesFile(dataDir), next);
+  return { ok: true, rules: readRulesEditor(dataDir) };
 }
 
 // ---------------------------------------------------------------- schedule preview and queue edits (D375)

@@ -118,3 +118,40 @@ Tests: `tests/recording-cleanup.test.mjs` 20/20. The fixtures cover:
 - random-daily: every taken time on a local day counts toward the day's maximum, also outside 09:00-23:00, for new and
   kept slots.
 - Tests: recording-cleanup 18/18, record-clips 27/27, posting-random-daily 9/9, posting-schedule 28/28, posting-e2e 38/38.
+## Codex round 2 fixes (2026-11-20)
+
+- The H/V identity is taken when the clip job starts and carried to its finish record; a file replaced while the job
+  ran gives no record. A record without a start identity is not written.
+- `safeDeleteFile` with `requireId` refuses a missing identity (`no-identity`). The V identity is read once per plan.
+- The live/recording state, the clip jobs and the Keep for labelling list are checked synchronously right before the
+  rename into `.ujwalam-deleting` (`gate`); an async or unreadable state counts as unknown and stops the batch.
+- A run folder proves a recording only when its `render.json` `createdAt` is at or after the file's last write minus
+  2 min and the name time is not after it (`run-older-than-file` otherwise).
+- `published.json` paths count only when relative, without `..`, and a regular file inside the clips folder by real
+  path (no junctions or directories).
+- Tests: recording-cleanup 23/23, record-clips 27/27, posting-auto-d375 46/46.
+
+## Custom posting times and "What gets posted" (user 2026-11-20: "add the ability to setup custom schedule in app as well")
+
+- `placement: custom` (`services/posting/schedule.mjs`): `customTimes` `{ mon: ['09:00', '18:00'], ... }` (up to 24 a
+  day) and `skipDates` (`YYYY-MM-DD`, up to 400). Times are local wall times (DST-safe through `zonedToUtc`); slots fill
+  them in order; a time too close (`minGapMinutes`) to a channel post or a taken time is skipped, never moved; a kept
+  slot must be one of its day's times. Lead time, `maxAheadDays`, quota, `maxUploadsPerDay` and retries apply as before.
+  Custom with no time refuses to load (fail closed). The backlog order is the same mixed order as random-daily.
+- Auto-post card: placement list "Random each day" (default), "Custom times", "Fill gaps between posts", "Always after
+  the last scheduled post". Custom times: a week grid with time chips (add by a time field, remove with x), "Copy to
+  every day", days off, and the next 10 posts with these times. Save/Discard as before; no typed confirms.
+- "What gets posted": when the rules file is the user's own shape, the card shows each rule with its kinds as
+  switches and its daily maximum, plus Upload automatically and the overall maximum. `GET/POST
+  /ui/api/posts/auto/rules` (session; POST also CSRF and same Origin) read and edit it; only the named fields of the
+  named rules change, every other key and rule is kept (`saveRulesEdit`), written atomically after `validateRules`.
+  Card Save then sends `keepRules: true` so the schedule is saved without replacing those rules.
+- Never silent: when auto-post is on and nothing can upload (no rules, bad rules, not signed in, no app key, read
+  scope missing) the card shows it in red and the upload pass keeps one task bar line (`auto-post-notice`), e.g.
+  "Auto-post is on but no rule says what to post: nothing uploads". The card checks sign-in locally only; the read
+  scope comes from the upload pass's last check (a scope check needs a Google token call).
+- Tests: posting-custom-schedule 12/12 (weekday times, DST, days off, channel and taken clashes, unknown rules kept,
+  keepRules, notices, routes with CSRF/Origin, QML bytecode compile), posting-random-daily 9/9, posting-schedule
+  28/28, posting-auto-d375 46/46, posting-auto-chain 14/14, studio-ui-posting-auto 8/8.
+- UNVERIFIED: the QML card was compiled, not run; `tests/studio-qml-posting.test.mjs` skips here because the studio
+  shell is not built in this worktree.
