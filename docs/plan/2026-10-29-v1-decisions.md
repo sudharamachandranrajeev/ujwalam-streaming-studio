@@ -2275,3 +2275,24 @@ User (2026-11-19): "installer needs to be a single file with everything that sho
   (`data/downloads/*.json`: the speech model for captions, the Face AI models) on a click, with resume, SHA-256 checks,
   retry, Pause and Cancel; never while live or recording. Settings > Clips and Editing offer the missing model.
 - Evidence: `docs/evidence/2026-11-19-single-file-setup.md`. A run on a fresh PC is still UNVERIFIED.
+
+## D405 — Backlog auto-post and recording cleanup as built (proposed, 2026-11-19)
+
+Proposed by the coding agent from D403; waits for the user's yes.
+
+- Schedule: `placement: random-daily` is the new default (`data/posting/schedule.json`): each local day 09:00-23:00
+  gets a seeded count of 3-6 posts (`postsPerDayMin`/`Max`), at seeded minute times at least `minGapMinutes` (90)
+  apart, also from the channel's own scheduled posts and the queue. The seed is written once to the user's
+  `schedule.json` (`seed`) so the times stay put between runs. A user schedule that already says `fill-gaps` keeps it;
+  the Auto-post card offers all three placements.
+- Backlog order (random-daily only): seeded shuffle of every made clip, no two of the same kind back to back while
+  another kind waits, the parts of a split reel next to each other in part order. The approval daily cap still applies.
+- `delete-processed-recordings` ("Delete clipped recordings") is ON by default (user-requested). A recording's H
+  and V files are deleted permanently only when: the flag is on; the studio is neither live nor recording (unknown =
+  no); it has a finished clip job (`<data>/clips/jobs.jsonl`) and the latest of each job type ended with exit 0 and its
+  reels made; no clip job for it runs, waits or asks; it is not ticked Keep for labelling (Settings > Clips >
+  Recordings; an unreadable list keeps everything); and each file is inside the recordings folder, unchanged and not
+  in use (`services/common/safe-delete.mjs`, shared with posted clips). Recordings with no recorded clip job (all made
+  before this build) are never deleted. Each deletion is logged to `<data>/clips/deleted-recordings.jsonl`; one task
+  bar line per batch says "Deleted N recordings, freed X GB". It runs once at start-up and after each clip job.
+- Evidence: `docs/evidence/2026-11-19-autopost-backlog-cleanup.md`.

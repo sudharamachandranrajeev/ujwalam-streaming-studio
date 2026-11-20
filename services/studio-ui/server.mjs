@@ -37,6 +37,7 @@ import { createYoutubeAuth } from '../posting/oauth.mjs';
 import { QUEUE_NAME, createUploadQueue, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
 import { previewRules } from '../posting/preview.mjs';
+import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
 import { moveQueueItem, readAutoPostSettings, readChannelForPreview, removeQueueItem, saveAutoPostSettings, schedulePreview } from '../posting/auto-settings.mjs';
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
 import { SCHEDULE_FLAG } from '../posting/schedule.mjs';
@@ -1609,8 +1610,18 @@ export function createStudioServer(opts) {
         return json(res, 200, await previewRules({ dataDir: opts.dataDir, rules, rulesFile, profile, log, flagOn: !!flags && flags.isOn(AUTO_FLAG), now: () => new Date(now()), outputsStatus: streamOnly(ytOutputsStatus), scheduleOn: !!flags && flags.isOn(SCHEDULE_FLAG), scheduleFile: opts.scheduleFile }));
       } catch { return json(res, 200, { error: 'preview-unavailable', queued: [], skipped: [] }); }
     }
-    if (req.method === 'GET' && route === '/ui/api/posts/auto/settings') {
-      // D375 Settings > Posting & growth > Auto-post: the card's values, defaults, limits and quota fit. Read only.
+    if (req.method === 'GET' && route === '/ui/api/recordings/keep') {
+      // D403 Settings > Clips > Recordings: the recordings Ujwalam made clips from, whether each may be deleted now (or
+      // why not) and whether it is on the Keep for labelling list. Read only.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      try {
+        const keepList = readKeepList(opts.dataDir);
+        const sessions = cleanupPlan({ dataDir: opts.dataDir, keepList: { all: false, names: new Set() } })
+          .map((s) => ({ name: s.name, hasV: !!s.v, reason: s.reason, keep: keepList.all || keepList.names.has(s.name.toLowerCase()) }));
+        return json(res, 200, { sessions, keepUnreadable: keepList.all, flag: !!flags && flags.isOn(CLEANUP_FLAG) });
+      } catch { return json(res, 500, { error: 'recordings-unreadable' }); }
+    }
+    if (req.method === 'GET' && route === '/ui/api/posts/auto/settings') {      // D375 Settings > Posting & growth > Auto-post: the card's values, defaults, limits and quota fit. Read only.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
       try {
         const on = (id) => !!flags && flags.isOn(id);
@@ -1897,8 +1908,15 @@ export function createStudioServer(opts) {
         return json(res, 200, { ok: true, undoes: u.entry.undoes, ...v });
       } catch { return json(res, 500, { error: 'mix-failed' }); }
     }
-    if (route === '/ui/api/posts/auto/settings') {
-      // D375: one click saves the card (D332, no confirm). Every value is checked first; nothing is written on a problem.
+    if (route === '/ui/api/recordings/keep') {
+      // D403: one click ticks or unticks a recording on the Keep for labelling list (D332, no confirm).
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      if (Object.keys(body).some((k) => k !== 'name' && k !== 'keep') || typeof body.name !== 'string' || typeof body.keep !== 'boolean') return json(res, 400, { error: 'bad-params' });
+      try { return json(res, 200, { ok: true, sessions: setKeep(opts.dataDir, body.name, body.keep) }); } catch (e) {
+        return json(res, e?.code === 'bad-name' ? 400 : 500, { error: e?.code === 'bad-name' || e?.code === 'keep-unreadable' ? e.code : 'save-failed' });
+      }
+    }
+    if (route === '/ui/api/posts/auto/settings') {      // D375: one click saves the card (D332, no confirm). Every value is checked first; nothing is written on a problem.
       // The rules and the schedule settings go to the user's files in the data dir; the next pass uses them (no restart).
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
       if (Object.keys(body).some((k) => k !== 'card' && k !== 'doc') || (body.card === undefined) === (body.doc === undefined)) return json(res, 400, { error: 'bad-params' });
