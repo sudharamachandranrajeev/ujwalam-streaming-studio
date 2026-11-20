@@ -60,6 +60,7 @@ import { UploadError, checkUploadStatus, uploadPost } from './youtube.mjs';
 import { DEFAULT_SCHEDULE, SCHEDULE_FLAG, ScheduleError, chunkDeadlineMs, fallbackBps, isRetry, loadScheduleConfig, marginMs, minLeadMs, planQueueSlots, toIso, userScheduleFile } from './schedule.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
 import { ensureScheduleSeed } from './schedule-seed.mjs';
+import { backlogOrder, clipFacts } from './backlog-order.mjs';
 import { createQuotaBudget } from './quota-budget.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
@@ -329,6 +330,18 @@ export function createPostChain(opts) {
     return cfg;
   }
 
+  /** D403: the backlog order for this pass (random-daily placement), or null (oldest first). The first clip differs in
+   *  kind from the clip queued last. */
+  function backlogOrderFn(store) {
+    const cfg = scheduleCfg();
+    if (!cfg || cfg.placement !== 'random-daily') return null;
+    const items = queue.items();
+    const lastId = items.length ? items[items.length - 1].id : null;
+    const lastPost = lastId ? store.list().find((p) => p.id === lastId) ?? null : null;
+    const prevKind = lastPost ? clipFacts(lastPost).kind : null;
+    return (posts) => backlogOrder(posts, { seed: cfg.seed, prevKind });
+  }
+
   async function processQueue(store, rules) {
     const due = queue.items().filter((i) => i.state === 'queued' && (!i.nextAt || Date.parse(i.nextAt) <= nowMs()));
     if (!due.length) return;
@@ -539,11 +552,13 @@ export function createPostChain(opts) {
     // RP5 (D373): the learned kind order only while the flag self-learning is on and a learned mix is in use
     let kindShares = null;
     if (flags.isOn(MIX_FLAG)) { try { kindShares = appliedKindShares(dataDir); } catch { kindShares = null; } }
-    const r = await runAuto({ store, rules, outputsStatus, logFile: autoLogFile, now: () => new Date(nowMs()), kindShares, unscoredFloor: rankerMinScore() });
+    // D403: with the random-daily placement the backlog goes out shuffled (seeded), kinds mixed, split reels in part order.
+    const order = backlogOrderFn(store);
+    const r = await runAuto({ store, rules, outputsStatus, logFile: autoLogFile, now: () => new Date(nowMs()), kindShares, unscoredFloor: rankerMinScore(), order });
     if (rules.autoUpload) {
       const autoApproved = new Set(createAutoLog(autoLogFile).list().filter((e) => e.action === 'approve').map((e) => e.id));
-      // Oldest clip first (D375): the queue's order is the order slots are given out in.
-      for (const p of oldestFirst(store.list())) if (p.status === 'approved' && UPLOAD_TARGETS.includes(p.target) && autoApproved.has(p.id)) queue.add(p.id);
+      // Oldest clip first (D375), or the backlog order (D403): the queue's order is the order slots are given out in.
+      for (const p of (order ?? oldestFirst)(store.list())) if (p.status === 'approved' && UPLOAD_TARGETS.includes(p.target) && autoApproved.has(p.id)) queue.add(p.id);
       await processQueue(store, rules);
     }
     const deleted = await deletePass(store);

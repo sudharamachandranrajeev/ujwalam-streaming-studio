@@ -486,6 +486,7 @@ export function createPostStore(opts) {
     id: postId(e), target: p.target, clipId: p.source.clipId, kind: typeof p.source.kind === 'string' ? p.source.kind : 'short', layout: p.source.layout, score: Number.isFinite(p.source.score) ? p.source.score : null, startSec: p.source.startSec, endSec: p.source.endSec,
     choices: cleanChoices(p.source.choices),
     madeAt: typeof p.source.madeAt === 'string' ? p.source.madeAt : (typeof p.createdAt === 'string' ? p.createdAt.slice(0, 19) : null), // D375: posting order
+    sourceName: typeof p.source.file === 'string' ? path.basename(p.source.file) : null, // D403: kind and parts for the backlog order
     status: e.status, videoId: e.videoId ?? null, privacy: 'private', title: p.title, description: p.description, tags: p.tags, hashtags: p.hashtags,
     limits: p.limits, unresolved: p.unresolved ?? [], hasCover: !!p.cover, hasCaptions: !!p.captions, videoBytes: p.video?.bytes ?? null, updatedAt: p.updatedAt,
   });
