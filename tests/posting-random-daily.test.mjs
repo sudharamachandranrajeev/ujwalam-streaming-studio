@@ -151,3 +151,17 @@ describe('random-daily placement (D403)', () => {
     assert.equal(fg.placement, 'fill-gaps'); assert.equal(fg.intervalHours, 2); assert.equal(fg.alignMinutes, 60);
   });
 });
+
+test('Codex round 1: every taken time on a local day counts toward its max, also outside the window (new and kept slots)', () => {
+  const cfg = base({ postsPerDayMin: 3, postsPerDayMax: 3 });
+  const day = '2026-11-21';
+  const at = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return zonedToUtc(2026, 11, 21, h, m, TZ); };
+  // three channel posts at 07:00, 07:30 and 23:30 (outside 09:00-23:00) fill the day's count of 3
+  const channel = [at('07:00'), at('07:30'), at('23:30')];
+  const plan = planQueueSlots({ items: queued(20), channelTimes: channel, nowMs: Date.parse('2026-11-20T23:30:00Z'), cfg });
+  assert.equal(plan.filter((p) => p.at !== null && localDayKey(p.at, TZ) === day).length, 0, 'no new post on a day that is full');
+  // a held queue slot on that day is not kept either
+  const held = [{ id: 'h1', state: 'queued', publishAt: new Date(at('12:00')).toISOString(), session: null }];
+  const again = planQueueSlots({ items: held, channelTimes: channel, nowMs: Date.parse('2026-11-20T23:30:00Z'), cfg });
+  assert.equal(again[0].reval, true); assert.notEqual(localDayKey(again[0].at, TZ), day);
+});

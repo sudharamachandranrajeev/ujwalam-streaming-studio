@@ -326,8 +326,8 @@ function planRandomDaily(moving, slots, nowMs, cfg) {
   let key = localDayKey(minFloor, tz);
   const lastKey = localDayKey(cap, tz);
   const fillDay = () => {
-    const { start, end } = dayWindow(key, cfg);
-    const have = slots.times().filter((t) => t >= start && t <= end).length;
+    // Codex round 1 (P2): every taken time on that local day counts (channel posts and queue items outside the window too).
+    const have = slots.times().filter((t) => localDayKey(t, tz) === key).length;
     const want = dayCount(key, cfg) - have;
     const picks = [];
     if (want > 0) {
@@ -358,7 +358,8 @@ function randomDailyKeeps(cfg) {
   return (t, slots) => {
     const key = localDayKey(t, tz); const { start, end } = dayWindow(key, cfg);
     if (t < start || t > end) return false;
-    if (!kept.has(key)) kept.set(key, slots.times().filter((x) => x >= start && x <= end).length);
+    // Every taken time on that local day counts, inside the window or not (Codex round 1).
+    if (!kept.has(key)) kept.set(key, slots.times().filter((x) => localDayKey(x, tz) === key).length);
     if (kept.get(key) >= dayCount(key, cfg)) return false;
     kept.set(key, kept.get(key) + 1);
     return true;
