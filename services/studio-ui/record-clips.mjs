@@ -35,6 +35,7 @@ import { PARENT_PIPE_ENV } from '../common/parent-pipe.mjs';
 import { killChildTree } from '../common/kill-tree.mjs';
 import { clipsFolder, readSettings, writeSettings } from './user-settings.mjs';
 import { writeTaskFile } from './tasks.mjs';
+import { CLEANUP_FLAG, appendJobRecord, fileIdentity, runRecordingCleanup } from './recording-cleanup.mjs';
 
 const ACTIVE = new Set(['starting', 'live', 'reconnecting', 'retrying']);
 /** The tray's "Stop all" while live or recording (D311 proposed): <dataDir>/clips/<this>, written by the UI server. */
@@ -278,7 +279,9 @@ const pickJob = (j) => Object.fromEntries(JOB_KEYS.filter((k) => j[k] !== undefi
 const speechModelUsable = () => (process.env.UJWALAM_MODELS_DIR ? modelUsable('speech-captions') : true);
 export const CAPTIONS_SKIPPED = 'Captions skipped: download the speech model in Settings > Downloads.';
 
-export function createRecordClips({ clipRoot, dataDir, project = null, log, spawnFn = spawn, now = Date.now, postChain = null, killTreeFn = killChildTree, liveClipper = null, trainFlag = () => false, resumeHoldMs = 0, captionsModel = speechModelUsable }) {
+export function createRecordClips({ clipRoot, dataDir, project = null, log, spawnFn = spawn, now = Date.now, postChain = null, killTreeFn = killChildTree, liveClipper = null, trainFlag = () => false, resumeHoldMs = 0, captionsModel = speechModelUsable,
+  // D403: the recordings folder in use (string or () => string) and the flag check for Delete clipped recordings.
+  recordingsFolder = null, cleanupFlag = () => false, cleanupImpl = runRecordingCleanup }) {
   const stateDir = path.join(dataDir, 'clips');
   const statusFile = path.join(stateDir, 'status.json');
   const answerFile = path.join(stateDir, 'answer.json');
@@ -368,12 +371,14 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     // The speech model check (captions): a failure skips only the captions step, the job still runs.
     if (job.type !== 'train' && job.captionsOk === undefined) {
       const settle = (ok) => { job.captionsOk = ok === true; if (!job.captionsOk) log(`clips: ${CAPTIONS_SKIPPED}`); };
+      // Codex round 4 (P3): while a check runs, a poll does not start another one (each call hashes the model).
+      if (checkingModel) return;
       let r;
       try { r = captionsModel(); } catch { r = false; }
       if (r !== true && r !== false) {
-        if (checkingModel) return;
         checkingModel = true;
-        Promise.resolve(r).catch(() => false).then((ok) => { checkingModel = false; settle(ok); write(); start(); });
+        // Codex round 4 (P1): the check can end after the stream went live; the job then waits for the off-air start.
+        Promise.resolve(r).catch(() => false).then((ok) => { checkingModel = false; settle(ok); write(); if (!liveNow && !stopped) start(); });
         return;
       }
       settle(r);
@@ -389,6 +394,8 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     mkdirSync(stateDir, { recursive: true });
     const fd = openSync(logFile, 'a');
     current = job;
+    // Codex round 2: the files' identity when the job starts reading them; the finish record needs the same files.
+    job.hId = typeof job.h === 'string' && job.h ? fileIdentity(job.h) : null; job.vId = typeof job.v === 'string' && job.v ? fileIdentity(job.v) : null;
     progress = null;
     job.activeAt = now(); job.progressAt = null; // the stall warning measures silence from here (tasks.mjs stallOf)
     // stdin: the parent pipe (D234): when the launcher is gone (even hard-killed) the clipper ends itself and its ffmpeg
@@ -427,6 +434,8 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       const reels = code === 0 ? reelsNotMade(done, spec.out) : null;
       last = { name: done.name, kind: done.kind, result: code === 0 ? 'done' : 'failed', code, clips: n, out: spec.out, folder: spec.folder, ...(reels ? { reelsNotMade: reels } : {}) };
       if (reels) log(`clips: reels not made from ${done.name}: ${reels}`);
+      // D403: what this job did with which files (the recording cleanup reads it).
+      appendJobRecord(dataDir, { h: done.h ?? null, hId: done.hId ?? null, v: done.v ?? null, ...(done.v ? { vId: done.vId ?? null } : {}), type: done.type, kind: done.kind ?? null, name: done.name, result: code === 0 ? 'done' : 'failed', code, reelsNotMade: reels ?? null, at: iso(now()) });
       log(code === 0 ? `clips: ${n} clip(s) made from ${done.name} in ${spec.folder}` : `clips: making clips from ${done.name} failed (exit ${code}); see ${logFile}`);
       const capNote = done.captionsOk === false ? `${CAPTIONS_SKIPPED} ` : ''; // first: the task note is cut at 160
       finishTask(done, code === 0, code === 0 ? `${capNote}${n} clip${n === 1 ? '' : 's'} made${reels ? `. Reels not made: ${reels}` : ''}` : `${capNote}Something went wrong; see the log`);
@@ -436,6 +445,27 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       if (done.kind === 'live' && trainOn() && !queue.some((q) => q.type === 'train')) add({ type: 'train', kind: 'train', name: `pack-check-${stamp(now())}` }, 'stream clips done; checking the game pack against the labels (runs last)');
       write();
       start();
+      cleanupSoon('a clip job finished');
+    });
+  };
+  // D403 Delete clipped recordings: once at start-up (first status) and after each clip job, off air only, when no
+  // clip job runs. It runs in the launcher on a later turn (setImmediate) and reads no file contents (file id checks).
+  // Also every CLEANUP_EVERY_MS while off air and idle, so a live-clipper session (no clip job) goes once it has settled.
+  const CLEANUP_EVERY_MS = 15 * 60 * 1000;
+  let cleaning = false; let lastCleanAt = null;
+  const flagOnSafe = () => { try { return cleanupFlag() === true; } catch { return false; } };
+  const cleanupSoon = (why) => {
+    if (cleaning || stopped || halted || child || liveNow || !lastStatus) return;
+    if (!flagOnSafe()) return;
+    cleaning = true; lastCleanAt = now();
+    setImmediate(() => {
+      const folder = typeof recordingsFolder === 'function' ? recordingsFolder() : recordingsFolder;
+      Promise.resolve(cleanupImpl({ dataDir, folder, flagOn: flagOnSafe(), status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] }, nowMs: now(), log, writeTask: writeTaskFile, clipperBusy: watching,
+        // Codex round 1: read again right before each file's delete (a stream, recording or clip job that starts stops the batch).
+        recheck: () => ({ status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] } }) }))
+        .then((r) => { if (r?.deleted?.length) log(`clips: recording cleanup after ${why}: ${r.deleted.length} file(s) deleted`); })
+        .catch((e) => log(`clips: recording cleanup failed (${String(e?.code ?? e?.message ?? 'error').slice(0, 60)}); recordings kept`))
+        .finally(() => { cleaning = false; });
     });
   };
   // Stop the tasks only (the tray's Stop all while a stream or recording runs, so the studio and host stay): the clip
@@ -510,6 +540,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       readStop();
       if (live && child && current && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); } // the whole tree: ffmpeg must not encode while live
       if (!live) start();
+      if (!live && !rec && (lastCleanAt === null || now() - lastCleanAt >= CLEANUP_EVERY_MS)) cleanupSoon(lastCleanAt === null ? 'start-up' : 'an idle check');
       if (postChain) void Promise.resolve(postChain.tick(status)).catch(() => {}); // retries of queued uploads; the chain itself refuses while a stream is live
       write();
     },

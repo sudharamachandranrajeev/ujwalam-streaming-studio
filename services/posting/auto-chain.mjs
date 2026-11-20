@@ -50,7 +50,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { LEDGER_NAME, POSTING_FLAG, createPostStore, packageRun, packageUploads, sha256File } from './index.mjs';
-import { AUTO_FLAG, AUTO_LOG_NAME, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
+import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
 import { scanClipsFolder } from './clips-source.mjs';
 import { DELETED_LOG_NAME, DELETE_FLAG, FINAL_KEEP, deleteUploadedFile } from './delete-uploaded.mjs';
 import { clipsFolder } from '../studio-ui/user-settings.mjs';
@@ -59,6 +59,8 @@ import { READONLY_SCOPE, createYoutubeAuth } from './oauth.mjs';
 import { UploadError, checkUploadStatus, uploadPost } from './youtube.mjs';
 import { DEFAULT_SCHEDULE, SCHEDULE_FLAG, ScheduleError, chunkDeadlineMs, fallbackBps, isRetry, loadScheduleConfig, marginMs, minLeadMs, planQueueSlots, toIso, userScheduleFile } from './schedule.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
+import { ensureScheduleSeed } from './schedule-seed.mjs';
+import { backlogOrder, clipFacts } from './backlog-order.mjs';
 import { createQuotaBudget } from './quota-budget.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
@@ -257,7 +259,8 @@ export function createPostChain(opts) {
     publishAtOf: (sha) => queue.items().find((i) => i.sha === sha)?.sessionPublishAt ?? null,
   };
   // The shipped settings plus the user's own (Settings > Posting & growth > Auto-post), read again on every pass.
-  const scheduleCfg = () => { try { return loadScheduleConfig(opts.scheduleFile ?? DEFAULT_SCHEDULE, { userFile: userScheduleFile(dataDir) }); } catch { return null; } };
+  // D403: the random-daily plan's seed is made once and saved in the user's schedule.json before the first plan.
+  const scheduleCfg = () => { try { if (opts.ensureSeed !== false) ensureScheduleSeed(dataDir); return loadScheduleConfig(opts.scheduleFile ?? DEFAULT_SCHEDULE, { userFile: userScheduleFile(dataDir) }); } catch { return null; } };
 
   /** post-schedule: every queued item without a usable slot gets the next slot, in queue order. The channel is read once,
    *  and only when some item needs a slot or a due item's slot must be re-checked before its upload starts (dueIds).
@@ -278,6 +281,7 @@ export function createPostChain(opts) {
     const recheck = queued.filter((i) => dueIds.has(i.id) && i.publishAt && !i.session && !isRetry(i, t, cfg));
     if (!need.some((i) => !capWait(i)) && !recheck.length) return cfg;
     const wait = (code, delay) => {
+      if (NOTICE_TEXT[code]) notice(code);
       // A too-close slot is dropped here (it can no longer be used) and marked for the D314 retry; nothing else is released.
       for (const i of need) queue.patch(i.id, { publishAt: null, reason: code, nextAt: new Date(t + delay).toISOString(), ...(isRetry(i, t, cfg) ? { reslot: true } : {}) });
       // A slot that could not be re-checked is kept but not used: the item waits for the next read.
@@ -325,6 +329,18 @@ export function createPostChain(opts) {
     if (given || moved) log(`posting: gave ${given} clip(s) a publish time and moved ${moved} (at least ${cfg.intervalHours} h apart)`);
     if (capped) log(`posting: ${REASON_TEXT['schedule-beyond-cap']}; ${capped} clip(s) wait`);
     return cfg;
+  }
+
+  /** D403: the backlog order for this pass (random-daily placement), or null (oldest first). The first clip differs in
+   *  kind from the clip queued last. */
+  function backlogOrderFn(store) {
+    const cfg = scheduleCfg();
+    if (!cfg || (cfg.placement !== 'random-daily' && cfg.placement !== 'custom')) return null; // custom times post the backlog in the same mixed order
+    const items = queue.items();
+    const lastId = items.length ? items[items.length - 1].id : null;
+    const lastPost = lastId ? store.list().find((p) => p.id === lastId) ?? null : null;
+    const prevKind = lastPost ? clipFacts(lastPost).kind : null;
+    return (posts) => backlogOrder(posts, { seed: cfg.seed, prevKind });
   }
 
   async function processQueue(store, rules) {
@@ -523,13 +539,25 @@ export function createPostChain(opts) {
     return names.length;
   }
 
+  /** Never silent (user 2026-11-20): one task-bar line while auto-post is on but cannot upload; null clears it. */
+  // Written again on every pass while it holds (the task bar drops a task not updated for 10 minutes).
+  let noticeNow = null; let noticeSince = 0;
+  function notice(code, detail = null) {
+    if (!code) { if (noticeNow) removeTaskFile(dataDir, NOTICE_TASK); noticeNow = null; return; }
+    const t = nowMs();
+    if (code !== noticeNow) { noticeNow = code; noticeSince = t; }
+    writeTaskFile(dataDir, { id: NOTICE_TASK, kind: 'upload', title: NOTICE_TEXT[code], state: 'waiting', startedAt: noticeSince, updatedAt: t,
+      note: code === 'no-rules' || code === 'bad-rules' ? `Settings > Posting & growth > Auto-post${detail ? `: ${detail}` : ''}` : 'Settings > Posting & growth > Auto-post' });
+  }
+
   /** Approvals by the rules, enqueue of auto-approved posts, then the due uploads. Safe to call often. */
   async function step() {
     if (!flagsOn()) return { skipped: 'flag-off' };
     if (halted) return { skipped: 'stopped' };
     let rules;
-    try { rules = rulesSrc.get(); } catch (e) { return { skipped: 'bad-rules', detail: e?.code ?? 'error' }; }
-    if (!rules.rules.length) return { skipped: 'no-rules' };
+    try { rules = rulesSrc.get(); } catch (e) { notice('bad-rules', e?.message); return { skipped: 'bad-rules', detail: e?.code ?? 'error' }; }
+    if (!rules.rules.length) { notice('no-rules'); return { skipped: 'no-rules' }; }
+    notice(null); // rules fine; a sign-in wait below says so again
     if (!recovered) { recovered = true; queue.recover(); }
     if (opts.scanFolder !== false && nowMs() - lastScan >= (opts.scanEveryMs ?? SCAN_EVERY_MS)) { lastScan = nowMs(); await scanFolder(readProfile()); }
     const store = createPostStore({ ledgerFile, dataDir });
@@ -537,11 +565,13 @@ export function createPostChain(opts) {
     // RP5 (D373): the learned kind order only while the flag self-learning is on and a learned mix is in use
     let kindShares = null;
     if (flags.isOn(MIX_FLAG)) { try { kindShares = appliedKindShares(dataDir); } catch { kindShares = null; } }
-    const r = await runAuto({ store, rules, outputsStatus, logFile: autoLogFile, now: () => new Date(nowMs()), kindShares, unscoredFloor: rankerMinScore() });
+    // D403: with the random-daily placement the backlog goes out shuffled (seeded), kinds mixed, split reels in part order.
+    const order = backlogOrderFn(store);
+    const r = await runAuto({ store, rules, outputsStatus, logFile: autoLogFile, now: () => new Date(nowMs()), kindShares, unscoredFloor: rankerMinScore(), order });
     if (rules.autoUpload) {
       const autoApproved = new Set(createAutoLog(autoLogFile).list().filter((e) => e.action === 'approve').map((e) => e.id));
-      // Oldest clip first (D375): the queue's order is the order slots are given out in.
-      for (const p of oldestFirst(store.list())) if (p.status === 'approved' && UPLOAD_TARGETS.includes(p.target) && autoApproved.has(p.id)) queue.add(p.id);
+      // Oldest clip first (D375), or the backlog order (D403): the queue's order is the order slots are given out in.
+      for (const p of (order ?? oldestFirst)(store.list())) if (p.status === 'approved' && UPLOAD_TARGETS.includes(p.target) && autoApproved.has(p.id)) queue.add(p.id);
       await processQueue(store, rules);
     }
     const deleted = await deletePass(store);

@@ -1649,7 +1649,11 @@ export async function main(argv = process.argv.slice(2)) {
         // LL4 (D342): the after-stream game pack check, last in the clip queue, only with its flag on.
         trainFlag: () => flagIsOn('learning-train'),
         // Start-up time (2026-11-19): last session's unfinished clip jobs wait until the studio is open (the 5 s tick starts them).
-        resumeHoldMs: CLIP_RESUME_HOLD_MS });
+        resumeHoldMs: CLIP_RESUME_HOLD_MS,
+        // D403 (flag delete-processed-recordings): processed recordings are deleted from the recordings folder in use
+        // (Settings, else <host data>/recordings), never from anywhere else.
+        recordingsFolder: () => hostCfg?.recordings ?? null,
+        cleanupFlag: () => flagIsOn('delete-processed-recordings') });
       const clipTick = async () => {
         if (stopping) return;
         // Idle load (2026-11-18): the live clipper and the face worker run only while wanted (flags and clip settings,

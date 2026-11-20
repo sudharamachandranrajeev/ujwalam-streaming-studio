@@ -35,9 +35,10 @@ import { createFlags } from '../flags/index.mjs';
 import { LEDGER_NAME, POSTING_FLAG, createPostStore } from '../posting/index.mjs';
 import { createYoutubeAuth } from '../posting/oauth.mjs';
 import { QUEUE_NAME, createUploadQueue, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
-import { AUTO_FLAG, AUTO_LOG_NAME, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
+import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
 import { previewRules } from '../posting/preview.mjs';
-import { moveQueueItem, readAutoPostSettings, readChannelForPreview, removeQueueItem, saveAutoPostSettings, schedulePreview } from '../posting/auto-settings.mjs';
+import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
+import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, schedulePreview } from '../posting/auto-settings.mjs';
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
 import { SCHEDULE_FLAG } from '../posting/schedule.mjs';
 import { UploadError, checkPostStatus, uploadPost } from '../posting/youtube.mjs';
@@ -57,7 +58,7 @@ import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
 import { clipsFolder, guideOnly, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
-import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, writeTaskFile } from './tasks.mjs';
+import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
 import { READINESS_FLAG, createReadiness, diskFreeBytes, lastCiPass, listProcessNames, loadReadinessConfig, logOverride, planTargets, readinessSummary } from './readiness.mjs';
 import { STOP_TASKS_FILE, clipTools } from './record-clips.mjs';
@@ -1609,13 +1610,43 @@ export function createStudioServer(opts) {
         return json(res, 200, await previewRules({ dataDir: opts.dataDir, rules, rulesFile, profile, log, flagOn: !!flags && flags.isOn(AUTO_FLAG), now: () => new Date(now()), outputsStatus: streamOnly(ytOutputsStatus), scheduleOn: !!flags && flags.isOn(SCHEDULE_FLAG), scheduleFile: opts.scheduleFile }));
       } catch { return json(res, 200, { error: 'preview-unavailable', queued: [], skipped: [] }); }
     }
-    if (req.method === 'GET' && route === '/ui/api/posts/auto/settings') {
-      // D375 Settings > Posting & growth > Auto-post: the card's values, defaults, limits and quota fit. Read only.
+    if (req.method === 'GET' && route === '/ui/api/recordings/keep') {
+      // D403 Settings > Clips > Recordings: the recordings Ujwalam made clips from, whether each may be deleted now (or
+      // why not) and whether it is on the Keep for labelling list. Read only.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      try {
+        const keepList = readKeepList(opts.dataDir);
+        const sessions = cleanupPlan({ dataDir: opts.dataDir, keepList: { all: false, names: new Set() } })
+          .map((s) => ({ name: s.name, hasV: !!s.v, reason: s.reason, keep: keepList.all || keepList.names.has(s.name.toLowerCase()) }));
+        return json(res, 200, { sessions, keepUnreadable: keepList.all, flag: !!flags && flags.isOn(CLEANUP_FLAG) });
+      } catch { return json(res, 500, { error: 'recordings-unreadable' }); }
+    }
+    if (req.method === 'GET' && route === '/ui/api/posts/auto/settings') {      // D375 Settings > Posting & growth > Auto-post: the card's values, defaults, limits and quota fit. Read only.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
       try {
         const on = (id) => !!flags && flags.isOn(id);
         return json(res, 200, { ...readAutoPostSettings(opts.dataDir), flags: { autoPost: on(AUTO_FLAG), schedule: on(SCHEDULE_FLAG), deleteUploaded: on(DELETE_FLAG) } });
       } catch { return json(res, 500, { error: 'settings-unreadable' }); }
+    }
+    if (req.method === 'GET' && route === '/ui/api/posts/auto/rules') {      // user 2026-11-20 "What gets posted": the rules in use, unchanged, plus what stops uploads (never silent). Read only.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      const on = (id) => !!flags && flags.isOn(id);
+      let view;
+      try { view = readRulesEditor(opts.dataDir); } catch { return json(res, 500, { error: 'rules-unreadable' }); }
+      const notices = [];
+      if (on(AUTO_FLAG)) {
+        if (view.notice) notices.push(view.notice);
+        const auth = youtubeAuth();
+        let st = { signedIn: false, hasClient: false };
+        try { st = (await auth.status?.()) ?? st; } catch { /* shown as not signed in */ }
+        if (st.hasClient === false) notices.push(NOTICE_TEXT['no-oauth-client']);
+        else if (st.signedIn !== true) notices.push(NOTICE_TEXT['not-signed-in']);
+        // The read scope needs a token refresh (a Google call), so the card shows what the upload pass last found instead.
+        let chain = null;
+        try { chain = readTaskFiles(opts.dataDir, now()).find((t) => t.id === NOTICE_TASK) ?? null; } catch { chain = null; }
+        if (chain && !notices.includes(chain.title)) notices.push(chain.title);
+      }
+      return json(res, 200, { ...view, autoPostOn: on(AUTO_FLAG), notices });
     }
     if (req.method === 'GET' && route === '/ui/api/posts/auto/schedule') {
       // D375 "Next posting times": the channel's scheduled posts, the queue's times and the next free slots. fresh=1 reads
@@ -1897,14 +1928,28 @@ export function createStudioServer(opts) {
         return json(res, 200, { ok: true, undoes: u.entry.undoes, ...v });
       } catch { return json(res, 500, { error: 'mix-failed' }); }
     }
-    if (route === '/ui/api/posts/auto/settings') {
-      // D375: one click saves the card (D332, no confirm). Every value is checked first; nothing is written on a problem.
+    if (route === '/ui/api/recordings/keep') {
+      // D403: one click ticks or unticks a recording on the Keep for labelling list (D332, no confirm).
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      if (Object.keys(body).some((k) => k !== 'name' && k !== 'keep') || typeof body.name !== 'string' || typeof body.keep !== 'boolean') return json(res, 400, { error: 'bad-params' });
+      try { return json(res, 200, { ok: true, sessions: setKeep(opts.dataDir, body.name, body.keep) }); } catch (e) {
+        return json(res, e?.code === 'bad-name' ? 400 : 500, { error: e?.code === 'bad-name' || e?.code === 'keep-unreadable' ? e.code : 'save-failed' });
+      }
+    }
+    if (route === '/ui/api/posts/auto/settings') {      // D375: one click saves the card (D332, no confirm). Every value is checked first; nothing is written on a problem.
       // The rules and the schedule settings go to the user's files in the data dir; the next pass uses them (no restart).
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
-      if (Object.keys(body).some((k) => k !== 'card' && k !== 'doc') || (body.card === undefined) === (body.doc === undefined)) return json(res, 400, { error: 'bad-params' });
+      if (Object.keys(body).some((k) => !['card', 'doc', 'keepRules', 'resetRules'].includes(k)) || (body.card === undefined) === (body.doc === undefined)
+        || ['keepRules', 'resetRules'].some((k) => body[k] !== undefined && (typeof body[k] !== 'boolean' || body.card === undefined)) || (body.keepRules === true && body.resetRules === true)) return json(res, 400, { error: 'bad-params' });
       let r;
       try { r = saveAutoPostSettings(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
       return r.ok ? json(res, 200, { ok: true, ...r.settings }) : json(res, 400, { error: 'invalid', problems: r.problems });
+    }
+    if (route === '/ui/api/posts/auto/rules') {      // user 2026-11-20: one click saves "What gets posted" (D332). Only the listed fields change; unknown rules and keys stay.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      let r;
+      try { r = saveRulesEdit(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return r.ok ? json(res, 200, { ok: true, ...r.rules }) : json(res, 400, { error: 'invalid', problems: r.problems });
     }
     if (route === '/ui/api/posts/auto/queue/move' || route === '/ui/api/posts/auto/queue/remove') {
       // D375: move a queued clip to another free time, or take it out of the queue. Local file only; nothing is sent.

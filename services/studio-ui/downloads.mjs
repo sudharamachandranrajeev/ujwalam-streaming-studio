@@ -18,7 +18,7 @@
 // and a running download pauses itself when either starts (checked every 2 s; the download is never on the stream's
 // path). Only https URLs, except http on 127.0.0.1 (tests).
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
@@ -167,7 +167,7 @@ const readMarker = (f) => { try { return readFileSync(f, 'utf8'); } catch { retu
  */
 export function createModelGate(id, { modelsDir = process.env.UJWALAM_MODELS_DIR, items, log = () => {}, onChange = () => {}, usable = modelUsable } = {}) {
   let state = 'unchecked'; // unchecked | checking | true | false
-  let failedMarker = null;
+  let checkedMarker = null; // the ready marker as read right BEFORE the last check (Codex round 4)
   const markerFile = () => {
     if (!modelsDir) return null;
     let list = items;
@@ -177,19 +177,20 @@ export function createModelGate(id, { modelsDir = process.env.UJWALAM_MODELS_DIR
   };
   return {
     check() {
-      if (state === false) {
+      // Codex round 4: the marker is compared with the one read BEFORE the last check, so a download that finished
+      // during a failed check is checked again; and a usable model whose marker changed (replaced) is checked again too.
+      if (state === false || state === true) {
         const f = markerFile();
         const now = f ? readMarker(f) : null;
-        if (now !== null && now !== failedMarker) state = 'unchecked'; // downloaded again: check again
+        if (state === false ? now !== null && now !== checkedMarker : now !== checkedMarker) state = 'unchecked';
       }
       if (state === true || state === false) return state;
       if (state === 'checking') return null;
       state = 'checking';
       const f = markerFile();
-      const before = f ? readMarker(f) : null;
+      checkedMarker = f ? readMarker(f) : null;
       Promise.resolve(usable(id, { modelsDir, items, log })).catch(() => false).then((ok) => {
         state = ok === true;
-        failedMarker = state ? null : (f ? readMarker(f) : null) ?? before;
         onChange(state);
       });
       return null;
@@ -378,14 +379,32 @@ export function createDownloads(opts) {
       }
     }
     throwIfAborted(signal);
-    rmSync(path.join(dest, MARKER), { force: true }); // the old marker never vouches for half-replaced files
-    for (const [from, target, f] of moves) {
-      rmSync(target, { force: true });
-      renameSync(from, target);
+    // Codex round 4: all or nothing. The old marker and the old files move aside into a staging folder first, then the
+    // new files move in. Any failure (on Windows: a file another program holds open) moves back what was moved, so the
+    // old set and its marker stay whole; the new files stay in the partial folder for the next try.
+    const move = opts.renameFn ?? renameSync;
+    const stage = path.join(dest, `.replacing-${process.pid}-${Date.now()}`);
+    mkdirSync(stage, { recursive: true });
+    const aside = []; const placed = [];
+    const markerFile = path.join(dest, MARKER);
+    try {
+      if (existsSync(markerFile)) { move(markerFile, path.join(stage, MARKER)); aside.push([markerFile, path.join(stage, MARKER)]); }
+      moves.forEach(([, target], k) => {
+        if (existsSync(target)) { const to = path.join(stage, String(k)); move(target, to); aside.push([target, to]); }
+      });
+      for (const [from, target] of moves) { move(from, target); placed.push([from, target]); }
+    } catch (e) {
+      for (const [from, target] of placed.reverse()) { try { renameSync(target, from); } catch { /* left as it is */ } }
+      for (const [orig, to] of aside.reverse()) { try { renameSync(to, orig); } catch { /* left in the staging folder */ } }
+      try { rmSync(stage, { recursive: true, force: true }); } catch { /* empty or held */ }
+      throw Object.assign(new Error(`a file could not be replaced (${e.code ?? e.message}); the model was left as it was. Close what uses it and click Download again.`), { code: 'in-use' });
+    }
+    for (const [, target, f] of moves) {
       const st2 = statOf(target);
       marker.files[f.name] = { sha256: f.sha256, size: st2.size, mtimeMs: st2.mtimeMs, ino: st2.ino };
     }
-    writeFileSync(path.join(dest, MARKER), `${JSON.stringify(marker, null, 2)}\n`);
+    writeFileSync(markerFile, `${JSON.stringify(marker, null, 2)}\n`);
+    try { rmSync(stage, { recursive: true, force: true }); } catch { /* removed on the next install */ }
     rmSync(partialDir(it), { recursive: true, force: true });
   }
 
@@ -420,7 +439,7 @@ export function createDownloads(opts) {
         }
       } else {
         s.state = 'failed';
-        s.message = e.code === 'sha' ? e.message : `The download stopped: ${e.message}. Click Resume to try again; what is already downloaded is kept.`;
+        s.message = e.code === 'sha' || e.code === 'in-use' ? e.message : `The download stopped: ${e.message}. Click Resume to try again; what is already downloaded is kept.`;
         log(`downloads: ${it.id} failed (${e.code ?? ''} ${e.message})`);
       }
     } finally {

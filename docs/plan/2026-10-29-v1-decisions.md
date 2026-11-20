@@ -2275,3 +2275,40 @@ User (2026-11-19): "installer needs to be a single file with everything that sho
   (`data/downloads/*.json`: the speech model for captions, the Face AI models) on a click, with resume, SHA-256 checks,
   retry, Pause and Cancel; never while live or recording. Settings > Clips and Editing offer the missing model.
 - Evidence: `docs/evidence/2026-11-19-single-file-setup.md`. A run on a fresh PC is still UNVERIFIED.
+
+## D405 — Backlog auto-post and recording cleanup as built (decided, 2026-11-19)
+
+Decided: the user chose these settings on 2026-11-19 (random 3-6 a day, 09:00-23:00, 90 min apart; delete posted clips;
+delete recordings once clipped and reviewed; keep the ones still to be labelled). This records how they were built.
+
+- Schedule: `placement: random-daily` is the new default (`data/posting/schedule.json`): each local day 09:00-23:00
+  gets a seeded count of 3-6 posts (`postsPerDayMin`/`Max`), at seeded minute times at least `minGapMinutes` (90)
+  apart, also from the channel's own scheduled posts and the queue. The seed is written once to the user's
+  `schedule.json` (`seed`) so the times stay put between runs. A user schedule that already says `fill-gaps` keeps it;
+  the Auto-post card offers all three placements.
+- Backlog order (random-daily only): seeded shuffle of every made clip, no two of the same kind back to back while
+  another kind waits, the parts of a split reel next to each other in part order. The approval daily cap still applies.
+- `delete-processed-recordings` ("Delete clipped recordings") is ON by default (user-requested). A recording's H
+  and V files are deleted permanently only when: the flag is on; the studio is neither live nor recording (unknown =
+  no); it has a finished clip job (`<data>/clips/jobs.jsonl`) and the latest of each job type ended with exit 0 and its
+  reels made; no clip job for it runs, waits or asks; it is not ticked Keep for labelling (Settings > Clips >
+  Recordings; an unreadable list keeps everything); and each file is inside the recordings folder, unchanged and not
+  in use (`services/common/safe-delete.mjs`, shared with posted clips). Recordings with no recorded clip job (all made
+  before this build) are never deleted. Each deletion is logged to `<data>/clips/deleted-recordings.jsonl`; one task
+  bar line per batch says "Deleted N recordings, freed X GB". It runs once at start-up and after each clip job.
+- Recordings with no clip job (user, 2026-11-20: "Delete if clips exist"). Real data: `alpha-<YYYYMMDD-HHMMSS>.mkv`
+  (H) and `alpha-v-<YYYYMMDD-HHMMSS>.mkv` (V); the clips were made by the live clipper while recording. An H file counts
+  as processed when at least one clip still in the clips folder has a name time (`<game>_<kind>_<YYYYMMDD-HHMMSS>_...`)
+  inside [the time in the recording's name, the recording's last write], or when an older run folder's `render.json`
+  names it and that run made a clip. It must also be finished: no output writes it, it was last written at least 10 min
+  ago, and the live clipper is not running. Its V file (same time, `-v-` form; else `<stem>-v`) goes only with a
+  qualifying H; a V with no H is kept; `replay/` is never touched. The entry records the files' identity at that time
+  and is marked backfill. This also covers live-clipper sessions from now on (checked at start-up, after each clip job
+  and every 15 min off air). Verdicts in `<data>/clips/backfill-recordings.jsonl` (`clips-exist (N clips in its time
+  window)` or why kept). Dry run: `node services/studio-ui/recording-cleanup.mjs --dry-run --data <dir> --recordings
+  <dir>` lists what would be deleted and kept, with sizes and reasons, and changes nothing.
+- Custom posting times (user, 2026-11-20: "add the ability to setup custom schedule in app as well"): placement
+  `custom` with exact local times per weekday and days off, filled in order, a clashing time skipped not moved; the
+  Auto-post card edits them, and "What gets posted" edits the user's own rules in place (unknown rules and keys kept).
+  Auto-post never fails silently: the card and the task bar say why nothing uploads.
+- Evidence: `docs/evidence/2026-11-19-autopost-backlog-cleanup.md`.

@@ -21,7 +21,9 @@ const UI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui'
 const KEY = 'k'.repeat(48);
 const T0 = Date.parse('2026-11-13T10:00:00Z');
 const tmpDirs = []; const servers = [];
-const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-d375ui-')); tmpDirs.push(d); return d; };
+// D403: the shipped placement is random-daily; these cases are about the fill-gaps rule (D375), so every temp data dir
+// holds a user schedule file that keeps it (random-daily: tests/posting-random-daily.test.mjs).
+const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-d375ui-')); tmpDirs.push(d); mkdirSync(path.join(d, 'posting'), { recursive: true }); writeFileSync(path.join(d, 'posting', 'schedule.json'), JSON.stringify({ placement: 'fill-gaps' })); return d; };
 after(async () => { for (const s of servers) await s.close?.(); for (const d of tmpDirs) rmSync(d, { recursive: true, force: true }); });
 
 function raw(port, { method = 'GET', url = '/', headers = {}, body } = {}) {
@@ -88,7 +90,8 @@ describe('auto-post settings routes (D375)', () => {
     const bad = await t.post('/ui/api/posts/auto/settings', { card: { ...GOOD, intervalHours: 0, kinds: [] } });
     assert.equal(bad.status, 400); assert.equal(bad.json().error, 'invalid');
     assert.deepEqual(bad.json().problems.map((p) => p.key).sort(), ['intervalHours', 'kinds']);
-    assert.equal(existsSync(userRulesFile(t.dataDir)), false); assert.equal(existsSync(userScheduleFile(t.dataDir)), false);
+    assert.equal(existsSync(userRulesFile(t.dataDir)), false);
+    assert.deepEqual(JSON.parse(readFileSync(userScheduleFile(t.dataDir), 'utf8')), { placement: 'fill-gaps' }, 'the schedule file as the test made it (mk)');
   });
 
   test('save writes both files whole (no temp file left) and the next read and schedule use them', async () => {

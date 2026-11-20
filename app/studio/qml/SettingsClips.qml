@@ -275,4 +275,70 @@ Column {
             text: k && k.about ? k.about : ""
         }
     }
+
+    // D403 Recordings Ujwalam made clips from: whether each is deleted once clipped, and Keep for labelling (one click,
+    // saved at once; ui/api/recordings/keep). A kept recording is never deleted by Delete clipped recordings.
+    property var recs: []
+    property string recsInfo: "Loading..."
+    property bool recsFlag: false
+    function reasonText(r) {
+        return r === null ? "deleted once it is not in use"
+            : r === "kept-for-labelling" ? "kept for labelling"
+            : r === "job-pending" ? "kept: a clip job for it is waiting or running"
+            : r === "job-failed" ? "kept: its last clip job did not finish"
+            : r === "reels-not-made" ? "kept: its reels were not made"
+            : "kept (" + r + ")";
+    }
+    function loadRecs() {
+        Api.get("ui/api/recordings/keep", (ok, b, err) => {
+            if (!ok) { recsInfo = "The recordings list is not available: " + err; return }
+            recsFlag = b.flag === true;
+            recs = Array.isArray(b.sessions) ? b.sessions : [];
+            recsInfo = b.keepUnreadable === true ? "Your Keep for labelling list could not be read, so every recording is kept."
+                : recs.length === 0 ? "No recording has been made into clips yet." : "";
+        });
+    }
+    function setRecKeep(name, keep) {
+        Api.post("ui/api/recordings/keep", { name: name, keep: keep }, (ok, b, err) => {
+            recsInfo = ok ? "" : "Not saved: " + err;
+            loadRecs();
+        });
+    }
+    Component.onCompleted: loadRecs()
+
+    UCard {
+        title: "RECORDINGS"
+        Quiet {
+            objectName: "recordingsAbout"
+            text: (cp.recsFlag ? "Delete clipped recordings is on: " : "Delete clipped recordings is off; when it is on, ")
+                + "a full recording (its H and V files) is deleted permanently once every clip from it is made and reviewed, never while you are live or recording. "
+                + "Tick Keep for labelling to keep a recording you still want to label."
+        }
+        Quiet { objectName: "recordingsInfo"; visible: cp.recsInfo !== ""; text: cp.recsInfo }
+        Repeater {
+            model: cp.recs
+            delegate: Item {
+                id: rr
+                required property var modelData
+                width: parent.width
+                height: 40
+                Text {
+                    anchors { left: parent.left; right: keepSw.left; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
+                    elide: Text.ElideRight
+                    text: rr.modelData.name + (rr.modelData.hasV ? " (H and V)" : "") + "  -  " + cp.reasonText(rr.modelData.keep ? "kept-for-labelling" : rr.modelData.reason)
+                    color: Theme.c.text
+                    font.family: Theme.family
+                    font.pixelSize: Theme.ty.small
+                }
+                USwitch {
+                    id: keepSw
+                    objectName: "recordingKeep:" + rr.modelData.name
+                    anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                    text: "Keep for labelling"
+                    checked: rr.modelData.keep === true
+                    onToggled: cp.setRecKeep(rr.modelData.name, checked)
+                }
+            }
+        }
+    }
 }

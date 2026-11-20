@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -394,5 +394,54 @@ test('round 3: every file is checked before any is moved; an abort during the fi
     assert.equal((await call('GET')).body.items[0].state, 'ready');
     assert.equal(seen.length, fetched, 'resume fetched nothing again');
     assert.deepEqual(readFileSync(path.join(dest, 'big.bin')), BIG);
+  } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
+});
+test('Codex round 4: a download that finishes during a failed check is checked again; a replaced model is checked again before use', async () => {
+  const root = tmp('gate4');
+  try {
+    const it = { id: 'm', dest: 'models/m', files: [] };
+    const marker = path.join(root, 'models', 'm', MARKER);
+    mkdirSync(path.dirname(marker), { recursive: true });
+    let calls = 0; let answer = false;
+    const g = createModelGate('m', { modelsDir: path.join(root, 'models'), items: [it], usable: async () => { calls += 1; if (calls === 1) writeFileSync(marker, '{"id":"m","v":1}'); return answer; } });
+    assert.equal(g.check(), null);
+    await new Promise((r) => setImmediate(r));
+    answer = true;
+    assert.equal(g.check(), null, 'the marker written during the failed check differs from the one read before it: checked again');
+    await new Promise((r) => setImmediate(r));
+    assert.equal(g.check(), true); assert.equal(calls, 2);
+    writeFileSync(marker, '{"id":"m","v":2}'); // the model was replaced
+    assert.equal(g.check(), null, 'usable, but the marker changed: checked again');
+    await new Promise((r) => setImmediate(r));
+    assert.equal(g.check(), true); assert.equal(calls, 3);
+    assert.equal(g.check(), true); assert.equal(calls, 3, 'nothing changed: no new check');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Codex round 4: replacing a model is all or nothing; a file held open leaves the old set and its marker whole', async () => {
+  const { s, base } = await server({ '/big.bin': BIG, '/small.txt': SMALL });
+  const root = tmp('swap');
+  try {
+    const it = item(base);
+    const first = mgr(root, [it]);
+    await first.call('POST', { id: it.id, action: 'start' }); await first.d.promise(it.id);
+    const dest = path.join(root, 'models', 'test');
+    const markerBefore = readFileSync(path.join(dest, MARKER), 'utf8');
+    // a newer version of the model (other small.txt) from a second server: not ready, so it is fetched and replaced
+    const SMALL2 = blob(1500, 11);
+    const two = await server({ '/big.bin': BIG, '/small.txt': SMALL2 });
+    const it2 = item(two.base, { files: [it.files[0] && { ...it.files[0], url: `${two.base}/big.bin` }, { name: 'small.txt', url: `${two.base}/small.txt`, bytes: SMALL2.length, sha256: sha(SMALL2) }] });
+    let n = 0;
+    const json = (res, code, body) => { res.code = code; res.body = body; };
+    const d = createDownloads({ json, dataRoot: safeRoot(root), items: [it2], hostStatus: async () => ({ live: false, recording: false }), retryDelays: [10], watchMs: 20, log: () => {},
+      renameFn: (a, b) => { if (path.dirname(b) === dest && !a.includes('.replacing-') && ++n === 2) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); renameSync(a, b); } });
+    try { await d.handle('POST', '/ui/api/downloads', {}, { id: it2.id, action: 'start' }); await d.promise(it2.id); } finally { two.s.close(); }
+    const res = {}; await d.handle('GET', '/ui/api/downloads', res);
+    assert.equal(res.body.items[0].state, 'failed');
+    assert.match(res.body.items[0].message, /left as it was/);
+    assert.equal(readFileSync(path.join(dest, MARKER), 'utf8'), markerBefore, 'old marker back');
+    assert.deepEqual(readFileSync(path.join(dest, 'big.bin')), BIG); assert.deepEqual(readFileSync(path.join(dest, 'small.txt')), SMALL);
+    assert.ok(isReady(root, it), 'old set still ready');
+    assert.deepEqual(readdirSync(dest).filter((x) => x.startsWith('.replacing-')), [], 'staging folder removed');
   } finally { s.close(); rmSync(root, { recursive: true, force: true }); }
 });

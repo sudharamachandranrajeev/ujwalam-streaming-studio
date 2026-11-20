@@ -643,3 +643,54 @@ test('speech model: each clip job checks again, so captions come back once the m
     assert.equal(s.spawned[1].o.env.UJWALAM_REEL_CAPTIONS, undefined, 'the second job has captions');
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
+test('D403: each finished job is recorded (jobs.jsonl); the recording cleanup runs once at start-up and after each job, off air and idle only', async () => {
+  const s = setup();
+  try {
+    writeSettings(s.dataDir, { clips: { recording: 'after', live: 'off' } });
+    const calls = [];
+    const cleanupImpl = async (o) => { calls.push({ folder: o.folder, flagOn: o.flagOn, running: o.state.running, queued: o.state.queued.length }); return { ran: true, deleted: [], kept: [] }; };
+    let flag = true;
+    const rc = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, recordingsFolder: () => path.dirname(s.h), cleanupFlag: () => flag, cleanupImpl });
+    rc.feed(s.S('live')); // recording: no start-up pass while recording
+    await tick();
+    assert.equal(calls.length, 0);
+    rc.feed(s.S('stopped')); await tick();
+    // the job started at this feed, so the start-up pass waits until no job runs
+    assert.equal(s.spawned.length, 1); assert.equal(calls.length, 0);
+    s.spawned[0].c.emit('exit', 0); await tick();
+    assert.equal(calls.length, 1, 'after the job');
+    assert.deepEqual(calls[0], { folder: path.dirname(s.h), flagOn: true, running: null, queued: 0 });
+    const recs = readFileSync(path.join(s.dataDir, 'clips', 'jobs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(recs.length, 1);
+    assert.deepEqual({ h: recs[0].h, v: recs[0].v, type: recs[0].type, result: recs[0].result, code: recs[0].code }, { h: s.h, v: s.v, type: 'full', result: 'done', code: 0 });
+    flag = false;
+    rc.feed(s.S('live')); rc.feed(s.S('stopped')); s.spawned[1].c.emit('exit', 1); await tick();
+    assert.equal(calls.length, 1, 'flag off: no pass');
+    const recs2 = readFileSync(path.join(s.dataDir, 'clips', 'jobs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(recs2[1].result, 'failed');
+    // A fresh start, off air and idle: one start-up pass.
+    flag = true;
+    const calls2 = [];
+    const rc2 = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, recordingsFolder: path.dirname(s.h), cleanupFlag: () => true, cleanupImpl: async (o) => { calls2.push(o); return { deleted: [] }; } });
+    rc2.feed(s.S('stopped')); await tick(); rc2.feed(s.S('stopped')); await tick();
+    assert.equal(calls2.length, 1, 'once at start-up');
+    rc2.stop(); rc.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+test('Codex round 4: polls during a model check start no second check (P3); a check that ends after going live starts nothing until off air (P1)', async () => {
+  const s = setup();
+  try {
+    writeSettings(s.dataDir, { clips: { recording: 'after', live: 'off' } });
+    let checks = 0; let answer;
+    const rc = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, captionsModel: () => { checks += 1; return new Promise((r) => { answer = r; }); } });
+    rc.feed(s.S('live')); s.advance(60000); rc.feed(s.S('stopped'));
+    rc.feed(s.S('stopped')); rc.feed(s.S('stopped'));
+    assert.equal(checks, 1, 'one check while it runs');
+    rc.feed(s.S('stopped', { stream: 'live' })); // back on air before the check ends
+    answer(true); await tick(); await tick();
+    assert.equal(s.spawned.length, 0, 'no job starts while live');
+    rc.feed(s.S('stopped')); await tick();
+    assert.equal(s.spawned.length >= 1, true, 'starts once off air');
+    rc.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});

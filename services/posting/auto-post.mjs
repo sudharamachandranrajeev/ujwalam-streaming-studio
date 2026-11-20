@@ -52,6 +52,17 @@ export function validateRules(j) {
   return { autoUpload: j.autoUpload === true, rules, ...(j.maxUploadsPerDay !== undefined ? { maxUploadsPerDay: j.maxUploadsPerDay } : {}) };
 }
 
+/** Never silent (user 2026-11-20): what the Auto-post card and the task bar say when auto-post is on but nothing can
+ *  upload. Plain words; one id on the task bar (NOTICE_TASK) so a new notice replaces the old one. */
+export const NOTICE_TASK = 'auto-post-notice';
+export const NOTICE_TEXT = Object.freeze({
+  'no-rules': 'Auto-post is on but no rule says what to post: nothing uploads',
+  'bad-rules': 'Auto-post is on but the posting rules have a mistake: nothing uploads',
+  'not-signed-in': 'Auto-post is on but YouTube is not signed in: nothing uploads',
+  'no-oauth-client': 'Auto-post is on but the YouTube app key is missing: nothing uploads',
+  'schedule-scope-missing': 'Auto-post is on but YouTube needs a new sign-in to read scheduled posts: nothing uploads',
+});
+
 /** Where the user's own rules live: <dataDir>/posting/auto-post-rules.json (survives app updates). */
 export function userRulesFile(dataDir) { return path.join(dataDir, 'posting', RULES_NAME); }
 
@@ -177,10 +188,11 @@ export function oldestFirst(posts) {
 /** Pure. posts = store.list() views. Returns what a run would do, oldest first (D375), caps applied.
  *  kindShares (RP5, only while the flag self-learning is on and a learned mix is in use): the order follows mixOrder.
  *  maxUploadsPerDay (D375, optional): one daily cap for approvals and for uploads across all rules.
+ *  order (D403, optional): (posts) -> posts in posting order, replacing oldest first (the chain passes the backlog order).
  *  unscoredFloor (D375, optional; the chain passes rankerMinScore()): a short from the clips folder has no score of its
  *  own, but the clipper only publishes clips at or above that floor; such a short passes a rule whose minScore is not
  *  above the floor, and is skipped ('no-score') by a stricter rule. Without it, a short with no score is always skipped. */
-export function planAuto({ posts, rules, autoUpload, log, now, kindShares = null, maxUploadsPerDay = null, unscoredFloor = null }) {
+export function planAuto({ posts, rules, autoUpload, log, now, kindShares = null, maxUploadsPerDay = null, unscoredFloor = null, order = null }) {
   const today = dayOf(now);
   const plan = [];
   const count = (ruleId, action) => log.filter((e) => e.ruleId === ruleId && e.action === action && String(e.at).slice(0, 10) === today).length;
@@ -199,7 +211,8 @@ export function planAuto({ posts, rules, autoUpload, log, now, kindShares = null
     used.set(k, n + 1); return true;
   };
   const claimed = new Set();
-  const ordered = oldestFirst(posts);
+  // D403: the random-daily backlog order (backlog-order.mjs) when the chain passes one; else oldest first (D375).
+  const ordered = typeof order === 'function' ? order(posts) : oldestFirst(posts);
   const sorted = kindShares ? mixOrder(ordered, kindShares) : ordered;
   for (const rule of rules) {
     const canUpload = autoUpload && UPLOAD_TARGETS.includes(rule.target);
@@ -244,7 +257,7 @@ export async function runAuto(opts) {
   const log = createAutoLog(opts.logFile);
   const blocked = await liveBlock(opts.outputsStatus);
   if (blocked) return { refused: blocked, done: [] };
-  const plan = planAuto({ posts: opts.store.list(), rules: opts.rules.rules, autoUpload: opts.rules.autoUpload && typeof opts.upload === 'function', log: log.list(), now: nowFn(), kindShares: opts.kindShares ?? null, maxUploadsPerDay: opts.rules.maxUploadsPerDay ?? null, unscoredFloor: opts.unscoredFloor ?? null });
+  const plan = planAuto({ posts: opts.store.list(), rules: opts.rules.rules, autoUpload: opts.rules.autoUpload && typeof opts.upload === 'function', log: log.list(), now: nowFn(), kindShares: opts.kindShares ?? null, maxUploadsPerDay: opts.rules.maxUploadsPerDay ?? null, unscoredFloor: opts.unscoredFloor ?? null, order: opts.order ?? null });
   const done = []; let uploadsStopped = false;
   const record = (e) => { const entry = { at: nowFn().toISOString(), ...e }; log.append(entry); done.push(entry); };
   for (const step of plan) {
