@@ -567,7 +567,6 @@ export function createPostChain(opts) {
     const filled = store.fillPlaceholders(readProfile());
     if (filled) log(`posting: filled the profile placeholders of ${filled} clip(s)`);
     const blocked = store.list().filter((p) => p.status === 'draft' && p.unresolved.length);
-    if (blocked.length) notice('unfilled-placeholders', `${blocked.length} clip(s): ${[...new Set(blocked.flatMap((p) => p.unresolved))].join(', ')}`);
     // Approvals are local file work, but they share the fail-closed live check (unreadable state -> nothing happens).
     // RP5 (D373): the learned kind order only while the flag self-learning is on and a learned mix is in use
     let kindShares = null;
@@ -582,6 +581,8 @@ export function createPostChain(opts) {
       await processQueue(store, rules);
     }
     const deleted = await deletePass(store);
+    // Last, and only when nothing this pass said more (a sign-in wait outranks it).
+    if (blocked.length && !noticeNow) notice('unfilled-placeholders', `${blocked.length} clip(s): ${[...new Set(blocked.flatMap((p) => p.unresolved))].join(', ')}`);
     return { refused: r.refused, approved: r.done.filter((d) => d.action === 'approve').length, ...(deleted ? { deleted } : {}) };
   }
 

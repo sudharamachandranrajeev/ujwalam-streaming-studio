@@ -144,6 +144,13 @@ describe('chain', () => {
     await c.tick(IDLE);
     assert.equal(e.store().get(e.ids.a).description, 'Live on @someone | chat https://discord.invalid/x');
     assert.ok(yt.count('init') >= 1, 'uploads start');
+    // a profile value holding a placeholder counts as missing: nothing nests, nothing grows pass after pass (Codex P2)
+    const e2 = env({ description: 'on {handles.youtube}' });
+    const pf2 = path.join(e2.dataDir, 'profile.json');
+    writeFileSync(pf2, JSON.stringify({ handles: { youtube: 'x {handles.youtube}' } }));
+    const { c: c2 } = chain(e2, { yt: fakeYt(), profileFile: pf2 });
+    await c2.afterRun('x', IDLE); await c2.tick(IDLE);
+    assert.equal(e2.store().get(e2.ids.a).description, 'on {handles.youtube}');
     const left = readdirSync(tdir).map((n) => JSON.parse(readFileSync(path.join(tdir, n), 'utf8'))).filter((t) => t.id === 'auto-post-notice');
     assert.deepEqual(left, [], 'notice cleared');
   });

@@ -535,7 +535,11 @@ export function createPostStore(opts) {
      * text itself: a value the profile does not have stays literal and still blocks approval. Returns how many changed.
      */
     fillPlaceholders(profile) {
-      const prof = cleanProfile(profile ?? {});
+      // A profile value that itself holds a placeholder counts as missing: one pass, no nesting, no growth per pass.
+      const noNested = (v) => (typeof v === 'string' ? (/\{[^{}]*\}/.test(v) ? undefined : v)
+        : Array.isArray(v) ? v.map(noNested).filter((x) => x !== undefined)
+          : isPlain(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, noNested(x)]).filter(([, x]) => x !== undefined)) : v);
+      const prof = noNested(cleanProfile(profile ?? {}));
       let filled = 0;
       for (const e of entries()) {
         if (e.status !== 'draft') continue;
@@ -545,7 +549,9 @@ export function createPostStore(opts) {
         const fill = (s) => resolveString(String(s), prof, missing, false);
         const next = { title: fill(p.title), description: fill(p.description), tags: (p.tags ?? []).map(fill), hashtags: (p.hashtags ?? []).map(fill) };
         const unresolved = unresolvedKeys(next.title, next.description, ...next.tags, ...next.hashtags);
-        if (unresolved.length === p.unresolved.length) continue;
+        const same = next.title === p.title && next.description === p.description
+          && JSON.stringify(next.tags) === JSON.stringify(p.tags ?? []) && JSON.stringify(next.hashtags) === JSON.stringify(p.hashtags ?? []);
+        if (same) continue;
         Object.assign(p, next);
         p.limits = checkLimits({ ...next, target: p.target }, limits());
         p.unresolved = unresolved;
