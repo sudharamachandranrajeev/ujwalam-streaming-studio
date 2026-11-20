@@ -3,14 +3,14 @@
 // refused while live or recording, with a job pending, for an unprocessed recording, for a session kept for labelling,
 // for a file swapped mid-check, for a path outside the recordings folder, and for a failed job. Temp folders only.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { safeRoot } from './helpers/data-root-guard.mjs';
 import { safeDeleteFile } from '../services/common/safe-delete.mjs';
 import {
-  BACKFILL_LOG, CLEANUP_FLAG, DELETED_RECORDINGS_LOG, appendJobRecord, backfillJobRecords, cleanupPlan, readKeepList, runRecordingCleanup, setKeep,
+  BACKFILL_LOG, CLEANUP_FLAG, DELETED_RECORDINGS_LOG, appendJobRecord, backfillJobRecords, backfillVerdict, dryRun, cleanupPlan, readKeepList, runRecordingCleanup, setKeep,
 } from '../services/studio-ui/recording-cleanup.mjs';
 import { loadDefinitions, DEFAULT_FLAGS_FILE } from '../services/flags/index.mjs';
 
@@ -161,52 +161,74 @@ describe('recording cleanup (D403)', () => {
   });
 });
 
-describe('one-time backfill for recordings clipped before jobs.jsonl (coordinator 2026-11-20)', () => {
+describe('one-time backfill for old recordings (user 2026-11-20: "Delete if clips exist")', () => {
   // A fixture copy of what earlier builds left in <data>/clips: run folders with render.json, report.json, published.json.
-  const runFiles = (dataDir, stem, { recording = `${stem}.mkv`, ok = true, published = true, extra = {} } = {}) => {
+  const runFiles = (dataDir, stem, { recording = `${stem}.mkv`, ok = false, published = [] } = {}) => {
     const run = path.join(dataDir, 'clips', 'runs', stem); mkdirSync(run, { recursive: true });
-    writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', recording, clips: [], ...extra }));
+    writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', recording, clips: [] }));
     writeFileSync(path.join(run, 'report.json'), JSON.stringify({ results: [{ id: 'c01', file: 'stream-v.mp4', ok }] }));
-    if (published) writeFileSync(path.join(run, 'published.json'), JSON.stringify({ files: [{ file: 'a' }] }));
-    writeFileSync(path.join(dataDir, 'clips', `run-${stem}.log`), 'detect 100%\n');
+    writeFileSync(path.join(run, 'published.json'), JSON.stringify({ files: published.map((file) => ({ file })) }));
   };
   const rec = (folder, name, n = 3000) => { const f = path.join(folder, name); writeFileSync(f, Buffer.alloc(n, 5)); return f; };
-  const backlog = (dataDir) => readFileSync(path.join(dataDir, 'clips', BACKFILL_LOG), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const verdicts = (dataDir) => readFileSync(path.join(dataDir, 'clips', BACKFILL_LOG), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).map((l) => [path.basename(l.file), l.decision, l.reason]);
+  function world() {
+    const dataDir = mk(); const folder = mk(); const clipsRoot = mk();
+    mkdirSync(path.join(clipsRoot, '2026-11-01'), { recursive: true }); writeFileSync(path.join(clipsRoot, '2026-11-01', 'a.mp4'), 'clip');
+    const f = {
+      h: rec(folder, 'alpha-1.mkv', 5000), v: rec(folder, 'alpha-1-v.mkv', 4000), // qualifying pair: a published clip still exists
+      noClips: rec(folder, 'alpha-2.mkv'), noClipsV: rec(folder, 'alpha-2-v.mkv'), // run made nothing that still exists
+      vOnly: rec(folder, 'alpha-3-v.mkv'), // V without H
+      kept: rec(folder, 'alpha-4.mkv'), keptV: rec(folder, 'alpha-4-v.mkv'), // ok in report.json, but kept for labelling
+      never: rec(folder, 'alpha-5.mkv'), // never clipped
+    };
+    runFiles(dataDir, 'alpha-1', { published: ['2026-11-01/a.mp4'] });
+    runFiles(dataDir, 'alpha-2', { published: ['2026-11-01/gone.mp4'] });
+    runFiles(dataDir, 'alpha-4', { ok: true });
+    return { dataDir, folder, clipsDirOf: () => clipsRoot, f };
+  }
 
-  test('what earlier builds wrote proves no file identity or run exit codes: every old recording is kept, with the reason logged', async () => {
-    const dataDir = mk(); const folder = mk();
-    const a = rec(folder, 'old-a.mkv'); runFiles(dataDir, 'old-a');
-    const b = rec(folder, 'old-b.mkv'); // never clipped
-    const c = rec(folder, 'old-c.mkv'); runFiles(dataDir, 'old-c', { recording: 'other.mkv' });
-    const d = rec(folder, 'old-d.mkv'); runFiles(dataDir, 'old-d', { ok: false });
-    const e = rec(folder, 'old-e.mkv'); runFiles(dataDir, 'old-e', { published: false });
-    writeFileSync(path.join(folder, 'notes.txt'), 'x');
-    const r = await runRecordingCleanup({ dataDir, folder, flagOn: true, status: OFF_AIR, nowMs: T });
-    assert.equal(r.deleted.length, 0);
-    for (const f of [a, b, c, d, e]) assert.ok(existsSync(f));
-    assert.deepEqual(backlog(dataDir).map((l) => [path.basename(l.file), l.decision, l.reason]), [
-      ['old-a.mkv', 'kept', 'no-size-or-file-id-recorded'], ['old-b.mkv', 'kept', 'no-run-folder'], ['old-c.mkv', 'kept', 'run-is-for-another-file'],
-      ['old-d.mkv', 'kept', 'not-validated'], ['old-e.mkv', 'kept', 'not-published']]);
-    assert.ok(!existsSync(path.join(dataDir, 'clips', 'jobs.jsonl')), 'no job record written');
+  test('dry run lists what would go and what stays, with sizes and reasons, and changes nothing', () => {
+    const w = world(); setKeep(w.dataDir, 'alpha-4', true);
+    const before = readdirSync(w.dataDir, { recursive: true }).sort();
+    const rows = dryRun({ dataDir: w.dataDir, folder: w.folder, clipsDirOf: w.clipsDirOf });
+    assert.deepEqual(rows.map((r) => [path.basename(r.file), r.action]), [
+      ['alpha-1-v.mkv', 'delete'], ['alpha-1.mkv', 'delete'], ['alpha-2-v.mkv', 'keep'], ['alpha-2.mkv', 'keep'], ['alpha-3-v.mkv', 'keep'],
+      ['alpha-4-v.mkv', 'keep'], ['alpha-4.mkv', 'keep'], ['alpha-5.mkv', 'keep']]);
+    assert.equal(rows.find((r) => r.file === w.f.h).size, 5000);
+    assert.equal(rows.find((r) => r.file === w.f.vOnly).reason, 'v-without-h');
+    assert.equal(rows.find((r) => r.file === w.f.kept).reason, 'kept-for-labelling');
+    assert.equal(rows.find((r) => r.file === w.f.noClips).reason, 'no-clips');
+    assert.deepEqual(readdirSync(w.dataDir, { recursive: true }).sort(), before, 'nothing written');
+    for (const x of Object.values(w.f)) assert.ok(existsSync(x));
   });
 
-  test('proven only with size or file id AND a full run AND a review run, each exit 0; then cleanup deletes it; runs once', async () => {
-    const dataDir = mk(); const folder = mk();
-    const ok = rec(folder, 'p-ok.mkv', 4000);
-    runFiles(dataDir, 'p-ok', { extra: { recordingFile: { size: 4000 }, runs: [{ type: 'full', code: 0 }, { type: 'review', code: 0 }] } });
-    const wrongSize = rec(folder, 'p-size.mkv', 4000);
-    runFiles(dataDir, 'p-size', { extra: { recordingFile: { size: 3999 }, runs: [{ type: 'full', code: 0 }, { type: 'review', code: 0 }] } });
-    const noReview = rec(folder, 'p-full.mkv', 4000);
-    runFiles(dataDir, 'p-full', { extra: { recordingFile: { size: 4000 }, runs: [{ type: 'full', code: 0 }, { type: 'review', code: 1 }] } });
-    const noFull = rec(folder, 'p-rev.mkv', 4000);
-    runFiles(dataDir, 'p-rev', { extra: { recordingFile: { size: 4000 }, runs: [{ type: 'review', code: 0 }] } });
-    const known = rec(folder, 'p-known.mkv'); appendJobRecord(dataDir, { h: known, v: null, type: 'full', result: 'failed', code: 1, at: '2026-11-19T00:00:00Z' });
-    assert.deepEqual(backfillJobRecords({ dataDir, folder, nowMs: T }), { ran: true, proven: 1, kept: 3 });
-    assert.deepEqual(backlog(dataDir).map((l) => [path.basename(l.file), l.reason]),
-      [['p-full.mkv', 'no-finished-review-run'], ['p-ok.mkv', 'proven'], ['p-rev.mkv', 'no-finished-full-run'], ['p-size.mkv', 'no-size-or-file-id-recorded']]);
-    assert.deepEqual(backfillJobRecords({ dataDir, folder, nowMs: T }), { ran: false, proven: 0, kept: 0 }, 'once');
-    const r = await runRecordingCleanup({ dataDir, folder, flagOn: true, status: OFF_AIR, nowMs: T });
-    assert.deepEqual(r.deleted.map((x) => x.file), [ok]);
-    for (const f of [wrongSize, noReview, noFull, known]) assert.ok(existsSync(f));
+  test('the first pass proves the pair, deletes H and V, keeps the rest; verdicts logged; runs once', async () => {
+    const w = world(); setKeep(w.dataDir, 'alpha-4', true);
+    const tasks = [];
+    assert.equal(backfillJobRecords({ dataDir: w.dataDir, folder: w.folder, clipsDirOf: w.clipsDirOf, nowMs: T }).proven, 4);
+    assert.deepEqual(verdicts(w.dataDir), [
+      ['alpha-1.mkv', 'proven', 'clips-exist'], ['alpha-1-v.mkv', 'proven', 'clips-exist (V of a proven H)'],
+      ['alpha-2.mkv', 'kept', 'no-clips'], ['alpha-2-v.mkv', 'kept', 'its H is kept (no-clips)'],
+      ['alpha-4.mkv', 'proven', 'clips-exist'], ['alpha-4-v.mkv', 'proven', 'clips-exist (V of a proven H)'],
+      ['alpha-5.mkv', 'kept', 'no-run-folder'], ['alpha-3-v.mkv', 'kept', 'v-without-h']]);
+    assert.equal(backfillJobRecords({ dataDir: w.dataDir, folder: w.folder, clipsDirOf: w.clipsDirOf, nowMs: T }).ran, false, 'once');
+    const r = await runRecordingCleanup({ dataDir: w.dataDir, folder: w.folder, flagOn: true, status: OFF_AIR, nowMs: T, writeTask: (_d, t) => tasks.push(t) });
+    assert.deepEqual(r.deleted.map((d) => path.basename(d.file)).sort(), ['alpha-1-v.mkv', 'alpha-1.mkv']);
+    assert.match(tasks[0].title, /^Deleted 2 recordings, freed [\d.]+ GB$/);
+    for (const x of [w.f.noClips, w.f.noClipsV, w.f.vOnly, w.f.kept, w.f.keptV, w.f.never]) assert.ok(existsSync(x));
+  });
+
+  test('a run folder that names another file proves nothing', () => {
+    const w = world();
+    runFiles(w.dataDir, 'alpha-5', { recording: 'alpha-50.mkv', ok: true });
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.never, clipsDirOf: w.clipsDirOf }).reason, 'run-is-for-another-file');
+  });
+
+  test('the command line dry run prints and changes nothing', async () => {
+    const w = world();
+    const { execFileSync } = await import('node:child_process');
+    const out = execFileSync(process.execPath, [path.resolve('services/studio-ui/recording-cleanup.mjs'), '--dry-run', '--data', w.dataDir, '--recordings', w.folder], { encoding: 'utf8', windowsHide: true });
+    assert.match(out, /would delete \d+ file\(s\)/); assert.match(out, /Nothing was changed/);
+    assert.ok(!existsSync(path.join(w.dataDir, 'clips', BACKFILL_LOG)));
   });
 });

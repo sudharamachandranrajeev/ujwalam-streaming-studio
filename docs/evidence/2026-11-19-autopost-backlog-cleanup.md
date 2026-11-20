@@ -75,12 +75,14 @@ studio running headless; not run per the no-full-CI rule).
 - Real YouTube scheduled publish at the planned times (fake server only).
 - The user's existing `schedule.json` with `placement: fill-gaps` stays on fill-gaps until switched in the card.
 
-## Backfill for recordings clipped before jobs.jsonl (2026-11-20)
+## Backfill for old recordings (user, 2026-11-20: "Delete if clips exist")
 
-`backfillJobRecords` runs once, inside the first cleanup pass, and logs a verdict per recording to
-`<data>/clips/backfill-recordings.jsonl`. Earlier builds left, per run, `runs/<stem>/render.json` (H file name only),
-`report.json`, `published.json` and `run-<stem>.log`, and `status.json` `last` for the latest job only. None of these
-holds the recording's size or file id or a per-run exit code, and full and review runs share one folder. Under the rule
-"proven only with size or file id AND a finished full run AND a finished review run, exit 0", every older recording is
-kept (reason `no-size-or-file-id-recorded`, or a weaker one). Tests: `tests/recording-cleanup.test.mjs` (13/13), using
-a fixture copy of those files in temp folders.
+A recording with no job record counts as processed when
+  its run folder's `render.json` names exactly that H file (same base name, directly in the recordings folder) and the
+  run made at least one clip that still exists in the clips folder or that `report.json` lists as ok. No size, file id
+  or exit code was recorded by earlier builds, so the name is the identity. Its V file (`<stem>-v.<ext>`) goes with a
+  qualifying H only; a V file with no H is kept. All other conditions still apply. Runs once; verdicts in
+  `<data>/clips/backfill-recordings.jsonl`. Dry run: `node services/studio-ui/recording-cleanup.mjs --dry-run --data
+  <dir> --recordings <dir>` lists what would be deleted and kept and changes nothing.
+Tests: `tests/recording-cleanup.test.mjs` 15/15 (fixtures: a qualifying H+V pair, an H whose clips are gone, a V without H,
+a session kept for labelling, a never-clipped H, a run naming another file; dry run in-process and from the command line).

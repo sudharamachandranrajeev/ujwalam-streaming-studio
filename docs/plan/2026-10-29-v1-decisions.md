@@ -2296,4 +2296,10 @@ delete recordings once clipped and reviewed; keep the ones still to be labelled)
   in use (`services/common/safe-delete.mjs`, shared with posted clips). Recordings with no recorded clip job (all made
   before this build) are never deleted. Each deletion is logged to `<data>/clips/deleted-recordings.jsonl`; one task
   bar line per batch says "Deleted N recordings, freed X GB". It runs once at start-up and after each clip job.
-- Evidence: `docs/evidence/2026-11-19-autopost-backlog-cleanup.md`.
+- Old recordings (user, 2026-11-20: "Delete if clips exist"): a recording with no job record counts as processed when
+  its run folder's `render.json` names exactly that H file (same base name, directly in the recordings folder) and the
+  run made at least one clip that still exists in the clips folder or that `report.json` lists as ok. No size, file id
+  or exit code was recorded by earlier builds, so the name is the identity. Its V file (`<stem>-v.<ext>`) goes with a
+  qualifying H only; a V file with no H is kept. All other conditions still apply. Runs once; verdicts in
+  `<data>/clips/backfill-recordings.jsonl`. Dry run: `node services/studio-ui/recording-cleanup.mjs --dry-run --data
+  <dir> --recordings <dir>` lists what would be deleted and kept and changes nothing.- Evidence: `docs/evidence/2026-11-19-autopost-backlog-cleanup.md`.
