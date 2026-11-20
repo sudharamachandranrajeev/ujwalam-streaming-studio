@@ -3,14 +3,14 @@
 // refused while live or recording, with a job pending, for an unprocessed recording, for a session kept for labelling,
 // for a file swapped mid-check, for a path outside the recordings folder, and for a failed job. Temp folders only.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { safeRoot } from './helpers/data-root-guard.mjs';
 import { safeDeleteFile } from '../services/common/safe-delete.mjs';
 import {
-  BACKFILL_LOG, CLEANUP_FLAG, DELETED_RECORDINGS_LOG, appendJobRecord, backfillJobRecords, backfillVerdict, dryRun, cleanupPlan, readKeepList, runRecordingCleanup, setKeep,
+  BACKFILL_LOG, CLEANUP_FLAG, DELETED_RECORDINGS_LOG, appendJobRecord, backfillVerdict, dryRun, planBackfill, recName, vNameOf, cleanupPlan, readKeepList, runRecordingCleanup, setKeep,
 } from '../services/studio-ui/recording-cleanup.mjs';
 import { loadDefinitions, DEFAULT_FLAGS_FILE } from '../services/flags/index.mjs';
 
@@ -161,67 +161,98 @@ describe('recording cleanup (D403)', () => {
   });
 });
 
-describe('one-time backfill for old recordings (user 2026-11-20: "Delete if clips exist")', () => {
-  // A fixture copy of what earlier builds left in <data>/clips: run folders with render.json, report.json, published.json.
-  const runFiles = (dataDir, stem, { recording = `${stem}.mkv`, ok = false, published = [] } = {}) => {
+describe('recordings with no clip job: their clips decide (user 2026-11-20: "Delete if clips exist")', () => {
+  // Fixtures in the real layout (names only): alpha-<ts>.mkv (H), alpha-v-<ts>.mkv (V), a replay/ subfolder; clips in
+  // <clips>/<YYYY-MM-DD>/<game>_<kind>_<YYYYMMDD-HHMMSS>_..._v.mp4.
+  const local = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi).getTime();
+  const rec = (folder, name, endMs, n = 3000) => { const f = path.join(folder, name); writeFileSync(f, Buffer.alloc(n, 5)); utimesSync(f, endMs / 1000, endMs / 1000); return f; };
+  const clip = (root, day, stamp) => { mkdirSync(path.join(root, day), { recursive: true }); writeFileSync(path.join(root, day, `codm_short_${stamp}_kills-3_01_v.mp4`), 'clip'); };
+  const runFiles = (dataDir, stem, { recording = `${stem}.mkv`, ok = false } = {}) => {
     const run = path.join(dataDir, 'clips', 'runs', stem); mkdirSync(run, { recursive: true });
     writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', recording, clips: [] }));
     writeFileSync(path.join(run, 'report.json'), JSON.stringify({ results: [{ id: 'c01', file: 'stream-v.mp4', ok }] }));
-    writeFileSync(path.join(run, 'published.json'), JSON.stringify({ files: published.map((file) => ({ file })) }));
   };
-  const rec = (folder, name, n = 3000) => { const f = path.join(folder, name); writeFileSync(f, Buffer.alloc(n, 5)); return f; };
   const verdicts = (dataDir) => readFileSync(path.join(dataDir, 'clips', BACKFILL_LOG), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).map((l) => [path.basename(l.file), l.decision, l.reason]);
   function world() {
     const dataDir = mk(); const folder = mk(); const clipsRoot = mk();
-    mkdirSync(path.join(clipsRoot, '2026-11-01'), { recursive: true }); writeFileSync(path.join(clipsRoot, '2026-11-01', 'a.mp4'), 'clip');
     const f = {
-      h: rec(folder, 'alpha-1.mkv', 5000), v: rec(folder, 'alpha-1-v.mkv', 4000), // qualifying pair: a published clip still exists
-      noClips: rec(folder, 'alpha-2.mkv'), noClipsV: rec(folder, 'alpha-2-v.mkv'), // run made nothing that still exists
-      vOnly: rec(folder, 'alpha-3-v.mkv'), // V without H
-      kept: rec(folder, 'alpha-4.mkv'), keptV: rec(folder, 'alpha-4-v.mkv'), // ok in report.json, but kept for labelling
-      never: rec(folder, 'alpha-5.mkv'), // never clipped
+      h: rec(folder, 'alpha-20261101-200000.mkv', local(2026, 11, 1, 22, 0), 5000), v: rec(folder, 'alpha-v-20261101-200000.mkv', local(2026, 11, 1, 22, 0), 4000),
+      noClips: rec(folder, 'alpha-20261102-200000.mkv', local(2026, 11, 2, 22, 0)), noClipsV: rec(folder, 'alpha-v-20261102-200000.mkv', local(2026, 11, 2, 22, 0)),
+      vOnly: rec(folder, 'alpha-v-20261103-200000.mkv', local(2026, 11, 3, 22, 0)),
+      kept: rec(folder, 'alpha-20261104-200000.mkv', local(2026, 11, 4, 22, 0)), keptV: rec(folder, 'alpha-v-20261104-200000.mkv', local(2026, 11, 4, 22, 0)),
+      old: rec(folder, 'practice-h-1.mkv', local(2026, 11, 5, 22, 0)), // an older record-clips run (run folder rule)
     };
-    runFiles(dataDir, 'alpha-1', { published: ['2026-11-01/a.mp4'] });
-    runFiles(dataDir, 'alpha-2', { published: ['2026-11-01/gone.mp4'] });
-    runFiles(dataDir, 'alpha-4', { ok: true });
+    mkdirSync(path.join(folder, 'replay'), { recursive: true }); f.replay = path.join(folder, 'replay', 'replay-h-20261101-201000.mkv'); writeFileSync(f.replay, 'r');
+    clip(clipsRoot, '2026-11-01', '20261101-203000'); clip(clipsRoot, '2026-11-01', '20261101-213000');
+    clip(clipsRoot, '2026-11-02', '20261102-233000'); // after that recording ended: outside its window
+    clip(clipsRoot, '2026-11-04', '20261104-201500');
+    runFiles(dataDir, 'practice-h-1', { ok: true });
     return { dataDir, folder, clipsDirOf: () => clipsRoot, f };
   }
 
+  test('names: H and V of a session; clip times; V name of an H', () => {
+    assert.deepEqual(recName('alpha-v-20261101-200000.mkv'), { prefix: 'alpha', v: true, stamp: '20261101-200000' });
+    assert.equal(vNameOf('alpha-20261101-200000.mkv'), 'alpha-v-20261101-200000.mkv');
+    assert.equal(vNameOf('practice.mkv'), 'practice-v.mkv');
+  });
+
   test('dry run lists what would go and what stays, with sizes and reasons, and changes nothing', () => {
-    const w = world(); setKeep(w.dataDir, 'alpha-4', true);
+    const w = world(); setKeep(w.dataDir, 'alpha-20261104-200000', true);
     const before = readdirSync(w.dataDir, { recursive: true }).sort();
-    const rows = dryRun({ dataDir: w.dataDir, folder: w.folder, clipsDirOf: w.clipsDirOf });
+    const rows = dryRun({ dataDir: w.dataDir, folder: w.folder, clipsDirOf: w.clipsDirOf, nowMs: T });
     assert.deepEqual(rows.map((r) => [path.basename(r.file), r.action]), [
-      ['alpha-1-v.mkv', 'delete'], ['alpha-1.mkv', 'delete'], ['alpha-2-v.mkv', 'keep'], ['alpha-2.mkv', 'keep'], ['alpha-3-v.mkv', 'keep'],
-      ['alpha-4-v.mkv', 'keep'], ['alpha-4.mkv', 'keep'], ['alpha-5.mkv', 'keep']]);
+      ['alpha-20261101-200000.mkv', 'delete'], ['alpha-20261102-200000.mkv', 'keep'], ['alpha-20261104-200000.mkv', 'keep'],
+      ['alpha-v-20261101-200000.mkv', 'delete'], ['alpha-v-20261102-200000.mkv', 'keep'], ['alpha-v-20261103-200000.mkv', 'keep'],
+      ['alpha-v-20261104-200000.mkv', 'keep'], ['practice-h-1.mkv', 'delete']]);
     assert.equal(rows.find((r) => r.file === w.f.h).size, 5000);
     assert.equal(rows.find((r) => r.file === w.f.vOnly).reason, 'v-without-h');
     assert.equal(rows.find((r) => r.file === w.f.kept).reason, 'kept-for-labelling');
-    assert.equal(rows.find((r) => r.file === w.f.noClips).reason, 'no-clips');
+    assert.equal(rows.find((r) => r.file === w.f.noClips).reason, 'no-clips-in-its-time-window');
+    assert.ok(!rows.some((r) => r.file.includes('replay')), 'the replay folder is not looked at');
     assert.deepEqual(readdirSync(w.dataDir, { recursive: true }).sort(), before, 'nothing written');
     for (const x of Object.values(w.f)) assert.ok(existsSync(x));
   });
 
-  test('the first pass proves the pair, deletes H and V, keeps the rest; verdicts logged; runs once', async () => {
-    const w = world(); setKeep(w.dataDir, 'alpha-4', true);
+  test('the first pass proves by clips in the window (or an old run), deletes H and V, keeps the rest, logs every verdict', async () => {
+    const w = world(); setKeep(w.dataDir, 'alpha-20261104-200000', true);
     const tasks = [];
-    assert.equal(backfillJobRecords({ dataDir: w.dataDir, folder: w.folder, clipsDirOf: w.clipsDirOf, nowMs: T }).proven, 4);
+    const r = await runRecordingCleanup({ dataDir: w.dataDir, folder: w.folder, flagOn: true, status: OFF_AIR, nowMs: T, clipsDirOf: w.clipsDirOf, writeTask: (_d, t) => tasks.push(t) });
+    assert.deepEqual(r.deleted.map((d) => path.basename(d.file)).sort(), ['alpha-20261101-200000.mkv', 'alpha-v-20261101-200000.mkv', 'practice-h-1.mkv']);
     assert.deepEqual(verdicts(w.dataDir), [
-      ['alpha-1.mkv', 'proven', 'clips-exist'], ['alpha-1-v.mkv', 'proven', 'clips-exist (V of a proven H)'],
-      ['alpha-2.mkv', 'kept', 'no-clips'], ['alpha-2-v.mkv', 'kept', 'its H is kept (no-clips)'],
-      ['alpha-4.mkv', 'proven', 'clips-exist'], ['alpha-4-v.mkv', 'proven', 'clips-exist (V of a proven H)'],
-      ['alpha-5.mkv', 'kept', 'no-run-folder'], ['alpha-3-v.mkv', 'kept', 'v-without-h']]);
-    assert.equal(backfillJobRecords({ dataDir: w.dataDir, folder: w.folder, clipsDirOf: w.clipsDirOf, nowMs: T }).ran, false, 'once');
-    const r = await runRecordingCleanup({ dataDir: w.dataDir, folder: w.folder, flagOn: true, status: OFF_AIR, nowMs: T, writeTask: (_d, t) => tasks.push(t) });
-    assert.deepEqual(r.deleted.map((d) => path.basename(d.file)).sort(), ['alpha-1-v.mkv', 'alpha-1.mkv']);
-    assert.match(tasks[0].title, /^Deleted 2 recordings, freed [\d.]+ GB$/);
-    for (const x of [w.f.noClips, w.f.noClipsV, w.f.vOnly, w.f.kept, w.f.keptV, w.f.never]) assert.ok(existsSync(x));
+      ['alpha-20261101-200000.mkv', 'proven', 'clips-exist (2 clips in its time window)'], ['alpha-v-20261101-200000.mkv', 'proven', 'clips-exist (2 clips in its time window) (V of a proven H)'],
+      ['alpha-20261102-200000.mkv', 'kept', 'no-clips-in-its-time-window'], ['alpha-v-20261102-200000.mkv', 'kept', 'its H is kept (no-clips-in-its-time-window)'],
+      ['alpha-20261104-200000.mkv', 'proven', 'clips-exist (1 clip in its time window)'], ['alpha-v-20261104-200000.mkv', 'proven', 'clips-exist (1 clip in its time window) (V of a proven H)'],
+      ['practice-h-1.mkv', 'proven', 'clips-exist'], ['alpha-v-20261103-200000.mkv', 'kept', 'v-without-h']]);
+    assert.match(tasks[0].title, /^Deleted 3 recordings, freed [\d.]+ GB$/);
+    for (const x of [w.f.noClips, w.f.noClipsV, w.f.vOnly, w.f.kept, w.f.keptV, w.f.replay]) assert.ok(existsSync(x));
+    // a second pass adds no verdict lines for what it kept again
+    await runRecordingCleanup({ dataDir: w.dataDir, folder: w.folder, flagOn: true, status: OFF_AIR, nowMs: T, clipsDirOf: w.clipsDirOf });
+    assert.equal(verdicts(w.dataDir).length, 8);
+  });
+
+  test('from now on: a session still being written, just ended, or while the live clipper runs is kept; once settled it goes', async () => {
+    const w = world();
+    const end = Date.now() - 60_000; utimesSync(w.f.h, end / 1000, end / 1000); // "just ended" (inside the settle time)
+    const opts = { dataDir: w.dataDir, folder: w.folder, flagOn: true, clipsDirOf: w.clipsDirOf };
+    const writing = { sinks: [{ id: 'rec', kind: 'record', state: 'stopped', path: w.f.old }] };
+    let r = await runRecordingCleanup({ ...opts, status: writing, nowMs: Date.now(), clipperBusy: true });
+    assert.equal(r.deleted.length, 0, 'clipper running: nothing proven');
+    r = await runRecordingCleanup({ ...opts, status: writing, nowMs: Date.now() });
+    assert.ok(existsSync(w.f.h) && existsSync(w.f.v), 'just ended: kept');
+    assert.ok(existsSync(w.f.old), 'the file an output names: kept');
+    const plan = planBackfill({ dataDir: w.dataDir, folder: w.folder, clipsDirOf: w.clipsDirOf, nowMs: Date.now(), writing: [w.f.old] });
+    assert.ok(plan.verdicts.some((v) => v.file === w.f.old && v.reason === 'being-recorded'));
+    assert.ok(plan.verdicts.some((v) => v.file === w.f.h && v.reason === 'just-recorded'));
+    // settled: the window is [name time, last write], so the clips of 1 Nov still count only if the end covers them
+    utimesSync(w.f.h, local(2026, 11, 1, 22, 0) / 1000, local(2026, 11, 1, 22, 0) / 1000);
+    r = await runRecordingCleanup({ ...opts, status: OFF_AIR, nowMs: Date.now() });
+    assert.ok(r.deleted.some((d) => d.file === w.f.h));
   });
 
   test('a run folder that names another file proves nothing', () => {
     const w = world();
-    runFiles(w.dataDir, 'alpha-5', { recording: 'alpha-50.mkv', ok: true });
-    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.never, clipsDirOf: w.clipsDirOf }).reason, 'run-is-for-another-file');
+    runFiles(w.dataDir, 'practice-h-1', { recording: 'other.mkv', ok: true });
+    assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: Date.now(), clipsDirOf: w.clipsDirOf }).reason, 'run-is-for-another-file');
   });
 
   test('the command line dry run prints and changes nothing', async () => {

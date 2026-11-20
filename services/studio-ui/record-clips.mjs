@@ -448,15 +448,17 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   };
   // D403 Delete clipped recordings: once at start-up (first status) and after each clip job, off air only, when no
   // clip job runs. It runs in the launcher on a later turn (setImmediate) and reads no file contents (file id checks).
-  let cleaning = false; let cleanedAtStart = false;
+  // Also every CLEANUP_EVERY_MS while off air and idle, so a live-clipper session (no clip job) goes once it has settled.
+  const CLEANUP_EVERY_MS = 15 * 60 * 1000;
+  let cleaning = false; let lastCleanAt = null;
   const flagOnSafe = () => { try { return cleanupFlag() === true; } catch { return false; } };
   const cleanupSoon = (why) => {
     if (cleaning || stopped || halted || child || liveNow || !lastStatus) return;
     if (!flagOnSafe()) return;
-    cleaning = true;
+    cleaning = true; lastCleanAt = now();
     setImmediate(() => {
       const folder = typeof recordingsFolder === 'function' ? recordingsFolder() : recordingsFolder;
-      Promise.resolve(cleanupImpl({ dataDir, folder, flagOn: flagOnSafe(), status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] }, nowMs: now(), log, writeTask: writeTaskFile,
+      Promise.resolve(cleanupImpl({ dataDir, folder, flagOn: flagOnSafe(), status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] }, nowMs: now(), log, writeTask: writeTaskFile, clipperBusy: watching,
         // Codex round 1: read again right before each file's delete (a stream, recording or clip job that starts stops the batch).
         recheck: () => ({ status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] } }) }))
         .then((r) => { if (r?.deleted?.length) log(`clips: recording cleanup after ${why}: ${r.deleted.length} file(s) deleted`); })
@@ -536,7 +538,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       readStop();
       if (live && child && current && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); } // the whole tree: ffmpeg must not encode while live
       if (!live) start();
-      if (!live && !rec && !cleanedAtStart) { cleanedAtStart = true; cleanupSoon('start-up'); }
+      if (!live && !rec && (lastCleanAt === null || now() - lastCleanAt >= CLEANUP_EVERY_MS)) cleanupSoon(lastCleanAt === null ? 'start-up' : 'an idle check');
       if (postChain) void Promise.resolve(postChain.tick(status)).catch(() => {}); // retries of queued uploads; the chain itself refuses while a stream is live
       write();
     },

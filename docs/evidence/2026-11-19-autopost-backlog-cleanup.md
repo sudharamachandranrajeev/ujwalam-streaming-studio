@@ -77,15 +77,34 @@ studio running headless; not run per the no-full-CI rule).
 
 ## Backfill for old recordings (user, 2026-11-20: "Delete if clips exist")
 
-A recording with no job record counts as processed when
-  its run folder's `render.json` names exactly that H file (same base name, directly in the recordings folder) and the
-  run made at least one clip that still exists in the clips folder or that `report.json` lists as ok. No size, file id
-  or exit code was recorded by earlier builds, so the name is the identity. Its V file (`<stem>-v.<ext>`) goes with a
-  qualifying H only; a V file with no H is kept. All other conditions still apply. Runs once; verdicts in
-  `<data>/clips/backfill-recordings.jsonl`. Dry run: `node services/studio-ui/recording-cleanup.mjs --dry-run --data
-  <dir> --recordings <dir>` lists what would be deleted and kept and changes nothing.
-Tests: `tests/recording-cleanup.test.mjs` 15/15 (fixtures: a qualifying H+V pair, an H whose clips are gone, a V without H,
-a session kept for labelling, a never-clipped H, a run naming another file; dry run in-process and from the command line).
+The first dry run on the real folders (main session) kept all 12 files as `no-run-folder`. The real recordings are
+`alpha-<ts>.mkv` / `alpha-v-<ts>.mkv` and their clips came from the live clipper, not from record-clips runs. The rule
+is therefore (D405): an H file with no clip job counts as processed when a clip still in the clips folder has a name
+time inside [the time in the recording's name, its last write], or when an older run folder names it and made a clip.
+It must also be finished: not written by an output, last written at least 10 minutes ago, and the live clipper not
+running. V goes only with a qualifying H; `replay/` is never touched. The same check runs from now on (start-up, after
+each clip job, every 15 minutes off air), so live-clipper sessions are covered going forward.
+
+Dry run on a fixture copy in the real layout (temp folders):
+
+```
+DELETE  alpha-20261101-200000.mkv    (clip at 20:30 inside 20:00-22:00)
+KEEP    alpha-20261102-200000.mkv    (no-clips-in-its-time-window)
+DELETE  alpha-v-20261101-200000.mkv
+KEEP    alpha-v-20261102-200000.mkv  (its H is kept (no-clips-in-its-time-window))
+KEEP    alpha-v-20261103-200000.mkv  (v-without-h)
+dry run: would delete 2 file(s), 0.00 GB; keep 3. Nothing was changed.
+```
+
+Tests: `tests/recording-cleanup.test.mjs` 20/20. The fixtures cover:
+- a qualifying H+V pair;
+- an H whose only clip is after its end;
+- a V with no H;
+- a session kept for labelling;
+- an older run folder, and a run folder that names another file;
+- a `replay/` file, which is left alone;
+- recordings still being written, just ended, or with the live clipper busy;
+- the dry run, both in-process and from the command line, writing nothing.
 
 ## Codex round 1 fixes (2026-11-20)
 

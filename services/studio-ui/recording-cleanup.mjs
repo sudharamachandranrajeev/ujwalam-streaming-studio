@@ -163,15 +163,19 @@ export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(data
  * One cleanup pass. folder: the configured recordings folder. status: the latest outputs.status (null = unknown: refused).
  * -> { ran, refused?, deleted: [{ file, size }], kept: [{ file, reason }] }.
  */
-export async function runRecordingCleanup({ dataDir, folder, flagOn, status, state = {}, nowMs = Date.now(), log = () => {}, writeTask = null, deleteImpl = safeDeleteFile, recheck = null }) {
+export async function runRecordingCleanup({ dataDir, folder, flagOn, status, state = {}, nowMs = Date.now(), log = () => {}, writeTask = null, deleteImpl = safeDeleteFile, recheck = null, clipperBusy = false, clipsDirOf = clipsFolder }) {
   const res = { ran: false, deleted: [], kept: [] };
   if (flagOn !== true) return { ...res, refused: 'flag-off' };
   if (typeof folder !== 'string' || !folder || !existsSync(folder)) return { ...res, refused: 'no-recordings-folder' };
   if (!isPlain(status)) return { ...res, refused: 'state-unknown' };
   if (statusActive(status)) return { ...res, refused: 'live-or-recording' };
   res.ran = true;
-  // Once: recordings clipped before jobs.jsonl existed get a job record only where the old run files prove it.
-  try { const b = backfillJobRecords({ dataDir, folder, nowMs }); if (b.ran) log(`clips: earlier recordings checked: ${b.proven} proven processed, ${b.kept} kept (clips/${BACKFILL_LOG})`); } catch { /* kept */ }
+  // Recordings with no clip job (live-clipper sessions, and every one made before jobs.jsonl): their clips decide.
+  try {
+    const writing = (Array.isArray(status.sinks) ? status.sinks : []).map((s) => s?.path).filter((p) => typeof p === 'string');
+    const b = backfillJobRecords({ dataDir, folder, nowMs, clipsDirOf, writing, clipperBusy });
+    if (b.ran && (b.first || b.proven)) log(`clips: recordings without a clip job checked: ${b.proven} proven processed, ${b.kept} kept (clips/${BACKFILL_LOG})`);
+  } catch { /* kept */ }
   const logFile = path.join(clipsDir(dataDir), DELETED_RECORDINGS_LOG);
   // Codex round 1: the live state and the clip jobs are read again right before each file (recheck: () => { status,
   // state }); the batch stops at the first change, and every file not yet deleted is kept.
@@ -215,31 +219,62 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
   return res;
 }
 
-// ---- One-time backfill for recordings clipped before jobs.jsonl existed ------------------------------------------------
-// User, 2026-11-20: "Delete if clips exist". What earlier builds left per run (read 2026-11-20 from record-clips.mjs and
-// clipper.py): <data>/clips/runs/<stem>/render.json { recording: <H file NAME> }, report.json { results: [{ ok }] },
-// published.json / montage/published.json { files: [{ file: <path in the clips folder> }] }. No size, file id or exit
-// code was recorded, and render.json's duration needs ffprobe to compare, so the identity is the name: a recording
-// directly in the recordings folder whose run folder (same base name) has a render.json naming exactly that file.
-// It is proven ("clips-exist") when that run made at least one clip that still exists in the clips folder, or that
-// report.json lists as ok. Its V recording is the same session's <stem>-v.<ext> (stream-setup.mjs vRecordName), taken
-// only with a qualifying H; a V file with no H partner is kept. A proven recording gets one job record
-// ({ type: 'full', backfill: true }); every other cleanup condition (Keep for labelling, off air, no job pending, the
-// safe-delete checks) still applies. Each verdict goes to <data>/clips/backfill-recordings.jsonl, whose existence marks
-// the backfill as done.
+// ---- Recordings with no clip job: the clips in their time window (user, 2026-11-20: "Delete if clips exist") -----------
+// How the data really looks (main session, 2026-11-20): the recordings folder holds alpha-<YYYYMMDD-HHMMSS>.mkv (H) and
+// alpha-v-<YYYYMMDD-HHMMSS>.mkv (V) at its top (a replay/ subfolder holds replay-buffer saves: never touched). The clips
+// were made by the live clipper while recording (clips.recording "while"), so no record-clips job exists for them. The
+// clips folder holds <YYYY-MM-DD>/<game>_<kind>_<YYYYMMDD-HHMMSS>_..._v.mp4.
+// An H recording with no jobs.jsonl entry counts as processed when either
+//   (a) at least one clip still in the clips folder has a name time inside [the time in the recording's name, the
+//       recording's last write], or
+//   (b) a run folder runs/<stem>/render.json names exactly that file and that run made a clip that still exists or that
+//       report.json lists as ok (older record-clips runs);
+// AND it is finished: not a file an output is writing now, last written at least SETTLE_MS ago, and the live clipper is
+// not running (record-clips passes clipperBusy while it watches). Its V file is the same session's (alpha-v-<ts>, or
+// <stem>-v), taken only with a qualifying H; a V file with no H is kept. Each one gets a job record with the files'
+// identity taken now, marked backfill. The first pass logs every verdict to <data>/clips/backfill-recordings.jsonl; later
+// passes add a line for each recording they prove. Every other cleanup condition still applies.
 export const BACKFILL_LOG = 'backfill-recordings.jsonl';
+export const SETTLE_MS = 10 * 60 * 1000;
 const REC_EXT = /\.(mkv|mp4|mov|flv|ts|m4v)$/i;
 const readJson = (f) => { try { const j = JSON.parse(readFileSync(f, 'utf8')); return isPlain(j) ? j : null; } catch { return null; } };
-const vStem = (stem) => /-v$/i.test(stem);
+const STAMP = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/;
+/** "YYYYMMDD-HHMMSS" (local time, as the host and the clip maker name files) -> ms, or null. */
+export const stampMs = (s) => { const m = STAMP.exec(String(s ?? '')); if (!m) return null; const t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime(); return Number.isFinite(t) ? t : null; };
+/** A recording file name -> { prefix, v, stamp } (alpha-20261118-200000.mkv / alpha-v-20261118-200000.mkv), else null. */
+export function recName(name) {
+  const m = /^(.*?)(-v)?-(\d{8}-\d{6})\.[A-Za-z0-9]+$/i.exec(name);
+  return m ? { prefix: m[1], v: !!m[2], stamp: m[3] } : null;
+}
+const isVName = (n) => { const r = recName(n); return r ? r.v : /-v$/i.test(sessionName(n)); };
+/** The V partner's file name of an H file name: alpha-<ts>.mkv -> alpha-v-<ts>.mkv; else <stem>-v.<ext> (vRecordName). */
+export const vNameOf = (n) => { const r = recName(n); const ext = path.extname(n); return r && !r.v ? `${r.prefix}-v-${r.stamp}${ext}` : `${sessionName(n)}-v${ext}`; };
 
-/** Does an old run prove clips were made from `file`? -> { proven, reason, clips } (reads only). */
-export function backfillVerdict({ dataDir, file, clipsDirOf = clipsFolder }) {
-  const stem = sessionName(file);
-  const run = path.join(clipsDir(dataDir), 'runs', stem);
+/** Clip names with a time, per date folder, from the clips folder (top-level YYYY-MM-DD folders only). Reads names only. */
+export function clipTimes(root) {
+  const out = [];
+  let days = [];
+  try { days = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(d.name)); } catch { return out; }
+  for (const d of days) {
+    let files = [];
+    try { files = readdirSync(path.join(root, d.name), { withFileTypes: true }).filter((e) => e.isFile() && /\.(mp4|mov|webm|mkv)$/i.test(e.name)); } catch { continue; }
+    for (const e of files) { const m = /_(\d{8}-\d{6})_/.exec(e.name); const t = m ? stampMs(m[1]) : null; if (t !== null) out.push(t); }
+  }
+  return out;
+}
+
+/** Is `file` (an H recording) proven processed by its clips or an old run? -> { proven, reason, clips }. Reads only. */
+export function backfillVerdict({ dataDir, file, mtimeMs, clipsDirOf = clipsFolder, times = null }) {
+  let root = null; try { root = clipsDirOf(dataDir); } catch { /* unknown clips folder */ }
+  const start = stampMs(recName(path.basename(file))?.stamp);
+  if (start !== null && Number.isFinite(mtimeMs) && root) {
+    const n = (times ?? clipTimes(root)).filter((t) => t >= start && t <= mtimeMs).length;
+    if (n > 0) return { proven: true, reason: `clips-exist (${n} clip${n === 1 ? '' : 's'} in its time window)`, clips: n };
+  }
+  const run = path.join(clipsDir(dataDir), 'runs', sessionName(file));
   const render = readJson(path.join(run, 'render.json'));
-  if (!render) return { proven: false, reason: 'no-run-folder', clips: 0 };
+  if (!render) return { proven: false, reason: start === null ? 'no-run-folder' : 'no-clips-in-its-time-window', clips: 0 };
   if (String(render.recording ?? '').toLowerCase() !== path.basename(file).toLowerCase()) return { proven: false, reason: 'run-is-for-another-file', clips: 0 };
-  let root = null; try { root = clipsDirOf(dataDir); } catch { /* the clips folder is unknown: only report.json counts */ }
   let clips = 0;
   for (const p of [path.join(run, 'published.json'), path.join(run, 'montage', 'published.json')]) {
     const files = readJson(p)?.files;
@@ -251,50 +286,60 @@ export function backfillVerdict({ dataDir, file, clipsDirOf = clipsFolder }) {
   return { proven: false, reason: 'no-clips', clips: 0 };
 }
 
-/** The backfill's verdicts and the job records it would write (reads only). -> { done, verdicts: [{ file, size, decision,
- *  reason, session }], records: [] }. done: it ran before (the log exists), nothing to add. */
-export function planBackfill({ dataDir, folder, nowMs = Date.now(), clipsDirOf = clipsFolder }) {
-  if (existsSync(path.join(clipsDir(dataDir), BACKFILL_LOG))) return { done: true, verdicts: [], records: [] };
+/** Verdicts and the job records to add for recordings with no job record (reads only).
+ *  writing: paths an output writes now (from the status); clipperBusy: the live clipper runs.
+ *  -> { first, verdicts: [{ file, size, decision, reason, session }], records, at } */
+export function planBackfill({ dataDir, folder, nowMs = Date.now(), clipsDirOf = clipsFolder, writing = [], clipperBusy = false }) {
+  const first = !existsSync(path.join(clipsDir(dataDir), BACKFILL_LOG));
   const known = new Set(readJobRecords(dataDir).flatMap((r) => [key(r.h), key(r.v)]).filter(Boolean));
+  const busy = new Set(writing.map(key).filter(Boolean));
   let names = [];
-  try { names = readdirSync(folder, { withFileTypes: true }).filter((e) => e.isFile() && REC_EXT.test(e.name)).map((e) => e.name).sort(); } catch { return { done: false, verdicts: [], records: [] }; }
+  try { names = readdirSync(folder, { withFileTypes: true }).filter((e) => e.isFile() && REC_EXT.test(e.name)).map((e) => e.name).sort(); } catch { return { first, verdicts: [], records: [] }; }
   const byLower = new Map(names.map((n) => [n.toLowerCase(), n]));
-  const sizeOf = (f) => { try { return statSync(f).size; } catch { return null; } };
+  const statOf = (f) => { try { return statSync(f); } catch { return null; } };
+  let root = null; try { root = clipsDirOf(dataDir); } catch { /* unknown */ }
+  const times = root ? clipTimes(root) : [];
   const at = new Date(nowMs).toISOString();
   const verdicts = []; const records = []; const pairedV = new Set();
-  for (const n of names.filter((x) => !vStem(sessionName(x)))) {
+  for (const n of names.filter((x) => !isVName(x))) {
     const h = path.join(folder, n);
     if (known.has(key(h))) continue;
-    const ext = path.extname(n); const vName = byLower.get(`${sessionName(n)}-v${ext}`.toLowerCase());
+    const vName = byLower.get(vNameOf(n).toLowerCase());
     const v = vName && !known.has(key(path.join(folder, vName))) ? path.join(folder, vName) : null;
-    const b = backfillVerdict({ dataDir, file: h, clipsDirOf });
+    if (v) pairedV.add(vName);
+    const st = statOf(h); const vst = v ? statOf(v) : null;
     const session = sessionName(n);
-    verdicts.push({ file: h, size: sizeOf(h), decision: b.proven ? 'proven' : 'kept', reason: b.reason, session });
-    if (v) { pairedV.add(vName); verdicts.push({ file: v, size: sizeOf(v), decision: b.proven ? 'proven' : 'kept', reason: b.proven ? 'clips-exist (V of a proven H)' : `its H is kept (${b.reason})`, session }); }
-    // Codex round 1: the identity is taken now, at backfill time, and the entry is marked backfill.
+    let b;
+    if (busy.has(key(h)) || (v && busy.has(key(v)))) b = { proven: false, reason: 'being-recorded' };
+    else if (clipperBusy) b = { proven: false, reason: 'live-clipper-running' };
+    else if (!st || nowMs - Math.max(st.mtimeMs, vst?.mtimeMs ?? 0) < SETTLE_MS) b = { proven: false, reason: 'just-recorded' };
+    else b = backfillVerdict({ dataDir, file: h, mtimeMs: st.mtimeMs, clipsDirOf, times });
+    verdicts.push({ file: h, size: st?.size ?? null, decision: b.proven ? 'proven' : 'kept', reason: b.reason, session });
+    if (v) verdicts.push({ file: v, size: vst?.size ?? null, decision: b.proven ? 'proven' : 'kept', reason: b.proven ? `${b.reason} (V of a proven H)` : `its H is kept (${b.reason})`, session });
+    // The identity is taken now, at backfill time, and the entry is marked backfill (Codex round 1).
     if (b.proven) records.push({ h, hId: fileIdentity(h), v, vId: v ? fileIdentity(v) : null, type: 'full', kind: 'recording', name: session, result: 'done', code: 0, reelsNotMade: null, at, backfill: true });
   }
-  for (const n of names.filter((x) => vStem(sessionName(x)) && !pairedV.has(x))) {
+  for (const n of names.filter((x) => isVName(x) && !pairedV.has(x))) {
     const v = path.join(folder, n);
-    if (!known.has(key(v))) verdicts.push({ file: v, size: sizeOf(v), decision: 'kept', reason: 'v-without-h', session: sessionName(n) });
+    if (!known.has(key(v))) verdicts.push({ file: v, size: statOf(v)?.size ?? null, decision: 'kept', reason: 'v-without-h', session: sessionName(n) });
   }
-  return { done: false, verdicts, records, at };
+  return { first, verdicts, records, at };
 }
 
-/** Runs once: writes the proven job records and the verdict log. -> { ran, proven, kept }. Never throws. */
-export function backfillJobRecords({ dataDir, folder, nowMs = Date.now(), clipsDirOf = clipsFolder }) {
-  let p; try { p = planBackfill({ dataDir, folder, nowMs, clipsDirOf }); } catch { return { ran: false, proven: 0, kept: 0 }; }
-  if (p.done) return { ran: false, proven: 0, kept: 0 };
+/** Each pass: writes the proven job records; the first pass logs every verdict, later ones each newly proven one.
+ *  -> { ran, first, proven, kept }. Never throws. */
+export function backfillJobRecords({ dataDir, folder, nowMs = Date.now(), clipsDirOf = clipsFolder, writing = [], clipperBusy = false }) {
+  let p; try { p = planBackfill({ dataDir, folder, nowMs, clipsDirOf, writing, clipperBusy }); } catch { return { ran: false, proven: 0, kept: 0 }; }
   for (const r of p.records) appendJobRecord(dataDir, r);
+  const lines = p.first ? p.verdicts : p.verdicts.filter((v) => v.decision === 'proven');
   const logFile = path.join(clipsDir(dataDir), BACKFILL_LOG);
-  try { mkdirSync(path.dirname(logFile), { recursive: true }); writeFileSync(logFile, p.verdicts.map((v) => `${JSON.stringify({ ...v, at: p.at })}\n`).join('')); } catch { /* tried again next start */ }
-  return { ran: true, proven: p.verdicts.filter((v) => v.decision === 'proven').length, kept: p.verdicts.filter((v) => v.decision === 'kept').length };
+  try { mkdirSync(path.dirname(logFile), { recursive: true }); appendFileSync(logFile, lines.map((v) => `${JSON.stringify({ ...v, at: p.at })}\n`).join('')); } catch { /* tried again next pass */ }
+  return { ran: true, first: p.first, proven: p.verdicts.filter((v) => v.decision === 'proven').length, kept: p.verdicts.filter((v) => v.decision === 'kept').length };
 }
-
 /** Dry run: what one cleanup pass would delete and keep, with sizes and reasons. Reads only; never writes or deletes.
  *  It cannot know the live state or the running jobs (it says so) and does not test "in use" (that needs the rename). */
-export function dryRun({ dataDir, folder, clipsDirOf = clipsFolder }) {
-  const bf = planBackfill({ dataDir, folder, clipsDirOf });
+export function dryRun({ dataDir, folder, clipsDirOf = clipsFolder, nowMs = Date.now() }) {
+  const bf = planBackfill({ dataDir, folder, clipsDirOf, nowMs });
   const records = [...readJobRecords(dataDir), ...bf.records];
   const rows = [];
   const sizeOf = (f) => { try { return statSync(f).size; } catch { return null; } };
@@ -302,7 +347,8 @@ export function dryRun({ dataDir, folder, clipsDirOf = clipsFolder }) {
     for (const file of [s.h, s.v].filter(Boolean)) {
       if (!existsSync(file)) continue;
       const where = s.reason ? null : checkInFolder(file, folder);
-      rows.push({ file, size: sizeOf(file), action: s.reason || where ? 'keep' : 'delete', reason: s.reason ?? where ?? 'clipped (in use and live state are checked when it runs)' });
+      const why = bf.verdicts.find((v) => key(v.file) === key(file))?.reason ?? 'its clip jobs finished';
+      rows.push({ file, size: sizeOf(file), action: s.reason || where ? 'keep' : 'delete', reason: s.reason ?? where ?? `${why}; in use and live state are checked when it runs` });
     }
   }
   const listed = new Set(rows.map((r) => key(r.file)));
