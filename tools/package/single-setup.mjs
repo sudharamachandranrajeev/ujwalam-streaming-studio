@@ -6,7 +6,7 @@
 // The whole file's SHA-256 goes into <exe>.sha256 next to it. Only the newest KEEP setups stay in the folder; older
 // ones (and their .sha256) are deleted, and each deletion is logged.
 import { createHash } from 'node:crypto';
-import { closeSync, createReadStream, existsSync, openSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync, createWriteStream } from 'node:fs';
+import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, createWriteStream } from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
@@ -71,20 +71,36 @@ export function pruneSetups(dir, { keep = KEEP, log = () => {} } = {}) {
   return deleted;
 }
 
+// setup.cpp kSingleMark: the program copy in front of the package says it was built as a single file, so a copy whose
+// trailer cannot be read is refused as damaged at any size (Codex review 2026-11-20).
+export const SINGLE_MARK = Buffer.from('UJWSINGLE:0\0', 'latin1');
+
+/** A copy of the program with the single-file mark set; throws unless the mark is there exactly once. */
+export function markSingle(prog) {
+  const at = prog.indexOf(SINGLE_MARK);
+  if (at < 0 || prog.indexOf(SINGLE_MARK, at + 1) >= 0) throw new Error(`setup program: the single-file mark ${SINGLE_MARK.toString('latin1', 0, 11)} must be in it exactly once`);
+  const b = Buffer.from(prog);
+  b[at + SINGLE_MARK.length - 2] = 0x31; // '1'
+  return b;
+}
+
 /**
- * Writes <outDir>/Ujwalam-Setup-<version>.exe from stub + zip (temp file, then one rename), its .sha256, and prunes.
+ * Writes <outDir>/Ujwalam-Setup-<version>.exe from stub (with the single-file mark set) + zip (temp file, then one rename), its .sha256, and prunes.
  * Returns { file, bytes, sha256, deleted }.
  */
 export async function buildSingleSetup({ stub, zip, version, outDir, keep = KEEP, log = () => {} }) {
   const dest = path.join(outDir, setupName(version));
   const tmp = `${dest}.${process.pid}.new`;
-  const [stubSha, zipSha] = await Promise.all([hashFile(stub), hashFile(zip)]);
-  const stubSize = statSync(stub).size;
+  const prog = markSingle(readFileSync(stub));
+  const stubSha = createHash('sha256').update(prog).digest();
+  const zipSha = await hashFile(zip);
+  const stubSize = prog.length;
   const zipSize = statSync(zip).size;
   try {
     const out = createWriteStream(tmp, { flags: 'wx' });
     await pipeline(async function* () {
-      for (const f of [stub, zip]) for await (const c of createReadStream(f, { highWaterMark: 1 << 20 })) yield c;
+      yield prog;
+      for await (const c of createReadStream(zip, { highWaterMark: 1 << 20 })) yield c;
       yield trailer({ stubSize, zipSize, zipSha, stubSha, version });
     }, out);
     renameSync(tmp, dest);

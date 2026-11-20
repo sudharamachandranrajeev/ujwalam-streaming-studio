@@ -5,12 +5,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { safeRoot } from './helpers/data-root-guard.mjs';
 import { SETUP_EXE } from '../app/setup/tools/build.mjs';
 import { backup, findSnapshot, listBackups, MAX_FILE, prune, recover, restore, scanSettings, settingsFiles, verify, wanted } from '../tools/package/settings-backup.mjs';
 import { installBusy } from '../tools/package/run-installed.mjs';
@@ -23,7 +24,13 @@ const sha = (b) => createHash('sha256').update(b).digest('hex');
 const tmp = (p) => mkdtempSync(path.join(os.tmpdir(), `ujw-setup-${p}-`));
 const noCreds = () => null;
 // Child installers never see a data-root override from the developer's shell: their data is the temp install's.
-const childEnv = () => { const e = { ...process.env }; delete e.UJWALAM_DATA_ROOT; return e; };
+// LOCALAPPDATA points at a temp folder too, so a call that forgets --install-root can never reach the real
+// %LOCALAPPDATA%\Ujwalam (guard: tests/helpers/data-root-guard.mjs).
+const FAKE_LOCALAPPDATA = mkdtempSync(path.join(os.tmpdir(), 'ujw-setup-lad-'));
+process.on('exit', () => rmSync(FAKE_LOCALAPPDATA, { recursive: true, force: true }));
+const childEnv = () => { const e = { ...process.env, LOCALAPPDATA: FAKE_LOCALAPPDATA }; delete e.UJWALAM_DATA_ROOT; return e; };
+/** Refuses any --install-root or --package outside the temp folder or inside the real %LOCALAPPDATA%\Ujwalam. */
+const guardArgs = (args) => { args.forEach((a, i) => { if (a === '--install-root') safeRoot(args[i + 1]); }); return args; };
 const A = '0.1.0-alpha.1';
 const B = '0.1.0-alpha.2';
 
@@ -266,7 +273,7 @@ test('settings backup: the snapshot a rollback needs survives any number of repa
 
 // ---- Install-Ujwalam.ps1 on fake packages ------------------------------------------------------------------------------
 
-function fakePackage(dir, version) {
+function fakePackage(dir, version, pad = 0) {
   mkdirSync(path.join(dir, 'tools', 'package'), { recursive: true });
   copyFileSync(path.join(REPO, 'tools', 'package', 'Install-Ujwalam.ps1'), path.join(dir, 'Install-Ujwalam.ps1'));
   copyFileSync(path.join(REPO, 'tools', 'package', 'Ujwalam.cmd'), path.join(dir, 'Ujwalam.cmd'));
@@ -276,12 +283,13 @@ function fakePackage(dir, version) {
   writeFileSync(path.join(dir, 'release.json'), JSON.stringify({ version, nodeMin: '22.13.0' }));
   writeFileSync(path.join(dir, 'tools', 'package', 'run-installed.mjs'), `console.log('fake ${version}');\n`);
   const rels = ['Install-Ujwalam.ps1', 'Ujwalam.cmd', 'ujwalam-start.exe', 'ujwalam.ico', 'release.json', 'tools/package/run-installed.mjs', 'tools/package/settings-backup.mjs'];
+  if (pad) { writeFileSync(path.join(dir, 'pad.bin'), randomBytes(pad)); rels.push('pad.bin'); } // a package of a real-ish size
   writeFileSync(path.join(dir, 'SHA256SUMS.txt'), rels.map((r) => `${sha(readFileSync(path.join(dir, r)))}  ${r}\n`).join(''));
   return { dir, rels };
 }
 
 function ps(script, root, ...args) {
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-InstallRoot', root, ...args],
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-InstallRoot', safeRoot(root), ...args],
     { encoding: 'utf8', windowsHide: true, timeout: 120_000, env: childEnv() });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
@@ -443,9 +451,9 @@ test('Install-Ujwalam.ps1: one at a time (install.lock; Ujwalam does not start m
 
 // ---- Ujwalam-Setup.exe end to end ---------------------------------------------------------------------------------------
 
-function packageZip(dist, version, { tamper = false, badScript = false } = {}) {
+function packageZip(dist, version, { tamper = false, badScript = false, pad = 0 } = {}) {
   const stage = path.join(dist, `stage-${version}`);
-  const { dir, rels } = fakePackage(stage, version);
+  const { dir, rels } = fakePackage(stage, version, pad);
   if (badScript) writeFileSync(path.join(dir, 'Install-Ujwalam.ps1'), `${readFileSync(path.join(dir, 'Install-Ujwalam.ps1'), 'utf8')}\r\n# changed\r\n`);
   const top = `ujwalam-${version}-win64`;
   const zip = path.join(dist, `${top}.zip`);
@@ -456,7 +464,7 @@ function packageZip(dist, version, { tamper = false, badScript = false } = {}) {
 }
 
 function setup(...args) {
-  const r = spawnSync(SETUP_EXE, ['--quiet', ...args], { encoding: 'utf8', windowsHide: true, timeout: 180_000, env: childEnv() });
+  const r = spawnSync(SETUP_EXE, ['--quiet', ...guardArgs(args)], { encoding: 'utf8', windowsHide: true, timeout: 180_000, env: childEnv() });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
 
@@ -533,7 +541,7 @@ test('single-file setup: trailer round trip; only the newest 2 setups stay (each
   const t = tmp('single-unit');
   try {
     const stub = path.join(t, 'stub.exe');
-    writeFileSync(stub, 'MZ stand-in program');
+    writeFileSync(stub, 'MZ stand-in UJWSINGLE:0\0');
     const zip = path.join(t, 'p.zip');
     writeFileSync(zip, 'PK stand-in package');
     const out = path.join(t, 'dist');
@@ -541,7 +549,12 @@ test('single-file setup: trailer round trip; only the newest 2 setups stay (each
     const logs = [];
     for (const v of ['0.1.0-alpha.9', '0.1.0-alpha.10', '0.1.0-alpha.2']) await buildSingleSetup({ stub, zip, version: v, outDir: out, log: (s) => logs.push(s) });
     const tr = readTrailer(path.join(out, 'Ujwalam-Setup-0.1.0-alpha.10.exe'));
-    assert.deepEqual(tr, { version: '0.1.0-alpha.10', stubSize: 19, zipSize: 19, zipSha: sha(readFileSync(zip)), stubSha: sha(readFileSync(stub)) });
+    const marked = Buffer.from('MZ stand-in UJWSINGLE:1\0', 'latin1');
+    assert.deepEqual(tr, { version: '0.1.0-alpha.10', stubSize: marked.length, zipSize: 19, zipSha: sha(readFileSync(zip)), stubSha: sha(marked) });
+    assert.deepEqual(readFileSync(path.join(out, 'Ujwalam-Setup-0.1.0-alpha.10.exe')).subarray(0, marked.length), marked, 'the program copy carries the single-file mark');
+    assert.equal(readFileSync(stub, 'latin1'), 'MZ stand-in UJWSINGLE:0\0', 'the program itself is not changed');
+    writeFileSync(path.join(t, 'nomark.exe'), 'MZ no mark');
+    await assert.rejects(buildSingleSetup({ stub: path.join(t, 'nomark.exe'), zip, version: '0.1.0-alpha.12', outDir: t }), /single-file mark/);
     const f = path.join(out, 'Ujwalam-Setup-0.1.0-alpha.10.exe');
     assert.equal(readFileSync(`${f}.sha256`, 'utf8'), `${sha(readFileSync(f))}  Ujwalam-Setup-0.1.0-alpha.10.exe\n`);
     // alpha.2 was built last but is the oldest by version: it goes, and so would alpha.9 at keep 1
@@ -567,9 +580,9 @@ test('single-file setup exe: installs what it carries, an update keeps settings,
   const ir = path.join(t, 'Ujwalam');
   const dist = path.join(t, 'dist');
   const data = path.join(ir, 'data');
-  const run = (exe, ...args) => { const r = spawnSync(exe, ['--quiet', ...args], { encoding: 'utf8', windowsHide: true, timeout: 180_000, env: childEnv() }); return { code: r.status, out: `${r.stdout}${r.stderr}` }; };
+  const run = (exe, ...args) => { const r = spawnSync(exe, ['--quiet', ...guardArgs(args)], { encoding: 'utf8', windowsHide: true, timeout: 180_000, env: childEnv() }); return { code: r.status, out: `${r.stdout}${r.stderr}` }; };
   const single = async (v, dir = dist) => {
-    const zip = packageZip(t, v);
+    const zip = packageZip(t, v, { pad: 3 << 20 });
     const s = await buildSingleSetup({ stub: SETUP_EXE, zip, version: v, outDir: dir });
     rmSync(zip); rmSync(`${zip}.sha256`);
     return s.file;
@@ -596,10 +609,15 @@ test('single-file setup exe: installs what it carries, an update keeps settings,
       program: (() => { const b = Buffer.from(bytes); b[1000] ^= 1; return b; })(),
       cut: bytes.subarray(0, bytes.length - 1000),
     };
+    // cut to 1 MiB (well under any size threshold) with a good package zip of B next to it: refused, never installed
+    // from the zip (Codex review 2026-11-20)
+    assert.ok(bytes.length > 3 << 20, 'B is bigger than the cut');
+    variants.cut1mib = bytes.subarray(0, 1 << 20);
     for (const [k, b] of Object.entries(variants)) {
       const f = path.join(t, k, path.basename(eb));
       mkdirSync(path.dirname(f));
       writeFileSync(f, b);
+      if (k === 'cut1mib') packageZip(path.dirname(f), B);
       r = run(f, '--update', '--install-root', ir, '--no-shortcuts');
       assert.equal(r.code, 21, `${k}: ${r.out}`);
       assert.match(r.out, /This setup file is damaged or incomplete .* Nothing was changed\./, k);

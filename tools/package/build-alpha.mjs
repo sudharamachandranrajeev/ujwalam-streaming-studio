@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Builds the single-file setup (2026-11-19): out/dist/Ujwalam-Setup-<base>-alpha.<N>.exe (+ .sha256), which carries the
-// package zip ujwalam-<base>-alpha.<N>-win64.zip (D133; kept next to it only with --keep-zip). The newest 2 setups stay.
+// package zip ujwalam-<base>-alpha.<N>-win64.zip (D133). The zip and its .sha256 stay next to it by default:
+// installs from before the single file (alpha.35 and older) update only from ujwalam-*-win64.zip (Codex review
+// 2026-11-20); --drop-zip removes them once no such install is left. The newest 2 setups stay.
 //   node tools/package/build-alpha.mjs [--n N] [--host-exe FILE] [--runtime DIR] [--out-dir DIR] [--profile FILE]
-//                                      [--force] [--keep-staging] [--keep-zip]
+//                                      [--force] [--keep-staging] [--drop-zip]
 //   N         --n, else data/release/alpha.json "current"; data/release/CHANGELOG-alpha.md needs a "## <version>" section.
 //   studio exe  --studio-exe, else out/studio/build/ujwalam-studio.exe (npm run build:studio); required.
 //   host exe  --host-exe, else app/host/lib/config.mjs (UJWALAM_HOST_EXE / host.local.json "exe" / out/host/build).
@@ -22,7 +24,7 @@
 // *.local.*, fonts incl. those named in docs/licence-headers.md, docs/, feedback/, out/, user data, secrets, media),
 // import closure of the packaged .mjs files, private-term scan, and the runtime's obs-nvenc.dll must be the patched
 // build (tools/obs-patch/obs-nvenc.manifest.json). The same path checks run again on the finished zip.
-// An existing build of the same version is refused unless --force (an old --keep-zip zip is moved to out/dist/_old/).
+// An existing build of the same version is refused unless --force (an old zip is moved to out/dist/_old/).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -47,6 +49,9 @@ export const STUDIO_QT = Object.freeze([
 ]);
 // The Qt Quick imports the QML window loads (D360), copied from the kit's qml/ into studio/qml/ (qml_studio.cpp adds
 // that folder to the import path). [folder under qml/, with its subfolders]. Debug builds (*d.dll) and .pdb files stay out.
+/** The package zip stays next to the single setup unless dropZip: alpha.35 and older update only from the zip. */
+export const keepZipFor = (opts = {}) => opts.dropZip !== true;
+
 export const STUDIO_QML = Object.freeze([
   ['QtQml', false], ['QtQml/Models', true], ['QtQml/WorkerScript', true],
   ['QtQuick', false], ['QtQuick/Window', true], ['QtQuick/Templates', true],
@@ -222,7 +227,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) throw new Error(`unexpected argument ${a}`);
     const k = a.slice(2);
-    if (['force', 'keep-staging', 'keep-zip'].includes(k)) o[k] = true;
+    if (['force', 'keep-staging', 'drop-zip'].includes(k)) o[k] = true;
     else { o[k] = argv[++i]; if (o[k] === undefined) throw new Error(`${a} needs a value`); }
   }
   return o;
@@ -409,16 +414,15 @@ export async function buildAlpha(opts = {}) {
       obsModules: obs.modules.shipped, systemDlls: obs.systemDlls, skipped: obs.skipped, commit,
     };
     writeFileSync(path.join(outDir, `${name}.files.txt`), `${sums.join('\n')}\n`);
-    // 6. the single file (2026-11-19): Ujwalam-Setup-<version>.exe carries the zip; the zip stays only with --keep-zip
-    // (the in-app update installs from the setup exe itself).
+    // 6. the single file (2026-11-19): Ujwalam-Setup-<version>.exe carries the zip. The zip stays too (keepZipFor).
     log(`zip ${path.basename(zipFile)}: ${(z.bytes / 1048576).toFixed(1)} MiB, ${z.entries} files, ${(unpacked / 1048576).toFixed(1)} MiB unpacked, sha256 ${zipSha}`);
     const t0 = Date.now();
     summary.single = await buildSingleSetup({ stub: setupExe, zip: zipFile, version, outDir, log });
     summary.single.seconds = (Date.now() - t0) / 1000;
-    if (!opts.keepZip) {
+    if (!keepZipFor(opts)) {
       for (const f of [zipFile, `${zipFile}.sha256`]) rmSync(f, { force: true });
       summary.zip = null;
-      log(`zip folded into ${path.basename(summary.single.file)} and removed (--keep-zip keeps it)`);
+      log(`zip folded into ${path.basename(summary.single.file)} and removed (--drop-zip)`);
     }
     if (opts.keepStaging) log(`staging kept: ${stage}`);
     return summary;
@@ -432,7 +436,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const a = parseArgs(process.argv.slice(2));
     const s = await buildAlpha({
       n: a.n !== undefined ? Number(a.n) : undefined, hostExe: a['host-exe'], studioExe: a['studio-exe'], startExe: a['start-exe'], setupExe: a['setup-exe'], qtDir: a['qt-dir'], runtime: a.runtime, outDir: a['out-dir'],
-      profile: a.profile, force: a.force === true, keepStaging: a['keep-staging'] === true, keepZip: a['keep-zip'] === true,
+      profile: a.profile, force: a.force === true, keepStaging: a['keep-staging'] === true, dropZip: a['drop-zip'] === true,
     });
     console.log(JSON.stringify({ ...s, zip: s.zip && path.basename(s.zip) }, null, 2));
   } catch (e) {

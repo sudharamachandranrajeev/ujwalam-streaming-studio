@@ -93,14 +93,14 @@ Evidence (2026-11-19, dev PC, off air):
   (magic, format 1, program size, zip size, the zip's SHA-256, the program part's SHA-256, version, end magic).
   Setup reads the trailer, hashes the program part, copies the zip out of itself into the private work folder while
   hashing it, hashes the copy again, and only then unpacks it with Windows' `tar.exe`. A flipped byte, a cut-short file
-  or a missing trailer on a file over 16 MiB gives exit 21: "This setup file is damaged or incomplete (it does not
+  or a missing trailer on a single-file setup gives exit 21 (since the Codex review: at any size, see below): "This setup file is damaged or incomplete (it does not
   match the checksum built into it). Download or copy Ujwalam-Setup again and check it against its .sha256 file.
   Nothing was changed." The plain program (the copy in the install root, used for repair, roll back and uninstall)
   still installs a zip next to it or `--package <zip>`, and now also finds a `Ujwalam-Setup-<version>.exe` in its
   folder or the update folder (`--package` takes either).
 - `tools/package/single-setup.mjs` writes the exe (temp file, one rename) and `<exe>.sha256`, and keeps the newest 2
-  setups in `out/dist` by version, logging each deletion. `build-alpha.mjs` folds the zip in and deletes it
-  (`--keep-zip` keeps it): the in-app update (`services/studio-ui/setup-update.mjs`) now prefers a single-file setup
+  setups in `out/dist` by version, logging each deletion. `build-alpha.mjs` folds the zip in and (since the Codex review,
+  see below) keeps the zip and its `.sha256` next to it: the in-app update (`services/studio-ui/setup-update.mjs`) now prefers a single-file setup
   in the update folder (checked against its `.sha256`) and runs it with `--update --quiet --next-start`; zips still work.
 - Defender: the exe keeps its version info, icon and `asInvoker` manifest; the payload is a plain zip after the PE
   image (not a PE section, not compressed code). An exe that carries an archive is the shape Defender's ML verdicts
@@ -152,3 +152,31 @@ Tests: `tests/downloads.test.mjs` 7/7, three runs in a row (manifests; dropped c
 redirect; bad checksum fetched twice then refused with nothing kept; server ignoring Range; pause/resume/cancel; refused
 while live, pauses when the stream starts, host unknown refused, flag off refused; archive members). No real model was
 downloaded from the internet in this session: UNVERIFIED against the real hosts.
+## Codex review round 1 (2026-11-20)
+
+1. Download queue (P1): `pump()` reads the host status before every start. Live, recording or unknown: the item and
+   every queued item are paused with the "Paused because the stream or a recording started" message; a running item
+   that pauses for the stream also pauses the queue. Test: 2 queued, the stream starts during the first, no request for
+   the second is ever made, and Resume is refused (409) while still live.
+2. Transition zip (P2): installs from alpha.35 and older update only from `ujwalam-*-win64.zip` in the update folder.
+   `build-alpha.mjs` now keeps the zip and its `.sha256` next to the single setup by default (`--drop-zip` removes them
+   once no such install is left). Test (package-alpha): the default keeps the zip, and the kept name matches the
+   alpha.35 updater's pattern.
+3. Download integrity (P2): a finished part from an earlier run is hashed again before use (a mismatch is deleted and
+   fetched again), each file is hashed once more right before it moves into place, and the ready marker records the
+   SHA-256, size and modification time per file, so a file changed in place with the same length is no longer ready.
+   Test: a finished part with the same length but other bytes is fetched again on resume; a ready file changed in place
+   reads as missing.
+4. Cut-short single exe (P2): the 16 MiB rule is gone. `single-setup.mjs` sets a mark (`UJWSINGLE:0` -> `:1`) in the
+   copy of the program it puts in front of the package (the build fails unless the mark is there exactly once; the
+   program's hash in the trailer is of the marked copy). Setup reads the mark from its own memory, so a single-file
+   setup whose trailer cannot be read is refused with exit 21 at any size and never falls back to a package next to it.
+   Test: B (3 MiB stand-in package) cut to 1 MiB with a good zip of B next to it: exit 21, nothing installed, also as
+   `--package` to the plain program.
+5. Test guard: `tests/helpers/data-root-guard.mjs` refuses `%LOCALAPPDATA%\Ujwalam` (and anything outside the temp
+   folder) as a test data or install root; the downloads and setup-installer helpers go through it, and setup children
+   get a temp `LOCALAPPDATA`.
+
+Runs (off air per `tools/live-check.mjs`, one file at a time, BelowNormal, `UJWALAM_HEADLESS=1`, setup rebuilt with
+`npm run build:setup`, 282,112 bytes, mark present once): `downloads` 10/10 (three runs in a row), `setup-installer`
+13/13, `package-alpha` 21 pass 1 skipped (e2e build), `live-install` 13/13.

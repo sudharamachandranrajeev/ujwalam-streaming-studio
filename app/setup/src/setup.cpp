@@ -403,6 +403,14 @@ bool sha256File(const std::wstring &file, std::string &hex) { return sha256Range
 // The exe checks both hashes before it unpacks anything; the whole file's SHA-256 is also in the .sha256 next to it.
 constexpr size_t kTrailer = 160;
 
+// Built as a single-file setup? tools/package/single-setup.mjs turns the last character of this string from '0' into
+// '1' in the copy of the program it puts in front of the package (and hashes that copy). Read at run time from this
+// process's own memory, so it does not depend on the file being whole: a single-file setup whose trailer cannot be read
+// is damaged or cut short at any size, and never falls back to some other package next to it (Codex review 2026-11-20:
+// a size threshold was used before). volatile: the compiler must not fold the value it sees at build time.
+static volatile const char kSingleMark[] = "UJWSINGLE:0";
+bool builtAsSingle() { return kSingleMark[sizeof(kSingleMark) - 2] == '1'; }
+
 struct Embedded {
 	bool ok = false;
 	unsigned long long stubSize = 0, zipSize = 0;
@@ -641,9 +649,9 @@ void refreshState()
 				return;
 			s.pkg = Pkg{};
 		}
-		// The program alone is well under 16 MiB; a bigger exe without a readable trailer is a single-file setup that was
-		// cut short or damaged (a broken download), never a reason to go looking for some other package.
-		if (!g_opts.package.empty() || fileSize(carrier) > (16ull << 20)) {
+		// A payload is expected (a setup exe given with --package, or this program built as a single-file setup) but its
+		// trailer cannot be read: damaged or cut short (a broken download), never a reason to look for another package.
+		if (!g_opts.package.empty() || builtAsSingle()) {
 			s.pkg.zip = carrier; // a setup exe with no (or a broken) package: doInstall says so
 			s.pkg.embedded = true;
 			return;

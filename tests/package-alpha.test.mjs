@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EXE as STUDIO_EXE, START_EXE } from '../app/studio/tools/build.mjs';
-import { changelogExcerpt, releaseInfo, studioQmlFiles } from '../tools/package/build-alpha.mjs';
+import { changelogExcerpt, keepZipFor, releaseInfo, studioQmlFiles } from '../tools/package/build-alpha.mjs';
 import { OFL_FONTS, OFL_FONT_LICENCES, OFL_FONT_LICENCE_SHA, allowProblems, dataRefProblems, disabledModules, fontNamesFromLicenceDoc, forbiddenProblems, importProblems, repoFiles } from '../tools/package/manifest.mjs';
 import { peInfo } from '../tools/package/pe.mjs';
 import { clipMakerNote, installedSpec, nodeOk, pruneLaunchLogs } from '../tools/package/run-installed.mjs';
@@ -574,4 +574,16 @@ test('D391: the generated cyberpunk stingers ship (presets and per-canvas WebM),
   }
   assert.ok(all.includes('data/transitions/easing.json'));
   for (const p of ['data/transitions/stingers/x.mp4', 'data/transitions/other/a-h.webm', 'data/media/neon-glitch-h.webm', 'data/transitions/stingers/Bad-h.webm']) assert.ok(forbiddenProblems([p], { fontNames: [] }).length > 0, p);
+});
+
+test('transition (Codex review 2026-11-20): the zip and its .sha256 stay next to the single setup unless --drop-zip; installs from alpha.35 and older find it', () => {
+  assert.equal(keepZipFor(), true);
+  assert.equal(keepZipFor({}), true);
+  assert.equal(keepZipFor({ dropZip: true }), false);
+  // The pattern the alpha.35 updater (services/studio-ui/setup-update.mjs before the single file) scans the folder with.
+  const OLD_ZIP_RE = /^ujwalam-(\d{1,6}\.\d{1,6}\.\d{1,6}-alpha\.\d{1,6})-win64\.zip$/;
+  const v = releaseInfo(REPO).version;
+  assert.match(`ujwalam-${v}-win64.zip`, OLD_ZIP_RE);
+  const src = readFileSync(path.join(REPO, 'tools', 'package', 'build-alpha.mjs'), 'utf8');
+  assert.match(src, /if \(!keepZipFor\(opts\)\)/, 'the build removes the zip only through keepZipFor');
 });
