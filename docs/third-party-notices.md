@@ -63,6 +63,9 @@ regular, semibold and bold weights the themes use are shipped. Microsoft fonts (
 | Inter | daylight-blue, sand-teal | 4.001 (git-9221beed3), release 4.1 | `https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip` (zip SHA-256 `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`), entries `extras/ttf/Inter-{Regular,SemiBold,Bold}.ttf` and `LICENSE.txt` | OFL 1.1, Copyright (c) 2016 The Inter Project Authors |
 | Barlow | copper-graphite | 1.408 | `https://github.com/google/fonts/raw/main/ofl/barlow/` (folder last changed in commit `6cdf01867df0813c2390f90dff7dc66c87f14cf7`, 2026-02-26), files `Barlow-{Regular,SemiBold,Bold}.ttf`, `OFL.txt` | OFL 1.1, Copyright 2017 The Barlow Project Authors |
 | Exo 2 | teal-grid | 2.001 | `https://github.com/NDISCOVER/Exo-2.0/` at commit `182060cd38adf3cde0d22add3f8009d30bd48cde`, `fonts/ttf/Exo2-{Regular,SemiBold,Bold}.ttf`, `OFL.txt` | OFL 1.1, Copyright 2013 The Exo 2 Project Authors |
+| Anton | BeatDrop titles (D413) | 2.116 | `https://github.com/google/fonts/` at commit `06bfe0d62a98375cb09c942fa18e68bd32cff057` (downloaded 2026-11-21), `ofl/anton/Anton-Regular.ttf`, `OFL.txt` | OFL 1.1, Copyright 2020 The Anton Project Authors |
+| Chakra Petch | BeatDrop HUD-style text (D413) | 1.000 | `https://github.com/google/fonts/` at commit `06bfe0d62a98375cb09c942fa18e68bd32cff057` (downloaded 2026-11-21), `ofl/chakrapetch/ChakraPetch-{SemiBold,Bold}.ttf`, `OFL.txt` | OFL 1.1, Copyright 2018 The Chakra Petch Project Authors |
+| Rajdhani | BeatDrop captions (D413) | 1.201 | `https://github.com/google/fonts/` at commit `06bfe0d62a98375cb09c942fa18e68bd32cff057` (downloaded 2026-11-21), `ofl/rajdhani/Rajdhani-{SemiBold,Bold}.ttf`, `OFL.txt` | OFL 1.1, Copyright (c) 2014 Indian Type Foundry |
 
 SHA-256 of every shipped file (data/fonts/):
 
@@ -80,6 +83,14 @@ SHA-256 of every shipped file (data/fonts/):
 | `Exo2-SemiBold.ttf` | `20a233e8c4b109c1203d9de6b126afff8b383eff0ccbc2bcfd7f5fde48b917f7` |
 | `Exo2-Bold.ttf` | `0bae8c900d1c84abfb5264c6867ec2113fd0507680861f79b206093ebe0ce374` |
 | `Exo2-OFL.txt` | `cecc43de8bf5449d88fb03a6d33b0b569df304545d3b57760863e833a6434d45` |
+| `Anton-Regular.ttf` | `a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab` |
+| `Anton-OFL.txt` | `eee1d24ff8f553eb732237c7dd9b945a78313ed49ad6de02872a47277741b44a` |
+| `ChakraPetch-SemiBold.ttf` | `45264de3204ddbd5fb3e14a2402acd5c630d16650ae5fc221d2c52da46a6734b` |
+| `ChakraPetch-Bold.ttf` | `65fbf76d95651697275e19db4d717c0e95a789ddd3476478b05292104db278a0` |
+| `ChakraPetch-OFL.txt` | `13831d02389d917d22fcfa6c79f98f8acbf61d230add0e73a4d4dc5f3bfb9e56` |
+| `Rajdhani-SemiBold.ttf` | `94bbd25a18ca665999feb05a537de9fd2b860dcfb78bbe9ca00270825bf235da` |
+| `Rajdhani-Bold.ttf` | `691470dd3286a14e9677940d0bf75796179841ba5215cbda1a2c8910a3226afd` |
+| `Rajdhani-OFL.txt` | `f62ef357d3a1c3d27edd35a6e1ba350e8a8d13499797964eeadefbf0b3b15d1f` |
 
 The OFL "Reserved Font Name" clause: the files are unmodified, so their names are unchanged. Inter and Exo 2 come from
 their own upstream releases (statics); Google Fonts ships those two only as variable fonts, which Qt may not select by
