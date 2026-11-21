@@ -113,6 +113,8 @@ def music_provenance(c, records=False):
     src = m.get("source")
     if src == "ncs":
         return {"source": "ncs", "trackId": m.get("trackId"), "credit": m.get("credit")}
+    if src == "ncs-filename":  # D417: the NCS file-name credit (parsed fields kept in the record)
+        return {"source": "ncs-filename", "trackId": m.get("trackId"), "credit": m.get("credit"), "ncs": m.get("ncs")}
     if src == "folder":
         return {"source": "user-folder", "track": m.get("track")}
     if src == "made-here" or (src is None and "track" not in m and "seed" in m):
