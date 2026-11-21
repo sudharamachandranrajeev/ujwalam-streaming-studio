@@ -1642,10 +1642,14 @@ export function createStudioServer(opts) {
       let store;
       try {
         const cfg = loadTimingConfig();
+        // Codex (D410): the fingerprinted text must be the text the schedule was loaded from. Read it before and after
+        // loading; a change in between means a save raced this read, so no suggestion is made from a mixed view.
+        const readSource = () => { try { return readFileSync(userScheduleFile(opts.dataDir), 'utf8'); } catch { return null; } };
+        const source = readSource();
         const sched = scheduleConfigFor(opts.dataDir);
+        if (readSource() !== source) return json(res, 409, { error: 'schedule-changed' });
         store = openGrowthStore(path.join(opts.dataDir, GROWTH_DB));
         const videos = growthView(store, now()).videos;
-        let source = null; try { source = readFileSync(userScheduleFile(opts.dataDir), 'utf8'); } catch { source = null; }
         const analysis = analyseTiming({ videos, cfg, schedule: sched, source, tz: sched.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
         const record = refreshSuggestion({ dataDir: opts.dataDir, analysis, cfg, now: now() });
         return json(res, 200, { enabled: true, count: analysis.count, minPosts: analysis.minPosts, reason: analysis.reason, byBand: analysis.byBand, record: record ? publicRecord(record) : null });
