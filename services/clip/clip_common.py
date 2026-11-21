@@ -415,6 +415,18 @@ def lower_own_priority():
 
 STALLED_RC = -2  # run_tool(watch=...): the child wrote nothing for stall_sec and was stopped
 STOPPED_RC = -3  # run_tool(stop=...): stop() said stop (a stream or recording started); the child was stopped
+NO_JOB_RC = -4  # run_tool(stop=...): Windows refused the child's kill-on-close job; nothing was run
+_CREATE_SUSPENDED = 0x00000004
+
+
+def _resume(process_handle):
+    """Resumes a process started with CREATE_SUSPENDED (all its threads; ntdll NtResumeProcess). -> True on success."""
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+    nt = ctypes.WinDLL("ntdll")
+    nt.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    nt.NtResumeProcess.restype = ctypes.c_long
+    return nt.NtResumeProcess(wintypes.HANDLE(int(process_handle))) == 0
 
 
 def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=2.0, setup_sec=300.0, stop=None):
@@ -427,22 +439,47 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
 
     stop (2026-11-21, D415 review): a callable asked every poll_sec while the child runs; when it returns True the
     child is killed and the result has returncode STOPPED_RC ("stopped: on air" in stderr). A caller that treats an
-    unknown live state as on air passes e.g. lambda: live() is not False."""
-    if (watch is None or not stall_sec) and stop is None:
-        return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
+    unknown live state as on air passes e.g. lambda: live() is not False.
+
+    Process tree (D415 review): every child runs in its own kill-on-close job on Windows, assigned while it is still
+    suspended (CREATE_SUSPENDED, then resumed), so nothing it starts escapes; every stop path ends the whole job. When
+    Windows refuses the job, a guarded run (stop given) runs nothing and returns NO_JOB_RC; an unguarded one runs
+    without it. Elsewhere the child gets its own session and the group is killed."""
     import tempfile  # noqa: PLC0415
     path = None if watch is None or not stall_sec else (watch if os.path.isabs(watch) or not cwd else os.path.join(cwd, watch))
     with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:  # files, not pipes: no pipe can fill and block
-        p = subprocess.Popen(argv, cwd=cwd, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
-        # the child's whole tree (node's ffmpeg, D415 review): a kill-on-close job on Windows, ended on every stop path
-        job = kill_on_close_job(p._handle) if os.name == "nt" else None
+        nt = os.name == "nt"
+        # Windows: no console, below-normal, suspended until the job holds it; elsewhere: its own session (group kill)
+        p = subprocess.Popen(argv, cwd=cwd, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL, start_new_session=not nt,
+                             **child_kwargs(creationflags=NO_WINDOW.get("creationflags", 0) | (_CREATE_SUSPENDED if nt else 0)))
+        job = None
+        if nt:
+            try:
+                job = kill_on_close_job(p._handle)
+            except OSError:
+                job = None
+            if job is None and stop is not None:
+                p.kill()
+                p.wait()
+                return subprocess.CompletedProcess(argv, NO_JOB_RC, "", "no process job (Windows refused it): not run")
+            if not _resume(p._handle):
+                end_job(job)
+                if p.poll() is None:
+                    p.kill()
+                p.wait()
+                return subprocess.CompletedProcess(argv, NO_JOB_RC, "", "the child could not be resumed: not run")
 
         def kill():
             try:
                 end_job_members(job)
             except OSError:
                 pass
+            if not nt and p.poll() is None:
+                import signal  # noqa: PLC0415
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except OSError:
+                    pass
             if p.poll() is None:
                 p.kill()
             p.wait()

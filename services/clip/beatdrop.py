@@ -623,7 +623,8 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
             res.pop("part", None)
             if res["status"] != STOPPED_ON_AIR and write_render is not None:
                 write_render(res)
-                sweep_videos(wd, referenced(render_json) | ({res["file"]} if res["file"] else set()))
+                refs = referenced(render_json)
+                sweep_videos(wd, None if refs is None else refs | ({res["file"]} if res["file"] else set()))
             return res
     finally:
         res.pop("part", None)
@@ -714,24 +715,32 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
     return res
 
 
-VIDEO_NAME = re.compile(r"^beatdrop-[0-9a-f]{12}\.mp4(\.part)?$")
+VIDEO_NAME = re.compile(r"^beatdrop-[0-9a-f]{10,12}\.mp4(\.part)?$")  # 10 hex: the names of c370e5c
 
 
 def referenced(render_json):
-    """The video names a BeatDrop render.json points at (empty when it is missing or unreadable)."""
-    if not render_json:
+    """The video names a BeatDrop render.json points at: an empty set when there is none yet; None when it exists but
+    cannot be read or is not a render document (fail closed: sweep_videos then removes nothing, D415 review)."""
+    if not render_json or not os.path.exists(render_json):
         return set()
     try:
         doc = load_json(render_json)
-    except (ClipError, OSError, ValueError):
-        return set()
-    return {f.get("file") for c in (doc or {}).get("clips") or [] for f in c.get("files") or [] if f.get("file")}
+        clips = doc["clips"]
+        return {f["file"] for c in clips for f in c.get("files") or [] if f.get("file")}
+    except (ClipError, OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        import sys  # noqa: PLC0415
+        print(f"beatdrop: {os.path.basename(render_json)} is unreadable ({type(e).__name__}): no video is swept",
+              file=sys.stderr)
+        return None
 
 
 def sweep_videos(wd, keep):
-    """Removes this code's own videos and part files (exactly beatdrop-<12 hex>.mp4 / .mp4.part) in wd that are not in
+    """Removes this code's own videos and part files (exactly beatdrop-<10-12 hex>.mp4 / .mp4.part) in wd that are not in
     `keep` (the names render.json points at). Called only inside make()'s heavy-job lock: before a run (orphans from a
-    crash) and after render.json is written (the previous video). Other files are never touched."""
+    crash) and after render.json is written (the previous video). Other files are never touched. keep None (an
+    unreadable render.json): nothing is removed."""
+    if keep is None:
+        return []
     try:
         names = os.listdir(wd)
     except OSError:

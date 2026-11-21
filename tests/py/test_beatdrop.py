@@ -473,17 +473,30 @@ class StopGuardTests(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="ujw-bdsweep-")
         try:
             names = ["beatdrop-notes.mp4", "other.mp4.part", "beatdrop-aaaaaaaaaaaa.mp4",
-                     "beatdrop-bbbbbbbbbbbb.mp4.part", "beatdrop-cccccccccccc.mp4", "beatdrop-plan.json"]
+                     "beatdrop-bbbbbbbbbbbb.mp4.part", "beatdrop-cccccccccccc.mp4", "beatdrop-plan.json",
+                     "beatdrop-eeeeeeeeee.mp4", "beatdrop-fffffffff.mp4"]  # 10 hex: c370e5c names; 9 hex: not ours
             for n in names:
                 open(os.path.join(tmp, n), "wb").close()
             render = os.path.join(tmp, "render.json")
             with open(render, "w", encoding="utf-8") as f:
                 json.dump({"clips": [{"files": [{"file": "beatdrop-aaaaaaaaaaaa.mp4"}]}]}, f)
             gone = beatdrop.sweep_videos(tmp, beatdrop.referenced(render))
-            self.assertEqual(sorted(gone), ["beatdrop-bbbbbbbbbbbb.mp4.part", "beatdrop-cccccccccccc.mp4"])
+            self.assertEqual(sorted(gone), ["beatdrop-bbbbbbbbbbbb.mp4.part", "beatdrop-cccccccccccc.mp4",
+                                            "beatdrop-eeeeeeeeee.mp4"])
             self.assertEqual(sorted(os.listdir(tmp)), sorted(["beatdrop-notes.mp4", "other.mp4.part",
                                                                "beatdrop-aaaaaaaaaaaa.mp4", "beatdrop-plan.json",
-                                                               "render.json"]))
+                                                               "beatdrop-fffffffff.mp4", "render.json"]))
+            # review round 4, item 2: an unreadable render.json sweeps nothing (fail closed)
+            open(os.path.join(tmp, "beatdrop-dddddddddddd.mp4"), "wb").close()
+            with open(render, "w", encoding="utf-8") as f:
+                f.write("{ not json")
+            self.assertIsNone(beatdrop.referenced(render))
+            self.assertEqual(beatdrop.sweep_videos(tmp, beatdrop.referenced(render)), [])
+            self.assertTrue(os.path.exists(os.path.join(tmp, "beatdrop-dddddddddddd.mp4")))
+            with open(render, "w", encoding="utf-8") as f:
+                json.dump({"no": "clips"}, f)
+            self.assertIsNone(beatdrop.referenced(render), "not a render document: also fail closed")
+            self.assertEqual(beatdrop.referenced(os.path.join(tmp, "missing.json")), set())
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -531,6 +544,49 @@ class StopGuardTests(unittest.TestCase):
             self.assertTrue(all(os.path.exists(f) for f in others), "other files survive")
         finally:
             cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    @unittest.skipUnless(os.name == "nt", "kill-on-close job is Windows")
+    def test_unguarded_child_is_in_the_job_from_its_start(self):
+        # review round 4, item 1 a/b: no watch, no stop: the child is still in the job (assigned while suspended),
+        # so a grandchild it starts at once is ended when run_tool returns
+        import time  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdjob-")
+        try:
+            pidf = os.path.join(tmp, "g.pid")
+            code = ("import subprocess, sys; "
+                    f"g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], creationflags={NOWIN}); "
+                    f"open({pidf!r}, 'w').write(str(g.pid))")
+            r = cc.run_tool([sys.executable, "-c", code])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            with open(pidf, encoding="utf-8") as f:
+                gpid = int(f.read())
+            time.sleep(1.0)
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {gpid}", "/NH"], capture_output=True, text=True,
+                                 creationflags=NOWIN).stdout
+            self.assertNotIn(str(gpid), out)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    @unittest.skipUnless(os.name == "nt", "kill-on-close job is Windows")
+    def test_no_job_means_a_guarded_run_runs_nothing(self):
+        # review round 4, item 1 c
+        import clip_common as cc  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdnojob-")
+        saved = cc.kill_on_close_job
+        try:
+            mark = os.path.join(tmp, "ran")
+            code = f"open({mark!r}, 'w').write('x')"
+            cc.kill_on_close_job = lambda h: None
+            r = cc.run_tool([sys.executable, "-c", code], stop=lambda: False)
+            self.assertEqual(r.returncode, cc.NO_JOB_RC)
+            self.assertFalse(os.path.exists(mark), "nothing ran")
+            r = cc.run_tool([sys.executable, "-c", code])
+            self.assertEqual(r.returncode, 0, "an unguarded run still runs without the job")
+            self.assertTrue(os.path.exists(mark))
+        finally:
+            cc.kill_on_close_job = saved
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_no_stop_runs_to_the_end(self):

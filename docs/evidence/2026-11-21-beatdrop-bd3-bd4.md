@@ -145,3 +145,16 @@ Runs (CPU, headless, BelowNormal, temp data root, live-check exit 0 first): Stop
 test_render_watch 10 OK; test_clip_montage 35 OK.
 
 The rendered class on this round's code was stopped by the tool (the PC ran low on memory): UNVERIFIED until it is run once with memory free.
+
+## Codex verify of d82c605 (2026-11-21), round 4
+
+Codex found the sweep pattern fixed. The other items:
+
+| Item | Fix | Test (tests/py/test_beatdrop.py) |
+|---|---|---|
+| 1 (P1) not every run_tool child was in the job, and the job came after the child could start its own | every `run_tool` call (with or without watch/stop) goes through one path; on Windows the child starts suspended (CREATE_SUSPENDED), joins its kill-on-close job, then resumes (NtResumeProcess). A guarded run (stop given) whose job Windows refuses runs nothing and returns `NO_JOB_RC` (-4); a failed resume also ends it with `NO_JOB_RC`. Elsewhere the child gets its own session and the group is killed with SIGKILL | `test_unguarded_child_is_in_the_job_from_its_start` (no watch, no stop: the grandchild is gone once run_tool returns); `test_no_job_means_a_guarded_run_runs_nothing` (job refused: guarded run leaves no marker file, unguarded still runs) |
+| 2 (P1) an unreadable render.json counted as "no references" | `referenced()` returns None for an unreadable or non-render render.json and logs it on stderr; `sweep_videos(wd, None)` removes nothing. A missing render.json is still an empty set | `test_sweep_matches_only_its_own_names` (corrupt JSON and a document without `clips`: nothing swept) |
+| 3 (P2) the 10-hex names of c370e5c were not swept | `^beatdrop-[0-9a-f]{10,12}\.mp4(\.part)?$`, same rules | same test: a 10-hex name is swept, a 9-hex name survives |
+
+Runs (CPU, headless, BelowNormal, temp data root, live-check exit 0 first): StopGuardTests + PlannerTests 24 OK;
+test_render_watch 10 OK; test_clip_montage 35 OK. The rendered class was not run (the coordinator runs it): UNVERIFIED.
