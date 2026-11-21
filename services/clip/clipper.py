@@ -96,9 +96,11 @@ import game_pack  # noqa: E402
 import learning_capture as lcap  # noqa: E402
 import learning_mix as lmix  # noqa: E402
 import match_gate as mg  # noqa: E402
+import music_library as mlib  # noqa: E402
 from clip_common import (  # noqa: E402
     CLIP_DATA, EXIT_FLAG_OFF, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir, end_tree_when_parent_gone, eprint, find_tool, flag_on, load_config,
-    load_json, lower_own_priority, match_gate_settings, media_info, progress_line, resolve_data_dir, run_tool, write_json_atomic,
+    load_json, lower_own_priority, match_gate_settings, media_info, on_air, progress_line, resolve_data_dir, run_tool,
+    write_json_atomic,
 )
 
 TOOL_VERSION = 1
@@ -688,9 +690,14 @@ def cmd_live_review(a):
         pk = _look_pick(ex, c["id"], os.path.basename(c["file"]))  # FX1: this clip's look
         tr = None if ass else _look_transition(ex, pk, m["pieces"], ex["transition"])  # RP1: captions keep the hard cut
         xd = mont.crossfade_sec(m["pieces"], tr) if pieces_path else 0.0
+        mplan = None
+        if pieces_path and sinfo.get("has_audio"):  # FX4: the track for this clip; beatSync may trim piece tails
+            ps2, mplan = _look_music_plan(ex, pk, m["pieces"], xd, tr, m, "live-clip", ass, c["id"], os.path.basename(c["file"]))
+            if ps2 is not m["pieces"]:
+                m = dict(m, pieces=ps2, seconds=round(sum(p["end"] - p["start"] for p in ps2), 3))
         thumb, trec = _thumbnail(ffmpeg, c["file"], m, "live-clip", frame, wd, ex) if pieces_path else (None, None)
         ttl, tirec = _title(wd, m["pieces"], xd, frame, ex, pk) if pieces_path else (None, None)
-        mus, murec = (_music(wd, m["pieces"], xd, tirec, ex, c["id"], os.path.basename(c["file"]))
+        mus, murec = (_music(wd, m["pieces"], xd, tirec, ex, c["id"], os.path.basename(c["file"]), pk=pk, mplan=mplan)
                       if pieces_path and sinfo.get("has_audio") else (None, None))
         mus, sfxrec = (_with_sfx(wd, ex, tr, m["pieces"], xd, pk, mus) if pieces_path and sinfo.get("has_audio")
                        else (mus, None))  # FX3
@@ -728,7 +735,7 @@ def cmd_live_review(a):
                          "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec,
                          "title": tirec, "music": murec, "look": pk, "sfx": sfxrec, "captions": cinfo, "hook": hook, "files": files,
                          "errors": errors})
-        _look_remember(ex, pk if files else None)
+        _look_remember(ex, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": "live-saves",
@@ -1054,15 +1061,17 @@ def _reel_extras(a, data_dir):
     ti_on = rti.on(data_dir)
     mu_on = rmu.on(data_dir)
     lcfg = look.load_config() if look.on(data_dir) else None  # FX1 (D411): the clip look, picked per reel
+    look_now = look.effective(data_dir, lcfg) if lcfg else None
+    tracks, mlcfg = _look_library(data_dir, look_now) if lcfg else ([], None)  # FX4: the user's music folder
     return {"hooks": rh.active(data_dir, hcfg), "hcfg": hcfg, "cap_on": cap_on, "ccfg": ccfg,
-            "look": ({"cfg": lcfg, "look": look.effective(data_dir, lcfg), "override": look.override_from_env(lcfg),
-                      "dataDir": data_dir, "history": look.load_history(data_dir)} if lcfg else None),
+            "look": ({"cfg": lcfg, "look": look_now, "override": look.override_from_env(lcfg), "tracks": tracks,
+                      "mlcfg": mlcfg, "dataDir": data_dir, "history": look.load_history(data_dir)} if lcfg else None),
             "transition": rt.active(data_dir),  # RP1: None = hard cut (flag off, or the user chose Cut)
             "thumb": rth.load_config() if th_on else None,  # RP6: the start frame (flag reel-thumbnail)
             "brand": rth.brand() if th_on else None,
             "title": rti.load_config() if ti_on else None,  # FX2: the name display (flag clip-look, or the retired reel-title)
             "tbrand": rth.brand() if ti_on else None,
-            "music": rmu.load_config() if mu_on else None,  # RP3: the lofi beds (flag reel-music)
+            "music": rmu.load_config() if mu_on or lcfg else None,  # RP3 beds (flag reel-music); FX4 duck + fallback
             "style": rcap.load_style(ccfg) if cap_on else None,
             "safe": caps.safe_area(load_config("targets", getattr(a, "targets", None))),
             "opts": {"whisper_bin": getattr(a, "whisper_bin", None),
@@ -1149,13 +1158,80 @@ def _title(wd, pieces, xd, frame, ex, pk=None):
         return None, None
 
 
-def _music(wd, pieces, xd, title_rec, ex, *seed_parts):
-    """RP3: the music bed of a reel -> (dict for render_argv(music=) or None, record for render.json or None)."""
+def _look_library(data_dir, look_now):
+    """FX4: the usable tracks of the user's music folder (new files analysed off air) and the library config, or
+    ([], cfg) when the folder is not ticked, not set or cannot be read. Never raises: a library error means the
+    made-here bed."""
+    mv = look_now["music"]
+    try:
+        mcfg = mlib.load_config()
+    except (OSError, ClipError) as e:
+        eprint(f"music library: not used ({str(e)[-120:]})")
+        return [], None
+    if "folder" not in (mv.get("sources") or []) or not mv.get("folder"):
+        return [], mcfg
+    try:
+        lib = mlib.refresh(data_dir, mv["folder"], mcfg, live=on_air)
+        return mlib.usable(lib), mcfg
+    except Exception as e:  # noqa: BLE001 - a broken library never stops the clip run
+        eprint(f"music library: not read ({type(e).__name__}: {str(e)[-120:]}); the made-here bed is used")
+        return [], mcfg
+
+
+def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
+    """FX4: this reel's track from the user's folder (matched to the reel's energy and mood) and where it plays; with
+    beatSync, the joins moved onto its beats (full-bed and intro-outro: the bed is anchored at the reel start). ->
+    (pieces, plan or None)."""
+    lk = ex.get("look")
+    if not (lk and pk and pk.get("music") and lk.get("tracks")):
+        return pieces, None
+    mv, mcfg = lk["look"]["music"], lk["mlcfg"]
+    total = sum(float(p["end"]) - float(p["start"]) for p in pieces) - (len(pieces) - 1) * xd
+    target = mlib.target_for(reel, typ, mcfg)
+    track, sc = mlib.match(lk["tracks"], target, total, seed_parts, lk["history"].get("track") or [], mcfg,
+                           n_avoid=int(lk["cfg"]["historyN"]["track"]))
+    if track is None:
+        return pieces, None
+    name_end = None
+    if pk.get("name") in ("lower-third", "kinetic"):
+        name_end = rti.timeline(pieces, xd)[0] + float(lk["look"]["name"]["durationSec"])
+
+    def mk(ps):
+        return mlib.plan(track, pk["music"], ps, xd, mlib.strongest_reel_time(reel, ps, xd), name_end, mv["levelDb"], mcfg)
+    rec = mk(pieces)
+    shifts = []
+    if tr and not ass and lk["look"]["transitions"].get("beatSync") and pk["music"] != "drop":
+        seg0 = rec["segments"][0]
+        beats = rec["beats"] if pk["music"] == "full-bed" else [b for b in rec["beats"] if b <= seg0["at"] + seg0["len"]]
+        synced, shifts = rt.beat_sync(pieces, xd, beats)
+        if any(shifts):
+            pieces = synced
+            rec = mk(pieces)
+    record = {k: v for k, v in rec.items() if k != "beats"}
+    return pieces, {"rec": rec, "track": track,
+                    "record": dict(record, source="folder", score=sc, target=target, beatShifts=shifts, beats=len(rec["beats"]))}
+
+
+def _music(wd, pieces, xd, title_rec, ex, *seed_parts, pk=None, mplan=None):
+    """RP3/FX4: the music bed of a reel -> (dict for render_argv(music=) or None, record for render.json or None). With
+    the clip look: no music when the look has none; a matched track of the user's folder (mplan); else the made-here
+    bed as the last fallback."""
+    if pk is not None and not pk.get("music"):
+        return None, None
+    if mplan:
+        try:
+            return (mlib.prepare(wd, mplan["rec"], mplan["track"], ex["look"]["mlcfg"], ex["music"]["duck"]),
+                    mplan["record"])
+        except Exception as e:  # noqa: BLE001 - a track that fails to decode falls back to the made-here bed
+            eprint(f"music: the track is not used ({type(e).__name__}: {str(e)[-120:]}); the made-here bed is used")
+            rmu.cleanup(wd)
     if not ex.get("music"):
         return None, None
     rec = rmu.plan(pieces, xd, title_rec, ex["music"], rmu.seed_for(*seed_parts))
     if rec is None:
         return None, None
+    if pk is not None:
+        rec = dict(rec, source="made-here", mode="intro-outro")
     try:
         return rmu.prepare(wd, rec, ex["music"]), rec
     except (OSError, ValueError) as e:
@@ -1337,9 +1413,14 @@ def cmd_montage(a):
         # RP1: captions keep the hard cut (their timeline is the sum of the pieces); each cross-faded join shortens the reel
         tr = None if ass else _look_transition(exr, pk, m["pieces"], exr["transition"])  # FX3: the look's set
         xd = mont.crossfade_sec(m["pieces"], tr)
+        mplan = None
+        if vinfo.get("has_audio", True):  # FX4: the track for this reel; beatSync may trim piece tails
+            ps2, mplan = _look_music_plan(exr, pk, m["pieces"], xd, tr, m, typ, ass, cid, os.path.basename(vrec))
+            if ps2 is not m["pieces"]:
+                m = dict(m, pieces=ps2, seconds=round(sum(p["end"] - p["start"] for p in ps2), 3))
         thumb, trec = _thumbnail(ffmpeg, vrec, m, typ, frame, wd, ex, matches)  # RP6
         ttl, tirec = _title(wd, m["pieces"], xd, frame, exr, pk)  # FX2
-        mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec))  # RP3
+        mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec), pk=pk, mplan=mplan)  # RP3/FX4
         mus, sfxrec = _with_sfx(wd, exr, tr, m["pieces"], xd, pk, mus)  # FX3
         def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ):
             return mont.render_argv(ffmpeg, vrec, m["pieces"], frame, rnd.ENCODERS[enc], rnd.AUDIO,
@@ -1401,7 +1482,7 @@ def cmd_montage(a):
                      **({"story": m["story"]} if m.get("story") else {}),
                      **({"learning": exr["learning"]} if exr.get("learning") else {}),
                      "files": files, "errors": errors})
-        _look_remember(exr, pk if files else None)
+        _look_remember(exr, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
     write_json_atomic(os.path.join(out, RENDER), {
         "tool": "clipper.montage", "toolVersion": TOOL_VERSION, "createdAt": _now(),
         "recording": os.path.basename(a.recording), "vRecording": os.path.basename(vrec), "encoder": encoder,
