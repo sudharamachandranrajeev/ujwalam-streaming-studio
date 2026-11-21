@@ -368,6 +368,17 @@ Column {
         });
     }
 
+    // PT3 (D408): one click asks for an auto-post pass now (refused while a stream is live or starting).
+    function runNow() {
+        const g = gen;
+        Api.post("ui/api/posts/auto/run", {}, (ok, b, err) => {
+            if (g !== gen) return;
+            message = ok ? "Auto-post runs now: new clips are checked and due uploads start within half a minute."
+                : (b && b.error === "stream-live") || err === "stream-live" ? "Not run: a stream is live or starting. Auto-post waits until it ends."
+                : "Not run: " + ((b && b.error) ? b.error : err);
+        });
+    }
+
     // The Move box takes the PC's own time on the hour, "2026-11-14 18:00" (the widget has a calendar window for it).
     function two(n) { return (n < 10 ? "0" : "") + n }
     function startMove(id) {
@@ -853,6 +864,12 @@ Column {
             tip: "Reads the posts already scheduled on your channel (read only, at most every 10 minutes)."
             onClicked: ap.loadTimes(true)
         }
+        UButton {
+            objectName: "autopostRunNow"
+            text: "Run auto-post now"
+            tip: "Checks for new clips and starts the uploads that are due, without waiting for the next check. Never while a stream is live or starting."
+            onClicked: ap.runNow()
+        }
         Quiet { objectName: "autopostMsg"; text: ap.message }
     }
 
@@ -902,6 +919,7 @@ Column {
         if (a === "ap-refresh") { loadTimes(true); return true }
         if (a === "ap-move" && p.length >= 3) { move(arg, p.slice(2).join(":")); return true } // the time has colons: the rest of the action
         if (a === "ap-remove" && arg) { remove(arg); return true }
+        if (a === "ap-run") { runNow(); return true }
         return false;
     }
 }

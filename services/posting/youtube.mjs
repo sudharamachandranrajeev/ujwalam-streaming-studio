@@ -45,8 +45,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Builds the fixed snippet from a post.json entry. privacyStatus is hardcoded here, never from `post`.
  *  publishAt (RFC 3339 UTC, from the post-schedule queue slot, D310 proposed) makes YouTube publish the private video at
  *  that time; it is never read from post.json and only accepted as a valid future-looking ISO string ending in Z. */
-export function uploadMetadata(post, { publishAt = null } = {}) {
-  const status = { privacyStatus: 'private', selfDeclaredMadeForKids: false };
+export function uploadMetadata(post, { publishAt = null, publicNow = false } = {}) {
+  // PT3 (D408): publicNow (only from the Posts window's "Post now (public)" click) is the one way to send 'public'; it
+  // never comes from post.json and never goes with a publish time.
+  if (publicNow !== false && publicNow !== true) throw new UploadError('bad-privacy', 'publicNow must be true or false');
+  if (publicNow && publishAt !== null) throw new UploadError('bad-privacy', 'a public upload has no publish time');
+  const status = { privacyStatus: publicNow ? 'public' : 'private', selfDeclaredMadeForKids: false };
   if (publishAt !== null) {
     if (typeof publishAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(publishAt) || !Number.isFinite(Date.parse(publishAt))) {
       throw new UploadError('bad-publish-at', 'the scheduled publish time is not a valid UTC time');
@@ -219,7 +223,7 @@ export async function uploadVideo(opts) {
 
   const bytes = statSync(opts.videoPath).size;
   const publishAt = opts.publishAt ?? null;
-  const metadata = uploadMetadata(opts.post, { publishAt });
+  const metadata = uploadMetadata(opts.post, { publishAt, publicNow: opts.publicNow === true });
   // post-schedule (D310 proposed): the publish time must still be minLeadMs ahead when a session starts or resumes, and
   // marginMs ahead before every chunk, so an upload never finishes with a passed time (YouTube would publish at once).
   const nowMs = opts.nowMs ?? (() => Date.now());
@@ -288,7 +292,7 @@ export async function uploadPost(opts) {
   const accessToken = await auth.accessToken();
   const r = await uploadVideo({
     post, sha256, videoPath: video.file, coverPath: cover?.file, accessToken,
-    ledger: store.ledger, limits: opts.limits ?? loadLimits(), outputsStatus: opts.outputsStatus, fetchImpl: opts.fetchImpl, now: opts.now, sessions: opts.sessions, publishAt: opts.publishAt ?? null, minLeadMs: opts.minLeadMs, marginMs: opts.marginMs, chunkDeadlineMs: opts.chunkDeadlineMs, fallbackBps: opts.fallbackBps, nowMs: opts.nowMs, beforeChunk: opts.beforeChunk, chunkSize: opts.chunkSize,
+    ledger: store.ledger, limits: opts.limits ?? loadLimits(), outputsStatus: opts.outputsStatus, fetchImpl: opts.fetchImpl, now: opts.now, sessions: opts.sessions, publishAt: opts.publishAt ?? null, minLeadMs: opts.minLeadMs, marginMs: opts.marginMs, chunkDeadlineMs: opts.chunkDeadlineMs, fallbackBps: opts.fallbackBps, nowMs: opts.nowMs, beforeChunk: opts.beforeChunk, chunkSize: opts.chunkSize, publicNow: opts.publicNow === true,
     recordUploaded: async ({ videoId }) => { store.ledger.annotate(sha256, post.target, { videoId }); },
   });
   // LL2 (D338): a "posted" label row in the local learning store when the store knows the data folder. Never fails the upload.

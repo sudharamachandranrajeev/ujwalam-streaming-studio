@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { AutoPostError, MAX_PER_DAY, NOTICE_TEXT, RULE_KINDS, rankerMinScore, rulesFileFor, userRulesFile, validateRules } from './auto-post.mjs';
-import { DEFAULT_SCHEDULE, HOUR_MS, PLACEMENTS, USER_LIMITS, ScheduleError, alignUp, checkUserSchedule, floorFrom, itemTimes, loadScheduleConfig, maxAheadMs, nextFreeSlots, savedChannelTimes, toIso, userScheduleFile } from './schedule.mjs';
+import { DEFAULT_SCHEDULE, HARD_GAP_MINUTES, HOUR_MS, PLACEMENTS, USER_LIMITS, ScheduleError, alignUp, checkUserSchedule, floorFrom, itemTimes, loadScheduleConfig, maxAheadMs, nextFreeSlots, savedChannelTimes, toIso, userScheduleFile } from './schedule.mjs';
 import { QUEUE_NAME, createUploadQueue } from './auto-chain.mjs';
 import { READONLY_SCOPE } from './oauth.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
@@ -301,6 +301,32 @@ export function removeQueueItem(dataDir, id) {
   if (!it) return { ok: false, code: 'unknown', text: 'that clip is not in the upload queue' };
   if (it.state !== 'queued' && it.state !== 'failed') return { ok: false, code: 'not-removable', text: 'only a clip that is waiting to upload can be removed' };
   return { ok: true, item: q.patch(id, { state: 'removed', publishAt: null, session: null, sessionPublishAt: null, reslot: null, nextAt: null, reason: 'removed-by-user' }) };
+}
+
+/** PT3 (D408) per-clip "Schedule next free slot": puts one approved clip in the upload queue at the next free time the
+ *  planner gives (the one hard rule: never within 60 min of any other scheduled time). Local file only; the chain's next
+ *  pass uploads it as private with that publish time. -> { ok: true, item } | { ok: false, code, text }. */
+export function scheduleNextFree(dataDir, id, { nowMs = Date.now() } = {}) {
+  const no = (code, text) => ({ ok: false, code, text });
+  let cfg;
+  try { cfg = scheduleConfigFor(dataDir); } catch { return no('schedule-config-bad', 'the schedule settings are not valid'); }
+  const q = queueOf(dataDir);
+  const cur = q.get(id);
+  if (cur && cur.state !== 'removed' && !(cur.state === 'queued' && !cur.session)) return no('not-movable', 'that clip is already uploading or uploaded');
+  const items = q.items().filter((i) => i.id !== id);
+  const [t] = nextFreeSlots({ items, channelTimes: savedChannelTimes({ schedule: q.schedule() }, nowMs), count: 1, nowMs, cfg });
+  if (t === null || t === undefined) return no('no-free-slot', `no free time in the next ${cfg.maxAheadDays} days`);
+  if (!cur) q.add(id);
+  const item = q.patch(id, { state: 'queued', publishAt: toIso(t), slotAt: toIso(nowMs), reslot: null, movedByUser: true, reason: null, nextAt: null, ...(cur?.state === 'removed' ? { attempts: 0 } : {}) });
+  return { ok: true, item };
+}
+
+/** PT3 "Post now (public)": the time of a scheduled or recent post within the hard gap of now, or null (free). */
+export function publicNowClash(dataDir, id, { nowMs = Date.now() } = {}) {
+  const gap = HARD_GAP_MINUTES * 60 * 1000;
+  const q = queueOf(dataDir);
+  const times = [...savedChannelTimes({ schedule: q.schedule() }, nowMs - gap), ...q.items().filter((i) => i.id !== id).flatMap(itemTimes)];
+  return times.find((x) => Number.isFinite(x) && Math.abs(x - nowMs) < gap) ?? null;
 }
 
 /** A fresh read of the channel's schedule for the card (read-only; needs the readonly sign-in scope). Its calls count

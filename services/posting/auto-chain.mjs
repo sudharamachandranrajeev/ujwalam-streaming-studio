@@ -45,11 +45,12 @@
 // Daily budget (quota-budget.mjs, Codex review 2026-11-13): every upload start or resume counts against the rules'
 // maxUploadsPerDay (UTC day) and the quota units (Pacific day); every API read (schedule reads, status checks) counts 1
 // unit. Over budget: the items wait ('daily-cap-reached' / 'quota-day-used'), no attempt is used.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
-import { LEDGER_NAME, POSTING_FLAG, createPostStore, packageRun, packageUploads, sha256File } from './index.mjs';
+import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadTemplates, packageRun, packageUploads, sha256File } from './index.mjs';
+import { createTextHistory } from './post-text.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
 import { scanClipsFolder } from './clips-source.mjs';
 import { DELETED_LOG_NAME, DELETE_FLAG, FINAL_KEEP, deleteUploadedFile } from './delete-uploaded.mjs';
@@ -80,7 +81,23 @@ export const STATUS_PER_PASS = 10;
 const PERMANENT = new Set(['not-approved', 'video-changed', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at']);
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
-export const backoffMs = (attempts) => Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1));
+/** PT3 (D408): the "Run auto-post now" request file (<dataDir>/posting/auto-run-now.json). The studio writes it (refused
+ *  while live or starting); the chain's next tick takes it and runs a pass at once. Every live check still applies. */
+export const RUN_NOW_NAME = 'auto-run-now.json';
+export function requestRunNow(dataDir, nowMs = Date.now()) {
+  const f = path.join(dataDir, 'posting', RUN_NOW_NAME);
+  mkdirSync(path.dirname(f), { recursive: true });
+  writeFileSync(`${f}.tmp`, JSON.stringify({ atMs: nowMs }));
+  renameSync(`${f}.tmp`, f);
+}
+function takeRunNow(dataDir) {
+  const f = path.join(dataDir, 'posting', RUN_NOW_NAME);
+  if (!existsSync(f)) return false;
+  try { rmSync(f, { force: true }); } catch { return false; }
+  return true;
+}
+
+export const backoffMs =(attempts) => Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1));
 
 /** Only stream sinks matter for an upload (D300). A malformed sink or answer still reads as "unreadable" (fail closed). */
 export function streamOnly(outputsStatus) {
@@ -598,6 +615,17 @@ export function createPostChain(opts) {
     // in silence (2026-11-20: 263 drafts waited on {handles.youtube} and {links.discord} with no word in the app).
     const filled = store.fillPlaceholders(readProfile());
     if (filled) log(`posting: filled the profile placeholders of ${filled} clip(s)`);
+    // PT1 (D408): older drafts get the fact-based text once (facts from uploads.json when the draft has none).
+    try {
+      const templates = opts.templates ?? loadTemplates();
+      const hist = createTextHistory(dataDir, Number.isInteger(templates.recentLines) ? templates.recentLines : 20);
+      const rows = new Map();
+      const up = readJson(path.join(dataDir, 'clips', 'uploads.json'));
+      for (const r of Array.isArray(up?.files) ? up.files : []) if (typeof r?.file === 'string') rows.set(path.resolve(r.file).toLowerCase(), r);
+      const redrafted = store.redraftOnce({ templates, profile: readProfile(), recent: hist.recent, used: hist.add, gamesDir: opts.gamesDir,
+        factsFor: (p) => { const r = typeof p.source?.file === 'string' ? rows.get(path.resolve(p.source.file).toLowerCase()) : null; return { facts: r?.facts ?? {}, game: r?.game ?? null }; } });
+      if (redrafted) log(`posting: wrote new post text for ${redrafted} older draft(s)`);
+    } catch (e) { log(`posting: could not redraft older drafts (${String(e?.code ?? 'error').slice(0, 40)})`); }
     const blocked = store.list().filter((p) => p.status === 'draft' && p.unresolved.length);
     // Approvals are local file work, but they share the fail-closed live check (unreadable state -> nothing happens).
     // RP5 (D373): the learned kind order only while the flag self-learning is on and a learned mix is in use
@@ -656,7 +684,11 @@ export function createPostChain(opts) {
     /** Called with each host status: remembers it, and every TICK_EVERY_MS retries what is due. */
     tick(status) {
       if (status) latest = status;
-      if (nowMs() - lastTick < (opts.tickEveryMs ?? TICK_EVERY_MS)) return Promise.resolve({ skipped: 'throttled' });
+      // PT3 "Run auto-post now": the studio's request file starts a full pass (folder scan included) on this tick.
+      const runNow = takeRunNow(dataDir);
+      if (runNow && busy) { requestRunNow(dataDir, nowMs()); return Promise.resolve({ skipped: 'busy' }); } // kept for the next tick
+      if (runNow) { lastScan = -Infinity; log('posting: auto-post pass started by Run auto-post now'); }
+      if (!runNow && nowMs() - lastTick < (opts.tickEveryMs ?? TICK_EVERY_MS)) return Promise.resolve({ skipped: 'throttled' });
       lastTick = nowMs();
       return guarded(step);
     },

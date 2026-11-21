@@ -28,6 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { resolveString } from '../project/scene-preset.mjs';
+import { cleanFacts, createTextHistory, draftText } from './post-text.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const POSTING_FLAG = 'posting';
@@ -73,6 +74,10 @@ export function sha256File(file) {
 }
 
 // ---------------------------------------------------------------- data files
+
+/** PT1: post.json source.textVersion of text drafted from facts (an older draft is redrafted once, auto-chain). */
+export const TEXT_VERSION = 2;
+const textHistory = (opts, templates) => (typeof opts.dataDir === 'string' ? createTextHistory(opts.dataDir, Number.isInteger(templates.recentLines) ? templates.recentLines : 20) : null);
 
 export function loadTemplates(file = DEFAULT_TEMPLATES) {
   const j = readJson(file);
@@ -424,9 +429,16 @@ export async function packageUploads(opts) {
     const tpl = isPlain(base.kinds?.[row.kind]) ? { ...base, ...base.kinds[row.kind] } : base;
     const missing = new Set();
     const ctx = { profile, n, date };
+    // PT1 (D408): title and first line from the clip's facts (lines with a missing fact are left out); else the template's.
+    const facts = cleanFacts(row.facts);
+    const game = typeof row.game === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(row.game) ? row.game : null;
+    const hist = textHistory(opts, templates);
+    const titleMax = limits.targets[target]?.fields?.title?.max ?? null;
+    const d = draftText({ templates, kind: row.kind, game, facts, seed: sha, recent: hist?.recent() ?? [], maxTitle: titleMax, gamesDir: opts.gamesDir });
+    if (hist && (d.title || d.lead)) hist.add(d.title?.line, d.lead?.line);
     const post = {
-      title: renderText(tpl.title, ctx, missing),
-      description: renderText(tpl.description, ctx, missing),
+      title: renderText(d.title?.text ?? tpl.title, ctx, missing),
+      description: renderText(d.lead ? `${d.lead.text}\n\n${tpl.description}` : tpl.description, ctx, missing),
       tags: tpl.tags.map((t) => renderText(t, ctx, missing)),
       hashtags: tpl.hashtags.map((t) => renderText(t, ctx, missing)),
       target,
@@ -442,6 +454,8 @@ export async function packageUploads(opts) {
       status: 'draft',
       source: { run: runName, clipId, kind: row.kind, layout: tail ? tail[2].toLowerCase() : 'unknown', startSec: 0, endSec: Number.isFinite(seconds) ? seconds : null, score: null, sha256: sha,
         ...(cleanChoices(row.choices) ? { choices: cleanChoices(row.choices) } : {}), // RP5: the reel's edit choices
+        // PT1: the clip's facts (medal, kills, result, mode; only the known ones) and its game, for post text and redrafts
+        ...(Object.keys(facts).length ? { facts } : {}), ...(game ? { game } : {}), textVersion: TEXT_VERSION,
         // D375: when the clip was made (from its name; posting order is oldest first) and the clips-folder file it came
         // from (the file the flag post-delete-uploaded may remove after a confirmed upload). Local data only.
         ...(madeAtOf(path.basename(file)) ? { madeAt: madeAtOf(path.basename(file)) } : {}), file: path.resolve(file) },
@@ -525,6 +539,7 @@ export function createPostStore(opts) {
       p.limits = checkLimits({ ...next, target: p.target }, limits());
       p.unresolved = unresolvedKeys(next.title, next.description, ...next.tags, ...next.hashtags);
       p.status = 'draft';
+      p.editedByUser = true; // PT1: a redraft never replaces the user's own words
       save(e, p);
       ledger.setStatus(e.sha256, e.target, 'draft', p.updatedAt);
       return view({ ...e, status: 'draft' }, p);
@@ -560,6 +575,35 @@ export function createPostStore(opts) {
         filled++;
       }
       return filled;
+    },
+    /**
+     * PT1 (D408): drafts made before the fact-based text get it once: a fact title replaces the old title and a lead line
+     * goes before the old description. Only drafts the user has not edited; each is marked (source.textVersion) whether
+     * or not a line fitted, so it never runs twice. factsFor(post) -> { facts, game } for drafts packaged without facts.
+     * opts: { templates, profile, recent: () => [], used: (...lines) => void, factsFor? }. Returns how many changed.
+     */
+    redraftOnce(opts) {
+      const prof = cleanProfile(opts.profile ?? {});
+      let changed = 0;
+      for (const e of entries()) {
+        if (e.status !== 'draft') continue;
+        const p = load(e);
+        if (!p || p.editedByUser || p.source?.textVersion === TEXT_VERSION) continue;
+        const known = isPlain(p.source?.facts) ? { facts: p.source.facts, game: p.source.game ?? null } : (opts.factsFor?.(p) ?? { facts: {}, game: null });
+        const facts = cleanFacts(known.facts);
+        const d = draftText({ templates: opts.templates, kind: p.source?.kind ?? 'short', game: known.game, facts, seed: e.sha256,
+          recent: opts.recent?.() ?? [], maxTitle: limits().targets?.[p.target]?.fields?.title?.max ?? null, gamesDir: opts.gamesDir });
+        const missing = new Set();
+        const next = { title: d.title ? renderText(d.title.text, { profile: prof, n: 1, date: '' }, missing) : p.title,
+          description: d.lead ? `${renderText(d.lead.text, { profile: prof, n: 1, date: '' }, missing)}\n\n${p.description}` : p.description };
+        if (d.title || d.lead) { opts.used?.(d.title?.line, d.lead?.line); changed++; }
+        Object.assign(p, next);
+        p.source = { ...p.source, ...(Object.keys(facts).length ? { facts } : {}), ...(known.game ? { game: known.game } : {}), textVersion: TEXT_VERSION };
+        p.limits = checkLimits({ title: p.title, description: p.description, tags: p.tags, hashtags: p.hashtags, target: p.target }, limits());
+        p.unresolved = unresolvedKeys(p.title, p.description, ...(p.tags ?? []), ...(p.hashtags ?? []));
+        save(e, p);
+      }
+      return changed;
     },
     /** status: draft | approved | rejected. Approve needs text inside the limits, no unresolved placeholder, an intact video. */
     async setStatus(id, status) {
