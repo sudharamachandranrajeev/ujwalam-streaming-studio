@@ -174,16 +174,20 @@ const claimsOf = (f) => { try { const base = path.basename(f); return readdirSyn
 export function stuckLock(dataDir, { procStart = osProcStart } = {}) {
   const f = path.resolve(dataDir, 'posting', LOCK_NAME);
   const lockRaw = readRaw(f); const lock = lockRaw === null ? null : parseOr(lockRaw);
-  for (const claimFile of claimsOf(f)) {
-    const claimRaw = readRaw(claimFile); const claim = parseClaim(claimRaw);
-    if (!claim || ownerState(claim, procStart) !== 'dead') continue;
-    if (lockRaw !== null) {
-      if (!lock || typeof lock.token !== 'string' || claimFileOf(f, lock.token) !== claimFile || ownerState(lock, procStart) !== 'dead') continue;
-    }
-    // The id names both files as seen: a click made on an older view (e.g. the lock was there) is refused as 'changed'.
-    return { id: `${path.basename(claimFile)}:${lockRaw === null ? 'no-lock' : lock.token}`, lockFile: f, claimFile, lockRaw, claimRaw };
+  // Seventh Codex review: general rule, no token matching. Stuck = at least one claim, EVERY claim's claimant dead, and
+  // the lock absent or held by a dead owner (old or new token: a crash at any point of the dead-lock replacement).
+  const claimFiles = claimsOf(f).sort();
+  if (!claimFiles.length) return null;
+  const claims = [];
+  for (const claimFile of claimFiles) {
+    const claimRaw = readRaw(claimFile);
+    if (ownerState(parseClaim(claimRaw), procStart) !== 'dead') return null;
+    claims.push({ file: claimFile, raw: claimRaw });
   }
-  return null;
+  if (lockRaw !== null && (!lock || typeof lock.token !== 'string' || ownerState(lock, procStart) !== 'dead')) return null;
+  // The id names every file as seen: a click made on an older view is refused as 'changed'.
+  const id = `${claimFiles.map((c) => path.basename(c)).join(',')}:${lockRaw === null ? 'no-lock' : lock.token}`;
+  return { id, lockFile: f, claims, lockRaw };
 }
 /**
  * The click: in the in-process mutex (never during this process's pass), re-verifies the same stuck lock (id) with dead
@@ -199,13 +203,16 @@ export async function clearStuckLock(dataDir, id, opts = {}) {
     const s = stuckLock(dataDir, opts);
     if (!s) return { cleared: false, code: 'not-stuck' };
     if (s.id !== id) return { cleared: false, code: 'changed' };
-    if (readRaw(s.claimFile) !== s.claimRaw) return { cleared: false, code: 'changed' };
+    if (s.claims.some((c) => readRaw(c.file) !== c.raw)) return { cleared: false, code: 'changed' };
     if (s.lockRaw !== null) {
       if (readRaw(s.lockFile) !== s.lockRaw) return { cleared: false, code: 'changed' };
       try { rmSync(s.lockFile); } catch { return { cleared: false, code: 'changed' }; }
     } else if (readRaw(s.lockFile) !== null) return { cleared: false, code: 'changed' };
-    if (readRaw(s.claimFile) !== s.claimRaw) return { cleared: false, code: 'changed' };
-    try { rmSync(s.claimFile); } catch { return { cleared: false, code: 'changed' }; }
+    // Every dead claim, last (compare-before-delete each).
+    for (const c of s.claims) {
+      if (readRaw(c.file) !== c.raw) return { cleared: false, code: 'changed' };
+      try { rmSync(c.file); } catch { return { cleared: false, code: 'changed' }; }
+    }
     return { cleared: true };
   } finally { endMutex(); }
 }

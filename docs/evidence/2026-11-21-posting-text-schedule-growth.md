@@ -131,6 +131,15 @@ studio-ui-posting-youtube 11.
 Runs (one file at a time, same rules, all exit 0): posting-e2e 58, posting-auto-chain 15, posting-pt3-actions 9,
 studio-qml-posting 12, studio-ui-posting-auto 8.
 
+## Seventh Codex review (2026-11-21)
+
+| Item | Fix | Test |
+|---|---|---|
+| Crash after the new lock, before the old claim was removed: refused with no Clear | `stuckLock` is general: every claim dead and the lock absent or dead, no token matching. The id lists all claim names and the lock token. The clear re-verifies the set, compare-before-deletes the lock, then each claim. | posting-e2e D409-7: that exact state is refused, Clear is offered (`schedule.lock.old-7.claim:new-7`), a second live claim blocks it, the click clears, the next pass sends (mock). Crash-point walk: before the claim, after claim create, after old-lock remove, after new-lock create, after claim remove: each one either sends or offers Clear, which then lets it send, and leaves no file behind. |
+
+Runs (one file at a time, same rules, all exit 0): posting-e2e 60, posting-auto-chain 15, posting-pt3-actions 9,
+studio-qml-posting 12.
+
 ## UNVERIFIED
 
 - Sixth review: compare-before-delete is not atomic across processes (the mutex is per process). For a live lock to be

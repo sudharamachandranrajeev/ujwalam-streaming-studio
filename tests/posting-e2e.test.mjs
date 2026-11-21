@@ -1141,6 +1141,57 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     assert.equal(stuckLock(d, { procStart: () => null }), null, 'numeric claim, pid alive: alive');
   });
 
+  test('D409-7: every crash point of the dead-lock replacement is either sendable or offers Clear (never stuck without an action)', async () => {
+    const { LOCK_NAME, stuckLock, clearStuckLock, withScheduleLock } = await import('../services/posting/auto-chain.mjs');
+    const OLD = JSON.stringify({ pid: 2 ** 30, start: 1, token: 'old', at: 1 });   // the old holder, dead
+    const NEW = JSON.stringify({ pid: 2 ** 30 - 2, start: 3, token: 'new', at: 2 }); // the crashed replacer's new lock
+    const CLAIM = JSON.stringify({ pid: 2 ** 30 - 2, start: 3 });                    // the crashed replacer's claim
+    const states = {
+      'before the claim': { lock: OLD, claim: null },
+      'after claim create': { lock: OLD, claim: CLAIM },
+      'after old-lock remove': { lock: null, claim: CLAIM },
+      'after new-lock create (before claim remove)': { lock: NEW, claim: CLAIM },
+      'after claim remove': { lock: NEW, claim: null },
+    };
+    for (const [name, st] of Object.entries(states)) {
+      const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
+      const f = path.join(d, 'posting', LOCK_NAME);
+      if (st.lock) writeFileSync(f, st.lock);
+      if (st.claim) writeFileSync(`${f}.old.claim`, st.claim);
+      let sent = false;
+      try { await withScheduleLock(d, async () => { sent = true; }); } catch (e) { assert.equal(e.code, 'sender-elsewhere', name); }
+      if (!sent) {
+        const s = stuckLock(d);
+        assert.ok(s, `${name}: refused, so Clear must be offered`);
+        assert.deepEqual(await clearStuckLock(d, s.id), { cleared: true }, name);
+        await withScheduleLock(d, async () => { sent = true; });
+      }
+      assert.ok(sent, `${name}: sendable (after Clear when offered)`);
+      assert.deepEqual(readdirSync(path.join(d, 'posting')), [], `${name}: nothing left behind`);
+    }
+  });
+
+  test('D409-7: crash after the new lock, before the old claim was removed: Clear offered, click, next pass sends', async () => {
+    const { LOCK_NAME, stuckLock, clearStuckLock } = await import('../services/posting/auto-chain.mjs');
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    const f = path.join(e.dataDir, 'posting', LOCK_NAME);
+    mkdirSync(path.dirname(f), { recursive: true });
+    writeFileSync(f, JSON.stringify({ pid: 2 ** 30 - 2, start: 3, token: 'new-7', at: Date.now() }));
+    writeFileSync(`${f}.old-7.claim`, JSON.stringify({ pid: 2 ** 30 - 2, start: 3 }));
+    const c = schedChain(e, g);
+    await c.afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0); assert.equal(e.queue().items()[0].reason, 'sender-elsewhere');
+    const s = stuckLock(e.dataDir);
+    assert.equal(s?.id, 'schedule.lock.old-7.claim:new-7');
+    // A second claim with a LIVE claimant: never stuck.
+    writeFileSync(`${f}.zz.claim`, JSON.stringify({ pid: process.ppid }));
+    assert.equal(stuckLock(e.dataDir), null);
+    rmSync(`${f}.zz.claim`);
+    assert.deepEqual(await clearStuckLock(e.dataDir, s.id), { cleared: true });
+    e.clock.t += 6 * MIN; await c.tick(IDLE);
+    assert.equal(e.queue().items()[0].state, 'done'); assert.equal(g.videos.length, 1);
+  });
+
   test('D409-6: interleaved clears cannot remove a live lock (acquire refuses while any claim exists; compare-before-delete)', async () => {
     const { LOCK_NAME, stuckLock, clearStuckLock, withScheduleLock } = await import('../services/posting/auto-chain.mjs');
     const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;

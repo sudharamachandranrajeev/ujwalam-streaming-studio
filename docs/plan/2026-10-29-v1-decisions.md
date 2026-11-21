@@ -2489,5 +2489,10 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
     whose claim is dead and whose lock file is already gone. The click's id names both files as seen, so a click made
     on an older view is refused. A claim holding only a number (7b5c7ec format) reads as { pid, start unknown }: pid
     gone = dead, pid alive = alive.
+  - Seventh Codex review: "stuck" is one general rule with no token matching. At least one claim file exists, every
+    claim's claimant is dead, and the lock file is absent or held by a dead owner. The click id lists every claim name
+    and the lock token as seen. The clear (in the mutex) re-verifies that same set, deletes the lock only if its content
+    still matches, then deletes each dead claim last. Every crash point of the dead-lock replacement is therefore either
+    sendable or offers Clear.
   - Known item: the studio has no single-instance guard. A second studio's chain refuses through the lock
     (`sender-elsewhere`); it is not stopped from starting.
