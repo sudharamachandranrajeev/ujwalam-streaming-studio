@@ -1,0 +1,55 @@
+{
+  "$comment": "BD1 moment finder (plan docs/plan/2026-11-21-beatdrop-montages.md section 5 BD1, D413, D414). The CODM numbers services/clip/moments.py uses to time gunshots, hits and kills, scope in and out, flicks, slides and jumps, and third-person shots to the frame. Boxes are fractions of the full 16:9 game frame (x0/y0 top-left, x1/y1 bottom-right); radii are fractions of the frame height. Every value is the agent's first proposal, tuned only on synthetic fixtures (tests/py/test_moments.py). Status unverified until checked on hand-labelled stretches of the user's own footage (labels with timestamps only).",
+  "game": "codm",
+  "version": "0.1.0",
+  "status": "unverified",
+  "checked": "2026-11-21",
+  "evidence": {
+    "doc": "docs/evidence/2026-11-21-beatdrop-bd1-bd2.md",
+    "source": "synthetic fixtures only",
+    "frames": 0,
+    "realFootage": "UNVERIFIED: not yet measured on the user's footage"
+  },
+  "analysis": { "width": 320, "height": 180, "flowWidth": 160, "flowHeight": 90 },
+  "guard": { "checkEveryFrames": 90, "maxFramesPerSec": 240, "maxWallSecPerMin": 120, "maxMemMb": 1500, "maxSec": 14400 },
+  "gunshot": {
+    "bandHz": [1000, 6000],
+    "sampleRate": 16000,
+    "fft": 512,
+    "hop": 128,
+    "thresholdMad": 8.0,
+    "minGapSec": 0.06,
+    "weaponZone": { "x0": 0.5, "y0": 0.5, "x1": 0.85, "y1": 0.9 },
+    "flashRise": 40.0,
+    "flashBaseFrames": 5,
+    "confirmFrames": 2
+  },
+  "hitmarker": {
+    "zone": { "x0": 0.46, "y0": 0.42, "x1": 0.54, "y1": 0.58 },
+    "whiteLevel": 220,
+    "minWhiteShare": 0.04,
+    "maxWhiteShare": 0.5
+  },
+  "kills": {
+    "detectors": ["M4", "M5", "B1", "M3", "X1", "B2"],
+    "killcam": ["N1"],
+    "clusterSec": 1.5,
+    "lookbackSec": 0.5
+  },
+  "scope": {
+    "centreRadius": 0.25,
+    "ringInner": 0.42,
+    "ringOuter": 0.5,
+    "ringMaxLuma": 40.0,
+    "minContrast": 40.0,
+    "minFrames": 2
+  },
+  "flick": { "minShiftShare": 0.04, "minFrames": 2, "minTotalShare": 0.15, "windowSec": 0.3, "minGapSec": 0.4 },
+  "vertical": { "minShiftShare": 0.03, "minFrames": 2, "windowSec": 0.6, "minGapSec": 0.5 },
+  "thirdPerson": {
+    "bodyZone": { "x0": 0.4, "y0": 0.55, "x1": 0.6, "y1": 0.95 },
+    "minMotionShare": 0.01,
+    "maxZoneDiffRatio": 0.35,
+    "minFrames": 8
+  }
+}

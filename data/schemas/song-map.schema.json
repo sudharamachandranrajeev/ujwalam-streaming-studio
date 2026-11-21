@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ujwalam.local/schemas/song-map.schema.json",
+  "title": "BD2 song map of one track (services/clip/song_map.py output): numbers and section names only",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "duration", "bpm", "period", "phase", "beatsPerBar", "fit", "beats", "downbeats", "sections", "drops", "transients"],
+  "$defs": {
+    "sec": { "type": "number", "minimum": 0, "maximum": 3600 },
+    "times": { "type": "array", "items": { "$ref": "#/$defs/sec" }, "maxItems": 20000 }
+  },
+  "properties": {
+    "version": { "const": 1 },
+    "duration": { "$ref": "#/$defs/sec" },
+    "bpm": { "type": "number", "minimum": 40, "maximum": 250 },
+    "period": { "type": "number", "exclusiveMinimum": 0, "maximum": 2 },
+    "phase": { "$ref": "#/$defs/sec" },
+    "beatsPerBar": { "type": "integer", "minimum": 2, "maximum": 8 },
+    "fit": {
+      "type": "object", "additionalProperties": false, "required": ["rmsMs", "inliers", "libraryBpm"],
+      "properties": { "rmsMs": { "type": ["number", "null"], "minimum": 0 }, "inliers": { "type": "integer", "minimum": 0 }, "libraryBpm": { "type": "number" } }
+    },
+    "beats": { "$ref": "#/$defs/times" },
+    "downbeats": { "$ref": "#/$defs/times" },
+    "sections": {
+      "type": "array", "minItems": 1, "maxItems": 200,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["kind", "start", "end", "energyDb"],
+        "properties": { "kind": { "enum": ["intro", "build", "drop", "breakdown", "outro"] }, "start": { "$ref": "#/$defs/sec" }, "end": { "$ref": "#/$defs/sec" },
+          "energyDb": { "type": ["number", "null"], "minimum": -200, "maximum": 20 } }
+      }
+    },
+    "drops": { "$ref": "#/$defs/times" },
+    "transients": {
+      "type": "array", "maxItems": 2000,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["t", "strength", "onBeat"],
+        "properties": { "t": { "$ref": "#/$defs/sec" }, "strength": { "type": "number", "minimum": 0, "maximum": 1 }, "onBeat": { "type": "boolean" } }
+      }
+    }
+  }
+}
