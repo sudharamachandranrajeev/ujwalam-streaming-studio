@@ -108,3 +108,14 @@ Re-measured Done-when after the fixes: 48/48 kills within one frame (max 16.7 ms
 flash peak 2.5/s. At 120 bpm a piece is at least one beat, so plan cuts never exceed 2/s; softening is exercised
 by the unit test with cuts every 0.2 s. A softened cut still counts in the budget (a dissolve is still a brightness
 change). UNVERIFIED: real dark/bright game footage.
+
+## Codex verify of 416127e (2026-11-21), round 2
+
+Accepted as fixed: the flash budget and the first drop. Accepted residual (D415 item 9, not changed): gunshots within
+noKillMarginSec before the anchor are that kill's own burst. Fixed, each with a test in tests/py/test_beatdrop.py:
+
+| Item | Fix | Test |
+|---|---|---|
+| 1 (P1) live starts between the last poll and the child's exit | `run_tool(stop=)` checks once more after the exit; stop = `STOPPED_RC`, output discarded | `test_stream_starting_as_the_child_exits_discards_it` (poll 30 s, child ends at once) |
+| 2 (P1) probes and flash check unguarded | each brightness probe and the node flash check run through `run_tool` with the job's stop; `live()` is checked between steps; any stop = `stopped: on air`, exit 4, nothing published | `test_stream_during_probes_or_flash_check_stops_the_job` (on air from the 5th look onward, which falls in the planning steps; and on air during the flash check) |
+| 3 (P1) rerender replaced the video before render.json | a new name per render `beatdrop-<id>.mp4`; render.json is written atomically pointing at it, then older videos are removed; orphans not in render.json are swept before a run | `test_rerender_new_name_then_old_removed_and_orphans_swept` (second clipper run plus a planted orphan: only the new video is left, render.json points at it with the NCS record) |

@@ -1939,7 +1939,7 @@ def cmd_run(a):
 def cmd_beatdrop(a):
     """BD3/BD4 (D415): one BeatDrop montage of --recording (H canvas) from its BD1 moments (--moments, default
     DIR/moments.json) and a song (Settings > Clips > Montage music: the NCS library pick; else the made-here bed) ->
-    DIR/beatdrop/clips/B1/beatdrop.mp4 + beatdrop-plan.json + DIR/beatdrop/render.json (musicRecords 1, the clip's music
+    DIR/beatdrop/clips/B1/beatdrop-<id>.mp4 (a new name per render) + beatdrop-plan.json + DIR/beatdrop/render.json (musicRecords 1, the clip's music
     record). Its own kind beside the kill montages (flag beatdrop): the other reels are not touched."""
     import beatdrop as bd  # noqa: PLC0415
     data_dir = resolve_data_dir(a.data_dir)
@@ -1965,6 +1965,8 @@ def cmd_beatdrop(a):
     frame = dict(bd.load_config()["frame"])
     if a.width and a.height:
         frame = {"width": int(a.width), "height": int(a.height)}
+    # orphans from a crash (a video render.json does not point at) are never published: swept before the run
+    bd.sweep_videos(wd, _beatdrop_files(os.path.join(out, RENDER)))
     res = bd.make(a.recording, mdoc, wd, data_dir, ffmpeg, rnd.ENCODERS[encoder], rnd.AUDIO, frame=frame, style=style,
                   seed_parts=(os.path.basename(a.recording), "beatdrop"), audio_tracks=1 if info["has_audio"] else 0,
                   max_sec=a.max_sec)
@@ -1974,11 +1976,11 @@ def cmd_beatdrop(a):
     pl = res["plan"]
     for line in pl.get("log") or []:
         eprint(f"beatdrop B1: {line}")
-    done = os.path.join(wd, bd.OUT)
+    done = os.path.join(wd, res["file"]) if res["file"] else None
     row = {"id": "B1", "kind": "beatdrop", "start": 0.0, "end": pl["total"], "music": res["music"],
            "style": {"id": style["id"], "name": style["name"]} if style else None,
            "beatdrop": {"plan": bd.PLAN, "stats": pl["stats"], "targets": pl["targets"], "slots": pl["slots"]},
-           "files": [{"layout": "beatdrop-h", "file": bd.OUT, "geometry": "canvas"}] if res["file"] else [],
+           "files": [{"layout": "beatdrop-h", "file": res["file"], "geometry": "canvas"}] if res["file"] else [],
            "flash": res["flash"],
            "errors": [] if res["file"] else [{"layout": "beatdrop-h", "error": (res["reason"] or "")[:300],
                                               "stderr": (res["stderr"] or "")[-300:]}],
@@ -1989,6 +1991,8 @@ def cmd_beatdrop(a):
         "recording": os.path.basename(a.recording), "encoder": encoder, "frame": frame,
         "beatdrop": {"flag": cfg["flag"], "version": cfg["version"], "status": cfg["status"]},
         "failed": 0 if res["file"] else 1, "clips": [row]})
+    # only now, with render.json pointing at the new video and its music record, the previous video goes
+    bd.sweep_videos(wd, {res["file"]} if res["file"] else set())
     if not res["file"]:
         eprint(f"beatdrop B1: FAILED: {res['reason']}")
         return 1
@@ -1996,6 +2000,15 @@ def cmd_beatdrop(a):
           f"kill drop at {pl['song']['dropAt']:.2f} s, flash {res['flash']['peakFlashesPerSecond']}/s, music {res['music'].get('source') if res['music'] else 'none'}")
     progress_line("montage", 1, 1, "BeatDrop montage done")
     return 0
+
+
+def _beatdrop_files(render_path):
+    """The video names a BeatDrop render.json points at (empty when it is missing or unreadable)."""
+    try:
+        doc = load_json(render_path)
+    except (ClipError, OSError, ValueError):
+        return set()
+    return {f.get("file") for c in (doc or {}).get("clips") or [] for f in c.get("files") or [] if f.get("file")}
 
 
 def _now():

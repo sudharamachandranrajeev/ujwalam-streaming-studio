@@ -416,6 +416,21 @@ class PlannerTests(unittest.TestCase):
 class StopGuardTests(unittest.TestCase):
     """run_tool(stop=): the guard BeatDrop renders run under (review item 2)."""
 
+    def test_stream_starting_as_the_child_exits_discards_it(self):
+        # review round 2, item 1: the child ends before any poll; the look after its exit sees on air
+        import clip_common as cc  # noqa: PLC0415
+        looks = {"n": 0}
+
+        def stop():
+            looks["n"] += 1
+            return True  # on air by the time the child has ended
+        r = cc.run_tool([sys.executable, "-c", "print('done')"], stop=stop, poll_sec=30)
+        self.assertEqual(r.returncode, cc.STOPPED_RC)
+        self.assertEqual(r.stdout, "", "output discarded")
+        self.assertEqual(looks["n"], 1)
+        r = cc.run_tool([sys.executable, "-c", "print('done')"], stop=lambda: None, poll_sec=30)
+        self.assertEqual(r.returncode, 0, "the caller decides unknown; this stop() says None = not stop")
+
     def test_stop_kills_the_child(self):
         import time  # noqa: PLC0415
         import clip_common as cc  # noqa: PLC0415
@@ -539,7 +554,11 @@ class RenderedMontageTests(unittest.TestCase):
                                   "--width", str(W), "--height", str(H), "--max-sec", "60"],
                                  capture_output=True, text=True, timeout=900, env=env, creationflags=NOWIN)
         cls.wd = os.path.join(cls.out, "beatdrop", "clips", "B1")
-        cls.video = os.path.join(cls.wd, "beatdrop.mp4")
+        try:
+            with open(os.path.join(cls.out, "beatdrop", "render.json"), encoding="utf-8") as f:
+                cls.video = os.path.join(cls.wd, json.load(f)["clips"][0]["files"][0]["file"])
+        except (OSError, ValueError, KeyError, IndexError):
+            cls.video = None
 
     @classmethod
     def tearDownClass(cls):
@@ -615,20 +634,19 @@ class RenderedMontageTests(unittest.TestCase):
     def test_over_the_flash_limit_is_failed_not_published(self):
         wd = os.path.join(self.tmp, "gate")
         res = self._make(wd, live=lambda: False,
-                         measure=lambda f: {"pass": False, "peakFlashesPerSecond": 4.5, "limit": 3})
+                         measure=lambda f, stop: {"pass": False, "peakFlashesPerSecond": 4.5, "limit": 3})
         self.assertEqual(res["status"], "failed")
         self.assertIn("flash limit", res["reason"])
         self.assertIsNone(res["file"])
-        self.assertFalse(os.path.exists(os.path.join(wd, "beatdrop.mp4")))
-        self.assertFalse(os.path.exists(os.path.join(wd, "beatdrop.mp4.part")))
+        self.assertEqual([f for f in os.listdir(wd) if f.endswith((".mp4", ".part"))], [])
 
     def test_live_flip_mid_render_stops_it(self):
         wd = os.path.join(self.tmp, "flip")
-        part = os.path.join(wd, "beatdrop.mp4.part")
         seen = {"rendering": False}
 
         def live():  # off air until the render has written its first bytes, then a stream starts
-            if os.path.isfile(part) and os.path.getsize(part) > 0:
+            parts = [f for f in os.listdir(wd) if f.endswith(".mp4.part")] if os.path.isdir(wd) else []
+            if parts and os.path.getsize(os.path.join(wd, parts[0])) > 0:
                 seen["rendering"] = True
                 return True
             return False
@@ -636,10 +654,66 @@ class RenderedMontageTests(unittest.TestCase):
         self.assertTrue(seen["rendering"], "the flip happened during the render")
         self.assertEqual(res["status"], "stopped: on air")
         self.assertIsNone(res["file"])
-        self.assertFalse(os.path.exists(part))
-        self.assertFalse(os.path.exists(os.path.join(wd, "beatdrop.mp4")))
+        self.assertEqual([f for f in os.listdir(wd) if f.endswith((".mp4", ".part"))], [])
         unknown = self._make(os.path.join(self.tmp, "unknown"), live=lambda: None)
         self.assertEqual(unknown["status"], "stopped: on air", "unknown counts as on air")
+
+    def test_stream_during_probes_or_flash_check_stops_the_job(self):
+        # review round 2, item 2: the brightness probes and the flash check run under the same stop
+        wd = os.path.join(self.tmp, "probe-flip")
+        probe = os.path.join(wd, "beatdrop-probe.rgb")
+        seen = {"probe": False}
+
+        def live():  # on air once a brightness probe has written its frame (seen by run_tool's look after the exit)
+            if os.path.exists(probe):
+                seen["probe"] = True
+                return True
+            return False
+        res = self._make(wd, live=live, poll_sec=0.2)
+        self.assertTrue(seen["probe"], "the stop came during a probe")
+        self.assertFalse(os.path.exists(probe))
+        n = {"calls": 0}
+
+        def live_soon():  # on air from the 5th look: inside the music pick or the song map's own guard
+            n["calls"] += 1
+            return n["calls"] > 4
+        res2 = self._make(os.path.join(self.tmp, "early-flip"), live=live_soon)
+        self.assertEqual(res2["status"], "stopped: on air")
+        self.assertEqual(res["status"], "stopped: on air")
+        self.assertIsNone(res["file"])
+        wd2 = os.path.join(self.tmp, "measure-flip")
+        state = {"on": False}
+
+        def measure(f, stop):  # a stream starts during the flash check
+            state["on"] = True
+            self.assertTrue(stop())
+            return {"pass": True, "peakFlashesPerSecond": 1, "limit": 3}
+        res = self._make(wd2, live=lambda: state["on"], measure=measure)
+        self.assertEqual(res["status"], "stopped: on air")
+        self.assertEqual([f for f in os.listdir(wd2) if f.endswith((".mp4", ".part"))], [])
+
+    def test_rerender_new_name_then_old_removed_and_orphans_swept(self):
+        # review round 2, item 3: render.json points at the new video before the old one goes; an orphan is swept
+        render = os.path.join(self.out, "beatdrop", "render.json")
+        with open(render, encoding="utf-8") as f:
+            old = json.load(f)["clips"][0]["files"][0]["file"]
+        orphan = os.path.join(self.wd, "beatdrop-0000000000.mp4")
+        with open(orphan, "wb") as f:
+            f.write(b"crash leftover")
+        env = dict(os.environ, UJWALAM_DATA_ROOT=self.data, UJWALAM_HEADLESS="1")
+        r = subprocess.run([sys.executable, "-I", os.path.join(CLIP, "clipper.py"), "--data-dir", self.data, "beatdrop",
+                            "--out", self.out, "--recording", self.rec, "--encoder", "libopenh264",
+                            "--width", str(W), "--height", str(H), "--max-sec", "60"],
+                           capture_output=True, text=True, timeout=900, env=env, creationflags=NOWIN)
+        self.assertEqual(r.returncode, 0, r.stderr[-800:])
+        with open(render, encoding="utf-8") as f:
+            row = json.load(f)["clips"][0]
+        new = row["files"][0]["file"]
+        self.assertNotEqual(new, old)
+        self.assertEqual(row["music"]["source"], "ncs")
+        vids = sorted(f for f in os.listdir(self.wd) if f.endswith((".mp4", ".part")))
+        self.assertEqual(vids, [new], "only the video render.json points at")
+        type(self).video = os.path.join(self.wd, new)
 
     def test_flag_off_makes_nothing(self):
         data = os.path.join(self.tmp, "data-off")

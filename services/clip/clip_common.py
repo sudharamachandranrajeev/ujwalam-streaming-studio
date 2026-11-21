@@ -477,8 +477,12 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
         fe.seek(0)
         out = fo.read().decode("utf-8", errors="replace")
         err = fe.read().decode("utf-8", errors="replace")
+    # a stream can start between the last look and the child's exit: one more look after it ended; on air (or unknown,
+    # the caller's stop() decides) = stopped, its output discarded (D415 review)
+    if not stopped and not stalled and stop is not None and stop():
+        stopped, out = True, ""
     if stopped:
-        return subprocess.CompletedProcess(argv, STOPPED_RC, out, err + "\nstopped: on air")
+        return subprocess.CompletedProcess(argv, STOPPED_RC, "", err + "\nstopped: on air")
     if stalled:
         return subprocess.CompletedProcess(argv, STALLED_RC, out,
                                            err + f"\nstalled: no output for {stall_sec:g} s; stopped")

@@ -39,7 +39,6 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(CLIP_DATA, "beatdrop.json")
 GAMES = os.path.normpath(os.path.join(_HERE, "..", "..", "data", "games"))
 PLAN = "beatdrop-plan.json"
-OUT = "beatdrop.mp4"
 GRAPH = "beatdrop-graph.txt"
 
 
@@ -398,6 +397,11 @@ def plan(moments_doc, smap, cfg=None, game=None, style=None, max_sec=None, rec_s
 
 
 LUMA_CACHE = "beatdrop-luma.json"
+PROBE_FILE = "beatdrop-probe.rgb"
+
+
+class OnAir(ClipError):
+    """A stream or recording started (or that cannot be told) during a BeatDrop step: the whole job stops."""
 _LIN = [(c / 255 / 12.92) if c / 255 <= 0.04045 else ((c / 255 + 0.055) / 1.055) ** 2.4 for c in range(256)]
 
 
@@ -408,9 +412,10 @@ class LumaProbe:
 
     W, H = 16, 9
 
-    def __init__(self, ffmpeg, recording, cache_dir, fps=10):
+    def __init__(self, ffmpeg, recording, cache_dir, fps=10, stop=None):
         import json  # noqa: PLC0415
-        self.ffmpeg, self.recording, self.fps = ffmpeg, recording, float(fps)
+        self.ffmpeg, self.recording, self.fps, self.stop = ffmpeg, recording, float(fps), stop
+        self.dir = cache_dir
         st = os.stat(recording)
         self.key = {"size": st.st_size, "mtime": int(st.st_mtime), "fps": fps}
         self.cache = os.path.join(cache_dir, LUMA_CACHE)
@@ -424,20 +429,30 @@ class LumaProbe:
             pass
 
     def __call__(self, t):
-        import subprocess  # noqa: PLC0415
-        from clip_common import NO_WINDOW, child_kwargs  # noqa: PLC0415
+        from clip_common import STOPPED_RC, run_tool  # noqa: PLC0415
         q = str(int(round(max(0.0, t) * self.fps)))
         if q in self.values:
             return self.values[q]
         n = self.W * self.H * 3
-        r = subprocess.run([self.ffmpeg, "-v", "error", "-nostdin", "-ss", f"{int(q) / self.fps:.3f}", "-i",
-                            self.recording, "-an", "-sn", "-frames:v", "1", "-vf", f"scale={self.W}:{self.H}:flags=area",
-                            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-                           capture_output=True, timeout=120, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
-        fr = r.stdout[:n]
+        out = os.path.join(self.dir, PROBE_FILE)
+        # through run_tool with the job's stop= (D415 review): a stream starting during a probe ends the job
+        r = run_tool([self.ffmpeg, "-v", "error", "-nostdin", "-y", "-ss", f"{int(q) / self.fps:.3f}", "-i",
+                      self.recording, "-an", "-sn", "-frames:v", "1", "-vf", f"scale={self.W}:{self.H}:flags=area",
+                      "-f", "rawvideo", "-pix_fmt", "rgb24", out], timeout=120, stop=self.stop, poll_sec=0.5)
+        try:
+            with open(out, "rb") as f:
+                fr = f.read()[:n]
+        except OSError:
+            fr = b""
+        finally:
+            try:
+                os.remove(out)
+            except OSError:
+                pass
+        if r.returncode == STOPPED_RC:
+            raise OnAir("a stream or recording started during the brightness probe")
         if r.returncode != 0 or len(fr) < n:
-            raise ClipError("beatdrop: the brightness probe of the recording failed: "
-                            + r.stderr.decode("utf-8", "replace")[-200:])
+            raise ClipError("beatdrop: the brightness probe of the recording failed: " + (r.stderr or "")[-200:])
         self.probes += 1
         v = round(sum(0.2126 * _LIN[fr[j]] + 0.7152 * _LIN[fr[j + 1]] + 0.0722 * _LIN[fr[j + 2]]
                       for j in range(0, n, 3)) / (self.W * self.H), 4)
@@ -451,14 +466,13 @@ class LumaProbe:
             json.dump({"key": self.key, "values": self.values}, f)
 
 
-def measure_flash(path, sample, fps=60, node=None):
+def measure_flash(path, sample, fps=60, node=None, stop=None):
     """The rendered file's flash rate with the fx test analyser (tools/fx-test.mjs analyseVideo, flash-detect.mjs).
     -> the analyser's result ({"pass", "peakFlashesPerSecond", "limit", ...}). Raises ClipError when it cannot run:
     an unmeasured montage is never published."""
     import json  # noqa: PLC0415
     import shutil  # noqa: PLC0415
-    import subprocess  # noqa: PLC0415
-    from clip_common import NO_WINDOW, child_kwargs  # noqa: PLC0415
+    from clip_common import STOPPED_RC, run_tool  # noqa: PLC0415
     node = node or shutil.which("node")
     if not node:
         raise ClipError("the flash check needs node (tools/fx-test.mjs): not found")
@@ -466,8 +480,9 @@ def measure_flash(path, sample, fps=60, node=None):
     js = (f"import({json.dumps(url)}).then(async m => {{ const r = await m.analyseVideo({json.dumps(path)}, "
           f"{{ sample: {{ width: {int(sample['width'])}, height: {int(sample['height'])} }}, fps: {int(fps)} }}); "
           "console.log(JSON.stringify(r)); }).catch(e => { console.error(String(e)); process.exit(2); });")
-    r = subprocess.run([node, "--input-type=module", "-e", js], capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=1800, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
+    r = run_tool([node, "--input-type=module", "-e", js], timeout=1800, stop=stop)
+    if r.returncode == STOPPED_RC:
+        raise OnAir("a stream or recording started during the flash check")
     if r.returncode != 0:
         raise ClipError("the flash check failed: " + (r.stderr or "")[-200:])
     return json.loads(r.stdout.strip().splitlines()[-1])
@@ -560,19 +575,21 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
          seed_parts=(), live=on_air, audio_tracks=1, max_sec=None, lock_dir=None, cfg=None, measure=None, poll_sec=2.0):
     """One BeatDrop montage, off air only, one heavy job at a time: the song (NCS library pick or the made-here bed),
     its song map, the plan (wd/beatdrop-plan.json; cut edges probed for brightness), the bed, the style's LUT and the
-    one ffmpeg run (wd/beatdrop.mp4.part), then the flash check of the rendered file; only a file that passes becomes
-    wd/beatdrop.mp4.
+    one ffmpeg run (wd/beatdrop-<id>.mp4.part), then the flash check of the rendered file; only a file that passes
+    becomes wd/beatdrop-<id>.mp4.
 
     On air (live() not False: a stream or recording, or unknown) before or during the render: the ffmpeg run is killed
     (run_tool stop=), the part file removed, status "stopped: on air" (the job runs again later). Flash rate above the
     limit, or not measurable: status "failed" with the reason; the file is not kept.
-    measure(path) -> the fx test analyser's result (default measure_flash).
+    measure(path, stop) -> the fx test analyser's result (default measure_flash). Every child (song map, each
+    brightness probe, the render, the flash check) runs under the same stop and live() is asked between steps: any
+    stop ends the whole job "stopped: on air", nothing published.
+    The video gets a new name per render (beatdrop-<plan id>.mp4); the caller writes render.json pointing at it and
+    only then removes older videos (sweep_videos), so a crash never pairs a new video with an old music record.
     -> {"status" ("done" | "failed" | "stopped: on air"), "reason", "plan", "music" (the record for render.json),
         "returncode", "stderr", "file", "argv", "flash"}."""
-    import song_map as smod  # noqa: PLC0415
-    from clip_common import STOPPED_RC, HeavyJobLock, run_tool, write_json_atomic  # noqa: PLC0415
+    from clip_common import HeavyJobLock  # noqa: PLC0415
     cfg = cfg or load_config()
-    fl = cfg["flash"]
     res = {"status": STOPPED_ON_AIR, "reason": "a stream or recording is on (or that cannot be told)", "plan": None,
            "music": None, "returncode": None, "stderr": "", "file": None, "argv": None, "flash": None}
 
@@ -583,67 +600,118 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
         return res
     frame = frame or cfg["frame"]
     os.makedirs(wd, exist_ok=True)
-    part = os.path.join(wd, OUT + ".part")
-    with HeavyJobLock(lock_dir, job="beatdrop"):
-        song, record = pick_music(data_dir, settings_of(data_dir), seed_parts, live=live)
+    try:
+        with HeavyJobLock(lock_dir, job="beatdrop"):
+            return _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame,
+                                style, seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec)
+    except Exception as e:  # noqa: BLE001 - only the on-air stops are handled, the rest re-raised
+        from style_analyse import GuardStop  # noqa: PLC0415 - the song map's own live guard
+        if not isinstance(e, (OnAir, GuardStop)):
+            raise
+        for f in os.listdir(wd):
+            if f.endswith(".part") or f == PROBE_FILE:
+                _drop(os.path.join(wd, f))
+        res.update(status=STOPPED_ON_AIR, reason="a stream or recording started (or that cannot be told)", file=None)
+        return res
+
+
+def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame, style,
+                 seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec):
+    import hashlib  # noqa: PLC0415
+    import json  # noqa: PLC0415
+    import time  # noqa: PLC0415
+    import song_map as smod  # noqa: PLC0415
+    from clip_common import STOPPED_RC, run_tool, write_json_atomic  # noqa: PLC0415
+    fl = cfg["flash"]
+
+    def check():
+        if on():
+            raise OnAir("on air")
+    song, record = pick_music(data_dir, settings_of(data_dir), seed_parts, live=live)
+    res["music"] = record
+    if song is None:
+        path, record = made_here_song(wd, float(max_sec or cfg["maxSec"]) + 8.0, seed_parts)
+        song = {"path": path, "root": wd}
         res["music"] = record
-        if song is None:
-            path, record = made_here_song(wd, float(max_sec or cfg["maxSec"]) + 8.0, seed_parts)
-            song = {"path": path, "root": wd}
-            res["music"] = record
-        smap = smod.song_map(song["path"], song["root"], live=live)
-        probe = LumaProbe(ffmpeg, recording, wd, int(fl["lumaFps"]))
-        pl = plan(moments_doc, smap, cfg, style=style, max_sec=max_sec, luma=probe)
-        probe.save()
-        res["plan"] = pl
-        write_json_atomic(os.path.join(wd, PLAN), pl)
-        wav = music_bed(wd, pl, song["path"], song["root"], cfg)
-        lut = None
-        if style and style.get("colour"):
-            import reel_style as rstyle  # noqa: PLC0415
-            ref = rstyle.clip_colour(recording, render_pieces(pl))
-            rstyle.write_lut(os.path.join(wd, rstyle.LUT_FILE), style["colour"], style["colour"]["strength"], ref)
-            lut = rstyle.LUT_FILE
-        r = None
-        if not on():
-            argv = render_argv(pl, ffmpeg, recording, frame, encoder_args, audio_args, wav, OUT + ".part",
-                               lut=lut, audio_tracks=audio_tracks)
-            argv = graph_from_file(argv, wd)
-            res["argv"] = argv
-            r = run_tool(argv, cwd=wd, watch=OUT + ".part", stall_sec=300, stop=on, poll_sec=poll_sec)
-            res["returncode"], res["stderr"] = r.returncode, (r.stderr or "")[-400:]
-        for f in (wav, lut, GRAPH):
-            if f:
-                try:
-                    os.remove(os.path.join(wd, f))
-                except OSError:
-                    pass
-        if r is None or r.returncode == STOPPED_RC:
-            _drop(part)
-            return res  # stopped: on air
-        if r.returncode != 0 or not os.path.isfile(part):
-            _drop(part)
-            res.update(status="failed", reason=f"ffmpeg exited {r.returncode}")
-            return res
-        try:
-            m = (measure or (lambda f: measure_flash(f, fl["sample"], pl["fps"])))(part)
-        except ClipError as e:
-            m = None
-            reason = f"flash not measured ({e}): not published"
-        else:
-            res["flash"] = {"peakFlashesPerSecond": m.get("peakFlashesPerSecond"), "limit": m.get("limit"),
-                            "pass": bool(m.get("pass"))}
-            reason = None
-            if not m.get("pass") or float(m.get("peakFlashesPerSecond") or 0) > float(fl["maxPerSec"]):
-                reason = (f"flash limit: the rendered montage measures {m.get('peakFlashesPerSecond')} flashes/s "
-                          f"(limit {float(fl['maxPerSec']):g}): not published")
-        if reason:
-            _drop(part)
-            res.update(status="failed", reason=reason)
-            return res
-        os.replace(part, os.path.join(wd, OUT))
-        res.update(status="done", reason=None, file=OUT)
+    check()
+    smap = smod.song_map(song["path"], song["root"], live=live)
+    check()
+    probe = LumaProbe(ffmpeg, recording, wd, int(fl["lumaFps"]), stop=on)
+    pl = plan(moments_doc, smap, cfg, style=style, max_sec=max_sec, luma=probe)
+    probe.save()
+    check()
+    res["plan"] = pl
+    # a new name per render (plan, music record and the time): render.json points at it once it is written
+    pid = hashlib.sha1(json.dumps([pl, res["music"], time.time_ns()], sort_keys=True, default=str)
+                       .encode("utf-8")).hexdigest()[:10]
+    name = f"beatdrop-{pid}.mp4"
+    part = os.path.join(wd, name + ".part")
+    write_json_atomic(os.path.join(wd, PLAN), pl)
+    wav = music_bed(wd, pl, song["path"], song["root"], cfg)
+    lut = None
+    if style and style.get("colour"):
+        import reel_style as rstyle  # noqa: PLC0415
+        ref = rstyle.clip_colour(recording, render_pieces(pl))
+        rstyle.write_lut(os.path.join(wd, rstyle.LUT_FILE), style["colour"], style["colour"]["strength"], ref)
+        lut = rstyle.LUT_FILE
+    r = None
+    if not on():
+        argv = render_argv(pl, ffmpeg, recording, frame, encoder_args, audio_args, wav, name + ".part",
+                           lut=lut, audio_tracks=audio_tracks)
+        argv = graph_from_file(argv, wd)
+        res["argv"] = argv
+        r = run_tool(argv, cwd=wd, watch=name + ".part", stall_sec=300, stop=on, poll_sec=poll_sec)
+        res["returncode"], res["stderr"] = r.returncode, (r.stderr or "")[-400:]
+    for f in (wav, lut, GRAPH):
+        if f:
+            try:
+                os.remove(os.path.join(wd, f))
+            except OSError:
+                pass
+    if r is None or r.returncode == STOPPED_RC:
+        raise OnAir("on air during the render")
+    if r.returncode != 0 or not os.path.isfile(part):
+        _drop(part)
+        res.update(status="failed", reason=f"ffmpeg exited {r.returncode}")
+        return res
+    try:
+        check()
+        m = (measure or (lambda f, stop: measure_flash(f, fl["sample"], pl["fps"], stop=stop)))(part, on)
+        check()
+    except OnAir:
+        raise
+    except ClipError as e:
+        m = None
+        reason = f"flash not measured ({e}): not published"
+    else:
+        res["flash"] = {"peakFlashesPerSecond": m.get("peakFlashesPerSecond"), "limit": m.get("limit"),
+                        "pass": bool(m.get("pass"))}
+        reason = None
+        if not m.get("pass") or float(m.get("peakFlashesPerSecond") or 0) > float(fl["maxPerSec"]):
+            reason = (f"flash limit: the rendered montage measures {m.get('peakFlashesPerSecond')} flashes/s "
+                      f"(limit {float(fl['maxPerSec']):g}): not published")
+    if reason:
+        _drop(part)
+        res.update(status="failed", reason=reason)
+        return res
+    os.replace(part, os.path.join(wd, name))
+    res.update(status="done", reason=None, file=name)
     return res
+
+
+def sweep_videos(wd, keep):
+    """Removes BeatDrop videos and part files in wd that render.json does not point at (`keep`: the names it does).
+    Called after render.json is written (the previous video) and before a run (orphans from a crash)."""
+    try:
+        names = os.listdir(wd)
+    except OSError:
+        return []
+    gone = []
+    for f in names:
+        if f.startswith("beatdrop") and (f.endswith(".mp4") or f.endswith(".part")) and f not in keep:
+            _drop(os.path.join(wd, f))
+            gone.append(f)
+    return gone
 
 
 def _drop(path):
