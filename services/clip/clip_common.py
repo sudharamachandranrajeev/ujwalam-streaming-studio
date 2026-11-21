@@ -548,14 +548,18 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
 
 
 def host_running(name="ujwalam-host.exe"):
-    """True when a ujwalam-host process runs (a live stream or soak may own the GPU). Windows only."""
+    """True when a ujwalam-host process runs (a live stream or soak may own the GPU). Windows only. Unknown (tasklist
+    could not run, exited nonzero, NO_JOB_RC, or wrote nothing but an error) counts as running: stay on the CPU. A
+    clean run that does not list the host is False."""
     if os.name != "nt":
         return False
     try:
         r = run_tool(["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH", "/FO", "CSV"], timeout=20)
     except (OSError, subprocess.SubprocessError):
         return True  # unknown: assume busy, stay on the CPU
-    return name.lower() in r.stdout.lower()
+    if r.returncode != 0 or (not (r.stdout or "").strip() and (r.stderr or "").strip()):
+        return True
+    return name.lower() in (r.stdout or "").lower()
 
 
 _SINK_LINE = re.compile(rb"\[host\] sink (\S+) (live|stopped|failed|dropped)\b")
@@ -725,9 +729,17 @@ def on_air(logs_dir=None, hosts=None):
     return result
 
 
+class NotStarted(ClipError):
+    """A child could not be started safely (run_tool NO_JOB_RC): the job ends "not started" (EXIT_NOT_STARTED),
+    nothing is written or swept; it runs again later."""
+
+
 def probe(ffprobe, path):
-    """ffprobe JSON (format + streams). Raises ClipError on failure."""
+    """ffprobe JSON (format + streams). Raises ClipError on failure; NotStarted when ffprobe could not be started
+    safely (NO_JOB_RC)."""
     r = run_tool([ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path], timeout=120)
+    if r.returncode == NO_JOB_RC:
+        raise NotStarted(f"ffprobe not started on {os.path.basename(path)}: {r.stderr.strip()[:200]}")
     if r.returncode != 0:
         raise ClipError(f"ffprobe failed on {os.path.basename(path)}: {r.stderr.strip()[:200]}")
     return json.loads(r.stdout)

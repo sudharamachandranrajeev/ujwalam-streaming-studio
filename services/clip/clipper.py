@@ -1953,7 +1953,11 @@ def cmd_beatdrop(a):
     if not os.path.isfile(mpath):
         raise ClipError("no moments: run the moment finder (moments.py) on this recording first (or give --moments)")
     mdoc = load_json(mpath)
-    info = media_info(ffprobe, a.recording)
+    try:
+        info = media_info(ffprobe, a.recording)
+    except bd.NotStarted as e:  # nothing written or swept: the previous record and video stay; runs again later
+        eprint(f"beatdrop B1: {bd.NOT_STARTED} ({e})")
+        return EXIT_NOT_STARTED
     style = None
     if rstyle.on(data_dir):
         st = rstyle.pick(data_dir, "montage", (os.path.basename(a.recording), "beatdrop"))

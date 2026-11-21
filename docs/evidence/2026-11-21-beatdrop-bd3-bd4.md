@@ -173,3 +173,17 @@ Codex found VIDEO_NAME fixed. The other items:
 Runs (CPU, headless, BelowNormal, temp data root, live-check exit 0 first): StopGuardTests + PlannerTests +
 test_render_watch 37 run, OK (1 POSIX skip); test_clip_montage 35 OK. Rendered class not run (the coordinator runs it):
 UNVERIFIED.
+
+## Codex verify of 53db411 (2026-11-21), round 6
+
+Codex found the containment and the bounded wait fixed. The other items:
+
+| Item | Fix | Test (tests/py/test_beatdrop.py) |
+|---|---|---|
+| 1 (P1) shape checks could be gamed | positive evidence replaces them: `sweep_videos(wd, render_json, keep)` removes a beatdrop-<10-12 hex> file only when render.json (readable, valid JSON) names a different beatdrop video that exists in wd (`current_videos`), or when render.json is absent and the file is a .part. Anything else (unreadable, not JSON, no existing beatdrop video named, a name with a path) removes nothing; `keep` (this run's own names) is never removed | `test_sweep_matches_only_its_own_names`: `{"tool":"clipper.beatdrop","musicRecords":null,"clips":[]}` and eight other odd documents delete nothing; render.json absent removes only the part file |
+| 2 (P1) the orphan sweep ran before any child was started; media_info treated NO_JOB_RC as a generic error | the orphan sweep runs from `_make_locked` once the render child has started (`started(own)`), never on a job that could not start one; `clip_common.probe` (media_info) raises `NotStarted` (moved to clip_common) on NO_JOB_RC, and cmd_beatdrop returns EXIT_NOT_STARTED (5) with nothing written or swept | `test_orphan_sweep_waits_for_the_first_started_child`, `test_probe_not_started_is_not_a_generic_error`, `test_a_child_that_cannot_start_safely_is_not_a_failed_render` (now: no sweep at all) |
+| 3 (P2) host_running ignored tasklist's result | nonzero exit, NO_JOB_RC, or empty output with an error = unknown = running (stay on the CPU); a clean no-match stays False | `test_host_running_unknown_counts_as_running` |
+
+Runs (CPU, headless, BelowNormal, temp data root, live-check exit 0 first): StopGuardTests + PlannerTests +
+test_render_watch 40 run, OK (1 POSIX skip); test_clip_montage 35 OK; lint 0 findings. Rendered class not run (the
+coordinator runs it): UNVERIFIED.

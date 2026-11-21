@@ -475,7 +475,7 @@ class StopGuardTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_sweep_matches_only_its_own_names(self):
-        # review round 3, item 3: only beatdrop-<12 hex>.mp4 / .mp4.part not referenced by render.json go
+        # review rounds 3-6: only beatdrop-<10-12 hex>.mp4 / .mp4.part, and only when provably superseded
         import beatdrop  # noqa: PLC0415
         tmp = tempfile.mkdtemp(prefix="ujw-bdsweep-")
         try:
@@ -487,43 +487,113 @@ class StopGuardTests(unittest.TestCase):
             render = os.path.join(tmp, "render.json")
             with open(render, "w", encoding="utf-8") as f:
                 json.dump(_render_doc(["beatdrop-aaaaaaaaaaaa.mp4"]), f)
-            gone = beatdrop.sweep_videos(tmp, beatdrop.referenced(render))
+            gone = beatdrop.sweep_videos(tmp, render)
             self.assertEqual(sorted(gone), ["beatdrop-bbbbbbbbbbbb.mp4.part", "beatdrop-cccccccccccc.mp4",
                                             "beatdrop-eeeeeeeeee.mp4"])
             self.assertEqual(sorted(os.listdir(tmp)), sorted(["beatdrop-notes.mp4", "other.mp4.part",
                                                                "beatdrop-aaaaaaaaaaaa.mp4", "beatdrop-plan.json",
                                                                "beatdrop-fffffffff.mp4", "render.json"]))
-            # review round 4, item 2: an unreadable render.json sweeps nothing (fail closed)
-            open(os.path.join(tmp, "beatdrop-dddddddddddd.mp4"), "wb").close()
-            with open(render, "w", encoding="utf-8") as f:
-                f.write("{ not json")
-            self.assertIsNone(beatdrop.referenced(render))
-            self.assertEqual(beatdrop.sweep_videos(tmp, beatdrop.referenced(render)), [])
-            self.assertTrue(os.path.exists(os.path.join(tmp, "beatdrop-dddddddddddd.mp4")))
-            with open(render, "w", encoding="utf-8") as f:
-                json.dump({"no": "clips"}, f)
-            self.assertIsNone(beatdrop.referenced(render), "not a render document: also fail closed")
-            self.assertEqual(beatdrop.referenced(os.path.join(tmp, "missing.json")), set())
-            # review round 5, item 2: only "absent" is an empty set; any other read error or a document that is not
-            # this code's full render.json fails closed
-            self.assertIsNone(beatdrop.referenced(tmp), "a folder, not a file: OSError other than absent")
-            for bad in ({"clips": {}}, {"tool": "clipper.beatdrop", "musicRecords": 1, "clips": {}},
-                        {"tool": "clipper.beatdrop", "clips": []},
-                        {"tool": "other", "musicRecords": 1, "clips": []},
-                        dict(_render_doc([]), beatdrop="x"),
-                        {"tool": "clipper.beatdrop", "musicRecords": 1, "clips": [{"files": [{"file": 3}]}]},
-                        {"tool": "clipper.beatdrop", "musicRecords": 1, "clips": [{"id": "B1"}]}, []):
+            # review round 6, item 1: no positive evidence of a different current video = nothing removed
+            old = ["beatdrop-dddddddddddd.mp4", "beatdrop-111111111111.mp4.part"]
+            for n in old:
+                open(os.path.join(tmp, n), "wb").close()
+            for bad in ("{ not json", {"tool": "clipper.beatdrop", "musicRecords": None, "clips": []}, {"clips": {}},
+                        {"no": "clips"}, [], _render_doc([]), _render_doc(["beatdrop-999999999999.mp4"]),
+                        _render_doc(["beatdrop-notes.mp4"]), _render_doc(["../beatdrop-aaaaaaaaaaaa.mp4"])):
                 with open(render, "w", encoding="utf-8") as f:
-                    json.dump(bad, f)
-                self.assertIsNone(beatdrop.referenced(render), bad)
-                self.assertEqual(beatdrop.sweep_videos(tmp, beatdrop.referenced(render)), [])
-            self.assertTrue(os.path.exists(os.path.join(tmp, "beatdrop-dddddddddddd.mp4")))
+                    f.write(bad) if isinstance(bad, str) else json.dump(bad, f)
+                self.assertIsNone(beatdrop.current_videos(render, tmp), bad)
+                self.assertEqual(beatdrop.sweep_videos(tmp, render), [], bad)
+            self.assertEqual(beatdrop.sweep_videos(tmp, tmp), [], "a folder, not a file: OSError other than absent")
+            self.assertTrue(all(os.path.exists(os.path.join(tmp, n)) for n in old + ["beatdrop-aaaaaaaaaaaa.mp4"]))
+            # this run's own names are kept even when superseded
             with open(render, "w", encoding="utf-8") as f:
-                json.dump(_render_doc([]), f)  # a valid full render.json with no video: the old one is swept
-            self.assertEqual(sorted(beatdrop.sweep_videos(tmp, beatdrop.referenced(render))),
-                             ["beatdrop-aaaaaaaaaaaa.mp4", "beatdrop-dddddddddddd.mp4"])
+                json.dump(_render_doc(["beatdrop-aaaaaaaaaaaa.mp4"]), f)
+            self.assertEqual(beatdrop.sweep_videos(tmp, render, keep={"beatdrop-111111111111.mp4.part"}),
+                             ["beatdrop-dddddddddddd.mp4"])
+            # render.json absent: only part files are orphans
+            os.remove(render)
+            self.assertEqual(beatdrop.current_videos(render, tmp), set())
+            self.assertEqual(beatdrop.sweep_videos(tmp, render), ["beatdrop-111111111111.mp4.part"])
+            self.assertTrue(os.path.exists(os.path.join(tmp, "beatdrop-aaaaaaaaaaaa.mp4")))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_orphan_sweep_waits_for_the_first_started_child(self):
+        # review round 6, item 2: a job that cannot start its render sweeps nothing; once it started, it does
+        import beatdrop  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdfirst-")
+
+        class Lock:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+        saved = (cc.HeavyJobLock, beatdrop._make_locked)
+        try:
+            cur, orphan = "beatdrop-aaaaaaaaaaaa.mp4", "beatdrop-bbbbbbbbbbbb.mp4.part"
+            for n in (cur, orphan):
+                open(os.path.join(tmp, n), "wb").close()
+            render = os.path.join(tmp, "render.json")
+            with open(render, "w", encoding="utf-8") as f:
+                json.dump(_render_doc([cur]), f)
+
+            def not_started(res, *a, started=None, **k):
+                beatdrop._not_started(subprocess.CompletedProcess([], cc.NO_JOB_RC, "", "not run"))
+            cc.HeavyJobLock, beatdrop._make_locked = Lock, not_started
+            res = beatdrop.make("rec.mkv", {}, tmp, tmp, "ffmpeg", [], [], live=lambda: False, render_json=render,
+                                write_render=lambda r: None)
+            self.assertEqual(res["status"], beatdrop.NOT_STARTED)
+            self.assertTrue(os.path.exists(os.path.join(tmp, orphan)), "no sweep before a child started")
+            own = "beatdrop-cccccccccccc.mp4"
+
+            def runs(res, *a, started=None, **k):
+                open(os.path.join(tmp, own + ".part"), "wb").close()
+                started({own, own + ".part"})
+                self.assertTrue(os.path.exists(os.path.join(tmp, own + ".part")), "own part kept")
+                raise beatdrop.OnAir("on air")
+            beatdrop._make_locked = runs
+            beatdrop.make("rec.mkv", {}, tmp, tmp, "ffmpeg", [], [], live=lambda: False, render_json=render,
+                          write_render=lambda r: None)
+            self.assertFalse(os.path.exists(os.path.join(tmp, orphan)), "swept once the render started")
+            self.assertTrue(os.path.exists(os.path.join(tmp, cur)))
+        finally:
+            cc.HeavyJobLock, beatdrop._make_locked = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_probe_not_started_is_not_a_generic_error(self):
+        # review round 6, item 2: media_info/probe map NO_JOB_RC to NotStarted (clipper: exit 5, nothing written)
+        import beatdrop  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        saved = cc.run_tool
+        try:
+            cc.run_tool = lambda *a, **k: subprocess.CompletedProcess([], cc.NO_JOB_RC, "", "not run")
+            with self.assertRaises(beatdrop.NotStarted):
+                cc.media_info("ffprobe", "rec.mkv")
+        finally:
+            cc.run_tool = saved
+
+    @unittest.skipUnless(os.name == "nt", "tasklist: Windows")
+    def test_host_running_unknown_counts_as_running(self):
+        # review round 6, item 3
+        import clip_common as cc  # noqa: PLC0415
+        saved = cc.run_tool
+        try:
+            for r in ((cc.NO_JOB_RC, "", "not run"), (1, "", "ERROR"), (0, "", "ERROR: access denied")):
+                cc.run_tool = lambda *a, r=r, **k: subprocess.CompletedProcess([], *r)
+                self.assertTrue(cc.host_running(), r)
+            cc.run_tool = lambda *a, **k: subprocess.CompletedProcess(
+                [], 0, "INFO: No tasks are running which match the specified criteria.\r\n", "")
+            self.assertFalse(cc.host_running(), "a clean no-match")
+            cc.run_tool = lambda *a, **k: subprocess.CompletedProcess([], 0, '"ujwalam-host.exe","1234"\r\n', "")
+            self.assertTrue(cc.host_running())
+        finally:
+            cc.run_tool = saved
 
     def test_sweeps_and_on_air_cleanup_run_inside_the_lock_and_touch_only_own_files(self):
         # review round 3, items 2 and 3: make() sweeps while holding the heavy-job lock; on air it removes only
@@ -546,15 +616,16 @@ class StopGuardTests(unittest.TestCase):
         own = os.path.join(tmp, "beatdrop-dddddddddddd.mp4.part")
         others = [os.path.join(tmp, n) for n in ("someone-else.mp4.part", "beatdrop-notes.mp4")]
 
-        def fake_locked(res, *a, **k):
+        def fake_locked(res, *a, started=None, **k):
             res["part"] = own
             open(own, "wb").close()
+            started({os.path.basename(own), os.path.basename(own)[:-5]})  # the render started: orphan sweep
             raise beatdrop.OnAir("on air during the render")
         real_sweep = beatdrop.sweep_videos
 
-        def sweep(wd, keep):
+        def sweep(wd, render_json, keep=()):
             held["sweeps"].append(held["now"])
-            return real_sweep(wd, keep)
+            return real_sweep(wd, render_json, keep)
         saved = (cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos)
         try:
             for f in others:
@@ -592,9 +663,9 @@ class StopGuardTests(unittest.TestCase):
             beatdrop._not_started(subprocess.CompletedProcess([], cc.NO_JOB_RC, "", "no process job: not run"))
         real_sweep = beatdrop.sweep_videos
 
-        def sweep(wd, keep):
+        def sweep(wd, render_json, keep=()):
             calls["sweeps"] += 1
-            return real_sweep(wd, keep)
+            return real_sweep(wd, render_json, keep)
         saved = (cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos)
         try:
             old = os.path.join(tmp, "beatdrop-aaaaaaaaaaaa.mp4")
@@ -610,7 +681,7 @@ class StopGuardTests(unittest.TestCase):
             res = beatdrop.make("rec.mkv", {}, tmp, tmp, "ffmpeg", [], [], live=lambda: False,
                                 render_json=render, write_render=write)
             self.assertEqual(res["status"], beatdrop.NOT_STARTED)
-            self.assertEqual(calls, {"write": 0, "sweeps": 1}, "only the orphan sweep before the run")
+            self.assertEqual(calls, {"write": 0, "sweeps": 0}, "review round 6: no sweep at all when no child started")
             self.assertTrue(os.path.exists(old))
             self.assertEqual(open(render, encoding="utf-8").read(), before)
         finally:
