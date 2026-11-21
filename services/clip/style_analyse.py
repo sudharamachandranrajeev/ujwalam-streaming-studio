@@ -92,6 +92,10 @@ def sha256_file(path, chunk=1 << 20, max_bytes=None, guard=None):
     return h.hexdigest()
 
 
+class GuardStop(ClipError):
+    """The guard stopped the job (on air, or a cap): never caught as a part that could not be measured."""
+
+
 class Guard:
     """Codex RS review: the long job is watched while it runs, not only before. Every checkEveryFrames frames it asks
     the same on-air rule the clip jobs use (clip_common.on_air: a stream or recording, or unknown, counts as on air)
@@ -105,6 +109,11 @@ class Guard:
         self.max_frames = max_frames
         self.n, self.t0 = 0, clock()
 
+    def limit(self, max_frames):
+        """A new frame count and cap for the next pass (the sound); the clock keeps running."""
+        self.n, self.max_frames = 0, max_frames
+        return self
+
     def start(self, max_frames=None):
         self.n, self.t0, self.max_frames = 0, self.clock(), max_frames
         return self
@@ -112,16 +121,16 @@ class Guard:
     def tick(self, force=False):
         self.n += 0 if force else 1
         if self.max_frames is not None and self.n > self.max_frames:
-            raise ClipError("stopped: more frames than the length limit allows")
+            raise GuardStop("stopped: more frames than the length limit allows")
         if self.clock() - self.t0 > self.wall:  # every decoded frame: a counter and a clock read only
-            raise ClipError(f"stopped: took longer than {self.wall:.0f} s")
+            raise GuardStop(f"stopped: took longer than {self.wall:.0f} s")
         if not force and self.n % self.every:
             return
         if self.live is not None and self.live() is not False:
-            raise ClipError("stopped: a stream or recording started (styles are analysed off air only)")
+            raise GuardStop("stopped: a stream or recording started (styles are analysed off air only)")
         m = self.memory()
         if m is not None and m > self.mem:
-            raise ClipError(f"stopped: used more than {self.mem:.0f} MB of memory")
+            raise GuardStop(f"stopped: used more than {self.mem:.0f} MB of memory")
 
 
 _DEMUX = {".mp4": "mov", ".mov": "mov", ".m4v": "mov", ".mkv": "matroska", ".webm": "matroska"}
@@ -586,12 +595,12 @@ def text_stats(fp, events, cfg):
 
 # ---------------------------------------------------------------- beats
 
-def beat_phase(path, bpm, ml, mcfg):
+def beat_phase(path, bpm, ml, mcfg, guard=None):
     """Where the beats fall (s, 0..period) for a known tempo: the onset-strength-weighted circular mean of the onset
     times folded on the exact (fractional) beat period. music_library's own offset folds on a whole number of envelope
     frames, which drifts over a long example; the tempo itself is taken from music_library."""
     np = _np()
-    mono = ml.decode(path, ml.SR, 1, max_sec=float(mcfg["maxAnalyseSec"]), open_kw=open_kw(path))[:, 0]
+    mono = ml.decode(path, ml.SR, 1, max_sec=float(mcfg["maxAnalyseSec"]), open_kw=open_kw(path), guard=guard)[:, 0]
     env, rate, _c = ml._onsets(mono, ml.SR)  # noqa: SLF001 - same package; hop 1024, window 2048
     period = 60.0 / float(bpm)
     t = (np.arange(len(env)) * 1024 + 1024) / float(ml.SR)  # an onset peaks when it reaches the window centre
@@ -633,9 +642,12 @@ def analyse_video(path, cfg=None, progress=None, ocr=True, guard=None):
         mcfg = ml.load_config()
         if dur < float(cfg["analyse"]["minAudioSec"]):
             raise ClipError("too short for a tempo")
-        m = ml.analyse(path, mcfg, open_kw=open_kw(path))
-        music = {"bpm": m["bpm"], "beatOffset": beat_phase(path, m["bpm"], ml, mcfg), "energyLevel": m["energyLevel"], "mood": m["mood"],
+        audio_cap = int((min(sec, float(cfg["maxExampleSec"])) + 1.0) * float(cfg["guard"]["maxAudioFramesPerSec"]))
+        m = ml.analyse(path, mcfg, open_kw=open_kw(path), guard=guard.limit(audio_cap) if guard else None)
+        music = {"bpm": m["bpm"], "beatOffset": beat_phase(path, m["bpm"], ml, mcfg, guard.limit(audio_cap) if guard else None), "energyLevel": m["energyLevel"], "mood": m["mood"],
                  "loudnessLufs": m["loudnessLufs"]}
+    except GuardStop:
+        raise
     except (ClipError, OSError, ValueError, ImportError) as e:
         omitted.append({"part": "music", "reason": f"no usable sound ({str(e)[-100:]})"})
     if music and cut_t:

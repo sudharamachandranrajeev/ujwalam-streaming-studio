@@ -57,6 +57,16 @@ Run one file at a time, `UJWALAM_HEADLESS=1`, temp data folder, BelowNormal, CPU
 | `tests/py/test_clip_reel_style.py` | 6/6 OK | New: crop, fill and canvas variants carry `lut3d=file=style.cube` once; no style = command line as before; the plain-word note per non-canvas layout. |
 | `tests/py/test_clip_live_review_gate.py`, `test_reel_hook.py`, `test_music_library.py` plus `test_clip_contain.py`, `test_clip_pipeline.py` | 6, 21, 15, 7, 37: all OK | |
 
+Last two (2026-11-21):
+
+| Test file | Result | What it shows |
+|---|---|---|
+| `tests/py/test_style_analyse.py` (run alone) | 18/18 OK | New: an 8 s mkv with 16-sample PCM sound frames: `music_library.decode` stops at a 2000-frame cap (frame 2001); the whole analysis passes the video pass and stops in the sound pass at its cap (3601 = 9 s x 400 + 1) with `GuardStop`, not "no usable sound"; an on-air flip after the video pass's 24 checks stops the sound pass at its second check (frame 20); a stalled clock stops a sound decode on wall time. 60 s bound: 65.2 s, 217 MB. |
+| `tests/py/test_music_library.py` | 15/15 OK | Callers without a guard unchanged. |
+| `tests/record-clips.test.mjs` | 34/34 pass | New: `clipStyles` reads style names and the per-layout notes from `render.json`; none or missing = null. |
+| `tests/studio-qml-clips.test.mjs` | 7/7 pass | New: the Clips chip's tip shows "Reel style: Warm" and "Style not applied: v-crop (...)"; the chip text stays "2 new clip(s)"; without styles nothing is added. |
+| `tests/studio-ui-server.test.mjs` | 40/40 pass | |
+
 A dref-bearing mov was not crafted; `enable_drefs=0` is passed and asserted (UNVERIFIED against a real dref file).
 
 ## Limits (left out or unverified)

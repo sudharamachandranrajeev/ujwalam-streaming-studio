@@ -97,6 +97,14 @@ describe('QML studio: clips chip, question and My clips (headless probe)', { ski
     }
   });
 
+  test('the last clips\' reel style and what it could not change show in the tip, in plain words (RS4, Codex RS verify)', async () => {
+    const note = 'style not applied: v-crop (crop layout gets the colour only; pace, joins, zoom pulses and slow motion need the canvas layout)';
+    const { c } = await probe({ status: { state: 'idle', available: true, asks: [], queued: [], last: { name: 'x', kind: 'live', result: 'done', clips: 2, styles: { names: ['Warm'], notApplied: [note] } } } });
+    assert.equal(c.text, '2 new clip(s)', 'the bar text is unchanged (no layout jump)');
+    assert.match(c.tip, /\nReel style: Warm\nStyle not applied: v-crop \(crop layout gets the colour only; pace, joins, zoom pulses and slow motion need the canvas layout\)$/);
+    const none = await probe({ status: { state: 'idle', available: true, asks: [], queued: [], last: { name: 'x', kind: 'live', result: 'done', clips: 2 } } });
+    assert.doesNotMatch(none.c.tip, /Reel style|not applied/);
+  });
   test('"Make clips?": the question for a recording, Make clips with "every time" saves the answer; a stream asks with its own words', async () => {
     const ask = { id: 'practice-h-1-1', name: 'practice-h-1', kind: 'recording', minutes: 8 };
     const live = { id: 'live-2', name: 'live-2', kind: 'live', minutes: null };

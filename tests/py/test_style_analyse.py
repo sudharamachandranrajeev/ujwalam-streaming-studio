@@ -307,6 +307,39 @@ class GuardTests(unittest.TestCase):
             self.sa.analyse_video(p, cfg, ocr=False, guard=g)
         self.assertEqual(g.n, 20)
 
+    def test_sound_pass_is_guarded(self):
+        """Codex RS verify: the sound passes (music_library.decode / analyse) tick the same guard per decoded sound
+        frame: a sound track with very many tiny frames stops at the cap, and an on-air flip during the sound pass
+        stops the job (never swallowed as "no usable sound")."""
+        import music_library as ml  # noqa: PLC0415
+        p = os.path.join(self.tmp, "tiny-frames.mkv")
+        r = cc.run_tool(["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=30:duration=8",
+                         "-f", "lavfi", "-i", "sine=f=440:r=48000:d=8:samples_per_frame=16",
+                         "-c:v", "mpeg4", "-q:v", "10", "-c:a", "pcm_s16le", "-frame_size", "16", p], timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        cfg = self.cfg(minExampleSec=0.5, guard={"checkEveryFrames": 10, "maxWallSecPerExample": 600, "maxMemMb": 100000,
+                                                 "maxDecodeFps": 240, "maxAudioFramesPerSec": 400})
+        g = self.sa.Guard(cfg, lambda: False).start()
+        with self.assertRaisesRegex(self.sa.ClipError, "more frames"):
+            ml.decode(p, ml.SR, 1, open_kw=self.sa.open_kw(p), guard=g.limit(2000))
+        self.assertEqual(g.n, 2001)
+        g = self.sa.Guard(cfg, lambda: False)  # whole analysis: the video pass is fine, the sound pass hits its cap
+        with self.assertRaisesRegex(self.sa.GuardStop, "more frames"):
+            self.sa.analyse_video(p, cfg, ocr=False, guard=g)
+        self.assertEqual(g.n, int(9.0 * 400) + 1)
+        calls = []
+        def live():  # off air through the video pass (240 frames, 24 checks), on air in the sound pass
+            calls.append(1)
+            return len(calls) > 25
+        cfg2 = self.cfg(minExampleSec=0.5, guard=dict(cfg["guard"], maxAudioFramesPerSec=100000))
+        g = self.sa.Guard(cfg2, live)
+        with self.assertRaisesRegex(self.sa.GuardStop, "stream or recording"):
+            self.sa.analyse_video(p, cfg2, ocr=False, guard=g)
+        self.assertEqual(g.n, 20)  # second check of the sound pass
+        g = self.sa.Guard(cfg2, lambda: False, clock=iter([0.0] + [0.0] * 200 + [1e9] * 100000).__next__)
+        with self.assertRaisesRegex(self.sa.GuardStop, "longer than"):  # a slow sound decode: wall time per tick
+            ml.decode(p, ml.SR, 1, open_kw=self.sa.open_kw(p), guard=g.start())
+
     def test_only_plain_video_containers_open(self):
         """Codex RS verify: the demuxer comes from the extension, file protocol only, mov drefs off; a playlist, a
         concat list or another container under a video name is refused and opens no other file."""

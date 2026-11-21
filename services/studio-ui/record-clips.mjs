@@ -156,6 +156,20 @@ export function reelsNotMade(job, out, { readJson = (f) => JSON.parse(readFileSy
   return 'the reel step did not finish; see the log';
 }
 
+/** RS4 (Codex RS verify): the reel styles a finished job's clips used and, per layout, what was not applied, from
+ *  <out>/render.json clips[] (style, styleNotApplied). -> { names: [..], notApplied: [plain words] } or null. */
+export function clipStyles(out, { readJson = (f) => JSON.parse(readFileSync(f, 'utf8')) } = {}) {
+  let rows;
+  try { rows = readJson(path.join(out, 'render.json'))?.clips; } catch { return null; }
+  if (!Array.isArray(rows)) return null;
+  const names = new Set(); const notApplied = new Set();
+  for (const r of rows) {
+    if (typeof r?.style?.name === 'string' && r.style.name) names.add(r.style.name.slice(0, 40));
+    for (const n of Array.isArray(r?.styleNotApplied) ? r.styleNotApplied : []) if (typeof n?.note === 'string') notApplied.add(n.note.slice(0, 160));
+  }
+  return names.size || notApplied.size ? { names: [...names].slice(0, 5), notApplied: [...notApplied].slice(0, 5) } : null;
+}
+
 /** D406: why the long highlights video of a finished job was not made, or null when it was made, or the clipper
  *  decided there is none to make (too short, no moments, switched off), or the job has no H recording (nothing to
  *  make it from and nothing to delete). The clipper writes <out>/long/long.json; none = it stopped before that step. */
@@ -470,7 +484,8 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       }
       const n = code === 0 ? countClips(spec.out) : 0;
       const reels = code === 0 ? reelsNotMade(done, spec.out) : null;
-      last = { name: done.name, kind: done.kind, result: code === 0 ? 'done' : 'failed', code, clips: n, out: spec.out, folder: spec.folder, ...(reels ? { reelsNotMade: reels } : {}) };
+      const styles = code === 0 ? clipStyles(spec.out) : null;
+      last = { name: done.name, kind: done.kind, result: code === 0 ? 'done' : 'failed', code, clips: n, out: spec.out, folder: spec.folder, ...(reels ? { reelsNotMade: reels } : {}), ...(styles ? { styles } : {}) };
       if (reels) log(`clips: reels not made from ${done.name}: ${reels}`);
       // D403: what this job did with which files (the recording cleanup reads it).
       appendJobRecord(dataDir, { h: done.h ?? null, hId: done.hId ?? null, v: done.v ?? null, ...(done.v ? { vId: done.vId ?? null } : {}), type: done.type, kind: done.kind ?? null, name: done.name, result: code === 0 ? 'done' : 'failed', code, reelsNotMade: reels ?? null, at: iso(now()) });

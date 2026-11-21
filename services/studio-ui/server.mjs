@@ -819,7 +819,9 @@ export function createStudioServer(opts) {
         queued: Array.isArray(s.queued) ? s.queued.length : 0,
         asks: (Array.isArray(s.asks) ? s.asks : []).slice(0, 5).map((a) => ({ id: str(a.id, 160), name: str(a.name, 120), kind: str(a.kind, 16), minutes: Number.isFinite(a.minutes) ? a.minutes : null })),
         posting: (() => { try { return readQueueSummary(opts.dataDir, flags); } catch { return null; } })(),
-        last: l ? { name: str(l.name, 120), kind: str(l.kind, 16), result: str(l.result, 16), reason: str(l.reason, 200), clips: Number(l.clips) || 0, out: str(l.out, 400), folder: str(l.folder, 400) } : null };
+        last: l ? { name: str(l.name, 120), kind: str(l.kind, 16), result: str(l.result, 16), reason: str(l.reason, 200), clips: Number(l.clips) || 0, out: str(l.out, 400), folder: str(l.folder, 400),
+        // RS4: the reel styles the last clips used and what each layout could not take (plain words)
+        ...(l.styles && typeof l.styles === 'object' ? { styles: { names: (Array.isArray(l.styles.names) ? l.styles.names : []).slice(0, 5).map((x) => str(x, 40)).filter(Boolean), notApplied: (Array.isArray(l.styles.notApplied) ? l.styles.notApplied : []).slice(0, 5).map((x) => str(x, 160)).filter(Boolean) } } : {}) } : null };
     } catch { return base; }
   }
 
