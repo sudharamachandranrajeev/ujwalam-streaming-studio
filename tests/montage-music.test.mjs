@@ -302,6 +302,10 @@ describe('posting', () => {
     assert.equal(scans, 0, 'recording: no scan');
     await chain.tick({ sinks: [{ id: 'yt', kind: 'stream', state: 'active' }] }).catch(() => {});
     assert.equal(scans, 0, 'streaming: no scan');
+    await chain.tick({ sinks: [{ id: 'yt', kind: 'stream', state: 'reconnecting' }] }).catch(() => {});
+    assert.equal(scans, 0, 'reconnecting: no scan');
+    await chain.tick({ sinks: [{ id: 'yt', kind: 'stream', state: 'warming-up' }, { id: 'rec', kind: 'record', state: 'stopped' }] }).catch(() => {});
+    assert.equal(scans, 0, 'an unknown state counts as on air');
     await chain.tick({ sinks: [{ id: 'yt', kind: 'stream', state: 'stopped' }, { id: 'rec', kind: 'record', state: 'stopped' }] }).catch(() => {});
     assert.equal(scans, 1, 'idle: scanned');
   });

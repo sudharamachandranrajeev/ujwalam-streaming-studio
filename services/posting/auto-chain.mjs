@@ -58,6 +58,7 @@ import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadTemplates, packageRun, 
 import { createTextHistory } from './post-text.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
 import { scanClipsFolder } from './clips-source.mjs';
+import { outputsOnAir } from '../studio-ui/record-clips.mjs';
 import { DELETED_LOG_NAME, DELETE_FLAG, FINAL_KEEP, deleteUploadedFile } from './delete-uploaded.mjs';
 import { clipsFolder } from '../studio-ui/user-settings.mjs';
 import { createDataNotifier } from '../common/data-reload.mjs';
@@ -879,7 +880,8 @@ export function createPostChain(opts) {
   /** D375: package the clips folder's videos that have no package yet (every SCAN_EVERY_MS). Never fails the pass. */
   async function scanFolder(profile) {
     // Codex verify (D414): the scan reads and hashes videos; never while streaming or recording (unknown = on air)
-    if (await liveBlock(allOutputs)) return 0;
+    let st = null; try { st = await allOutputs(); } catch { /* unknown = on air */ }
+    if (outputsOnAir(st)) return 0;
     try {
       const { rows } = scanClipsFolder({ dataDir, folder: opts.clipsFolder ?? clipsFolder(dataDir), ...(opts.probeSeconds ? { probeSeconds: opts.probeSeconds } : {}) });
       if (!rows.length) return 0;

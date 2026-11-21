@@ -125,6 +125,10 @@ Codex verify of 529f3ad: lock fixed. Two left:
 
 Re-run, one file at a time, CPU only: posting-e2e 61, posting-uploads 12, posting 18, posting-auto-chain 15, posting-auto-d375 51, posting-auto 14, posting-pt3-actions 9, posting-custom-schedule 15, posting-preview 12, posting-backlog-order 5, studio-ui-posting-auto 8, analytics 12. All passed. The Posts view preview scan (on the user's click) still hashes without a live check.
 
+## Fourth Codex verify fix (2026-11-21)
+
+The auto-post folder scan now uses outputsOnAir in services/studio-ui/record-clips.mjs. It reuses that file's isLive/isRecording (reconnecting included). It also treats an unreadable status, a malformed sink, or a stream/record sink in any state not known to be off (OFF_STATES) as on air. Test (	ests/montage-music.test.mjs): ticks with a stream reconnecting, or in an unknown state, do not scan (pass, 14/14 in file); posting-auto-chain 15, posting-auto-d375 51, posting-e2e 61 pass.
+
 Residual (accepted, D414): the data folder is the user's own; whoever can write it can rewrite a video and its sidecar together.
 
 Still UNVERIFIED: the Montage music card does not yet show the "file changed, check the credit" note (it shows the credit as incomplete). The legacy rule has not run against the user's real clips folder.
