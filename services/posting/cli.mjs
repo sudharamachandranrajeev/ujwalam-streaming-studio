@@ -13,10 +13,11 @@ import { createFlags } from '../flags/index.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { LEDGER_NAME, POSTING_FLAG, PostingError, createPostStore, packageRun } from './index.mjs';
 import { ANALYTICS_SCOPE, READONLY_SCOPE, SCOPE, createYoutubeAuth, joinScopes } from './oauth.mjs';
-import { uploadPost, UploadError } from './youtube.mjs';
+import { UploadError } from './youtube.mjs';
 import { SCHEDULE_FLAG } from './schedule.mjs';
 import { GROWTH_FLAG } from '../analytics/index.mjs';
-import { streamOnly } from './auto-chain.mjs';
+import { requestRunNow, streamOnly } from './auto-chain.mjs';
+import { scheduleNextFree } from './auto-settings.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, AutoPostError, createAutoLog, describeMode, initUserRules, loadRules, planAuto, rankerMinScore, rulesFileFor, runAuto } from './auto-post.mjs';
 import { formatPreview, previewRules } from './preview.mjs';
 import { HostClient } from '../../app/host/lib/client.mjs';
@@ -208,9 +209,17 @@ async function youtubeMain(a, out, err, deps) {
       if (typeof a.id !== 'string') { err('usage: node services/posting/cli.mjs youtube upload --id <post id> [--data-dir DIR]'); return 2; }
       const ledgerFile = path.join(dataDir, 'posting', LEDGER_NAME);
       const store = createPostStore({ ledgerFile, dataDir });
-      const r = await uploadPost({ id: a.id, store, auth, outputsStatus: deps.outputsStatus ?? outputsStatusFor(dataDir), fetchImpl: deps.fetchImpl });
-      const cover = r.hasCover;
-      out(`youtube: uploaded ${a.id} as ${r.videoId}${cover ? ` (cover: ${r.thumbnailOk ? 'ok' : 'failed, video is still up'})` : ''}`);
+      // D409 (second Codex review, 2026-11-21): nothing is sent from here. No video goes up without a checked publish
+      // time, so the clip is queued at the next free time (an hour or more from any other post) and the studio's
+      // auto-post chain uploads it: one schedule-lock hold, a fresh channel read, the 60-min check, the budget gate.
+      const post = store.get(a.id);
+      if (!post) throw new UploadError('unknown-post', `unknown post id ${a.id}`);
+      if (post.status === 'uploaded') throw new UploadError('already-uploaded', `already uploaded as ${post.videoId}`);
+      if (post.status !== 'approved') throw new UploadError('not-approved', 'only approved packages can be uploaded');
+      const r = scheduleNextFree(dataDir, a.id);
+      if (!r.ok) { err(`youtube: not queued (${r.code}): ${r.text}`); return 1; }
+      requestRunNow(dataDir);
+      out(`youtube: queued ${a.id}; goes public ${r.item.publishAt}. The studio's auto-post queue uploads it as private when no stream is live (auto-post must be on).`);
       return 0;
     }
     err('usage: node services/posting/cli.mjs youtube signin|status|signout|upload --id <post id>');

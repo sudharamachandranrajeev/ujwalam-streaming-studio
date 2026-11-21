@@ -4,6 +4,8 @@
 // (private until its publish time). It loads ui/api/posts/auto/settings and .../schedule when Settings opens (flag posting
 // on); Save sends ui/api/posts/auto/settings only when the card changed (the server checks every value again). Moving or
 // removing a queued clip acts on its own click (ui/api/posts/auto/queue/move|remove, D332). Not live-gated, like the widget.
+// PT5 (D410): the POST TEXT AND GROWTH card (tone, emoji, own hashtags, footer with a preview on the newest clips, the
+// share of each kind, growth suggestions) loads ui/api/posts/prefs and saves it with the same Save / Discard.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -24,16 +26,17 @@ Column {
     property bool loaded: false
     property bool started: false          // the load is on its way or done (Settings starts it as soon as the flags are known)
     property int gen: 0                   // a newer load or reset drops older answers
-    property var card: ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 90, customTimes: ({}), skipDates: [] })
+    property var card: ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 60, customTimes: ({}), skipDates: [] })
     property string orig: ""              // the card as loaded, to see a change
     property var quota: ({})
-    property int maxPerDayLimit: 100
+    property int maxPerDayLimit: 24
     property string flagsText: ""
     property string timesInfo: "Loading..."
     property var times: []                // [{text, id, movable}]
     property string message: ""
     property string movingId: ""          // the clip whose new time is being typed
     property string moveText: ""
+    property string stuckLockId: ""       // D409 fifth review: a posting lock left by a closed copy (empty = none)
     // "What gets posted" (user 2026-11-20): the rules in use when they are the user's own shape (edited in place, unknown
     // rules and keys kept by the server); otherwise the card's own controls below write the rules.
     property bool rulesOwn: false
@@ -43,12 +46,24 @@ Column {
     property string skipText: ""
     property string skipProblem: ""
     property string rulesProblem: ""      // Codex round 3: a rules file that cannot be read; only Reset replaces it
+    // PT5 (D410): post text and growth (ui/api/posts/prefs)
+    readonly property var prefsDefault: ({ text: { tone: "hype", emoji: false, hashtags: [], footer: "" }, kindShare: ({ short: 20, montage: 20, "won-reel": 20, "impact-play": 20, "long-highlights": 20 }), growthSuggestions: true })
+    property var prefs: JSON.parse(JSON.stringify(prefsDefault))
+    property string prefsOrig: ""
+    property bool prefsLoaded: false
+    property string prefsError: ""
+    property string tagsText: ""
+    property string tagsProblem: ""
+    property var previewItems: []         // [{kind, title, description, hashtags}]
+    property string previewInfo: ""
     readonly property var weekDays: [{ id: "mon", text: "Mon" }, { id: "tue", text: "Tue" }, { id: "wed", text: "Wed" }, { id: "thu", text: "Thu" }, { id: "fri", text: "Fri" }, { id: "sat", text: "Sat" }, { id: "sun", text: "Sun" }]
 
     readonly property bool active: box.ready && box.flagOn("posting")
     readonly property bool cardDirty: loaded && JSON.stringify(card) !== orig
     readonly property bool rulesDirty: loaded && rulesOwn && JSON.stringify(rulesEdit) !== rulesOrig
-    readonly property bool dirty: cardDirty || rulesDirty
+    readonly property bool prefsDirty: prefsLoaded && JSON.stringify(prefs) !== prefsOrig
+    readonly property bool dirty: cardDirty || rulesDirty || prefsDirty
+    readonly property int shareSum: kindList.reduce((n, k) => n + (prefs.kindShare[k.id] || 0), 0)
     // The card's own rule controls (kinds, upload, score, per day) changed: only then may Save write the rules file.
     function ruleKeys(o) { return JSON.stringify({ a: o.autoUpload, k: o.kinds, s: o.minScore, m: o.maxPerDay }) }
     readonly property bool ruleKeysDirty: loaded && orig !== "" && ruleKeys(card) !== ruleKeys(JSON.parse(orig))
@@ -58,6 +73,8 @@ Column {
         : rulesOwn && rulesEdit.rules.some(r => r.kinds.length === 0) ? "Each rule needs at least one kind of clip."
         : customOn && weekDays.every(d => (card.customTimes[d.id] || []).length === 0) ? "Add at least one posting time to the week."
         : skipProblem !== "" ? skipProblem
+        : tagsProblem !== "" ? tagsProblem
+        : prefsLoaded && shareSum !== 100 ? "The shares of each kind add up to " + shareSum + " %; make them add up to 100 %."
         : card.postsPerDayMin > card.postsPerDayMax ? "The fewest posts a day must not be more than the most."
         : minutesOf(card.windowEnd, 0) <= minutesOf(card.windowStart, 0) ? "The posting window must end after it starts." : ""
     readonly property bool blocksSave: dirty && problem !== ""
@@ -67,10 +84,22 @@ Column {
         const per = typeof quota.perUploadUnits === "number" ? quota.perUploadUnits : 0;
         const reserve = typeof quota.readReserveUnits === "number" ? quota.readReserveUnits : 0;
         const q = card.quotaUnitsPerDay;
-        const n = per > 0 ? Math.max(0, Math.floor((q - reserve) / per)) : maxPerDayLimit;
-        if (n === 0) return "No upload fits in a quota of " + q.toLocaleString(Qt.locale("en_US"), "f", 0) + " units a day (one upload needs "
+        // PT2: the upload bucket caps the count too (uploadsCap), and never more than the 24 the hour gap allows.
+        const cap = typeof quota.uploadsCap === "number" ? quota.uploadsCap : maxPerDayLimit;
+        const n = Math.min(maxPerDayLimit, cap, per > 0 ? Math.max(0, Math.floor((q - reserve) / per)) : maxPerDayLimit);
+        const model = typeof quota.modelText === "string" && quota.modelText !== "" ? quota.modelText + " " : "";
+        if (n === 0) return model + "No upload fits in a quota of " + q.toLocaleString(Qt.locale("en_US"), "f", 0) + " units a day (one upload needs "
             + (per + reserve).toLocaleString(Qt.locale("en_US"), "f", 0) + "): nothing uploads until the quota is raised.";
-        return "About " + n + " uploads a day fit in the quota." + (card.maxPerDay > n ? " More than that a day stop at the quota and wait for the next day." : "");
+        return model + "About " + n + " uploads a day fit in the quota." + (card.maxPerDay > n ? " More than that a day stop at the quota and wait for the next day." : "");
+    }
+
+    // PT5: the quota model in use and why, in plain words
+    readonly property string quotaModel: {
+        const m = quota.fallback === true ? "the old unit count, for today" : quota.model === "unit-sum" ? "the old unit count" : quota.model === "upload-bucket" ? "YouTube's upload allowance" : "";
+        if (m === "") return "";
+        const why = quota.fallback === true ? "YouTube said the upload quota was used up, so this lasts until the next Pacific midnight."
+            : quota.model === "unit-sum" ? "Your quota settings ask for it." : "It is the default: Google gives uploads their own allowance of 100 a day.";
+        return "Quota model in use: " + m + ". " + why;
     }
 
     onActiveChanged: { if (!active) reset(); else if (!started) load() }
@@ -94,7 +123,7 @@ Column {
         gen++;
         started = false;
         loaded = false;
-        card = ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 90, customTimes: ({}), skipDates: [] });
+        card = ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 60, customTimes: ({}), skipDates: [] });
         orig = "";
         quota = ({});
         flagsText = "";
@@ -109,6 +138,14 @@ Column {
         rulesProblem = "";
         notices = [];
         skipText = "";
+        prefs = JSON.parse(JSON.stringify(prefsDefault));
+        prefsOrig = "";
+        prefsLoaded = false;
+        prefsError = "";
+        tagsText = "";
+        tagsProblem = "";
+        previewItems = [];
+        previewInfo = "";
     }
 
     function load() {
@@ -120,6 +157,56 @@ Column {
             render(b);
             loadTimes(false);
             loadRules(b.custom === true);
+        });
+        Api.get("ui/api/posts/prefs", (ok, b, err) => {
+            if (g !== gen) return;
+            if (!ok) { prefsError = "Post text settings are not available: " + err; return }
+            renderPrefs(b);
+        });
+    }
+
+    // ---- PT5 (D410) post text and growth ----
+    function renderPrefs(b) {
+        const p = b.prefs || prefsDefault, t = p.text || ({});
+        const ks = ({});
+        for (const k of kindList) ks[k.id] = clamp(p.kindShare ? p.kindShare[k.id] : 0, 0, 100, 0);
+        prefs = { text: { tone: t.tone === "clean" ? "clean" : "hype", emoji: t.emoji === true, hashtags: Array.isArray(t.hashtags) ? t.hashtags.map(String) : [], footer: String(t.footer || "") },
+            kindShare: ks, growthSuggestions: p.growthSuggestions !== false };
+        prefsError = b.error ? "Your post text settings could not be read (" + String(b.error) + "); the defaults are shown, and Save writes them again." : "";
+        tagsText = prefs.text.hashtags.join(" ");
+        tagsProblem = "";
+        prefsOrig = JSON.stringify(prefs);
+        prefsLoaded = true;
+    }
+    function setPref(f) {
+        if (!prefsLoaded) return false;
+        const p = JSON.parse(JSON.stringify(prefs));
+        if (f(p) === false) return false;
+        prefs = p;
+        return true;
+    }
+    function setTone(v) { return (v === "hype" || v === "clean") && setPref(p => { p.text.tone = v }) }
+    function setTags(text) {
+        tagsText = text;
+        const parts = String(text).split(/[\s,]+/).filter(x => x !== "").map(x => x.startsWith("#") ? x : "#" + x);
+        const bad = parts.find(x => !/^#[A-Za-z0-9_\u00C0-\uFFFF]{1,39}$/.test(x));
+        tagsProblem = bad !== undefined ? "Own hashtags: " + bad + " is not a hashtag (letters, numbers or _ after the #)."
+            : parts.length > 10 ? "Own hashtags: at most 10." : "";
+        if (tagsProblem !== "") return false;
+        return setPref(p => { p.text.hashtags = parts.filter((x, i) => parts.findIndex(y => y.toLowerCase() === x.toLowerCase()) === i) });
+    }
+    function setShare(kind, n) {
+        if (!kindList.some(k => k.id === kind)) return false;
+        return setPref(p => { p.kindShare[kind] = clamp(Math.round(n), 0, 100, 0) });
+    }
+    function loadPreview() {
+        const g = gen;
+        previewInfo = "Loading...";
+        Api.post("ui/api/posts/prefs/preview", { text: JSON.parse(JSON.stringify(prefs.text)) }, (ok, b, err) => {
+            if (g !== gen) return;
+            if (!ok) { previewItems = []; previewInfo = "No preview: " + err; return }
+            previewItems = Array.isArray(b.items) ? b.items : [];
+            previewInfo = previewItems.length ? "Your newest clips with these choices (not saved yet):" : "No clips yet: the preview shows once the first clip has a post.";
         });
     }
 
@@ -143,7 +230,7 @@ Column {
         const c = b.card || ({}), fl = b.flags || ({});
         quota = b.quota || ({});
         const lim = (b.limits || ({})).maxPerDay;
-        maxPerDayLimit = typeof lim === "number" ? lim : 100;
+        maxPerDayLimit = typeof lim === "number" ? lim : 24;
         const ks = Array.isArray(c.kinds) ? c.kinds : [];
         card = {
             autoUpload: c.autoUpload === true,
@@ -158,7 +245,7 @@ Column {
             postsPerDayMax: clamp(c.postsPerDayMax, 1, 24, 6),
             windowStart: hhmm(minutesOf(c.windowStart, 540)),
             windowEnd: hhmm(minutesOf(c.windowEnd, 1380)),
-            minGapMinutes: clamp(c.minGapMinutes, 15, 1440, 90),
+            minGapMinutes: clamp(c.minGapMinutes, 60, 1440, 60),
             customTimes: cleanWeek(c.customTimes),
             skipDates: Array.isArray(c.skipDates) ? c.skipDates.filter(s => /^\d{4}-\d{2}-\d{2}$/.test(String(s))).map(String) : []
         };
@@ -190,6 +277,7 @@ Column {
 
     function renderTimes(b) {
         const err = b.error || "", live = b.liveError || "";
+        stuckLockId = (b.stuckLock && typeof b.stuckLock.id === "string") ? b.stuckLock.id : "";
         let info;
         if (err === "schedule-read-incomplete")
             info = "The last channel read did not reach back far enough to see every scheduled post, so no time is given (nothing uploads until it does).";
@@ -324,6 +412,15 @@ Column {
                 store.say("What gets posted not saved: " + (why !== "" ? why : err));
             });
         }
+        if (prefsDirty) {
+            const pb = JSON.parse(JSON.stringify(prefs));
+            const psent = JSON.stringify(prefs);
+            Api.post("ui/api/posts/prefs", { prefs: pb }, (ok, b, err) => {
+                if (ok) { if (g === gen) prefsOrig = psent; return store.say("Post text and growth settings saved; new posts use them.") }
+                const why = problemsText(b && b.problems);
+                store.say("Post text and growth settings not saved: " + (why !== "" ? why : err));
+            });
+        }
         if (!cardDirty) return;
         const body = JSON.parse(JSON.stringify(card));
         Api.post("ui/api/posts/auto/settings", rulesOwn || !ruleKeysDirty ? { card: body, keepRules: true } : { card: body }, (ok, b, err) => {
@@ -361,6 +458,28 @@ Column {
         Api.post("ui/api/posts/auto/queue/remove", { id: id }, (ok, b, err) => {
             if (g !== gen) return;
             message = ok ? "Taken out of the upload queue." : "Not removed: " + ((b && b.text) ? b.text : err);
+            loadTimes(false);
+        });
+    }
+
+    // PT3 (D408): one click asks for an auto-post pass now (refused while a stream is live or starting).
+    function runNow() {
+        const g = gen;
+        Api.post("ui/api/posts/auto/run", {}, (ok, b, err) => {
+            if (g !== gen) return;
+            message = ok ? "Auto-post runs now: new clips are checked and due uploads start within half a minute."
+                : (b && b.error === "stream-live") || err === "stream-live" ? "Not run: a stream is live or starting. Auto-post waits until it ends."
+                : "Not run: " + ((b && b.error) ? b.error : err);
+        });
+    }
+
+    // D409 (fifth Codex review): one click clears a posting lock left behind by a closed copy (D332: no confirm).
+    function clearLock() {
+        const g = gen;
+        Api.post("ui/api/posts/auto/clear-lock", { id: stuckLockId }, (ok, b, err) => {
+            if (g !== gen) return;
+            message = ok ? "Stuck posting lock cleared. Auto-post runs again within half a minute."
+                : "Not cleared: the lock changed or its owner is still running (" + ((b && b.error) ? b.error : err) + ").";
             loadTimes(false);
         });
     }
@@ -665,14 +784,14 @@ Column {
                     label: "Post until"
                     enabled: ap.randomDaily
                     from: 30
-                    to: 1439
+                    to: 1440
                     stepSize: 30
                     textFromValue: (v) => ap.hhmm(v)
                     valueFromText: (t) => ap.minutesOf(String(t).trim(), 1380)
                     want: ap.minutesOf(ap.card.windowEnd, 1380)
                     onValueModified: ap.set("windowEnd", ap.hhmm(value))
                 }
-                Quiet { text: "No post goes up after this time of day." }
+                Quiet { text: "No post goes up after this time of day. 00:00 to 24:00 is the whole day." }
             }
             Field {
                 label: "At least apart:"
@@ -681,13 +800,13 @@ Column {
                     label: "At least apart"
                     enabled: ap.randomDaily
                     suffix: " min"
-                    from: 15
+                    from: 60
                     to: 1440
                     stepSize: 15
                     want: ap.card.minGapMinutes
-                    onValueModified: ap.setNum("minGapMinutes", value, 15, 1440)
+                    onValueModified: ap.setNum("minGapMinutes", value, 60, 1440)
                 }
-                Quiet { text: "Every post, yours from Ujwalam or already on the channel, is at least this far from the next." }
+                Quiet { text: "Every post, yours from Ujwalam or already on the channel, is at least this far from the next. An hour is the least: that rule is always kept." }
             }
             Field {
                 label: "YouTube quota:"
@@ -777,6 +896,7 @@ Column {
             }
         }
         Quiet { objectName: "autopostFit"; text: ap.fit }
+        Quiet { objectName: "autopostQuotaModel"; text: ap.quotaModel }
         Text {
             objectName: "autopostProblem"
             visible: ap.problem !== ""
@@ -787,6 +907,122 @@ Column {
             font.family: Theme.family
             font.pixelSize: Theme.ty.small
         }
+    }
+
+    // PT5 (D410): post text and growth, saved with the same Save / Discard as the card above
+    UCard {
+        title: "POST TEXT AND GROWTH"
+        Quiet { text: "How new posts are worded, which kinds of clip go up most, and whether Ujwalam may suggest better posting times. New posts use these; posts already made keep their text." }
+        Text {
+            objectName: "autopostPrefsError"
+            visible: ap.prefsError !== ""
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: ap.prefsError
+            color: Theme.c.danger
+            font.family: Theme.family
+            font.pixelSize: Theme.ty.small
+        }
+        Flow {
+            width: parent.width
+            spacing: Theme.sp.l
+            Field {
+                label: "Tone:"
+                width: 330
+                PickBox {
+                    objectName: "autopostTone"
+                    width: parent.width
+                    label: "Tone"
+                    model: [{ value: "hype", text: "Hype (as the lines are written)" }, { value: "clean", text: "Clean (no ! and no emoji)" }]
+                    want: ap.prefs.text.tone === "clean" ? 1 : 0
+                    onChose: (v) => ap.setTone(v)
+                }
+            }
+            Field {
+                label: "Emoji in titles:"
+                KindToggle {
+                    objectName: "autopostEmoji"
+                    text: ap.prefs.text.emoji ? "Emoji on" : "Emoji off"
+                    want: ap.prefs.text.emoji
+                    enabled: ap.prefs.text.tone === "hype"
+                    onToggled: ap.setPref(p => { p.text.emoji = checked })
+                }
+                Quiet { text: ap.prefs.text.tone === "hype" ? "One emoji at the end of the title, when it still fits." : "Clean tone never adds an emoji." }
+            }
+        }
+        Words { text: "Your own hashtags:" }
+        UField {
+            objectName: "autopostTags"
+            width: Math.min(parent.width, 420)
+            label: "Your own hashtags"
+            placeholderText: "#gaming #clutch"
+            text: ap.tagsText
+            onTextEdited: ap.setTags(text)
+        }
+        Quiet { text: "Added to every new post after the usual ones, up to 10." }
+        Words { text: "Description footer:" }
+        UField {
+            objectName: "autopostFooter"
+            width: parent.width
+            label: "Description footer"
+            placeholderText: "Live most nights. New clips every day."
+            text: ap.prefs.text.footer
+            onTextEdited: ap.setPref(p => { p.text.footer = text.slice(0, 500) })
+        }
+        Quiet { text: "A last line under every new description (plain text, up to 500 characters)." }
+        UButton {
+            objectName: "autopostPreview"
+            text: "Preview on my newest clips"
+            tip: "Shows your newest clips' text with these choices. Nothing is saved or posted."
+            onClicked: ap.loadPreview()
+        }
+        Quiet { objectName: "autopostPreviewInfo"; visible: ap.previewInfo !== ""; text: ap.previewInfo }
+        Repeater {
+            model: ap.previewItems
+            delegate: Quiet {
+                required property var modelData
+                required property int index
+                objectName: "autopostPreview:" + index
+                color: Theme.c.text
+                text: String(modelData.title) + "\n" + String(modelData.description) + "\n" + (modelData.hashtags || []).join(" ")
+            }
+        }
+        Words { text: "Share of each kind:" }
+        Quiet { text: "Of every 100 posts, about this many are of each kind. Only the order changes: the number a day and the gap stay as set above." }
+        Flow {
+            width: parent.width
+            spacing: Theme.sp.l
+            Repeater {
+                model: ap.kindList
+                delegate: Field {
+                    id: sf
+                    required property var modelData
+                    label: modelData.text + ":"
+                    width: 200
+                    SpinBox2 {
+                        objectName: "autopostShare_" + sf.modelData.id
+                        label: sf.modelData.text
+                        suffix: " %"
+                        from: 0
+                        to: 100
+                        stepSize: 5
+                        want: ap.prefs.kindShare[sf.modelData.id] || 0
+                        onValueModified: ap.setShare(sf.modelData.id, value)
+                    }
+                }
+            }
+        }
+        Quiet { objectName: "autopostShareSum"; text: "Together: " + ap.shareSum + " %" + (ap.shareSum === 100 ? "." : " (must be 100 %).") }
+        USwitch {
+            id: growSw
+            objectName: "autopostGrowth"
+            width: parent.width
+            text: ap.prefs.growthSuggestions ? "Growth suggestions on" : "Growth suggestions off"
+            checked: ap.prefs.growthSuggestions
+            onToggled: ap.setPref(p => { p.growthSuggestions = checked })
+            Binding { target: growSw; property: "checked"; value: ap.prefs.growthSuggestions }
+        }
+        Quiet { text: "With Growth data on and at least 8 posts with numbers, the Posts window may suggest moving some posts to better times, with the numbers behind it. Nothing changes until you click Apply, and Undo puts it back." }
     }
 
     UCard {
@@ -850,6 +1086,19 @@ Column {
             tip: "Reads the posts already scheduled on your channel (read only, at most every 10 minutes)."
             onClicked: ap.loadTimes(true)
         }
+        UButton {
+            objectName: "autopostRunNow"
+            text: "Run auto-post now"
+            tip: "Checks for new clips and starts the uploads that are due, without waiting for the next check. Never while a stream is live or starting."
+            onClicked: ap.runNow()
+        }
+        UButton {
+            objectName: "autopostClearLock"
+            visible: ap.stuckLockId !== ""
+            text: "Clear stuck posting lock"
+            tip: "A copy of Ujwalam that has closed left its posting lock behind, so nothing uploads. This removes that lock (only if its owner is really gone)."
+            onClicked: ap.clearLock()
+        }
         Quiet { objectName: "autopostMsg"; text: ap.message }
     }
 
@@ -857,7 +1106,9 @@ Column {
     function probe() {
         return { loaded: loaded, card: JSON.parse(JSON.stringify(card)), dirty: dirty, fit: fit, flags: flagsText, problem: problem,
             rulesOwn: rulesOwn, rulesProblem: rulesProblem, rules: JSON.parse(JSON.stringify(rulesEdit)), notices: notices.slice(), customNext: customNext.slice(),
-            timesInfo: timesInfo, times: times.map(t => t.text), message: message };
+            timesInfo: timesInfo, times: times.map(t => t.text), message: message, stuckLockId: stuckLockId,
+            prefsLoaded: prefsLoaded, prefs: JSON.parse(JSON.stringify(prefs)), prefsDirty: prefsDirty, prefsError: prefsError, shareSum: shareSum, quotaModel: quotaModel,
+            previewInfo: previewInfo, preview: previewItems.map(i => String(i.title)) };
     }
 
     // ap-upload:<on|off> | ap-kind:<id>:<on|off> | ap-score:<n> | ap-perday:<n> | ap-gap:<h> | ap-days:<n> | ap-placement:<id>
@@ -867,6 +1118,7 @@ Column {
         const a = p[0], arg = p[1];
         const on = (v) => v === "on" || v === "1";
         if (a === "ap-upload") return set("autoUpload", on(arg));
+        if (a === "ap-clearlock") { if (stuckLockId === "") return false; clearLock(); return true }
         if (a === "ap-kind" && p.length === 3) return setKind(arg, on(p[2]));
         const n = parseInt(arg, 10);
         if (a === "ap-score" && !isNaN(n)) return setNum("minScore", n, 0, 100);
@@ -876,12 +1128,12 @@ Column {
         if (a === "ap-quota" && !isNaN(n)) return setNum("quotaUnitsPerDay", n, 1000, 10000000);
         if (a === "ap-daymin" && !isNaN(n)) return setNum("postsPerDayMin", n, 1, 24);
         if (a === "ap-daymax" && !isNaN(n)) return setNum("postsPerDayMax", n, 1, 24);
-        if (a === "ap-gapmin" && !isNaN(n)) return setNum("minGapMinutes", n, 15, 1440);
+        if (a === "ap-gapmin" && !isNaN(n)) return setNum("minGapMinutes", n, 60, 1440);
         if (a === "ap-window" && p.length >= 3) { // ap-window:<from minutes>:<until minutes>
             const s = parseInt(p[1], 10), e = parseInt(p[2], 10);
             if (isNaN(s) || isNaN(e)) return false;
             set("windowStart", hhmm(clamp(s, 0, 1439, 540)));
-            return set("windowEnd", hhmm(clamp(e, 0, 1439, 1380)));
+            return set("windowEnd", hhmm(clamp(e, 0, 1440, 1380)));
         }
         if (a === "ap-placement") {
             if (!placements.includes(arg)) return false;
@@ -899,6 +1151,15 @@ Column {
         if (a === "ap-refresh") { loadTimes(true); return true }
         if (a === "ap-move" && p.length >= 3) { move(arg, p.slice(2).join(":")); return true } // the time has colons: the rest of the action
         if (a === "ap-remove" && arg) { remove(arg); return true }
+        if (a === "ap-run") { runNow(); return true }
+        // PT5: ap-tone:<hype|clean> | ap-emoji:<on|off> | ap-tags:<tags, space-separated, URI-encoded> | ap-footer:<URI-encoded text> | ap-share:<kind>:<n> | ap-growth:<on|off> | ap-preview
+        if (a === "ap-tone") return setTone(arg);
+        if (a === "ap-emoji") return setPref(q => { q.text.emoji = on(arg) });
+        if (a === "ap-tags") return setTags(decodeURIComponent(p.slice(1).join(":")));
+        if (a === "ap-footer") return setPref(q => { q.text.footer = decodeURIComponent(p.slice(1).join(":")).slice(0, 500) });
+        if (a === "ap-share" && p.length === 3) return setShare(arg, parseInt(p[2], 10));
+        if (a === "ap-growth") return setPref(q => { q.growthSuggestions = on(arg) });
+        if (a === "ap-preview") { loadPreview(); return true }
         return false;
     }
 }

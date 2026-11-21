@@ -28,6 +28,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { resolveString } from '../project/scene-preset.mjs';
+import { cleanFacts, createTextHistory, draftText } from './post-text.mjs';
+import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const POSTING_FLAG = 'posting';
@@ -73,6 +75,10 @@ export function sha256File(file) {
 }
 
 // ---------------------------------------------------------------- data files
+
+/** PT1: post.json source.textVersion of text drafted from facts (an older draft is redrafted once, auto-chain). */
+export const TEXT_VERSION = 2;
+const textHistory = (opts, templates) => (typeof opts.dataDir === 'string' ? createTextHistory(opts.dataDir, Number.isInteger(templates.recentLines) ? templates.recentLines : 20) : null);
 
 export function loadTemplates(file = DEFAULT_TEMPLATES) {
   const j = readJson(file);
@@ -141,6 +147,9 @@ export function composeField(post, from) {
 const countMatches = (s, re) => [...String(s).matchAll(re)].length;
 const HASHTAG = /(?:^|\s)#[^\s#]+/gu;
 const MENTION = /(?:^|\s)@[^\s@]+/gu;
+
+/** PT5 (D410): a check for applyTextPrefs: the post with a changed title, description or hashtags still passes every limit. */
+export const limitsFit = (post, limits) => (p) => checkLimits({ ...post, ...p }, limits).checks.every((x) => x.ok);
 
 /** Checks the composed platform fields against the target's limits. A field without max is not length-checked. Pure. */
 export function checkLimits(post, limits) {
@@ -310,6 +319,8 @@ export async function packageRun(opts) {
         hashtags: tpl.hashtags.map((t) => renderText(t, ctx, missing)),
         target,
       };
+      // PT5 (D410): the user's tone, emoji, own hashtags and footer; the defaults change nothing
+      Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: 'short', seed: sha, titleMax: limits.targets?.[target]?.fields?.title?.max ?? null, fits: limitsFit(post, limits) }));
       const dur = Number(row.facts?.duration);
       const peak = Number.isFinite(Number(c.anchor)) && Number.isFinite(Number(c.start)) ? Number(c.anchor) - Number(c.start) : 0;
       const at = Math.min(Math.max(peak, 0), Number.isFinite(dur) && dur > 0.4 ? dur - 0.2 : Math.max(peak, 0));
@@ -424,13 +435,22 @@ export async function packageUploads(opts) {
     const tpl = isPlain(base.kinds?.[row.kind]) ? { ...base, ...base.kinds[row.kind] } : base;
     const missing = new Set();
     const ctx = { profile, n, date };
+    // PT1 (D408): title and first line from the clip's facts (lines with a missing fact are left out); else the template's.
+    const facts = cleanFacts(row.facts);
+    const game = typeof row.game === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(row.game) ? row.game : null;
+    const hist = textHistory(opts, templates);
+    const titleMax = limits.targets[target]?.fields?.title?.max ?? null;
+    const d = draftText({ templates, kind: row.kind, game, facts, seed: sha, recent: hist?.recent() ?? [], maxTitle: titleMax, gamesDir: opts.gamesDir });
+    if (hist && (d.title || d.lead)) hist.add(d.title?.line, d.lead?.line);
     const post = {
-      title: renderText(tpl.title, ctx, missing),
-      description: renderText(tpl.description, ctx, missing),
+      title: renderText(d.title?.text ?? tpl.title, ctx, missing),
+      description: renderText(d.lead ? `${d.lead.text}\n\n${tpl.description}` : tpl.description, ctx, missing),
       tags: tpl.tags.map((t) => renderText(t, ctx, missing)),
       hashtags: tpl.hashtags.map((t) => renderText(t, ctx, missing)),
       target,
     };
+    // PT5 (D410): the user's tone, emoji, own hashtags and footer (Settings > Posting & growth); the defaults change nothing
+    Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: row.kind, seed: sha, titleMax, fits: limitsFit(post, limits) }));
     const at = uploadCoverAt(row, seconds);
     const coverOk = await extractCover(ffmpeg, dst, at, path.join(dir, 'cover.jpg'));
     const stamp = now().toISOString();
@@ -442,6 +462,8 @@ export async function packageUploads(opts) {
       status: 'draft',
       source: { run: runName, clipId, kind: row.kind, layout: tail ? tail[2].toLowerCase() : 'unknown', startSec: 0, endSec: Number.isFinite(seconds) ? seconds : null, score: null, sha256: sha,
         ...(cleanChoices(row.choices) ? { choices: cleanChoices(row.choices) } : {}), // RP5: the reel's edit choices
+        // PT1: the clip's facts (medal, kills, result, mode; only the known ones) and its game, for post text and redrafts
+        ...(Object.keys(facts).length ? { facts } : {}), ...(game ? { game } : {}), textVersion: TEXT_VERSION,
         // D375: when the clip was made (from its name; posting order is oldest first) and the clips-folder file it came
         // from (the file the flag post-delete-uploaded may remove after a confirmed upload). Local data only.
         ...(madeAtOf(path.basename(file)) ? { madeAt: madeAtOf(path.basename(file)) } : {}), file: path.resolve(file) },
@@ -458,6 +480,38 @@ export async function packageUploads(opts) {
     packaged.push({ file: path.basename(file), kind: row.kind, target, dir, limitsOk: full.limits.ok, unresolved: full.unresolved });
   }
   return { packaged, skipped };
+}
+
+/**
+ * What the pre-PT1 templates generated for a draft (Codex review 2026-11-21): the target's base text (with its
+ * kinds.<kind> override for a finished video), with {n} and {date} from the values the draft was made with: the
+ * clips-folder file name (source.file) for a finished video, else the run's candidates.json (rank, recordStartUtc)
+ * for a clip variant. -> { title, description, tags, hashtags } | null (a value cannot be found). Reads only.
+ */
+export function legacyText(e, p, templates, profile) {
+  const base = templates?.targets?.[p?.target];
+  if (!isPlain(base) || typeof base.title !== 'string') return null;
+  let n; let date; let tpl = base;
+  if (typeof p.source?.file === 'string') {
+    const name = path.basename(p.source.file);
+    const tail = CANVAS_TAIL.exec(name); const dm = NAME_DATE.exec(name);
+    date = dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : 'unknown-date';
+    n = tail ? Number(tail[1]) : 1;
+    const kind = p.source.kind;
+    if (typeof kind === 'string' && isPlain(base.kinds?.[kind])) tpl = { ...base, ...base.kinds[kind] };
+  } else {
+    if (typeof e?.dir !== 'string') return null;
+    const cands = readJson(path.join(path.resolve(e.dir, '..', '..', '..'), 'candidates.json'));
+    if (!isPlain(cands) || !Array.isArray(cands.candidates)) return null;
+    const idx = cands.candidates.findIndex((c) => isPlain(c) && c.id === p.source?.clipId);
+    if (idx < 0) return null;
+    const c = cands.candidates[idx];
+    n = Number.isInteger(c.rank) ? c.rank : idx + 1;
+    date = typeof cands.recordStartUtc === 'string' && /^\d{4}-\d{2}-\d{2}/.test(cands.recordStartUtc) ? cands.recordStartUtc.slice(0, 10) : 'unknown-date';
+  }
+  const ctx = { profile, n, date }; const missing = new Set();
+  return { title: renderText(tpl.title, ctx, missing), description: renderText(tpl.description, ctx, missing),
+    tags: (tpl.tags ?? []).map((t) => renderText(t, ctx, missing)), hashtags: (tpl.hashtags ?? []).map((t) => renderText(t, ctx, missing)) };
 }
 
 // ---------------------------------------------------------------- store (studio UI)
@@ -525,6 +579,7 @@ export function createPostStore(opts) {
       p.limits = checkLimits({ ...next, target: p.target }, limits());
       p.unresolved = unresolvedKeys(next.title, next.description, ...next.tags, ...next.hashtags);
       p.status = 'draft';
+      p.editedByUser = true; // PT1: a redraft never replaces the user's own words
       save(e, p);
       ledger.setStatus(e.sha256, e.target, 'draft', p.updatedAt);
       return view({ ...e, status: 'draft' }, p);
@@ -560,6 +615,41 @@ export function createPostStore(opts) {
         filled++;
       }
       return filled;
+    },
+    /**
+     * PT1 (D408): drafts made before the fact-based text get it once: a fact title replaces the old title and a lead line
+     * goes before the old description. Only drafts the user has not edited; each is marked (source.textVersion) whether
+     * or not a line fitted, so it never runs twice. factsFor(post) -> { facts, game } for drafts packaged without facts.
+     * opts: { templates, profile, recent: () => [], used: (...lines) => void, factsFor? }. Returns how many changed.
+     */
+    redraftOnce(opts) {
+      const prof = cleanProfile(opts.profile ?? {});
+      let changed = 0;
+      for (const e of entries()) {
+        if (e.status !== 'draft') continue;
+        const p = load(e);
+        if (!p || p.editedByUser || p.source?.textVersion === TEXT_VERSION) continue;
+        // Codex review 2026-11-21 (D409): a draft from before the editedByUser marker is redrafted only while its text
+        // is exactly what the old templates made for it (re-rendered from its stored values); any other text may be the
+        // user's own words and is kept untouched. No stored values to re-render from: kept too.
+        const old = legacyText(e, p, opts.templates, prof);
+        if (!old || old.title !== p.title || old.description !== p.description
+          || JSON.stringify(old.tags) !== JSON.stringify(p.tags ?? []) || JSON.stringify(old.hashtags) !== JSON.stringify(p.hashtags ?? [])) continue;
+        const known = isPlain(p.source?.facts) ? { facts: p.source.facts, game: p.source.game ?? null } : (opts.factsFor?.(p) ?? { facts: {}, game: null });
+        const facts = cleanFacts(known.facts);
+        const d = draftText({ templates: opts.templates, kind: p.source?.kind ?? 'short', game: known.game, facts, seed: e.sha256,
+          recent: opts.recent?.() ?? [], maxTitle: limits().targets?.[p.target]?.fields?.title?.max ?? null, gamesDir: opts.gamesDir });
+        const missing = new Set();
+        const next = { title: d.title ? renderText(d.title.text, { profile: prof, n: 1, date: '' }, missing) : p.title,
+          description: d.lead ? `${renderText(d.lead.text, { profile: prof, n: 1, date: '' }, missing)}\n\n${p.description}` : p.description };
+        if (d.title || d.lead) { opts.used?.(d.title?.line, d.lead?.line); changed++; }
+        Object.assign(p, next);
+        p.source = { ...p.source, ...(Object.keys(facts).length ? { facts } : {}), ...(known.game ? { game: known.game } : {}), textVersion: TEXT_VERSION };
+        p.limits = checkLimits({ title: p.title, description: p.description, tags: p.tags, hashtags: p.hashtags, target: p.target }, limits());
+        p.unresolved = unresolvedKeys(p.title, p.description, ...(p.tags ?? []), ...(p.hashtags ?? []));
+        save(e, p);
+      }
+      return changed;
     },
     /** status: draft | approved | rejected. Approve needs text inside the limits, no unresolved placeholder, an intact video. */
     async setStatus(id, status) {

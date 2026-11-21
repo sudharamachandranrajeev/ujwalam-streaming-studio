@@ -2375,3 +2375,177 @@ Codex review (2026-11-21), all five fixed on the same branch:
   limit is the user's setting, posts a day up to 24 (the most a 1 h gap allows); growth-led timing changes apply only
   after the user's click.
 - Order: posting PT first (the user's live complaint), then clip look FX.
+
+## D409 — Posting PT2, PT3 and PT1 as built (decided, 2026-11-21)
+
+As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. Evidence:
+`docs/evidence/2026-11-21-posting-text-schedule-growth.md`.
+
+- PT2: `HARD_GAP_MINUTES = 60` in `services/posting/schedule.mjs` is the default and the floor in every placement. A
+  saved gap below 60 reads as 60, and the card refuses it. A window may end at 24:00. A day stops one gap before the next
+  day's window starts. `slotClash` checks the slot again right before each upload session. The channel is read again
+  when the last read is older than `recheckMaxAgeMinutes` (10). A clash gives the clip a new slot. Posts a day go up to
+  24 everywhere, and older 25..100 values read as 24.
+- Quota: by default each upload counts against the separate upload allowance (`model: upload-bucket`, 100 a day, about
+  50 units per cover). A quotaExceeded answer switches to the unit sum for that Pacific day and the next one
+  (`posting/quota-model.json`). The clip waits without using up a try, and the task area says so in plain words. The
+  upload allowance figure is UNVERIFIED against Google.
+- PT3: the "Run auto-post now" request file starts a pass on the chain's next tick. It is refused while a stream is live or
+  starting. The Posts window gains two actions. "Schedule next free slot" approves the clip and queues it at the
+  planner's next free time. "Post now (public)" is the only path that sends `public`. It is refused within 60 min of any
+  other post, while live, and for a clip that is in the queue.
+- PT1: the post text comes from the clip facts (`reel_thumbnail.py facts()`, kept in `source.facts`). The lines live in
+  `templates.json textPools` and `data/games/<id>/posting.json`. A line that needs a missing fact is never used. No line
+  repeats within the last 20. Drafts the user has not edited are redrafted once (`source.textVersion` 2).
+- PT5 (the post text card in Settings) and PT4 (growth suggestions) are not built yet. They come next.
+- Codex fixes (review 2026-11-21). These replace the points above where they differ:
+  - One reservation: `withScheduleLock` (`services/posting/auto-chain.mjs`, file `posting/schedule.lock`) covers both
+    the chain and "Post now (public)". Each one checks a fresh channel read and the queue inside the lock, and records
+    its time in the queue before it lets go. A public post is a queue item. It is `public-uploading` while it is sent,
+    and the chain starts no session then. Once sent it is `public-done`, and its start and end times stay taken. If it
+    is not sent, the hold is given back.
+  - "Post now (public)" reads the channel just before it goes. A read that fails, is refused by the quota or is
+    incomplete refuses the click, and nothing is sent. The 60-min check covers now up to the estimated end of the upload.
+  - The chain reads the channel just before each new upload session. The pass's first read counts only for the first
+    session. `recheckMaxAgeMinutes` is retired. An incomplete read fails closed.
+  - The channel read now covers the whole uploads list. The `lookbackDays` stop is gone. Hitting `maxPages` counts as
+    incomplete, so nothing is scheduled.
+  - Quota: each upload's share now includes one full channel read at its worst (1 + 2 x maxPages = 81 units), so about
+    5 a day fit under the unit sum and 24 under the bucket. A quotaExceeded answer blocks uploads until the next Pacific
+    midnight (`exhaustedUntil` in `quota-model.json`). Under the fallback, the same day's earlier bucket uploads count
+    1,600 units each again. A repeated answer never makes the fallback last longer.
+  - Redraft: a draft from before the `editedByUser` marker is redrafted only if its text still exactly matches the old
+    template, rendered again with its stored values (`legacyText` in `services/posting/index.mjs`). Any other draft,
+    and one whose values cannot be found, is left as it is.
+- Second Codex review (2026-11-21). These replace the points above where they differ:
+  - "Post now (public)" is removed: the route, the Posts window button, `reservePublicNow`/`finishPublicNow` and the
+    `public-uploading`/`public-done` states. No code path sends a video without a publishAt: `uploadVideo` and
+    `uploadPost` refuse one with `publish-at-required` before any request.
+  - The Upload button and `youtube upload` (CLI) now queue the clip at the next free time and ask for a pass. The
+    auto-post chain is the only sender. With auto-post off the button is refused (`auto-post-off`), because nothing would
+    send the clip.
+  - One upload gate: every upload goes through `sendGated` (`auto-chain.mjs`). It applies the quota budget and records a
+    quotaExceeded answer.
+  - The whole chain pass runs in one lock hold. Before every new upload session, including the restart of an expired
+    one, the chain reads the channel fully and checks the 60-min gap in that hold, with the time taken after the read.
+    One read serves one new session. A saved session resumes only after a complete read in the same unreleased hold.
+  - A malformed or partial read answer (items missing, an id with no details, no privacy status) counts as incomplete
+    and fails closed: nothing is scheduled, the clip waits and no try is used. The read has a 30 s deadline
+    (`READ_DEADLINE_MS`). Past it the read is incomplete and the request is aborted.
+  - The lock holder writes a heartbeat every 5 s. Another holder takes the lock over only if the holder's process is gone
+    or the heartbeat is older than 2 min (`LOCK_STALE_MS`, at least 3 read deadlines). A pass that loses the lock stops.
+- Third Codex review (2026-11-21). These replace the points above where they differ:
+  - The channel read takes its reference time from the clock after the last page comes back (`readAt`). Every public
+    video that went public within the last 2 days counts, including one that went public during the read. The chain
+    plans the slots from that later time.
+  - A `nextPageToken` that is present but not a non-empty string, and a public video with a missing or invalid
+    `videoPublishedAt`, make the read incomplete (fail closed). Only an absent token ends the list.
+  - Lock takeover is atomic. The contender renames the stale lock file to a unique tombstone (only one rename can win).
+    It then compares the tombstone with the exact content it judged stale, and only then deletes it. A file that does
+    not match is put back with an exclusive create, never over a new lock. Release uses the same compare-before-delete
+    step. The heartbeat only refreshes an existing file and never re-creates one.
+  - Ownership (`hold.held()`) is checked after every channel read, right before any session starts or resumes, in
+    `beforeNewSession` (including the expired-session restart) before and after its read, and before every chunk.
+  - Every YouTube request has a deadline: the session start, the progress query and the thumbnail each get
+    `REQUEST_MS` (60 s). Each chunk gets `CHUNK_REQUEST_MS` (10 min), on top of the scheduled chunk deadline. A request
+    past its deadline fails that item for this pass with `request-timeout`. No try is used, the session is kept, and the
+    item waits 5 min.
+  - The whole lock hold is capped (`LOCK_MAX_HOLD_MS`, 60 min). At the cap the hold's requests are aborted, `held()`
+    turns false, the lock file is released and the pass ends. The item in flight waits with `request-timeout`.
+- Fourth Codex review (2026-11-21). These replace the points above where they differ:
+  - One sender by design. The studio's posting chain (`createPostChain`, started once by
+    `services/studio-ui/launch.mjs`) is the only code that starts upload sessions or sends chunks. `uploadPost` has no
+    other caller. `cli.mjs youtube upload`, the Upload button and "Run auto-post now" only queue the clip and write the
+    run-now request file (already so since the second review; checked again).
+  - Inside that process an in-process mutex per lock file serialises passes. A second pass waits up to `waitMs`, then
+    waits with `schedule-busy` (no try used).
+  - The lock file stays only as a guard against a second sender process. A lock that is present and not provably ours
+    is never taken over: the pass refuses with `sender-elsewhere`, and the task area says in plain words that another
+    copy of Ujwalam holds the posting lock. The one exception is a lock whose process has ended, or this process's own
+    leftover. Only the process that will then hold it removes it, under an exclusive claim file for that exact lock,
+    followed by an exclusive create. Any failure on that path refuses. The tombstone rename, the heartbeat and
+    `LOCK_STALE_MS` are gone.
+  - The launcher has no single-instance guard (searched `launch.mjs` and the repo, 2026-11-21). A second studio on the
+    same data folder is therefore refused by the file lock, not prevented from starting.
+  - Every YouTube request, including the read of its answer's body, has one deadline (`timedFetch` with a `read`
+    step): the session start, the progress query, every chunk, the cover and the status check (`checkUploadStatus`,
+    which had none).
+  - The chunk deadline is no longer a fixed 10 min. It is the chunk's size at the slower of the floor speed
+    (`fallbackKbps` in `data/posting/schedule.json`) and the slowest chunk measured, plus `REQUEST_MS` (`chunkTimeoutMs`).
+    A chunk that times out after Google has received more bytes resumes from Google's count with no try used. With no
+    progress the item waits (`request-timeout`, no try used, session kept).
+- Fifth Codex review (2026-11-21). These replace the points above where they differ:
+  - The lock and the claim record their owner's pid and process start time. An owner is dead when its pid is gone,
+    or when the pid now belongs to a process with another start time (pid reused; 5 s slack). A live pid whose start
+    time cannot be read counts as not dead.
+  - A crash between the claim and the exclusive create leaves a claim behind. If the claimant and the lock's holder
+    are both dead, the pass still refuses, and the notice says a closed copy left its posting lock behind. Settings >
+    Posting & growth > Auto-post then shows "Clear stuck posting lock" (one click, no confirm, D332). The click checks
+    again that both files are the same ones with dead owners, removes the lock and then its claim, and asks for a pass.
+    Nothing is removed automatically. A live claimant or a live lock holder is never cleared.
+  - Sixth Codex review: taking the lock refuses whenever ANY claim file for it exists, even with the lock file
+    absent. The clear runs in the in-process mutex. It re-verifies, then removes the lock only if it still has the
+    exact verified content (otherwise nothing else is removed), and removes the claim LAST. A stuck lock is also one
+    whose claim is dead and whose lock file is already gone. The click's id names both files as seen, so a click made
+    on an older view is refused. A claim holding only a number (7b5c7ec format) reads as { pid, start unknown }: pid
+    gone = dead, pid alive = alive.
+  - Seventh Codex review: "stuck" is one general rule with no token matching. At least one claim file exists, every
+    claim's claimant is dead, and the lock file is absent or held by a dead owner. The click id lists every claim name
+    and the lock token as seen. The clear (in the mutex) re-verifies that same set, deletes the lock only if its content
+    still matches, then deletes each dead claim last. Every crash point of the dead-lock replacement is therefore either
+    sendable or offers Clear.
+  - Eighth Codex review: the lock and the claim are created whole or not at all. The content goes to a unique temp file
+    in the same folder (`<name>.<pid>.<rand>.tmp`), is fsynced, then hard-linked to the target (atomic and exclusive;
+    EEXIST = lost); the temp is removed. The lock logic ignores `*.tmp`, and the chain removes such temp files older
+    than 10 min when it starts. Files from older builds or other torn writes: an empty or unparseable claim or lock
+    older than 60 s (`TORN_DEAD_MS`) counts as dead-owned, so the general stuck rule offers Clear (a torn lock with no
+    claim included). Younger than 60 s counts as alive (wait).
+  - Known item: the studio has no single-instance guard. A second studio's chain refuses through the lock
+    (`sender-elsewhere`); it is not stopped from starting.
+
+## D410 — Posting PT5 and PT4 as built (decided, 2026-11-21)
+
+As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. Evidence:
+`docs/evidence/2026-11-21-posting-text-schedule-growth.md`. Nothing in D409 is weakened: the 60-minute floor, the
+fail-closed channel reads, the single sender, the lock and publishAt on every upload are unchanged.
+
+- PT5: Settings > Posting & growth gains a card "Post text and growth" next to the Auto-post card, with the same
+  Save / Discard. The posts a day, window, gap (60 to 1440, floor 60), days off and "Run auto-post now" were already on
+  the Auto-post card and stay there. New: tone (hype or clean), emoji on or off, the user's own hashtags (up to 10),
+  a description footer (up to 500 characters), a preview on the three newest clips (read only), the share of each kind
+  (whole percent, must add up to 100), growth suggestions on or off, and a line that says which quota model is in use
+  and why.
+- The settings live in `<data>/posting/prefs.json` (`services/posting/post-prefs.mjs`), next to the other posting
+  settings, so they survive updates. Routes: `GET/POST /ui/api/posts/prefs` and `POST /ui/api/posts/prefs/preview`
+  (read only). No new flag: the card is part of the posting flag, and growth suggestions are on by default.
+- The defaults change no text: tone hype keeps the drafted lines as written and emoji are off by default. Clean replaces
+  "!" and never adds an emoji. With hype and emoji on, one emoji per kind (`data/posting/text-style.json`) is added at
+  the end of the title, only when it still fits the title limit. The prefs apply when a clip is packaged
+  (`packageUploads`, `packageRun`); posts already made keep their text.
+- Kind shares change only the order inside the daily cap (`mixOrder`), never the count or the gap. A learned RP5 mix
+  wins when one is in use. Even shares (the default) keep the order exactly as before.
+- PT4: `services/analytics/timing.mjs` reads the AN1 numbers already stored (`view()`: 24 h and 7 d checkpoints, views,
+  averageViewPercentage, subscribersGained). No new scope and no Google request. It groups them by local time band,
+  weekday and kind. With at least 8 posts that have a 24 h number, it proposes one change: the best band (at least 3
+  posts and at least 10 % more 24 h views than the other posts), for example "Move 2 of your daily posts to
+  18:00-21:00: +34 % 24 h views on 12 posts." Limits are in `data/posting/growth-timing.json` with source and date.
+- The proposal is a record (`<data>/posting/growth-suggestion.json`) shown in the Posts window with Apply and Dismiss.
+  Apply writes the user's schedule settings as placement custom (the same times each weekday), checked with the strict
+  60-minute floor. It keeps the earlier file for Undo and logs to `growth-log.jsonl`. Undo puts the file back byte for
+  byte. It refuses when the schedule was changed after Apply, so a later change is never overwritten. Dismiss hides the
+  same proposal for 7 days.
+- Exploration: at most 1 in 5 of the day's slots (rounded down; the config refuses more than 0.2) go to a band outside
+  the best one. The band is picked by Thompson sampling as in RP5, using `betaDraw` and `seededRng` from
+  `services/learning/mix.mjs`.
+- UNVERIFIED: "24 h views" is the first stored fetch at least 24 h after the video went public, so it can be later than
+  24 h. Viewer activity by hour is not read, because the report was not checked. The Analytics numbers arrive a day or
+  two late.
+
+### D410 addendum — Codex review of PT5/PT4 fixed (2026-11-21)
+
+- Apply order: the record is saved first as `applying` (whole file as it was, the text to write, fsync and rename), then the schedule is replaced, then the record becomes `applied`. A stop in between is recovered on the next read: schedule unchanged means back to open; schedule written means applied with Undo offered.
+- Each weekday keeps its own post count (a day with 0 stays 0). A proposal is refused (`no-room`) unless every slot fits with the gap, across midnight and into the next weekday too.
+- Exploration (at most 1 in 5) is checked on the actual proposed times.
+- The proposal stores a fingerprint of the schedule file it was made from. Apply refuses in plain words when the file changed since, and asks for a fresh suggestion.
+- Own hashtags: #Shorts is refused. Footer: control characters refused (same rule as the post editor). Each emoji, footer and own hashtag is added only if the composed text still passes data/posting/limits.json (`limitsFit`); otherwise it is left out.
+- The Apply text says what it replaces: "Replaces your random 3-6 a day with fixed times ... (Undo keeps your old schedule)."

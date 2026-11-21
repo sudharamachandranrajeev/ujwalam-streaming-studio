@@ -22,6 +22,7 @@ from datetime import datetime
 
 import clip_names as names
 import learning_mix as lmix
+import reel_thumbnail as rt
 from clip_common import ClipError, load_json, write_json_atomic
 
 PUBLISHED = "published.json"
@@ -135,6 +136,8 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         rows.append({"id": c["id"], "layout": f["layout"], "file": os.path.join(day, name), "how": how, "kind": kind,
                      "label": label, "seconds": round(float(c["end"]) - float(c["start"]), 3),
                      **({"thumbnail": True} if f.get("thumbnail") else {}),  # RP6: frame 0 is the cover
+                     # PT1 (D408): the clip's facts (medal, kills, result, mode; only the known ones) for its post text
+                     **({"facts": rt.facts(c)} if rt.facts(c) else {}),
                      # RP5 (D373): the edit choices a reel was made with, so its results can be linked to them
                      **({"choices": lmix.choices_record(c, (c.get("learning") or {}).get("mixAt"))}
                         if tool.startswith("clipper.montage") else {})})
@@ -142,7 +145,8 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
     write_json_atomic(prev_path, {"tool": "clipper.publish", "to": to, "files": prev + rows})
     if data_dir and rows:
         add_uploads(data_dir, [{**{k: r[k] for k in ("file", "kind", "label", "seconds")}, "run": run,
-                                "recording": rdoc.get("recording"), "posted": [],
+                                "recording": rdoc.get("recording"), "posted": [], "game": game,
+                                **({"facts": r["facts"]} if r.get("facts") else {}),
                                 **({"thumbnail": True} if r.get("thumbnail") else {}),
                                 **({"choices": r["choices"]} if r.get("choices") else {})} for r in rows])
     return rows

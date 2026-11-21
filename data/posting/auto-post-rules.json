@@ -10,6 +10,6 @@
     "kinds": { "type": "string[] optional, default [\"short\"]", "from": "post.json source.kind (short | montage | won-reel | impact-play | long-highlights)", "status": "proposed" },
     "minScore": { "type": "number", "from": "candidates.json score (post.json source.score)", "status": "proposed" },
     "layouts": { "type": "string[] optional", "from": "post.json source.layout", "status": "proposed" },
-    "maxPerDay": { "type": "integer 1..10", "counts": "auto approvals (and, separately, auto uploads) per UTC day per rule", "status": "proposed" }
+    "maxPerDay": { "type": "integer 1..24 (PT2, D408: the 60-minute gap allows 24 a day; a file value 25..100 from before reads as 24)", "counts": "auto approvals (and, separately, auto uploads) per UTC day per rule", "status": "proposed" }
   }
 }

@@ -21,6 +21,7 @@ import { createProject, saveProject } from '../services/project/index.mjs';
 import { QUEUE_NAME, createUploadQueue } from '../services/posting/auto-chain.mjs';
 import { userRulesFile } from '../services/posting/auto-post.mjs';
 import { userScheduleFile } from '../services/posting/schedule.mjs';
+import { prefsFile } from '../services/posting/post-prefs.mjs';
 import { EXE, qtDir } from '../app/studio/tools/build.mjs';
 
 const UI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
@@ -92,9 +93,9 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(ap.dirty, false);
     assert.equal(s.settings.dirty, false);
     // D405: random-daily is the shipped placement; the card also carries the random-daily and custom-times fields.
-    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 3, maxPerDay: 6, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000,
-      minGapMinutes: 90, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, skipDates: [] });
-    assert.match(ap.fit, /About 6 uploads a day fit/);
+    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 3, maxPerDay: 24, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000,
+      minGapMinutes: 60, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, skipDates: [] });
+    assert.match(ap.fit, /About 24 uploads a day fit/); assert.match(ap.fit, /own upload allowance/); // PT2 (D408): the upload bucket
     assert.match(ap.flags, /Auto post and Scheduled posting are on/);
     assert.match(ap.flags, /stay in the clips folder/);
     assert.ok(ap.times.length >= 11, ap.times.join(' | '));
@@ -113,9 +114,9 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
   });
 
   test('edits make the dialog dirty; no kind at all blocks Save with a plain note and keeps Settings open', async () => {
-    const r = await probe({ actions: [...open, ...WAIT, 'ap-gap:6', 'ap-perday:9', 'ap-kind:short:off', 'ap-kind:montage:off', 'ap-kind:won-reel:off', 'ap-kind:impact-play:off', 'ap-kind:long-highlights:off', ...WAIT, 'settings-save'] }); // D406: five kinds
+    const r = await probe({ actions: [...open, ...WAIT, 'ap-gap:6', 'ap-quota:1000', 'ap-perday:20', 'ap-kind:short:off', 'ap-kind:montage:off', 'ap-kind:won-reel:off', 'ap-kind:impact-play:off', 'ap-kind:long-highlights:off', ...WAIT, 'settings-save'] }); // D406: five kinds
     const d = done(r.p);
-    for (const a of ['ap-gap:6', 'ap-perday:9', 'ap-kind:short:off', 'ap-kind:impact-play:off']) assert.equal(d[a], true, a);
+    for (const a of ['ap-gap:6', 'ap-quota:1000', 'ap-perday:20', 'ap-kind:short:off', 'ap-kind:impact-play:off']) assert.equal(d[a], true, a);
     assert.equal(d['settings-save'], false, 'Save is refused');
     assert.equal(r.ap.dirty, true);
     assert.equal(r.s.settings.dirty, true);
@@ -128,10 +129,10 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(exists(userRulesFile(r.dataDir)), false, 'nothing written');
   });
 
-  test('a quota below one upload: the card says plainly that nothing uploads', async () => {
+  test('PT2: a low quota with the upload bucket still fits uploads (each costs only its cover, 50 units)', async () => {
     const r = await probe({ actions: [...open, ...WAIT, 'ap-quota:1000', ...WAIT] });
     assert.equal(done(r.p)['ap-quota:1000'], true);
-    assert.match(r.ap.fit, /No upload fits in a quota of 1,?000 units a day \(one upload needs 1,?750\): nothing uploads until the quota is raised/);
+    assert.match(r.ap.fit, /About 18 uploads a day fit/);
   });
 
   test('Save writes the user files in the data folder (one click, no question)', async () => {
@@ -143,7 +144,7 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(sched.maxAheadDays, 60);
     const rules = JSON.parse(readFileSync(userRulesFile(r.dataDir), 'utf8'));
     assert.deepEqual(rules.rules[0].kinds, ['short', 'montage', 'won-reel', 'long-highlights']);
-    assert.equal(rules.maxUploadsPerDay, 6);
+    assert.equal(rules.maxUploadsPerDay, 24);
     assert.equal(r.s.flagsInSettings, false, 'Settings closed');
     assert.match(r.s.note, /Settings saved\.|Auto-post settings saved; the next upload pass uses them\./);
   });
@@ -158,7 +159,7 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     // D405: the card also carries the random-daily and custom-times fields (defaults here, untouched by these actions).
     const empty = { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] };
     assert.deepEqual(r.ap.card, { autoUpload: false, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 50, maxPerDay: 2, intervalHours: 48, maxAheadDays: 5, placement: 'after-last', quotaUnitsPerDay: 20000,
-      minGapMinutes: 90, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: empty, skipDates: [] });
+      minGapMinutes: 60, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: empty, skipDates: [] });
     assert.equal(r.ap.dirty, true);
     assert.equal(node(r.p, 'autopostUpload').checked, false);
     assert.equal(node(r.p, 'autopostPlacement').text, 'Always after the last scheduled post');
@@ -226,5 +227,40 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.deepEqual([k.s.settings.unsavedOpen, k.s.settings.dirty], [true, true]);
     const sv = await probe({ actions: [...open, ...WAIT, 'ap-gap:6', ...WAIT, 'settings-cancel', 'settings-unsaved:save'], ms: 12000 });
     assert.equal(JSON.parse(readFileSync(userScheduleFile(sv.dataDir), 'utf8')).intervalHours, 6, 'Save changes writes it');
+  });
+  // ---- PT5 (D410): post text and growth ----
+  test('PT5: the post text and growth card shows the defaults, the quota model in plain words and growth suggestions on', async () => {
+    const { ap } = await probe({ actions: [...open, ...WAIT] });
+    assert.equal(ap.prefsLoaded, true);
+    assert.deepEqual(ap.prefs, { text: { tone: 'hype', emoji: false, hashtags: [], footer: '' }, kindShare: { short: 20, montage: 20, 'won-reel': 20, 'impact-play': 20, 'long-highlights': 20 }, growthSuggestions: true });
+    assert.equal(ap.shareSum, 100);
+    assert.equal(ap.prefsDirty, false);
+    assert.match(ap.quotaModel, /^Quota model in use: YouTube's upload allowance\. It is the default/);
+  });
+
+  test('PT5: edits make it dirty; shares off 100 % block Save with a plain note; a good edit saves to the data folder', async () => {
+    const bad = await probe({ actions: [...open, ...WAIT, 'ap-share:short:50', ...WAIT, 'settings-save'] });
+    assert.equal(done(bad.p)['settings-save'], false, 'Save refused');
+    assert.match(bad.ap.problem, /add up to 130 %/);
+    assert.equal(exists(prefsFile(bad.dataDir)), false);
+    const tags = encodeURIComponent('#mobile clutch');
+    const footer = encodeURIComponent('Live most nights');
+    const r = await probe({ actions: [...open, ...WAIT, 'ap-tone:clean', 'ap-emoji:on', `ap-tags:${tags}`, `ap-footer:${footer}`, 'ap-share:short:40', 'ap-share:montage:0', 'ap-growth:off', ...WAIT, 'settings-save'], ms: 14000 });
+    const d = done(r.p);
+    for (const a of ['ap-tone:clean', 'ap-emoji:on', 'ap-share:short:40', 'ap-growth:off', 'settings-save']) assert.equal(d[a], true, a);
+    const saved = JSON.parse(readFileSync(prefsFile(r.dataDir), 'utf8'));
+    assert.deepEqual(saved.text, { tone: 'clean', emoji: true, hashtags: ['#mobile', '#clutch'], footer: 'Live most nights' });
+    assert.deepEqual(saved.kindShare, { short: 40, montage: 0, 'won-reel': 20, 'impact-play': 20, 'long-highlights': 20 });
+    assert.equal(saved.growthSuggestions, false);
+    assert.equal(exists(userScheduleFile(r.dataDir)), false, 'the schedule card did not change, so it is not written');
+  });
+
+  test('PT5: Preview reads only and says so when there are no clips; Discard writes nothing', async () => {
+    const r = await probe({ actions: [...open, ...WAIT, 'ap-preview', ...WAIT, ...WAIT] });
+    assert.match(r.ap.previewInfo, /No clips yet/);
+    assert.equal(exists(prefsFile(r.dataDir)), false);
+    const k = await probe({ actions: [...open, ...WAIT, 'ap-growth:off', ...WAIT, 'settings-cancel', 'settings-unsaved:discard'], ms: 12000 });
+    assert.equal(k.s.flagsInSettings, false);
+    assert.equal(exists(prefsFile(k.dataDir)), false, 'nothing written');
   });
 });

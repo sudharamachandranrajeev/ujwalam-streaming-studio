@@ -8,6 +8,8 @@ import { test } from 'node:test';
 import { createLedger } from '../services/posting/index.mjs';
 import { uploadMetadata, uploadVideo, UploadError } from '../services/posting/youtube.mjs';
 
+// D409: every upload needs a publish time (uploadVideo refuses one without).
+const PUB = '2030-01-01T00:00:00.000Z';
 const LIMITS = { targets: { 'youtube-shorts': { status: 'checked', fields: { title: { max: 100, unit: 'chars' } } } } };
 
 function tmpVideo(bytes) {
@@ -48,7 +50,7 @@ test('uploadVideo: happy path, single chunk upload, ledger-first then thumbnail'
     if (String(url).includes('thumbnails/set')) return jsonRes(200, {});
     throw new Error(`unexpected call ${url}`);
   };
-  const r = await uploadVideo({
+  const r = await uploadVideo({ publishAt: PUB,
     post: basePost(sha), sha256: sha, videoPath: video, coverPath: cover, accessToken: 'tok', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [] }), fetchImpl, now: () => 't1',
   });
@@ -83,7 +85,7 @@ test('uploadVideo: multi-chunk upload with a dropped connection resumes from the
     if (endByte + 1 >= totalBytes) return jsonRes(200, { id: 'VID999' });
     return jsonRes(308, {}, { range: `bytes=0-${endByte}` });
   };
-  const r = await uploadVideo({
+  const r = await uploadVideo({ publishAt: PUB,
     post: basePost(sha), sha256: sha, videoPath: video, accessToken: 'tok', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [] }), fetchImpl, chunkSize, now: () => 't1',
   });
@@ -96,7 +98,7 @@ test('uploadVideo: multi-chunk upload with a dropped connection resumes from the
 test('uploadVideo: refuses a non-approved package', async () => {
   const video = tmpVideo(16);
   const ledger = createLedger(path.join(path.dirname(video), 'ledger.json'));
-  await assert.rejects(uploadVideo({
+  await assert.rejects(uploadVideo({ publishAt: PUB,
     post: basePost('c'.repeat(64), { status: 'draft' }), sha256: 'c'.repeat(64), videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [] }), fetchImpl: async () => { throw new Error('must not call the network'); },
   }), (e) => e instanceof UploadError && e.code === 'not-approved');
@@ -105,7 +107,7 @@ test('uploadVideo: refuses a non-approved package', async () => {
 test('uploadVideo: refuses if the video changed since approval (sha256 mismatch)', async () => {
   const video = tmpVideo(16);
   const ledger = createLedger(path.join(path.dirname(video), 'ledger.json'));
-  await assert.rejects(uploadVideo({
+  await assert.rejects(uploadVideo({ publishAt: PUB,
     post: basePost('d'.repeat(64)), sha256: 'e'.repeat(64), videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [] }), fetchImpl: async () => { throw new Error('must not call the network'); },
   }), (e) => e.code === 'video-changed');
@@ -116,7 +118,7 @@ test('uploadVideo: refuses an already-uploaded post (never upload the same video
   const ledger = createLedger(path.join(path.dirname(video), 'ledger.json'));
   const sha = 'f'.repeat(64);
   ledger.put({ sha256: sha, target: 'youtube-shorts', status: 'uploaded', videoId: 'OLDID', dir: path.dirname(video), createdAt: 't0', updatedAt: 't0' });
-  await assert.rejects(uploadVideo({
+  await assert.rejects(uploadVideo({ publishAt: PUB,
     post: basePost(sha), sha256: sha, videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [] }), fetchImpl: async () => { throw new Error('must not call the network'); },
   }), (e) => e.code === 'already-uploaded' && /OLDID/.test(e.message));
@@ -127,7 +129,7 @@ test('uploadVideo: refuses while a stream sink is active (uploads never compete 
   const ledger = createLedger(path.join(path.dirname(video), 'ledger.json'));
   const sha = '1'.repeat(64);
   ledger.put({ sha256: sha, target: 'youtube-shorts', status: 'approved', dir: path.dirname(video), createdAt: 't0', updatedAt: 't0' });
-  await assert.rejects(uploadVideo({
+  await assert.rejects(uploadVideo({ publishAt: PUB,
     post: basePost(sha), sha256: sha, videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [{ kind: 'stream', active: true }] }), fetchImpl: async () => { throw new Error('must not call the network'); },
   }), (e) => e.code === 'stream-active');
@@ -138,7 +140,7 @@ test('uploadVideo: refuses with unresolved placeholders', async () => {
   const ledger = createLedger(path.join(path.dirname(video), 'ledger.json'));
   const sha = '2'.repeat(64);
   ledger.put({ sha256: sha, target: 'youtube-shorts', status: 'approved', dir: path.dirname(video), createdAt: 't0', updatedAt: 't0' });
-  await assert.rejects(uploadVideo({
+  await assert.rejects(uploadVideo({ publishAt: PUB,
     post: basePost(sha, { unresolved: ['handles.x'] }), sha256: sha, videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [] }), fetchImpl: async () => { throw new Error('must not call the network'); },
   }), (e) => e.code === 'unresolved-placeholders');
@@ -156,7 +158,7 @@ test('uploadVideo: a cover upload failure is reported, not fatal (video is alrea
     if (String(url).includes('thumbnails')) return jsonRes(403, {});
     throw new Error('unexpected');
   };
-  const r = await uploadVideo({ post: basePost(sha), sha256: sha, videoPath: video, coverPath: cover, accessToken: 'x', ledger, limits: LIMITS, outputsStatus: async () => ({ sinks: [] }), fetchImpl, now: () => 't1' });
+  const r = await uploadVideo({ publishAt: PUB, post: basePost(sha), sha256: sha, videoPath: video, coverPath: cover, accessToken: 'x', ledger, limits: LIMITS, outputsStatus: async () => ({ sinks: [] }), fetchImpl, now: () => 't1' });
   assert.equal(r.videoId, 'VID1');
   assert.equal(r.thumbnailOk, false);
   assert.equal(ledger.get(sha, 'youtube-shorts').status, 'uploaded'); // still recorded as uploaded

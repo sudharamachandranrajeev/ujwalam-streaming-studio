@@ -1,0 +1,16 @@
+{
+  "$comment": "PT1 (D408, 2026-11-21): post text lines for this game, added to data/posting/templates.json textPools for the same kind (services/posting/post-text.mjs). Same rules: facts {medal} {killsText} {kills} {result} {mode} only (a line with a missing fact is not used), no {n} or {date}, no names of people, brands or channels.",
+  "version": "0.1.0",
+  "textPools": {
+    "short": {
+      "title": ["CODM {medal}", "CODM {mode}: {killsText}"],
+      "lead": ["Call of Duty: Mobile, {mode}, live on stream."]
+    },
+    "montage": {
+      "title": ["CODM {killsText} montage"]
+    },
+    "won-reel": {
+      "title": ["CODM {mode}: {result}"]
+    }
+  }
+}

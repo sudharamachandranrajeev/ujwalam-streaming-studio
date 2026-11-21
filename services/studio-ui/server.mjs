@@ -32,16 +32,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOTS, BOT_LABELS, GRACEFUL_MS, createBots } from '../bots/index.mjs';
 import { createFlags } from '../flags/index.mjs';
-import { LEDGER_NAME, POSTING_FLAG, createPostStore } from '../posting/index.mjs';
+import { LEDGER_NAME, POSTING_FLAG, createPostStore, limitsFit, loadLimits } from '../posting/index.mjs';
 import { createYoutubeAuth } from '../posting/oauth.mjs';
-import { QUEUE_NAME, createUploadQueue, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
+import { QUEUE_NAME, clearStuckLock, createUploadQueue, requestRunNow, stuckLock, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
 import { previewRules } from '../posting/preview.mjs';
 import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
-import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, schedulePreview } from '../posting/auto-settings.mjs';
+import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, scheduleConfigFor, scheduleNextFree, schedulePreview } from '../posting/auto-settings.mjs';
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
-import { SCHEDULE_FLAG } from '../posting/schedule.mjs';
-import { UploadError, checkPostStatus, uploadPost } from '../posting/youtube.mjs';
+import { applyTextPrefs, readPrefs, savePrefs } from '../posting/post-prefs.mjs';
+import { analyseTiming, applySuggestion, dismissSuggestion, loadTimingConfig, readRecord as readGrowthRecord, refreshSuggestion, undoSuggestion } from '../analytics/timing.mjs';
+import { SCHEDULE_FLAG, userScheduleFile } from '../posting/schedule.mjs';
+import { UploadError, checkPostStatus } from '../posting/youtube.mjs';
 import { GROWTH_FLAG, DB_NAME as GROWTH_DB, collect as growthCollect, openStore as openGrowthStore, view as growthView } from '../analytics/index.mjs';
 import { MIX_FLAG, step as mixStep, undo as mixUndo, view as mixView, weeklyReport as mixReport } from '../learning/mix.mjs';
 import { AnalyticsError } from '../analytics/youtube.mjs';
@@ -342,6 +344,9 @@ export function gateStarts(host, getAuthority) {
   return new Proxy(host, { get(t, k) { if (k === 'call') return call; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } });
 }
 
+/** PT4: the suggestion record without the saved schedule text (that stays in the data folder for Undo). */
+const publicRecord = (r) => { const { before, appliedText, ...rest } = r; return rest; };
+
 export function createStudioServer(opts) {
   const limits = { ...LIMITS, ...(opts.limits ?? {}) };
   const now = opts.now ?? Date.now;
@@ -426,7 +431,6 @@ export function createStudioServer(opts) {
   // reach the browser. opts.youtube = { auth, fetchImpl, outputsStatus } are test seams.
   let ytAuth = opts.youtube?.auth ?? null;
   const youtubeAuth = () => (ytAuth ??= createYoutubeAuth({ browserOpen: async () => { throw new Error('sign-in runs from the command line'); } }));
-  const uploading = new Set();
   // D375 Auto-post card: a fresh channel read for "Next posting times" at most every 10 minutes (quota), else the saved one.
   const CHANNEL_READ_EVERY_MS = 10 * 60 * 1000;
   // { at, promise } -> { channel } | { error }. The promise is stored before it is awaited, so requests that arrive while a
@@ -1628,6 +1632,33 @@ export function createStudioServer(opts) {
         return json(res, 200, { ...readAutoPostSettings(opts.dataDir), flags: { autoPost: on(AUTO_FLAG), schedule: on(SCHEDULE_FLAG), deleteUploaded: on(DELETE_FLAG) } });
       } catch { return json(res, 500, { error: 'settings-unreadable' }); }
     }
+    if (req.method === 'GET' && route === '/ui/api/posts/growth-suggestion') {
+      // PT4 (D410): one growth-led schedule suggestion from the stored AN1 numbers (flag growth, read only towards YouTube;
+      // nothing is fetched here). Only the suggestion record is written; the schedule changes only on Apply.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      if (!growthOn()) return json(res, 200, { enabled: false, why: 'growth-off', record: null });
+      let prefsOn = true; try { prefsOn = readPrefs(opts.dataDir).prefs.growthSuggestions !== false; } catch { prefsOn = true; }
+      if (!prefsOn) return json(res, 200, { enabled: false, why: 'suggestions-off', record: readGrowthRecord(opts.dataDir)?.status === 'applied' ? readGrowthRecord(opts.dataDir) : null });
+      let store;
+      try {
+        const cfg = loadTimingConfig();
+        // Codex (D410): the fingerprinted text must be the text the schedule was loaded from. Read it before and after
+        // loading; a change in between means a save raced this read, so no suggestion is made from a mixed view.
+        const readSource = () => { try { return readFileSync(userScheduleFile(opts.dataDir), 'utf8'); } catch { return null; } };
+        const source = readSource();
+        const sched = scheduleConfigFor(opts.dataDir);
+        if (readSource() !== source) return json(res, 409, { error: 'schedule-changed' });
+        store = openGrowthStore(path.join(opts.dataDir, GROWTH_DB));
+        const videos = growthView(store, now()).videos;
+        const analysis = analyseTiming({ videos, cfg, schedule: sched, source, tz: sched.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
+        const record = refreshSuggestion({ dataDir: opts.dataDir, analysis, cfg, now: now() });
+        return json(res, 200, { enabled: true, count: analysis.count, minPosts: analysis.minPosts, reason: analysis.reason, byBand: analysis.byBand, record: record ? publicRecord(record) : null });
+      } catch { return json(res, 500, { error: 'suggestion-unavailable' }); } finally { try { store?.close(); } catch { /* closed */ } }
+    }
+    if (req.method === 'GET' && route === '/ui/api/posts/prefs') {      // PT5 (D410) Settings > Posting & growth: post text, kind shares, growth suggestions. Read only.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      try { return json(res, 200, readPrefs(opts.dataDir)); } catch { return json(res, 500, { error: 'settings-unreadable' }); }
+    }
     if (req.method === 'GET' && route === '/ui/api/posts/auto/rules') {      // user 2026-11-20 "What gets posted": the rules in use, unchanged, plus what stops uploads (never silent). Read only.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
       const on = (id) => !!flags && flags.isOn(id);
@@ -1663,7 +1694,9 @@ export function createStudioServer(opts) {
         channel = r.channel ?? null; liveError = r.error ?? null;
       }
       const count = Number(url.searchParams.get('count') ?? 10);
-      try { return json(res, 200, { ...schedulePreview(opts.dataDir, { nowMs: t, count: Number.isFinite(count) ? count : 10, channel }), liveError }); } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
+      // Fifth Codex review (D409): a stuck posting lock (crash-left claim, both owners dead) is shown with its one-click clear.
+      let stuck = null; try { const s = stuckLock(opts.dataDir, opts.procStart ? { procStart: opts.procStart } : {}); stuck = s ? { id: s.id } : null; } catch { stuck = null; }
+      try { return json(res, 200, { ...schedulePreview(opts.dataDir, { nowMs: t, count: Number.isFinite(count) ? count : 10, channel }), liveError, stuckLock: stuck }); } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
     }
     if (req.method === 'GET' && route === '/ui/api/posts/auto') {
       // Read-only: the auto-post mode and what a run would do now. Enabling stays a flag; nothing is changed here.
@@ -1886,18 +1919,22 @@ export function createStudioServer(opts) {
       if (!isUpload) {
         try { return json(res, 200, await checkPostStatus({ id: body.id, store: posting, auth: youtubeAuth(), fetchImpl: opts.youtube?.fetchImpl })); } catch (e) { return fail(e); }
       }
-      // The Upload click is the decision (D332): no typed phrase. Approved, not uploaded, nothing live (checked below).
+      // The Upload click is the decision (D332): no typed phrase. D409 (second Codex review, 2026-11-21): nothing is sent
+      // from here. No video goes up without a checked publish time, so the click puts the approved clip in the upload
+      // queue at the next free time (the one hard rule: an hour or more from any other post) and asks the auto-post chain
+      // for a pass at once. The chain is the only sender: one schedule-lock hold, a fresh channel read right before the
+      // session, the 60-min check and the upload budget gate (auto-chain.mjs sendGated). Refused while live or starting.
       if (v.status === 'uploaded') return json(res, 409, { error: 'already-uploaded', videoId: v.videoId });
       if (v.status !== 'approved') return json(res, 409, { error: 'not-approved' });
-      if (uploading.size) return json(res, 409, { error: 'upload-in-progress' });
-      uploading.add(body.id);
-      const ut = tasks.start({ title: 'Uploading a clip to YouTube (private)', kind: 'upload', note: 'Sending the video' });
-      try {
-        // Live is re-checked inside uploadPost just before the transfer; here a failed check also refuses (fail closed).
-        const r = await uploadPost({ id: body.id, store: posting, auth: youtubeAuth(), fetchImpl: opts.youtube?.fetchImpl, outputsStatus: async () => { try { return await ytOutputsStatus(); } catch { throw new UploadError('stream-active', 'could not confirm that nothing is live; upload refused'); } } });
-        ut.done();
-        return json(res, 200, { videoId: r.videoId, uploadStatus: r.uploadStatus, thumbnailOk: r.thumbnailOk, privacy: 'private' });
-      } catch (e) { ut.fail('The upload did not finish'); return fail(e); } finally { uploading.delete(body.id); }
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      if (!flags || !flags.isOn(AUTO_FLAG)) return json(res, 409, { error: 'auto-post-off' });
+      // A live (or unreadable) stream state refuses with the route's old code, 'stream-active' (fail closed).
+      const blocked = await liveBlock(streamOnly(ytOutputsStatus));
+      if (blocked) return json(res, 409, { error: 'stream-active', detail: blocked });
+      const r = scheduleNextFree(opts.dataDir, body.id, { nowMs: now() });
+      if (!r.ok) return json(res, 409, { error: r.code, text: r.text });
+      try { requestRunNow(opts.dataDir, now()); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return json(res, 200, { queued: true, publishAt: r.item.publishAt, privacy: 'private', queue: readQueueSummary(opts.dataDir, flags) });
     }
     if (route === '/ui/api/growth/refresh') {
       // Reads the user's own numbers from YouTube (read only; nothing is posted or changed). One run at a time; a run within
@@ -1945,6 +1982,36 @@ export function createStudioServer(opts) {
       try { r = saveAutoPostSettings(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
       return r.ok ? json(res, 200, { ok: true, ...r.settings }) : json(res, 400, { error: 'invalid', problems: r.problems });
     }
+    if (route === '/ui/api/posts/growth-suggestion/apply' || route === '/ui/api/posts/growth-suggestion/dismiss' || route === '/ui/api/posts/growth-suggestion/undo') {
+      // PT4 (D410): each acts on its own click (D332). Apply writes the user's schedule settings (60-minute floor checked),
+      // Undo puts them back exactly; both are logged. Dismiss only marks the record.
+      if (typeof opts.dataDir !== 'string' || typeof body.id !== 'string' || body.id.length > 40 || Object.keys(body).some((k) => k !== 'id')) return json(res, 400, { error: 'bad-params' });
+      if (!growthOn()) return json(res, 409, { error: 'growth-off' });
+      const fn = route.endsWith('/apply') ? applySuggestion : route.endsWith('/dismiss') ? dismissSuggestion : undoSuggestion;
+      let r;
+      try { r = fn(opts.dataDir, body.id, { now: now() }); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return r.ok ? json(res, 200, { ok: true, record: publicRecord(r.record) }) : json(res, r.code === 'unknown' ? 404 : 409, { error: r.code, text: r.text });
+    }
+    if (route === '/ui/api/posts/prefs') {      // PT5 (D410): one click saves the post text card (D332). Every value is checked; nothing is written on a problem.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      if (Object.keys(body).some((k) => k !== 'prefs')) return json(res, 400, { error: 'bad-params' });
+      let r;
+      try { r = savePrefs(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return r.ok ? json(res, 200, r) : json(res, 400, { error: 'invalid', problems: r.problems });
+    }
+    if (route === '/ui/api/posts/prefs/preview') {
+      // PT5 (D410): the post text choices (not saved yet) applied to the newest clips' text. Read only: nothing is written.
+      if (Object.keys(body).some((k) => k !== 'text') || body.text === null || typeof body.text !== 'object' || Array.isArray(body.text)) return json(res, 400, { error: 'bad-params' });
+      const t = body.text;
+      const text = { tone: t.tone === 'clean' ? 'clean' : 'hype', emoji: t.emoji === true,
+        hashtags: Array.isArray(t.hashtags) ? t.hashtags.filter((h) => typeof h === 'string' && /^#[\p{L}\p{N}_]{1,39}$/u.test(h)).slice(0, 10) : [],
+        footer: typeof t.footer === 'string' ? t.footer.slice(0, 500) : '' };
+      try {
+        let lim = null; try { lim = loadLimits(); } catch { lim = null; }
+        const newest = posting.list().filter((p) => typeof p.title === 'string').sort((a, b) => String(b.madeAt ?? '').localeCompare(String(a.madeAt ?? ''))).slice(0, 3);
+        return json(res, 200, { items: newest.map((p) => ({ id: p.id, kind: p.kind, ...applyTextPrefs(p, text, { kind: p.kind, seed: p.id, titleMax: lim?.targets?.[p.target]?.fields?.title?.max ?? null, fits: lim ? limitsFit({ title: p.title, description: p.description, tags: p.tags ?? [], hashtags: p.hashtags ?? [], target: p.target }, lim) : () => true }) })) });
+      } catch { return json(res, 500, { error: 'preview-unavailable' }); }
+    }
     if (route === '/ui/api/posts/auto/rules') {      // user 2026-11-20: one click saves "What gets posted" (D332). Only the listed fields change; unknown rules and keys stay.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
       let r;
@@ -1960,6 +2027,35 @@ export function createStudioServer(opts) {
       const r = move ? moveQueueItem(opts.dataDir, body.id, body.at, { nowMs: now() }) : removeQueueItem(opts.dataDir, body.id);
       return r.ok ? json(res, 200, { ok: true, state: r.item.state, publishAt: r.item.publishAt ?? null, queue: readQueueSummary(opts.dataDir, flags) })
         : json(res, r.code === 'unknown' ? 404 : 409, { error: r.code, text: r.text });
+    }
+    if (route === '/ui/api/posts/auto/clear-lock') {
+      // "Clear stuck posting lock": one click, no confirm (D332). Removes that exact lock and its claim only after checking
+      // again that both are the same files and both owners are dead; otherwise refused and nothing is removed.
+      if (typeof opts.dataDir !== 'string' || typeof body.id !== 'string' || body.id.length > 200 || Object.keys(body).some((k) => k !== 'id')) return json(res, 400, { error: 'bad-params' });
+      const r = await clearStuckLock(opts.dataDir, body.id, opts.procStart ? { procStart: opts.procStart } : {});
+      if (!r.cleared) return json(res, 409, { error: r.code });
+      try { requestRunNow(opts.dataDir, now()); } catch { /* the next tick runs a pass anyway */ }
+      return json(res, 200, { cleared: true });
+    }
+    if (route === '/ui/api/posts/auto/run') {
+      // PT3 (D408) "Run auto-post now": one click asks the chain for a pass at once (request file; the chain's next tick
+      // runs it). Refused while a stream is live or starting, or when that cannot be read (fail closed).
+      if (typeof opts.dataDir !== 'string' || Object.keys(body).length) return json(res, 400, { error: 'bad-params' });
+      if (!flags || !flags.isOn(AUTO_FLAG)) return json(res, 409, { error: 'auto-post-off' });
+      const blocked = await liveBlock(streamOnly(ytOutputsStatus));
+      if (blocked) return json(res, 409, { error: blocked === 'output-live' ? 'stream-live' : blocked });
+      try { requestRunNow(opts.dataDir, now()); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return json(res, 200, { ok: true });
+    }
+    if (route === '/ui/api/posts/schedule-next') {
+      // PT3 per-clip "Schedule next free slot": the click approves the clip (D332) and queues it at the next free time.
+      if (typeof opts.dataDir !== 'string' || typeof body.id !== 'string' || body.id.length > 64 || Object.keys(body).some((k) => k !== 'id')) return json(res, 400, { error: 'bad-params' });
+      const v = posting.get(body.id);
+      if (!v) return json(res, 404, { error: 'unknown-post' });
+      if (v.status === 'uploaded') return json(res, 409, { error: 'already-uploaded' });
+      if (v.status !== 'approved') { const s = await posting.setStatus(body.id, 'approved'); if (typeof s === 'string') return json(res, POST_ERR[s] ?? 409, { error: s }); }
+      const r = scheduleNextFree(opts.dataDir, body.id, { nowMs: now() });
+      return r.ok ? json(res, 200, { ok: true, publishAt: r.item.publishAt, queue: readQueueSummary(opts.dataDir, flags) }) : json(res, 409, { error: r.code, text: r.text });
     }
     if (route === '/ui/api/posts/queue/retry') {
       // D301 "Retry now": puts a failed (or waiting) item back in the upload queue at once; the chain's next tick uploads it.

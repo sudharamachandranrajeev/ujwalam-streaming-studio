@@ -54,15 +54,19 @@ export const userScheduleFile = (dataDir) => path.join(dataDir, 'posting', USER_
 export const PLACEMENTS = Object.freeze(['random-daily', 'fill-gaps', 'after-last', 'custom']);
 export const WEEKDAYS = Object.freeze(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
 export const CUSTOM_LIMITS = Object.freeze({ timesPerDay: 24, skipDates: 400 });
+/** PT2 (D408, user 2026-11-21: "only not allowed rule should be ... 1 hr before or after the already scheduled one"): the
+ *  one fixed rule. No slot is ever less than this from any other scheduled time (channel, queue, same pass), in every
+ *  placement; a user gap may be wider, never narrower. 24 posts a day is the most this gap allows. */
+export const HARD_GAP_MINUTES = 60;
 /** What the user may set, and the allowed whole-number ranges (2 days is the widest gap that is still a schedule;
  *  maxAheadDays 730 = the user's 2-year cap, D314; quota from 1,000 units up to a raised Google quota). */
 export const USER_LIMITS = Object.freeze({
-  intervalHours: { min: 1, max: 48 },
+  intervalHours: { min: HARD_GAP_MINUTES / 60, max: 48 },
   maxAheadDays: { min: 1, max: 730 },
   quotaUnitsPerDay: { min: 1000, max: 10000000 },
   postsPerDayMin: { min: 1, max: 24 },
   postsPerDayMax: { min: 1, max: 24 },
-  minGapMinutes: { min: 15, max: 1440 },
+  minGapMinutes: { min: HARD_GAP_MINUTES, max: 1440 },
   seed: { min: 0, max: 2147483647 },
 });
 export const USER_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed', 'customTimes', 'skipDates']);
@@ -71,25 +75,31 @@ export const RANDOM_KEYS = Object.freeze(['postsPerDayMin', 'postsPerDayMax', 'w
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 /** 'HH:MM' -> minutes after midnight, or null. */
 export const hhmmMinutes = (s) => { const m = typeof s === 'string' ? HHMM.exec(s) : null; return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+/** PT2: the window's end may also be '24:00' (the whole day: windowStart 00:00, windowEnd 24:00). */
+export const windowEndMinutes = (s) => (s === '24:00' ? 1440 : hhmmMinutes(s));
 
 /** Checks a user settings object (only USER_KEYS; any may be missing). -> { values, problems: [{ key, text }] }. Pure. */
 /** 'YYYY-MM-DD' that is a real calendar date (Codex round 3: never throws). */
 const realDate = (s) => { const t = Date.parse(`${s}T00:00:00Z`); return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === s; };
-export function checkUserSchedule(j) {
+// opts.strict (the card's Save): a gap below the 60-minute floor is a problem. Without it (reading a file saved before PT2,
+// when the floor was 15 min) such a gap is raised to the floor, never used and never a reason to stop posting.
+export function checkUserSchedule(j, { strict = false } = {}) {
   const values = {}; const problems = [];
   if (j === null || typeof j !== 'object' || Array.isArray(j)) return { values, problems: [{ key: null, text: 'not a settings object' }] };
   for (const [k, lim] of Object.entries(USER_LIMITS)) {
     if (j[k] === undefined) continue;
+    if (!strict && k === 'minGapMinutes' && Number.isInteger(j[k]) && j[k] >= 15 && j[k] < lim.min) { values[k] = lim.min; continue; }
     if (!Number.isInteger(j[k]) || j[k] < lim.min || j[k] > lim.max) problems.push({ key: k, text: `${k} must be a whole number from ${lim.min} to ${lim.max}` });
     else values[k] = j[k];
   }
   if (j.placement !== undefined) { if (PLACEMENTS.includes(j.placement)) values.placement = j.placement; else problems.push({ key: 'placement', text: `placement must be one of ${PLACEMENTS.join(', ')}` }); }
   for (const k of ['windowStart', 'windowEnd']) {
     if (j[k] === undefined) continue;
-    if (hhmmMinutes(j[k]) === null) problems.push({ key: k, text: `${k} must be a time like 09:00` }); else values[k] = j[k];
+    const v = k === 'windowEnd' ? windowEndMinutes(j[k]) : hhmmMinutes(j[k]);
+    if (v === null) problems.push({ key: k, text: `${k} must be a time like 09:00${k === 'windowEnd' ? ' (24:00 = until midnight)' : ''}` }); else values[k] = j[k];
   }
   if (values.postsPerDayMin !== undefined && values.postsPerDayMax !== undefined && values.postsPerDayMin > values.postsPerDayMax) problems.push({ key: 'postsPerDayMax', text: 'the most posts a day must not be less than the fewest' });
-  if (values.windowStart !== undefined && values.windowEnd !== undefined && hhmmMinutes(values.windowEnd) <= hhmmMinutes(values.windowStart)) problems.push({ key: 'windowEnd', text: 'the posting window must end after it starts (same day)' });
+  if (values.windowStart !== undefined && values.windowEnd !== undefined && windowEndMinutes(values.windowEnd) <= hhmmMinutes(values.windowStart)) problems.push({ key: 'windowEnd', text: 'the posting window must end after it starts (same day)' });
   if (j.customTimes !== undefined) {
     const ct = j.customTimes; let bad = null;
     if (!isPlain(ct) || Object.keys(ct).some((k) => !WEEKDAYS.includes(k))) bad = 'custom times must list weekdays (mon to sun)';
@@ -129,7 +139,7 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
   const alignMinutes = num('alignMinutes', 1, 60);
   if (!ALIGN_STEPS.includes(alignMinutes)) throw new ScheduleError('schedule-config-bad', `schedule setting alignMinutes must divide an hour (${ALIGN_STEPS.join(', ')})`);
   const cfg = {
-    intervalHours: num('intervalHours', 0.25, 24 * 30),
+    intervalHours: num('intervalHours', HARD_GAP_MINUTES / 60, 24 * 30),
     minLeadHours: num('minLeadHours', 0.25, 24 * 30),
     marginMinutes: num('marginMinutes', 1, 4 * 60),
     chunkDeadlineSeconds: num('chunkDeadlineSeconds', 1, 3600),
@@ -150,7 +160,7 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
     for (const k of ['intervalHours', 'maxAheadDays', 'placement', ...RANDOM_KEYS, 'customTimes', 'skipDates']) if (values[k] !== undefined) { cfg[k] = values[k]; cfg.userKeys.push(k); }
   }
   // random-daily (D403): shipped defaults (a missing key = the user's 2026-11-19 choice), then the checks across keys.
-  const rd = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 90, seed: 0 };
+  const rd = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: HARD_GAP_MINUTES, seed: 0 };
   for (const k of RANDOM_KEYS) if (cfg[k] === undefined) cfg[k] = j?.[k] ?? rd[k];
   const rc = checkUserSchedule(Object.fromEntries(RANDOM_KEYS.map((k) => [k, cfg[k]])));
   if (rc.problems.length) throw new ScheduleError('schedule-config-bad', `schedule setting ${rc.problems.map((p) => p.text).join('; ')}`);
@@ -165,6 +175,9 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
   }
   // A chunk may only start with at least marginMinutes left, and must end chunkDeadlineSeconds before the time:
   // a deadline at or past the margin would stop every final chunk.
+  // PT2 hard rule: whatever the placement, the gap in use is never under HARD_GAP_MINUTES.
+  if (cfg.intervalHours * 60 < HARD_GAP_MINUTES) cfg.intervalHours = HARD_GAP_MINUTES / 60;
+  cfg.recheckMaxAgeMinutes = typeof j?.recheckMaxAgeMinutes === 'number' && j.recheckMaxAgeMinutes >= 1 && j.recheckMaxAgeMinutes <= 240 ? j.recheckMaxAgeMinutes : 10;
   if (cfg.chunkDeadlineSeconds >= cfg.marginMinutes * 60) throw new ScheduleError('schedule-config-bad', 'schedule setting chunkDeadlineSeconds must be less than marginMinutes');
   return cfg;
 }
@@ -310,7 +323,7 @@ const nextDayKey = (key) => { const [y, m, d] = key.split('-').map(Number); cons
 /** The posting window of a local day in UTC ms: { start, end } (DST-safe: built from the wall times). */
 export function dayWindow(key, cfg) {
   const tz = zoneOf(cfg); const [y, m, d] = key.split('-').map(Number);
-  const a = hhmmMinutes(cfg.windowStart); const b = hhmmMinutes(cfg.windowEnd);
+  const a = hhmmMinutes(cfg.windowStart); const b = windowEndMinutes(cfg.windowEnd);
   return { start: zonedToUtc(y, m, d, Math.floor(a / 60), a % 60, tz), end: zonedToUtc(y, m, d, Math.floor(b / 60), b % 60, tz) };
 }
 /** How many posts the day gets (seeded; min..max). */
@@ -322,7 +335,11 @@ export function dayCandidates(key, cfg, count = dayCount(key, cfg), extra = 48) 
   const { start, end } = dayWindow(key, cfg);
   const r = rngOf(hash32(cfg.seed, key, 'times'));
   const gapMin = Math.ceil(cfg.minGapMinutes);
-  const span = Math.floor((end - start) / MINUTE);
+  // PT2: when the window reaches into the gap before the next day's window (00:00-24:00: no room at all), the day stops
+  // a gap before the next day starts, so the last post of one day and the first of the next also keep the gap.
+  const nextStart = dayWindow(nextDayKey(key), cfg).start;
+  const over = Math.max(0, gapMin * MINUTE - (nextStart - end));
+  const span = Math.max(0, Math.floor((end - over - start) / MINUTE));
   let n = count; while (n > 1 && (n - 1) * gapMin > span) n--;
   const free = span - (n - 1) * gapMin;
   const base = Array.from({ length: n }, () => Math.floor(r() * (free + 1))).sort((x, y) => x - y);
@@ -480,4 +497,18 @@ export function savedChannelTimes(queueDoc, nowMs) {
   const out = [...fut, ...recent];
   if (last !== null && last > nowMs && !out.includes(last)) out.push(last);
   return out.sort((x, y) => x - y);
+}
+
+/**
+ * PT2: the check right before an upload session starts. -> the clashing time (ms) or null. A clash is any channel time
+ * (saved read) or any other queue item's time less than the gap in use (never under HARD_GAP_MINUTES) from the item's slot.
+ * Pure.
+ */
+export function slotClash({ item, items = [], channelTimes = [], cfg }) {
+  const t = ms(item?.publishAt);
+  if (t === null) return null;
+  const gap = Math.max(cfg.intervalHours * 60, HARD_GAP_MINUTES) * MINUTE_MS;
+  const others = [...channelTimes, ...items.filter((i) => isPlain(i) && i.id !== item.id).flatMap(itemTimes)];
+  for (const x of others) if (Number.isFinite(x) && Math.abs(x - t) < gap) return x;
+  return null;
 }

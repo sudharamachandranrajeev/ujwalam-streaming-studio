@@ -16,7 +16,8 @@ const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-rd-')); tmp
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 
 const TZ = 'Europe/London'; // a zone with DST (29 Mar and 25 Oct 2026); fixed so the test does not depend on this PC
-const base = (over = {}) => ({ ...loadScheduleConfig(DEFAULT_SCHEDULE), timeZone: TZ, seed: 20261119, ...over });
+// The user's D403 choice (90 min apart) as the test plan; PT2 (D408) made 60 the shipped default and the floor.
+const base = (over = {}) => ({ ...loadScheduleConfig(DEFAULT_SCHEDULE), timeZone: TZ, seed: 20261119, minGapMinutes: 90, intervalHours: 1.5, ...over });
 const NOW = Date.parse('2026-11-20T08:00:00Z');
 const queued = (n) => Array.from({ length: n }, (_, k) => ({ id: `c${k}`, state: 'queued', publishAt: null, session: null }));
 const MIN = 60 * 1000;
@@ -44,11 +45,11 @@ function checkPlan(plan, cfg, { nowMs, channel = [] } = {}) {
 }
 
 describe('random-daily placement (D403)', () => {
-  test('shipped defaults: random-daily, 3-6 a day, 09:00-23:00, 90 min; gap and grid follow it', () => {
+  test('shipped defaults: random-daily, 3-6 a day, 09:00-23:00, 60 min (PT2 floor); gap and grid follow it', () => {
     const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
     assert.equal(cfg.placement, 'random-daily');
-    assert.deepEqual([cfg.postsPerDayMin, cfg.postsPerDayMax, cfg.windowStart, cfg.windowEnd, cfg.minGapMinutes], [3, 6, '09:00', '23:00', 90]);
-    assert.equal(cfg.intervalHours, 1.5); assert.equal(cfg.alignMinutes, 1);
+    assert.deepEqual([cfg.postsPerDayMin, cfg.postsPerDayMax, cfg.windowStart, cfg.windowEnd, cfg.minGapMinutes], [3, 6, '09:00', '23:00', 60]);
+    assert.equal(cfg.intervalHours, 1); assert.equal(cfg.alignMinutes, 1);
   });
 
   test('198 clips: 3-6 per local day (every full day), inside the window, >= 90 min apart, stable with the same seed', () => {

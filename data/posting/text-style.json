@@ -1,0 +1,14 @@
+{
+  "$comment": "PT5 (D410) post text style, read by services/posting/post-prefs.mjs. The user picks tone (hype or clean) and emoji on or off in Settings > Posting & growth > Post text; the values below say what each choice does. hype keeps the drafted lines as written (they come from data/posting/templates.json textPools and data/games/<id>/posting.json). clean replaces each run of '!' with '.' (or drops it at the end of the title) and never adds an emoji. With emoji on and tone hype, one emoji from the kind's list is added at the end of the title (seeded by the clip, so the same clip gets the same emoji), only when the title still fits the platform's title limit (data/posting/limits.json). Emoji are off by default, so the text stays exactly as before PT5 until the user switches them on.",
+  "version": "1.0.0",
+  "emoji": {
+    "short": ["🔥", "💥", "⚡"],
+    "montage": ["🔥", "🎬", "💥"],
+    "won-reel": ["🏆", "👑", "🔥"],
+    "impact-play": ["💥", "🎯", "⚡"],
+    "long-highlights": ["🎮", "🔥", "🏆"]
+  },
+  "source": "agent proposal 2026-11-21 (D410), not a user instruction: the plan (docs/plan/2026-11-21-posting-text-schedule-growth.md PT1) asks for a tone and an emoji switch; these emoji and the clean rule are the agent's choice, tune here.",
+  "checked": "2026-11-21",
+  "status": "unverified"
+}

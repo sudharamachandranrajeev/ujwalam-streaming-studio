@@ -8,13 +8,14 @@
 // (at most cfg.maxPages x cfg.pageSize): playlistItems.list part=snippet,contentDetails -> video ids, when each was added
 // (snippet.publishedAt) and when it went public (contentDetails.videoPublishedAt); videos.list part=status -> privacyStatus
 // + publishAt. Only these parts are read (no titles or descriptions). Nothing is written; tokens never leave memory.
-// Big channels (D375): the uploads list comes newest first, so the scan stops at the first page whose items were ALL
-// added more than cfg.lookbackDays ago. The statuses of every item on that last page are still read (videos.list, Codex
-// review 2026-11-13), so a post on the page that ends the scan is never missed. Such a scan is complete (not truncated).
-// Only reaching maxPages first is truncated; the caller then gives out no slot (fail closed). Residual risk: a video
-// uploaded before the lookback, on a later page, but scheduled to go public later is not seen (UNVERIFIED that the
-// uploads list is ordered by the time a video was added; a page with an unreadable time never ends the scan).
-// Any failure throws ScheduleError: 'schedule-scope-missing' (403 insufficient permissions / 401) or 'schedule-read-failed'.
+// Whole channel (Codex review 2026-11-21, D409): every page of the uploads list is read, to its end (no nextPageToken).
+// An old upload can still carry a future publishAt, so no lookback ends the scan any more (cfg.lookbackDays is no
+// longer used here). Reaching cfg.maxPages with pages left is truncated (incomplete): the caller gives out no slot and
+// uploads nothing (fail closed). A channel with more than maxPages x pageSize uploads must raise maxPages.
+// Cost: 1 (channels.list) + 2 per page (playlistItems.list + videos.list) quota units per read.
+// Any failure throws ScheduleError: 'schedule-scope-missing' (403 insufficient permissions / 401), 'schedule-read-failed',
+// or 'schedule-read-incomplete' (D409: a page without an items list, an item without a video id, a video whose details
+// did not come back, or the read past its deadline).
 // The caller never guesses a slot when this throws.
 import { ScheduleError, futureScheduleTimes, latestFutureSchedule } from './schedule.mjs';
 
@@ -39,25 +40,48 @@ const DAY_MS = 24 * 3600 * 1000;
 export const RECENT_DAYS = 2;
 const msOf = (v) => { const t = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null; };
 
-export async function readChannelSchedule({ accessToken, fetchImpl = fetch, nowMs, cfg }) {
+/** D409 (second Codex review): one read, every page's request AND its body, must end within this time, well under the
+ *  sender lock's hold cap (auto-chain.mjs LOCK_MAX_HOLD_MS). Past it the read is incomplete (fail closed) and its
+ *  requests are aborted. */
+export const READ_DEADLINE_MS = 30 * 1000;
+const incomplete = (what) => new ScheduleError('schedule-read-incomplete', `the channel answer was incomplete (${what})`);
+
+/** opts.deadlineMs (default READ_DEADLINE_MS): hard deadline on the whole read.
+ *  opts.nowMs: a clock function (preferred) or a fixed time. Third Codex review (D409): with a clock, the reference time
+ *  is taken AFTER the last page came back (returned as readAt), so a video that went public during the read still
+ *  counts as a recent post. */
+export async function readChannelSchedule({ accessToken, fetchImpl = fetch, nowMs, cfg, deadlineMs = READ_DEADLINE_MS }) {
+  const stop = new AbortController();
+  let timer = null;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => { reject(new ScheduleError('schedule-read-incomplete', 'the channel read did not finish in time')); stop.abort(); }, deadlineMs);
+  });
+  const f = (url, init = {}) => { if (stop.signal.aborted) throw new ScheduleError('schedule-read-incomplete', 'the channel read did not finish in time'); return fetchImpl(url, { ...init, signal: stop.signal }); };
+  try { return await Promise.race([readAll({ accessToken, fetchImpl: f, nowMs, cfg }), late]); } finally { clearTimeout(timer); }
+}
+
+async function readAll({ accessToken, fetchImpl, nowMs, cfg }) {
   const ch = await getJson(fetchImpl, `${API}/channels?part=contentDetails&mine=true`, accessToken);
   const uploads = ch?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
   if (typeof uploads !== 'string' || !uploads) throw new ScheduleError('schedule-read-failed', 'no uploads list found for this channel');
-  const cutoff = nowMs - cfg.lookbackDays * DAY_MS;
-  const videos = []; const wentPublic = new Map(); let pageToken = null; let pages = 0; let scanned = 0; let reachedLookback = false;
+  const videos = []; const wentPublic = new Map(); let pageToken = null; let pages = 0; let scanned = 0;
   do {
     const q = new URLSearchParams({ part: 'snippet,contentDetails', playlistId: uploads, maxResults: String(cfg.pageSize) });
     if (pageToken) q.set('pageToken', pageToken);
     const page = await getJson(fetchImpl, `${API}/playlistItems?${q}`, accessToken);
     pages++;
-    const items = Array.isArray(page?.items) ? page.items : [];
-    pageToken = typeof page?.nextPageToken === 'string' && page.nextPageToken ? page.nextPageToken : null;
-    const added = items.map((i) => msOf(i?.snippet?.publishedAt));
-    const stop = items.length > 0 && added.every((t) => t !== null && t < cutoff);
+    // D409 (second Codex review): a malformed or partial answer is incomplete, never an empty or partial success.
+    if (!Array.isArray(page?.items)) throw incomplete('no playlist items list');
+    const items = page.items;
+    // Third Codex review (D409): only an absent nextPageToken ends the list; any other non-string or empty value is a
+    // malformed answer, so the read is incomplete (fail closed), never "the end".
+    if (page.nextPageToken === undefined) pageToken = null;
+    else if (typeof page.nextPageToken === 'string' && page.nextPageToken) pageToken = page.nextPageToken;
+    else throw incomplete('a malformed next page token');
     const ids = [];
     for (const i of items) {
       const id = i?.contentDetails?.videoId;
-      if (typeof id !== 'string' || !id) continue;
+      if (typeof id !== 'string' || !id) throw incomplete('a playlist item without a video id');
       ids.push(id);
       const p = msOf(i?.contentDetails?.videoPublishedAt);
       if (p !== null) wentPublic.set(id, p);
@@ -65,16 +89,25 @@ export async function readChannelSchedule({ accessToken, fetchImpl = fetch, nowM
     scanned += ids.length;
     if (ids.length) {
       const v = await getJson(fetchImpl, `${API}/videos?part=status&id=${ids.map(encodeURIComponent).join(',')}`, accessToken);
-      if (Array.isArray(v?.items)) videos.push(...v.items);
+      if (!Array.isArray(v?.items)) throw incomplete('no video details list');
+      const got = new Map();
+      for (const x of v.items) if (typeof x?.id === 'string' && typeof x?.status?.privacyStatus === 'string') got.set(x.id, x);
+      // Every listed video must come back with its status: a missing one could be a scheduled post we did not see.
+      for (const id of ids) if (!got.has(id)) throw incomplete('video details missing');
+      videos.push(...ids.map((id) => got.get(id)));
     }
-    if (stop) { reachedLookback = true; pageToken = null; break; }
   } while (pageToken && pages < cfg.maxPages);
-  const { last, count } = latestFutureSchedule(videos, nowMs);
+  // The reference time is taken now, after the whole read (third Codex review, D409).
+  const ref = typeof nowMs === 'function' ? nowMs() : nowMs;
+  const { last, count } = latestFutureSchedule(videos, ref);
   const recent = [];
   for (const v of videos) {
     if (v?.status?.privacyStatus !== 'public') continue;
     const t = wentPublic.get(v.id);
-    if (t !== undefined && t <= nowMs && t > nowMs - RECENT_DAYS * DAY_MS) recent.push(t);
+    // A public video without a valid time could be one that went public a minute ago: incomplete (fail closed).
+    if (t === undefined) throw incomplete('a public video without a valid public time');
+    // Anything public up to (and, on a skewed clock, after) the reference time counts; only old ones drop out.
+    if (t > ref - RECENT_DAYS * DAY_MS) recent.push(t);
   }
-  return { last, count, times: futureScheduleTimes(videos, nowMs), recent: recent.sort((x, y) => x - y), scanned, pages, truncated: Boolean(pageToken), reachedLookback };
+  return { last, count, times: futureScheduleTimes(videos, ref), recent: recent.sort((x, y) => x - y), scanned, pages, truncated: Boolean(pageToken), readAt: ref };
 }

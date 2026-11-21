@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Posts (flag posting; QML twin of the widget openPosts, plan Q4): the clip packages made after a stream. Edit the text,
 // Approve or Reject (local files only), open the package folder, see the auto-post mode and a read-only dry run of its
-// rules, the auto-upload queue state with "Retry now", and the private YouTube upload (Upload as private / Check
+// rules, the auto-upload queue state with "Retry now", and the private YouTube upload (Upload now: queued at the next free time / Check
 // status: one call at a time, the server re-checks that nothing is live). Its own window (Popup.Window).
 import QtQuick
 import QtQuick.Controls.Basic
@@ -29,14 +29,21 @@ Dialog {
     property bool signedIn: false
     property bool busy: false
     property int gen: 0
+    // PT4 (D410): one growth-led schedule suggestion (ui/api/posts/growth-suggestion); Apply, Dismiss and Undo act on their
+    // own click (D332). Nothing changes the schedule without that click.
+    property var growth: null             // the record: { id, status, text, numbers, times, exploreTimes }
+    property string growthInfo: ""
 
     readonly property var post: { for (const p of posts) if (p.id === selected) return p; return null }
     readonly property string queueState: post && post.queueState ? String(post.queueState) : ""
     readonly property bool isYoutube: post !== null && String(post.target || "").startsWith("youtube")
     readonly property bool uploaded: post !== null && post.status === "uploaded"
-    readonly property bool canUpload: !busy && !uploaded && signedIn && post !== null && post.status === "approved"
+    // D409: Upload queues the clip at the next free time and asks for an auto-post pass at once (nothing is sent from here).
+    readonly property bool canUpload: !busy && !uploaded && signedIn && post !== null && post.status === "approved" && (queueState === "" || queueState === "queued" || queueState === "removed")
     readonly property bool canCheck: !busy && uploaded
-    readonly property bool retryShown: queueState === "failed" || (queueState === "queued" && !!(post && post.queueReasonText))
+    // PT3 (D408): per-clip "Schedule next free slot" (approves and queues at the next free time). "Post now (public)" was removed (D409).
+    readonly property bool canScheduleNext: !busy && !uploaded && post !== null && isYoutube && post.status !== "rejected" && (queueState === "" || queueState === "queued" || queueState === "removed")
+    readonly property bool retryShown:queueState === "failed" || (queueState === "queued" && !!(post && post.queueReasonText))
 
     function show() {
         gen++;
@@ -58,6 +65,9 @@ Dialog {
                      + (m.autoUpload === true ? "approve and upload (private)" : "approve only") + ". " + (r.plan || []).length + " planned action(s)."
                      + (r.rulesFile ? "\nRules file: " + r.rulesFile : "");
         });
+        growth = null;
+        growthInfo = "";
+        loadGrowth();
         Api.get("ui/api/posts/youtube/status", (ok, r) => {
             if (g !== gen) return;
             signedIn = ok && r.signedIn === true;
@@ -65,6 +75,38 @@ Dialog {
         return true;
     }
     onClosed: gen++
+
+    function loadGrowth() {
+        const g = gen;
+        Api.get("ui/api/posts/growth-suggestion", (ok, r) => {
+            if (g !== gen || !ok) return;
+            growth = r.enabled === true || (r.record && r.record.status === "applied") ? r.record : null;
+            growthInfo = r.enabled !== true ? "" : growth ? "" : r.reason === "few-posts"
+                ? "Growth suggestions: " + (r.count || 0) + " of " + (r.minPosts || 8) + " posts have numbers yet; a suggestion comes once " + (r.minPosts || 8) + " do."
+                : "Growth suggestions: no clear better time in your numbers yet.";
+        });
+    }
+    function growthNumbers(rec) {
+        const n = rec && rec.numbers;
+        if (!n) return "";
+        let t = n.bandPosts + " posts at " + n.band + " averaged " + n.bandViews24h + " views in 24 h; " + n.otherPosts + " posts at other times averaged " + n.otherViews24h + ".";
+        if (typeof n.bandAvgViewedPct === "number") t += " Viewed " + n.bandAvgViewedPct + " % on average.";
+        t += " New times each day: " + (rec.times || []).join(", ") + ".";
+        if ((rec.exploreTimes || []).length) t += " Trying " + rec.exploreTimes.join(", ") + " to keep learning.";
+        return t;
+    }
+    function growthAct(what) {
+        if (!growth) return false;
+        const g = gen, id = growth.id;
+        Api.post("ui/api/posts/growth-suggestion/" + what, { id: id }, (ok, r, err) => {
+            if (g !== gen) return;
+            if (!ok) { growthInfo = "Not done: " + ((r && r.text) ? r.text : err); return }
+            growth = what === "apply" ? r.record : null;
+            growthInfo = what === "apply" ? "Applied: your posting times are now the ones above (Settings > Posting & growth shows them). Undo puts the old ones back."
+                : what === "undo" ? "Undone: your earlier posting times are back." : "Dismissed. Nothing changed.";
+        });
+        return true;
+    }
 
     // `said`: the outcome of the action that asked for the reload; it stays on the info line (render would replace it).
     // `release`: the upload or check keeps `busy` until the package's new status is read (else Upload is enabled again
@@ -87,7 +129,7 @@ Dialog {
         posts = list;
         if (post === null) selected = "";
         info = posts.length === 0 ? "No packages yet. Make them with services/posting/cli.mjs after a stream."
-             : posts.length + " package(s). Private drafts only; approving marks a package. Upload to YouTube is separate (Upload as private).";
+             : posts.length + " package(s). Private drafts only; approving marks a package. Upload to YouTube is separate (Upload now).";
         if (selected === keep && post !== null) fillForm();
     }
     function flagged(p) { return (p.limits && p.limits.ok === false) || (p.unresolved || []).length > 0 }
@@ -164,11 +206,11 @@ Dialog {
         if (upload ? !canUpload : !canCheck) return false;
         const g = gen;
         busy = true;
-        info = upload ? "Uploading... this can take a while. Keep this window open." : "Checking...";
+        info = upload ? "Queuing..." : "Checking...";
         Api.post(upload ? "ui/api/posts/youtube/upload" : "ui/api/posts/youtube/check", { id: selected }, (ok, r, err) => {
             // Always re-read (it clears busy); the outcome only shows in the window that asked.
             reload(g !== gen ? "" : !ok ? "Not done: " + err
-                 : upload ? "Uploaded as private video " + r.videoId + "."
+                 : upload ? "Queued: goes public " + when(r.publishAt) + ". It uploads as private now, when no stream is live."
                  : "Video " + r.videoId + ": " + (r.found === true ? "upload " + (r.uploadStatus || "?") + ", processing " + (r.processingStatus || "?") + ", privacy " + (r.privacyStatus || "?") : "not found"), true);
         });
         return true;
@@ -179,6 +221,15 @@ Dialog {
         Api.post("ui/api/posts/queue/retry", { id: selected }, (ok, r, err) => {
             if (g !== gen) return;
             reload(ok ? "Queued again. It uploads at the next check if no stream is live." : "Not done: " + err);
+        });
+        return true;
+    }
+    function scheduleNext() {
+        if (!canScheduleNext) return false;
+        const g = gen;
+        busy = true;
+        Api.post("ui/api/posts/schedule-next", { id: selected }, (ok, r, err) => {
+            reload(g !== gen ? "" : ok ? "Scheduled: goes public " + when(r.publishAt) + ". It uploads as private first, when no stream is live." : "Not scheduled: " + err, true);
         });
         return true;
     }
@@ -216,13 +267,18 @@ Dialog {
         return { open: opened, info: info, autoInfo: autoInfo, previewInfo: previewInfo, queueInfo: queueInfo, rows: posts.map(rowText), selected: selected,
                  formShown: post !== null, meta: metaText(post), limits: limitsText(post), title: titleField.text, desc: descText.text, tags: tagsField.text,
                  hashtags: hashField.text, ytShown: isYoutube, ytInfo: ytText(post), uploadEnabled: canUpload, checkEnabled: canCheck,
-                 queueShown: queueState !== "", queueText: post ? queueText(post) : "", retryShown: retryShown, busy: busy };
+                 queueShown: queueState !== "", queueText: post ? queueText(post) : "", retryShown: retryShown, busy: busy,
+                 scheduleNextEnabled: canScheduleNext,
+                 growthText: growth ? String(growth.text) : "", growthStatus: growth ? String(growth.status) : "", growthNumbers: growthNumbers(growth), growthInfo: growthInfo, growthApplyText: growth && growth.applyText ? String(growth.applyText) : "" };
     }
     function probeAction(a) {
         if (a === "posts-open") return show();
         if (!opened) return false;
         if (a === "posts-close") { close(); return true }
         if (a === "posts-preview") return preview();
+        if (a === "posts-growth-apply") return growth !== null && growth.status === "open" && growthAct("apply");
+        if (a === "posts-growth-dismiss") return growth !== null && growth.status === "open" && growthAct("dismiss");
+        if (a === "posts-growth-undo") return growth !== null && growth.status === "applied" && growthAct("undo");
         if (a.startsWith("posts-pick:")) { const n = parseInt(a.slice(11), 10); return n >= 0 && n < posts.length && pick(posts[n].id) }
         if (post === null) return false;
         if (a.startsWith("posts-title:")) { titleField.text = decodeURIComponent(a.slice(12)); return true }
@@ -235,6 +291,7 @@ Dialog {
         if (a === "posts-folder") return openFolder();
         if (a === "posts-retry") return retry();
         if (a === "posts-check") return youtube(false);
+        if (a === "posts-schedule-next") return scheduleNext();   // local queue file only; nothing is sent
         return false;
     }
 
@@ -271,6 +328,22 @@ Dialog {
             spacing: 8
             Line { objectName: "postsInfo"; text: dlg.info; font.pixelSize: 14 }
             Line { objectName: "postsAuto"; text: dlg.autoInfo; color: Theme.c.muted }
+            Column {
+                objectName: "postsGrowth"
+                visible: dlg.growth !== null
+                width: parent.width
+                spacing: 6
+                Line { objectName: "postsGrowthText"; text: dlg.growth ? (dlg.growth.status === "applied" ? "Applied suggestion: " : "Suggestion: ") + dlg.growth.text : ""; font.weight: Font.DemiBold }
+                Line { objectName: "postsGrowthNumbers"; text: dlg.growthNumbers(dlg.growth); color: Theme.c.muted }
+                Line { objectName: "postsGrowthApplyText"; text: dlg.growth && dlg.growth.status === "open" && dlg.growth.applyText ? "Apply: " + dlg.growth.applyText : "" }
+                Row {
+                    spacing: 8
+                    UButton { objectName: "postsGrowthApply"; visible: dlg.growth !== null && dlg.growth.status === "open"; text: "Apply"; kind: "primary"; tip: dlg.growth && dlg.growth.applyText ? dlg.growth.applyText : "Sets these posting times. Undo puts the old ones back."; onClicked: dlg.growthAct("apply") }
+                    UButton { objectName: "postsGrowthDismiss"; visible: dlg.growth !== null && dlg.growth.status === "open"; text: "Dismiss"; tip: "Keeps your posting times as they are."; onClicked: dlg.growthAct("dismiss") }
+                    UButton { objectName: "postsGrowthUndo"; visible: dlg.growth !== null && dlg.growth.status === "applied"; text: "Undo"; tip: "Puts your earlier posting times back."; onClicked: dlg.growthAct("undo") }
+                }
+            }
+            Line { objectName: "postsGrowthInfo"; text: dlg.growthInfo; color: Theme.c.muted }
             UButton {
                 objectName: "postsPreview"
                 text: "Preview auto-post rules"
@@ -362,9 +435,14 @@ Dialog {
                     Line { objectName: "postsYtInfo"; text: dlg.ytText(dlg.post) }
                     Row {
                         spacing: 10
-                        UButton { objectName: "postsUpload"; text: "Upload as private"; enabled: dlg.canUpload; onClicked: dlg.youtube(true) }
+                        UButton { objectName: "postsUpload"; text: "Upload now (next free time)"; enabled: dlg.canUpload; onClicked: dlg.youtube(true) }
                         UButton { objectName: "postsCheck"; text: "Check status"; enabled: dlg.canCheck; onClicked: dlg.youtube(false) }
                     }
+                    Row {
+                        spacing: 10
+                        UButton { objectName: "postsScheduleNext"; text: "Schedule next free slot"; enabled: dlg.canScheduleNext; onClicked: dlg.scheduleNext() }
+                    }
+                    Line { text: "Schedule next free slot approves the clip and gives it the next free time, at least an hour from any other post. Upload now does the same for an approved clip and starts the upload at once; it goes public at that time."; color: Theme.c.muted }
                 }
             }
         }

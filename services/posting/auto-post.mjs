@@ -23,9 +23,13 @@ export const UPLOAD_TARGET = 'youtube-shorts';
 /** Targets the auto chain may upload (private YouTube). youtube-video is for finished videos that are not Shorts (D301). */
 export const UPLOAD_TARGETS = Object.freeze(['youtube-shorts', 'youtube-video']);
 export const RULE_KINDS = Object.freeze(['short', 'montage', 'won-reel', 'impact-play', 'long-highlights']); // D406: the long highlights video
-/** Highest allowed uploads per day (a rule's or the global cap): YouTube's own videos.insert limit per project is
- *  100 a day (developers.google.com/youtube/v3/determine_quota_cost, fetched 2026-11-13); the quota fit is lower (quota.json). */
-export const MAX_PER_DAY = 100;
+/** Highest allowed uploads per day (a rule's or the global cap). PT2 (D408): the one hard rule (60 min between any two
+ *  scheduled posts, schedule.mjs HARD_GAP_MINUTES) allows at most 24 a day; YouTube's own videos.insert ceiling is 100 a
+ *  day (developers.google.com/youtube/v3/determine_quota_cost, fetched 2026-11-13), so the gap is the ceiling here. */
+export const MAX_PER_DAY = 24;
+/** Rules files written before PT2 allowed up to 100 a day; such a value reads as MAX_PER_DAY (lower, never higher). */
+const LEGACY_MAX_PER_DAY = 100;
+const liftCap = (v) => (Number.isInteger(v) && v > MAX_PER_DAY && v <= LEGACY_MAX_PER_DAY ? MAX_PER_DAY : v);
 const ID = /^[a-z][a-z0-9-]{0,31}$/;
 const ACTIVE = new Set(['starting', 'live', 'retrying', 'active', 'running']);
 
@@ -34,8 +38,9 @@ export class AutoPostError extends Error {
 }
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
-export function validateRules(j) {
-  if (!isPlain(j) || !Array.isArray(j.rules)) throw new AutoPostError('bad-rules', 'rules file: missing rules list');
+export function validateRules(j0) {
+  if (!isPlain(j0) || !Array.isArray(j0.rules)) throw new AutoPostError('bad-rules', 'rules file: missing rules list');
+  const j = { ...j0, ...(j0.maxUploadsPerDay !== undefined ? { maxUploadsPerDay: liftCap(j0.maxUploadsPerDay) } : {}), rules: j0.rules.map((r) => (isPlain(r) ? { ...r, maxPerDay: liftCap(r.maxPerDay) } : r)) };
   if (j.autoUpload !== undefined && typeof j.autoUpload !== 'boolean') throw new AutoPostError('bad-rules', 'rules file: autoUpload must be true or false');
   if (j.maxUploadsPerDay !== undefined && !(Number.isInteger(j.maxUploadsPerDay) && j.maxUploadsPerDay >= 1 && j.maxUploadsPerDay <= MAX_PER_DAY)) throw new AutoPostError('bad-rules', `rules file: maxUploadsPerDay must be an integer 1..${MAX_PER_DAY}`);
   const seen = new Set();
@@ -62,6 +67,9 @@ export const NOTICE_TEXT = Object.freeze({
   'not-signed-in': 'Auto-post is on but YouTube is not signed in: nothing uploads',
   'no-oauth-client': 'Auto-post is on but the YouTube app key is missing: nothing uploads',
   'schedule-scope-missing': 'Auto-post is on but YouTube needs a new sign-in to read scheduled posts: nothing uploads',
+  'sender-stuck': 'Auto-post is on but a posting lock was left behind by a closed copy of Ujwalam: nothing uploads until you clear it',
+  'sender-elsewhere':'Auto-post is on but another copy of Ujwalam holds the posting lock: nothing uploads from here',
+  'quota-fallback':'YouTube said the upload quota is used up: uploads wait until tomorrow and are counted the old way (1,650 units each) until then',
 });
 
 /** Where the user's own rules live: <dataDir>/posting/auto-post-rules.json (survives app updates). */

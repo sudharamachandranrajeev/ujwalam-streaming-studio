@@ -1,7 +1,31 @@
 {
   "$comment": "P16a post text templates. A target may carry kinds.montage / kinds.won-reel / kinds.long-highlights text overrides (D301, D406); a clip (kind short) uses the base text. youtube-video is the target for finished videos that are not Shorts (horizontal, or longer than the Shorts limit in limits.json). Placeholders only: {handles.x}, {links.x} come from the local profile (data/profile.local.json) at export time; {date} is the stream date (UTC, from candidates.json recordStartUtc); {n} is the clip's rank in the run. Never put names, brands or channel ids here. Chat text, viewer names, marker notes and candidate reasons are never used in post text.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "layoutPreference": ["full-crop", "blurred-fill", "game-facecam"],
+  "$textPools": "PT1 (D408, 2026-11-21): title and lead lines per kind, picked from the clip's facts (services/posting/post-text.mjs). Facts a line may name: {medal}, {killsText} (e.g. 3 KILLS), {kills} (the number), {result}, {mode}; they come from services/clip/reel_thumbnail.py facts() and are stored in post.json source.facts. A line naming a fact the clip does not have is never used (no guessing); a title over the platform's title limit is never used; the last recentLines lines used are not used again. Lines may also use {handles.x}/{links.x}; never {n} or {date} (an older draft redrafted does not know them). Per-game lines add to these from data/games/<id>/posting.json. No line here at all for a kind: the target's title and description above are used.",
+  "recentLines": 20,
+  "textPools": {
+    "short": {
+      "title": ["{medal} on stream", "{killsText} in seconds", "{medal}: {killsText}", "{killsText} and a {medal}", "{mode}: {killsText}", "That {medal} though"],
+      "lead": ["{killsText} back to back, straight from the live stream.", "A {medal} from the live stream.", "{mode}, live on stream: {killsText}."]
+    },
+    "montage": {
+      "title": ["{killsText} kill montage", "{medal} montage", "{mode} montage: {killsText}", "Montage: {killsText} and a {medal}"],
+      "lead": ["Every kill of the run, cut to the beat: {killsText}.", "The best kills from the stream, {medal} included."]
+    },
+    "won-reel": {
+      "title": ["{result}: the full reel", "{result} with {killsText}", "{mode}: {result}", "How the {result} happened"],
+      "lead": ["{result} in {mode}, with {killsText} on the way.", "The match that ended in a {result}."]
+    },
+    "impact-play": {
+      "title": ["The play that turned it: {killsText}", "{medal} when it counted", "Clutch {killsText}"],
+      "lead": ["One play, {killsText}, and the match turned."]
+    },
+    "long-highlights": {
+      "title": ["Stream highlights: {killsText} and more", "Full stream highlights, {mode}"],
+      "lead": ["Every highlight of the stream in the order it happened."]
+    }
+  },
   "targets": {
     "youtube-shorts": {
       "title": "Stream highlight {n} ({date})",

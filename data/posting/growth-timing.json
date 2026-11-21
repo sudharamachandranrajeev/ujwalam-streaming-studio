@@ -1,0 +1,23 @@
+{
+  "$comment": "PT4 (D410) growth-led timing, suggestions only. Read by services/analytics/timing.mjs. From the AN1 numbers Ujwalam already stores (services/analytics, flag growth, read-only scopes; no new API scope), it groups the posts by the local time band and weekday they went public, and per kind. With at least minPosts posts that have a 24 h number, it may propose ONE schedule change with the numbers behind it. The change is a record in <data>/posting/growth-suggestion.json shown in the Posts window; nothing changes until the user clicks Apply. Apply writes the user's schedule settings (<data>/posting/schedule.json: placement custom, the same times each weekday), checked with the 60-minute floor like the card's Save; it is logged in <data>/posting/growth-log.jsonl and one click on Undo puts the earlier settings back. Exploration: at most exploreShare of the day's posts (rounded down, so at most 1 in 5) go to a band outside the best ones, picked by Thompson sampling (as RP5, services/learning/mix.mjs), so the estimate keeps learning.",
+  "version": "1.0.0",
+  "flag": "growth",
+  "minPosts": 8,
+  "minPerBand": 3,
+  "minLiftPct": 10,
+  "maxMove": 2,
+  "exploreShare": 0.2,
+  "bands": [[0, 6], [6, 9], [9, 12], [12, 15], [15, 18], [18, 21], [21, 24]],
+  "dismissDays": 7,
+  "seed": 1,
+  "metrics": {
+    "views24h": "views at the first stored fetch at least 24 h after the video went public (AN1 at24h; the fetch can be later than 24 h, so this is 24 h or a little more: UNVERIFIED as an exact 24 h count)",
+    "views7d": "views at the first stored fetch at least 7 days after it went public (AN1 at7d; same caveat)",
+    "avgViewedPct": "YouTube Analytics averageViewPercentage at the 24 h fetch (lifetime to that day; YouTube fills it a day or two late, so it can be missing)",
+    "subs": "YouTube Analytics subscribersGained at the 24 h fetch (same delay)",
+    "viewerActivity": "UNVERIFIED and not used: which Analytics report gives viewer activity by hour was not checked; no such number is read"
+  },
+  "source": "plan docs/plan/2026-11-21-posting-text-schedule-growth.md PT4 (user 2026-11-21: suggest better times, ask approval, find optimum timings over time). minPosts 8 and exploration at most 1 in 5 slots: the plan. Bands (3 h in the day, 6 h at night), minPerBand 3, minLiftPct 10, maxMove 2, dismissDays 7, seed 1: agent proposal 2026-11-21 (D410), not user values; tune here.",
+  "checked": "2026-11-21",
+  "status": "unverified"
+}

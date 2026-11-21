@@ -39,8 +39,8 @@ const minGap = (times) => { const s = [...times].sort((a, b) => a - b); let m = 
 describe('slot math (UTC, pure)', () => {
   test('settings come from data/posting/schedule.json (random-daily since D403; fill-gaps keeps 1 h gap, whole hours; 2 months ahead, with source and date)', () => {
     const cfg = loadScheduleConfig();
-    // D403: the shipped placement is random-daily, whose gap is minGapMinutes (90) on the minute grid.
-    assert.equal(cfg.placement, 'random-daily'); assert.equal(cfg.intervalHours, 1.5); assert.equal(cfg.alignMinutes, 1);
+    // D403: the shipped placement is random-daily, whose gap is minGapMinutes on the minute grid (PT2, D408: 60, the floor).
+    assert.equal(cfg.placement, 'random-daily'); assert.equal(cfg.intervalHours, 1); assert.equal(cfg.alignMinutes, 1);
     const d0 = mk(); const u0 = userScheduleFile(d0); mkdirSync(path.dirname(u0), { recursive: true }); writeFileSync(u0, JSON.stringify({ placement: 'fill-gaps' }));
     const fg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: u0 });
     assert.equal(fg.intervalHours, 1); assert.equal(fg.placement, 'fill-gaps'); assert.equal(fg.alignMinutes, 60);
@@ -49,8 +49,9 @@ describe('slot math (UTC, pure)', () => {
     assert.equal(cfg.chunkDeadlineSeconds, 120); assert.ok(cfg.chunkDeadlineSeconds < cfg.marginMinutes * 60 && cfg.fallbackKbps >= 64);
     assert.deepEqual(cfg.userKeys, []);
     const raw = JSON.parse(readFileSync(DEFAULT_SCHEDULE, 'utf8'));
-    assert.match(raw.source, /user 2026-11-13/); assert.match(raw.source, /every one hour for the next 2 months/); assert.equal(raw.checked, '2026-11-19');
-    assert.match(raw.source, /user 2026-11-19/); assert.equal(raw.minGapMinutes, 90, 'D403: the random-daily gap (the D314 minGapMinutes of 2026-11-09 stays retired for fill-gaps)');
+    assert.match(raw.source, /user 2026-11-13/); assert.match(raw.source, /every one hour for the next 2 months/); assert.equal(raw.checked, '2026-11-21');
+    assert.match(raw.source, /user 2026-11-19/); assert.match(raw.source, /user 2026-11-21/);
+    assert.equal(raw.minGapMinutes, 60, 'PT2 (D408): the one hard rule, 60 min, is the default and the floor');
   });
   test('a bad settings file is refused, never defaulted', () => {
     const d = mk(); const f = path.join(d, 's.json');
