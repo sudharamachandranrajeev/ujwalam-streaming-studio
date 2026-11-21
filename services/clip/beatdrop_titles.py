@@ -416,7 +416,11 @@ def _wrap(line, fits):
             if cur:
                 rows.append(cur)
                 cur = ""
-            k = max(1, max((j for j in range(1, len(w) + 1) if fits(w[:j])), default=1))
+            lo, hi = 1, len(w)  # the longest prefix that fits (prefix width only grows): binary search
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                lo, hi = (mid, hi) if fits(w[:mid]) else (lo, mid - 1)
+            k = lo
             while 1 < k < len(w) and unicodedata.category(w[k]) in ("Mn", "Mc", "Me"):
                 k -= 1  # Codex BD5 verify: a combining mark stays with its base character
             if 0 < k < len(w) and unicodedata.category(w[k]) in ("Mn", "Mc", "Me"):
@@ -454,8 +458,10 @@ def credit_layout(lines, pc, lk, frame):
         rows = [(r, i) for i, line in enumerate(lines) for r in _wrap(line, lambda s: width(s, size) <= room)]
         bottom = y + (len(rows) - 1) * gap * size + 0.6 * size
         wide = any(width(r, size) > room for r, _ in rows)
-        if (bottom <= CREDIT_BOTTOM_OF_FRAME * oh and not wide) or size <= 4.0:
+        if bottom <= CREDIT_BOTTOM_OF_FRAME * oh and not wide:
             return rows, size
+        if size <= 4.0:  # Codex BD5 verify: a credit that cannot be shown whole fails the render (never posted cut)
+            raise ClipError("beatdrop titles: the song credit does not fit the frame even at the smallest size")
         size *= 0.9
 
 

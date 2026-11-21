@@ -173,6 +173,10 @@ class SlotTests(unittest.TestCase):
         word = "é" * 200
         for r, _ in self.bt.credit_layout([word], prm, lk, frame)[0]:
             self.assertNotEqual(unicodedata.category(r[0]), "Mn", "a row starts with a lone combining mark")
+        # a credit that cannot fit whole even at the smallest size fails (the render fails, nothing is posted cut)
+        from clip_common import ClipError  # noqa: PLC0415
+        with self.assertRaises(ClipError):
+            self.bt.credit_layout(["x"] * 400, prm, lk, frame)  # 400 rows pass the bottom even at 4 px
         # a short credit is not wrapped and keeps the preset size
         rows2, size2 = self.bt.credit_layout(["Song: A - B"], prm, lk, frame)
         self.assertEqual((rows2, size2), ([("Song: A - B", 0)], float(prm["sizeOfHeight"]) * 1920))
