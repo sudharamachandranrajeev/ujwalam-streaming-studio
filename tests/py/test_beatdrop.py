@@ -168,11 +168,12 @@ def flash_measure(path, w=192, h=108):
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-def smap_fixture():
+def smap_fixture(layout=(("intro", 4), ("drop", 8), ("breakdown", 2), ("drop", 8), ("outro", 4))):
     """A song map for the planner unit tests (the known grid of the click track; BD2 itself is tested elsewhere)."""
-    beats = [round(b, 4) for b in TRUE_BEATS]
+    n_beats = 4 * sum(b for _, b in layout)
+    beats = [round(PHASE + k * 0.5, 4) for k in range(n_beats)]
     secs, t = [], PHASE
-    for kind, bars in (("intro", 4), ("drop", 8), ("breakdown", 2), ("drop", 8), ("outro", 4)):
+    for kind, bars in layout:
         secs.append({"kind": kind, "start": round(t, 4), "end": round(t + bars * 2.0, 4), "energyDb": -10.0})
         t += bars * 2.0
     return {"version": 1, "duration": round(t + 1.0, 3), "bpm": BPM, "period": 0.5, "phase": PHASE, "beatsPerBar": 4,
@@ -276,6 +277,106 @@ class PlannerTests(unittest.TestCase):
                 self.assertGreaterEqual(t - times[i - 1], 0.34 - 1e-6)
         self.assertTrue(any(e["mode"] == "pulse" for e in fl) or len(fl) == len(times))
 
+    def test_first_drop_before_the_cold_open_minimum_wins(self):
+        # review item 3: a drop at 2 bars (4.25 s) is before coldOpen.minSec (6 s): it stays the first drop, the cold
+        # open is shortened and logged
+        sm = smap_fixture((("intro", 2), ("drop", 8), ("breakdown", 2), ("drop", 8), ("outro", 4)))
+        pl = self.bd.plan(moments_doc(), sm, max_sec=60)
+        drop = next(p for p in pl["pieces"] if p["part"] == "drop")
+        self.assertEqual(drop["anchor"]["outFrame"], round(4.25 * 60))
+        self.assertEqual(pl["song"]["firstDrop"], 4.25)
+        self.assertEqual(pl["song"]["dropAt"], 4.25)
+        self.assertNotIn("firstDropMissed", pl)
+        self.assertTrue(any("cold open shortened" in m for m in pl["log"]), pl["log"])
+        self.assertTrue(all(p["part"] == "cold-open" for p in pl["pieces"] if p["outStart"] < drop["outStart"]))
+
+    def test_first_drop_too_early_is_recorded_not_relabelled(self):
+        # a drop after 1 bar (2.25 s) leaves no room for the shortest intro (coldOpen.minBars 2): firstDropMissed with
+        # the reason; the kill goes on the next drop, which is not called the first drop
+        sm = smap_fixture((("intro", 1), ("drop", 4), ("breakdown", 2), ("drop", 8), ("outro", 4)))
+        pl = self.bd.plan(moments_doc(), sm, max_sec=60)
+        self.assertEqual(pl["firstDropMissed"]["at"], 2.25)
+        self.assertIn("shortest intro", pl["firstDropMissed"]["reason"])
+        self.assertTrue(any(m.startswith("firstDropMissed") for m in pl["log"]))
+        self.assertIsNone(pl["song"]["firstDrop"])
+        self.assertEqual(pl["song"]["dropAt"], 2.25 + 6 * 2.0)
+        import reel_style as rs  # noqa: PLC0415
+        with open(os.path.join(REPO, "data", "schemas", "beatdrop-plan.schema.json"), encoding="utf-8") as f:
+            self.assertEqual(rs.schema_problems(pl, json.load(f), "plan"), [])
+
+    def test_lead_in_holds_no_other_kill(self):
+        # review item 4: two close kills: a weaker kill 0.3 s before the strongest one sits inside the drop piece's
+        # lead-in at speed 1; the lead-in is trimmed (slower) or another moment is picked, never an off-beat kill
+        doc = moments_doc()
+        near = KILLS[7] - 18
+        doc["moments"].append({"kind": "kill", "t": round(near / FPS, 4), "frame": near, "strength": 0.4,
+                               "source": "synthetic", "status": "unverified"})
+        doc["moments"].sort(key=lambda m: m["frame"])
+        pl = self.bd.plan(doc, smap_fixture(), max_sec=60)
+        for p, d in ((self.pl, moments_doc()), (pl, doc)):
+            kill_ts = [m["frame"] / FPS for m in d["moments"] if m["kind"] == "kill"]
+            for q in p["pieces"]:
+                a = q.get("anchor")
+                if not a:
+                    continue
+                others = [t for t in kill_ts if abs(t - a["srcT"]) > 1e-3 and q["src"]["start"] <= t <= q["src"]["end"]]
+                self.assertEqual(others, [], f"another kill inside an anchored piece {q}")
+        drop = next(q for q in pl["pieces"] if q["part"] == "drop")
+        self.assertEqual(drop["anchor"]["frame"], KILLS[7])
+        self.assertGreater(drop["src"]["start"], near / FPS)
+
+    def test_bright_dark_cuts_count_as_flashes(self):
+        # review item 1: cuts between dark and bright shots are flashes in the same 3/s budget: impact flashes yield,
+        # a cut over the budget gets a luma-matched dissolve
+        def luma(t):
+            return 0.9 if int(t * 3) % 2 else 0.03
+        pl = self.bd.plan(moments_doc(), smap_fixture(), max_sec=60, luma=luma)
+        cuts = pl["cuts"]
+        self.assertGreater(len(cuts), 10)
+        self.assertEqual(self.pl["cuts"], [], "no luma probe, no cut check")
+        soft = {e["at"] for e in pl["effects"] if e["fn"] == "cut-soften"}
+        self.assertEqual(soft, {c["at"] for c in cuts if c["softened"]})
+        pulses = lambda p: sum(1 for e in p["effects"] if e["fn"] == "impact-flash" and e["mode"] == "pulse")  # noqa: E731
+        self.assertGreater(pulses(pl), pulses(self.pl), "impact flashes yield to the cuts")
+        # replay the budget: every counted event (each cut, each impact flash left as a flash) keeps the rule unless it
+        # is a softened cut
+        ev = sorted([(c["at"], "cut", c["softened"]) for c in cuts]
+                    + [(e["at"], "flash", False) for e in pl["effects"] if e["fn"] == "impact-flash" and e["mode"] == "flash"])
+        kept = []
+        for t, kind, softened in ev:
+            ok = (not kept or t - kept[-1] >= 0.34 - 1e-6) and sum(1 for k in kept if t - k < 1.0) < 3
+            self.assertTrue(ok or softened, f"{kind} at {t} breaks the flash budget unsoftened")
+            kept.append(t)
+        import beatdrop_fx as bfx  # noqa: PLC0415
+        g = bfx.graph(pl["effects"], {"width": W, "height": H})
+        self.assertTrue("color=black@" in g or "color=white@" in g)
+        import reel_style as rs  # noqa: PLC0415
+        with open(os.path.join(REPO, "data", "schemas", "beatdrop-plan.schema.json"), encoding="utf-8") as f:
+            self.assertEqual(rs.schema_problems(pl, json.load(f), "plan"), [])
+
+    def test_cuts_over_the_budget_are_softened(self):
+        # at 120 bpm a piece is at least one beat (2 cuts/s), so the plan above never needs it: cuts every 0.2 s
+        # (a fast song) go over 3/s and the ones that do not fit get the dissolve
+        import beatdrop_fx as bfx  # noqa: PLC0415
+        cuts = [{"at": round(0.2 * i, 4), "from": 0.03 if i % 2 else 0.9, "to": 0.9 if i % 2 else 0.03} for i in range(1, 11)]
+        fl = [{"fn": "impact-flash", "at": 0.5, "params": bfx.params_for("impact-flash")}]
+        out = bfx.space_flashes(fl, 3, 0.34, cuts=cuts, soften_frames=3)
+        # a softened cut still counts (a dissolve is still a brightness change): after the first, every cut 0.2 s on
+        # is under min gap
+        self.assertEqual([c["softened"] for c in cuts], [False] + [True] * 9)
+        self.assertEqual(sum(1 for e in out if e["fn"] == "cut-soften"), sum(1 for c in cuts if c["softened"]))
+        self.assertEqual(next(e for e in out if e["fn"] == "impact-flash")["mode"], "pulse")
+
+    def test_soften_matches_the_outgoing_level(self):
+        import beatdrop_fx as bfx  # noqa: PLC0415
+        p = bfx.soften_params(0.05, 0.9, 3)
+        self.assertEqual(p["colour"], "black")
+        self.assertAlmostEqual(0.9 ** (1 / 2.2) * (1 - p["alpha"]), 0.05 ** (1 / 2.2), places=3)
+        q = bfx.soften_params(0.9, 0.05, 3)
+        self.assertEqual(q["colour"], "white")
+        sb = 0.05 ** (1 / 2.2)
+        self.assertAlmostEqual(sb + q["alpha"] * (1 - sb), 0.9 ** (1 / 2.2), places=3)
+
     def test_game_sound_cutouts(self):
         p = next(p for p in self.pl["pieces"] if p["part"] == "drop")
         self.assertEqual(p["game"]["gain"], 0.2)
@@ -312,6 +413,30 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(bfx.params_for("impact-flash", {"maxPerSec": 9})["maxPerSec"], 3, "clamped to the limit")
 
 
+class StopGuardTests(unittest.TestCase):
+    """run_tool(stop=): the guard BeatDrop renders run under (review item 2)."""
+
+    def test_stop_kills_the_child(self):
+        import time  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        t0 = time.monotonic()
+        state = {"n": 0}
+
+        def stop():
+            state["n"] += 1
+            return state["n"] >= 3  # the stream starts on the third look
+        r = cc.run_tool([sys.executable, "-c", "import time; time.sleep(60)"], stop=stop, poll_sec=0.2)
+        self.assertEqual(r.returncode, cc.STOPPED_RC)
+        self.assertIn("stopped: on air", r.stderr)
+        self.assertLess(time.monotonic() - t0, 20)
+
+    def test_no_stop_runs_to_the_end(self):
+        import clip_common as cc  # noqa: PLC0415
+        r = cc.run_tool([sys.executable, "-c", "print('ok')"], stop=lambda: False, poll_sec=0.2)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "ok")
+
+
 @unittest.skipUnless(np is not None, "numpy/PyAV missing (use the project venv)")
 class MusicChoiceTests(unittest.TestCase):
     """No Montage music folder: the made-here bed is made, mapped and planned on; its record says made here."""
@@ -330,7 +455,7 @@ class MusicChoiceTests(unittest.TestCase):
             pl = beatdrop.plan(moments_doc(), sm, max_sec=60)
             drop = next(p for p in pl["pieces"] if p["part"] == "drop")
             self.assertTrue(drop["anchor"]["onBeat"])
-            self.assertGreaterEqual(pl["song"]["firstDrop"], 6.0 - 1e-6)
+            self.assertGreaterEqual(pl["song"]["dropAt"], 2 * 4 * sm["period"] - 1e-6, "at least the shortest intro")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -468,6 +593,53 @@ class RenderedMontageTests(unittest.TestCase):
         import clip_publish  # noqa: PLC0415
         self.assertEqual(clip_publish.music_provenance(row, records=True)["source"], "ncs")
         self.assertFalse(os.path.exists(os.path.join(self.wd, "music.wav")), "the bed is cleaned up")
+
+    def test_render_is_measured_and_recorded(self):
+        with open(os.path.join(self.out, "beatdrop", "render.json"), encoding="utf-8") as f:
+            row = json.load(f)["clips"][0]
+        self.assertTrue(row["flash"]["pass"])
+        self.assertLessEqual(row["flash"]["peakFlashesPerSecond"], 3)
+        with open(os.path.join(self.wd, "beatdrop-luma.json"), encoding="utf-8") as f:
+            self.assertGreater(len(json.load(f)["values"]), 10, "cut edges probed and cached")
+
+    def _make(self, wd, **kw):
+        import beatdrop  # noqa: PLC0415
+        import clip_render as rnd  # noqa: PLC0415
+        with open(os.path.join(self.out, "moments.json"), encoding="utf-8") as f:
+            mdoc = json.load(f)
+        os.makedirs(os.path.join(self.tmp, "lock"), exist_ok=True)
+        return beatdrop.make(self.rec, mdoc, wd, self.data, "ffmpeg", rnd.ENCODERS["libopenh264"], rnd.AUDIO,
+                             frame={"width": W, "height": H}, seed_parts=("rec.mkv", "beatdrop"), max_sec=60,
+                             lock_dir=os.path.join(self.tmp, "lock"), **kw)
+
+    def test_over_the_flash_limit_is_failed_not_published(self):
+        wd = os.path.join(self.tmp, "gate")
+        res = self._make(wd, live=lambda: False,
+                         measure=lambda f: {"pass": False, "peakFlashesPerSecond": 4.5, "limit": 3})
+        self.assertEqual(res["status"], "failed")
+        self.assertIn("flash limit", res["reason"])
+        self.assertIsNone(res["file"])
+        self.assertFalse(os.path.exists(os.path.join(wd, "beatdrop.mp4")))
+        self.assertFalse(os.path.exists(os.path.join(wd, "beatdrop.mp4.part")))
+
+    def test_live_flip_mid_render_stops_it(self):
+        wd = os.path.join(self.tmp, "flip")
+        part = os.path.join(wd, "beatdrop.mp4.part")
+        seen = {"rendering": False}
+
+        def live():  # off air until the render has written its first bytes, then a stream starts
+            if os.path.isfile(part) and os.path.getsize(part) > 0:
+                seen["rendering"] = True
+                return True
+            return False
+        res = self._make(wd, live=live, poll_sec=0.2)
+        self.assertTrue(seen["rendering"], "the flip happened during the render")
+        self.assertEqual(res["status"], "stopped: on air")
+        self.assertIsNone(res["file"])
+        self.assertFalse(os.path.exists(part))
+        self.assertFalse(os.path.exists(os.path.join(wd, "beatdrop.mp4")))
+        unknown = self._make(os.path.join(self.tmp, "unknown"), live=lambda: None)
+        self.assertEqual(unknown["status"], "stopped: on air", "unknown counts as on air")
 
     def test_flag_off_makes_nothing(self):
         data = os.path.join(self.tmp, "data-off")

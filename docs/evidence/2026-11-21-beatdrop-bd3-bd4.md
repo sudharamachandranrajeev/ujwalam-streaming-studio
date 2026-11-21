@@ -33,15 +33,15 @@ All Python runs: `.venv-gpu\Scripts\python.exe -I -m unittest discover -s tests/
 
 | File | Result |
 |---|---|
-| tests/py/test_beatdrop.py | 17 tests OK (planner 10, music choice 1, BD4 flash 1, rendered montage 5) |
+| tests/py/test_beatdrop.py | 27 tests OK after the review fixes (planner 15, stop guard 2, music choice 1, BD4 flash 1, rendered montage 8) |
 | tests/py/test_clip_montage.py | 35 OK |
 | tests/py/test_clip_reel_style.py | 6 OK |
 | tests/py/test_clip_look.py | 15 OK |
-| tests/py/test_clip_live_montage.py | 4 OK, 2 FAIL: the `_short_` name count also counts the D414 `.music.json` sidecars; not touched by this branch (pre-existing, UNVERIFIED on the base commit) |
+| tests/py/test_clip_live_montage.py | the 2 failures seen at f9f32ab were a D414 test bug (sidecars counted), fixed on claude/alpha0-d1 in 8bdd329 and merged here |
 | tests/flags.test.mjs | 10 pass |
 | tests/beatdrop-schemas.test.mjs | 3 pass |
 | tests/registry.test.mjs, tests/registry-layer-effects.test.mjs | 14 + 1 pass |
-| tests/package-alpha.test.mjs | 17 pass ("repo file set" included), 2 fail: Install-Ujwalam.ps1 fake-install and -SettingsOnly tests (installer, not touched by this branch; UNVERIFIED whether they fail on the base commit) |
+| tests/package-alpha.test.mjs | 17 pass ("repo file set" included), the 2 installer failures came from running it with UJWALAM_DATA_ROOT set; it passes without it |
 | npm run validate:registry | OK: registry valid |
 
 ### Done when (plan section 7, BD3), measured on the rendered montage
@@ -89,5 +89,22 @@ beats, not with the plan.
 
 - Real footage and real tracks (BD1/BD2 accuracy on them is also unverified), game numbers in
   `data/games/codm/beatdrop.json`, how the effects look to the user, Content ID on NCS tracks, flash rate of real cuts
-  between bright and dark game shots (the cuts themselves are not re-spaced).
-- The two package-alpha installer failures and the two live-montage failures above on the base commit.
+  between bright and dark game shots (now counted and measured, see below; tested on synthetic brightness only).
+
+## Codex review fixes (2026-11-21, after f9f32ab)
+
+claude/alpha0-d1 merged first (55441ef). Each fix has a test in tests/py/test_beatdrop.py; all 27 tests pass (CPU,
+headless, BelowNormal, temp data root, live-check exit 0 before each run); test_clip_montage 35 OK; flags and
+beatdrop-schemas 13 pass.
+
+| Item | Fix | Test |
+|---|---|---|
+| 1 (P1) cut flashes unmeasured | cut edges probed for relative luminance (one small seek per edge, cached `beatdrop-luma.json`); a jump >= 0.1 counts in the 3/s budget, impact flashes yield, a cut over budget gets a 3-frame luma-matched dissolve (`cut-soften`); plan `cuts`. The rendered file is measured with the fx-test analyser; above 3/s or unmeasurable: status failed, reason recorded, file removed, never published | `test_bright_dark_cuts_count_as_flashes`, `test_cuts_over_the_budget_are_softened`, `test_soften_matches_the_outgoing_level`, `test_over_the_flash_limit_is_failed_not_published` (fake 4.5/s), `test_render_is_measured_and_recorded` (real render: peak 2.5/s in render.json) |
+| 2 (P1) on-air only checked before ffmpeg | `run_tool(stop=)` polls `live()` (unknown = on air) and kills ffmpeg; status `stopped: on air`, part removed; clipper writes no render.json and exits 4 so it runs again | `StopGuardTests` (2), `test_live_flip_mid_render_stops_it` (live flips once the part file has bytes; plus live() None) |
+| 3 (P2) early first drop dropped and relabelled | first drop wins, cold open shortened and logged; below 2 bars: `firstDropMissed` {at, reason}, `song.firstDrop` null, kill on `song.dropAt` | `test_first_drop_before_the_cold_open_minimum_wins`, `test_first_drop_too_early_is_recorded_not_relabelled` |
+| 4 (P2) earlier kill in a lead-in | no other kill inside an anchored piece (either side), no other gunshot before the anchor beyond the no-kill margin; too short at 0.5x moves to the next moment | `test_lead_in_holds_no_other_kill` (two kills 0.3 s apart) |
+
+Re-measured Done-when after the fixes: 48/48 kills within one frame (max 16.7 ms), first kill on the drop 0.0 ms,
+flash peak 2.5/s. At 120 bpm a piece is at least one beat, so plan cuts never exceed 2/s; softening is exercised
+by the unit test with cuts every 0.2 s. A softened cut still counts in the budget (a dissolve is still a brightness
+change). UNVERIFIED: real dark/bright game footage.

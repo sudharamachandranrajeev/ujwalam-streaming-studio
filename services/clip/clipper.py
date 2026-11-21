@@ -99,7 +99,7 @@ import learning_mix as lmix  # noqa: E402
 import match_gate as mg  # noqa: E402
 import music_library as mlib  # noqa: E402
 from clip_common import (  # noqa: E402
-    CLIP_DATA, EXIT_FLAG_OFF, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
+    CLIP_DATA, EXIT_FLAG_OFF, EXIT_ON_AIR, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
     end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
     load_json, lower_own_priority, match_gate_settings, media_info, on_air, progress_line, resolve_data_dir, run_tool,
     write_json_atomic,
@@ -1968,13 +1968,20 @@ def cmd_beatdrop(a):
     res = bd.make(a.recording, mdoc, wd, data_dir, ffmpeg, rnd.ENCODERS[encoder], rnd.AUDIO, frame=frame, style=style,
                   seed_parts=(os.path.basename(a.recording), "beatdrop"), audio_tracks=1 if info["has_audio"] else 0,
                   max_sec=a.max_sec)
+    if res["status"] == bd.STOPPED_ON_AIR:  # nothing written to render.json: the job runs again once off air
+        eprint(f"beatdrop B1: {bd.STOPPED_ON_AIR} ({res['reason']})")
+        return EXIT_ON_AIR
     pl = res["plan"]
+    for line in pl.get("log") or []:
+        eprint(f"beatdrop B1: {line}")
     done = os.path.join(wd, bd.OUT)
     row = {"id": "B1", "kind": "beatdrop", "start": 0.0, "end": pl["total"], "music": res["music"],
            "style": {"id": style["id"], "name": style["name"]} if style else None,
            "beatdrop": {"plan": bd.PLAN, "stats": pl["stats"], "targets": pl["targets"], "slots": pl["slots"]},
            "files": [{"layout": "beatdrop-h", "file": bd.OUT, "geometry": "canvas"}] if res["file"] else [],
-           "errors": [] if res["file"] else [{"layout": "beatdrop-h", "error": res["stderr"][-300:]}],
+           "flash": res["flash"],
+           "errors": [] if res["file"] else [{"layout": "beatdrop-h", "error": (res["reason"] or "")[:300],
+                                              "stderr": (res["stderr"] or "")[-300:]}],
            "fileStamp": _file_stamp(done) if res["file"] else None}
     write_json_atomic(os.path.join(out, RENDER), {
         "tool": "clipper.beatdrop", "toolVersion": TOOL_VERSION, "createdAt": _now(),
@@ -1983,10 +1990,10 @@ def cmd_beatdrop(a):
         "beatdrop": {"flag": cfg["flag"], "version": cfg["version"], "status": cfg["status"]},
         "failed": 0 if res["file"] else 1, "clips": [row]})
     if not res["file"]:
-        eprint("beatdrop B1: FAILED")
+        eprint(f"beatdrop B1: FAILED: {res['reason']}")
         return 1
     print(f"beatdrop B1: {pl['total']:.1f} s, {pl['stats']['pieces']} piece(s), {pl['stats']['kills']} kill(s), "
-          f"first drop at {pl['song']['firstDrop']:.2f} s, music {res['music'].get('source') if res['music'] else 'none'}")
+          f"kill drop at {pl['song']['dropAt']:.2f} s, flash {res['flash']['peakFlashesPerSecond']}/s, music {res['music'].get('source') if res['music'] else 'none'}")
     progress_line("montage", 1, 1, "BeatDrop montage done")
     return 0
 

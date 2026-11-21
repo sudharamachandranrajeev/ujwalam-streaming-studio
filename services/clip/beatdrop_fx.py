@@ -10,8 +10,10 @@ the zoom pulse here.
 
 Flash safety (AGENTS.md): impact flashes are re-spaced on the final (beat-synced) timeline by space_flashes(): at most
 maxFlashesPerSec in any 1 s window and at least minGapSec apart; a flash that does not fit becomes a colour pulse
-(a low-alpha tint, below the flash threshold). The rendered result is measured from frame luminance by the same
-analyser as `fx test` (services/overlay-server/flash-detect.mjs) in tests/py/test_beatdrop.py.
+(a low-alpha tint, below the flash threshold). Hard cuts with a big luminance jump count in the same budget (the
+planner measures each cut edge; "cut-soften" is the dissolve over a cut that is over budget, a safety element, not a
+registry effect). Every rendered montage is measured from frame luminance by the same analyser as `fx test`
+(services/overlay-server/flash-detect.mjs) before it may be published (beatdrop.make).
 """
 
 from __future__ import annotations
@@ -51,20 +53,44 @@ def params_for(fn, over=None, preset_id=None, registry=REGISTRY):
     return p
 
 
-def space_flashes(effects, max_per_sec=3, min_gap=0.34):
+def space_flashes(effects, max_per_sec=3, min_gap=0.34, cuts=(), soften_frames=3):
     """Impact flashes on the final timeline: kept as flashes while at least min_gap after the last flash and fewer than
-    max_per_sec in the 1 s before; the rest become colour pulses (mode "pulse"). -> new list (others unchanged)."""
+    max_per_sec in the 1 s before; the rest become colour pulses (mode "pulse"). -> new list (others unchanged).
+
+    cuts (D415 review): hard cuts with a big luminance jump ({"at", "from", "to"}: relative luminance 0..1 at each side)
+    are flashes in the same budget. A cut always counts (it cannot be demoted), so impact flashes near it yield; a cut
+    that is itself over the budget gets a soften_frames luma-matched dissolve (a "cut-soften" entry) and is marked
+    "softened" in place. The rendered file is measured afterwards (beatdrop.make): softening never stands in for that."""
     out, kept = [], []
-    for e in sorted(effects, key=lambda e: e["at"]):
-        if e["fn"] != "impact-flash":
+    events = [(e["at"], 0, e) for e in effects] + [(c["at"], 1, c) for c in cuts]
+    for t, is_cut, e in sorted(events, key=lambda x: (x[0], -x[1])):
+        if not is_cut and e["fn"] != "impact-flash":
             out.append(e)
             continue
-        t = e["at"]
         ok = (not kept or t - kept[-1] >= min_gap) and sum(1 for k in kept if t - k < 1.0) < max_per_sec
+        if is_cut:
+            kept.append(t)
+            e["softened"] = not ok
+            if not ok:
+                out.append({"fn": "cut-soften", "at": round(t, 4),
+                            "params": soften_params(e["from"], e["to"], soften_frames)})
+            continue
         if ok:
             kept.append(t)
         out.append(dict(e, mode="flash" if ok else "pulse"))
     return out
+
+
+def soften_params(l_from, l_to, frames=3):
+    """A dissolve from the outgoing shot's luminance to the incoming one over `frames` frames, drawn as a black (incoming
+    brighter) or white (incoming darker) veil over the first frames of the incoming shot. alpha matches the outgoing
+    level on the first frame (sRGB approximation, gamma 2.2) and falls linearly to 0."""
+    sa, sb = max(l_from, 0.0) ** (1 / 2.2), max(l_to, 0.0) ** (1 / 2.2)
+    if sb > sa:
+        colour, alpha = "black", 1.0 - sa / sb
+    else:
+        colour, alpha = "white", (sa - sb) / (1.0 - sb) if sb < 1 else 0.0
+    return {"frames": int(frames), "colour": colour, "alpha": round(min(max(alpha, 0.0), 1.0), 4)}
 
 
 def _between(a, b):
@@ -147,6 +173,13 @@ def graph(effects, frame, fps=60):
         h = f"ih*{p['bar']:.4f}*{k}"
         post.append(f"drawbox=x=0:y=0:w=iw:h='{h}':color=black:t=fill:enable='{_between(a, b)}'")
         post.append(f"drawbox=x=0:y='ih-{h}':w=iw:h='{h}':color=black:t=fill:enable='{_between(a, b)}'")
+    for e in by.get("cut-soften", []):  # luma-matched dissolve over a hard cut (space_flashes)
+        p, a, n = e["params"], e["at"], int(e["params"]["frames"])
+        for k in range(n):
+            al = p["alpha"] * (1.0 - k / n)
+            if al > 0.001:
+                post.append(f"drawbox=x=0:y=0:w=iw:h=ih:color={p['colour']}@{al:.3f}:t=fill"
+                            f":enable='{_between(a + k / fps, a + (k + 1) / fps - 0.001)}'")
     for e in by.get("impact-flash", []):
         p, a = e["params"], e["at"]
         if e.get("mode", "flash") == "flash":

@@ -67,8 +67,10 @@ def targets(style, cfg):
 
 
 class _Planner:
-    def __init__(self, moments_doc, smap, cfg, game, style, max_sec, rec_seconds):
+    def __init__(self, moments_doc, smap, cfg, game, style, max_sec, rec_seconds, luma=None):
         self.cfg, self.game = cfg, game
+        self.luma = luma  # source seconds -> relative luminance 0..1 (LumaProbe), or None (no cut check)
+        self.log = []
         self.fps = int(cfg["fps"])
         self.rfps = float(moments_doc["fps"])
         self.rec_len = float(rec_seconds or moments_doc["seconds"])
@@ -78,6 +80,8 @@ class _Planner:
         margin = float(game["noKillMarginSec"])
         self.killish = sorted(st(m) for m in ms if m["kind"] in ("kill", "gunshot", "hit", "killcam"))
         self.sounds = sorted(st(m) for m in ms if m["kind"] in ("kill", "gunshot"))
+        self.kill_ts = sorted(st(m) for m in ms if m["kind"] == "kill")
+        self.shot_ts = sorted(st(m) for m in ms if m["kind"] == "gunshot")
         self.scopes = sorted(st(m) for m in ms if m["kind"] == "scope-in")
         shots = sorted((m for m in ms if m["kind"] == "gunshot" and all(abs(st(m) - st(k)) > margin for k in self.kills)),
                        key=lambda m: (-m["strength"], m["frame"]))
@@ -154,6 +158,13 @@ class _Planner:
             return None
         lo = max([0.0] + [u1 for u0, u1 in self.used if u1 <= sa])
         hi = min([self.rec_len - 1.0 / self.rfps] + [u0 for u0, u1 in self.used if u0 >= sa])
+        # no other kill (either side) and no gunshot of another moment (before the anchor, beyond the margin that ties
+        # a gunshot to this kill) inside the piece: it would land off the beat (D415 review). Too short at 0.5x: the
+        # next moment is tried.
+        eps = 1.5 / self.rfps
+        lo = max([lo] + [t + eps for t in self.kill_ts if t < sa - 1e-6]
+                 + [t + eps for t in self.shot_ts if t < sa - self.margin])
+        hi = min([hi] + [t - eps for t in self.kill_ts if t > sa + 1e-6])
         s = 1.0
         if pre > 0:
             s = min(s, (sa - lo) / pre)
@@ -190,10 +201,29 @@ class _Planner:
         co = cfg["coldOpen"]
         if not self.on_queue:
             raise ClipError("beatdrop: no kill or gunshot moments in this recording")
-        drops = [d for d in sm.get("drops") or [] if d >= float(co["minSec"])]
-        drop = drops[0] if drops else next((d for d in downs if d >= float(co["minSec"])), None)
+        # the song's first drop wins (D415 review): coldOpen.minSec is a soft target, an earlier drop shortens the cold
+        # open (logged); only a drop too early for any intro (< coldOpen.minBars bars) is missed, recorded with the reason,
+        # and the kill goes on the next drop. The later drop is never called the first drop (song.firstDrop null).
+        min_intro = int(co["minBars"]) * bar
+        drops = sorted(float(d) for d in sm.get("drops") or [])
+        self.missed = None
+        drop = None
+        for d in drops:
+            if d >= min_intro - 1e-6:
+                drop = d
+                break
+            if self.missed is None:
+                self.missed = {"at": round(d, 4), "reason": f"the song's first drop at {d:.2f} s is earlier than the "
+                               f"shortest intro ({int(co['minBars'])} bars, {min_intro:.2f} s): the kill is on the next drop"}
+                self.log.append("firstDropMissed: " + self.missed["reason"])
         if drop is None:
-            raise ClipError("beatdrop: the song has no drop or downbeat after the cold open's minimum length")
+            drop = next((d for d in downs if d >= float(co["minSec"])), None)
+            if drop is None:
+                raise ClipError("beatdrop: the song has no drop or downbeat after the cold open's minimum length")
+        elif drop < float(co["minSec"]):
+            self.log.append(f"cold open shortened to {drop:.2f} s (target {float(co['minSec']):g} s): the song's first "
+                            f"drop comes earlier")
+        self.first_drop = drop if drops and self.missed is None else None
         drop = min(beats, key=lambda b: abs(b - drop))  # the drop on the grid
         if drop > float(co["maxSec"]):  # a long intro: the song starts later, on a downbeat
             self.song0 = min(d for d in downs if drop - d <= float(co["maxSec"]))
@@ -289,15 +319,40 @@ class _Planner:
         self.fx("letterbox", round(self.F(outro0) / self.fps, 4), end=round(self.F(song_end) / self.fps, 4))
         self.fx("bloom-grade", 0.0)
         fl = cfg["flash"]
-        self.effects = bfx.space_flashes(self.effects, int(fl["maxPerSec"]), float(fl["minGapSec"]))
+        cuts = self.cut_jumps()
+        self.effects = bfx.space_flashes(self.effects, int(fl["maxPerSec"]), float(fl["minGapSec"]), cuts=cuts,
+                                         soften_frames=int(fl["softenFrames"]))
+        n_soft = sum(1 for c in cuts if c["softened"])
+        if n_soft:
+            self.log.append(f"{n_soft} hard cut(s) with a big brightness jump over the flash budget: softened with a "
+                            f"{int(fl['softenFrames'])}-frame dissolve")
         total_f = self.F(song_end)
         reel_beats = [round((b - self.song0), 4) for b in beats if self.song0 <= b <= song_end]
-        return {"version": 1, "kind": "beatdrop", "status": "unverified", "fps": self.fps,
-                "songStart": round(self.song0, 4), "total": round(total_f / self.fps, 4), "frames": total_f,
-                "song": {"bpm": sm["bpm"], "period": period, "firstDrop": round(drop - self.song0, 4),
-                         "beats": reel_beats},
-                "targets": self.tg, "slots": slots, "pieces": self.pieces, "effects": self.effects,
-                "stats": stats(self.pieces, self.fps)}
+        out = {"version": 1, "kind": "beatdrop", "status": "unverified", "fps": self.fps,
+               "songStart": round(self.song0, 4), "total": round(total_f / self.fps, 4), "frames": total_f,
+               "song": {"bpm": sm["bpm"], "period": period,
+                        "firstDrop": round(drop - self.song0, 4) if self.first_drop is not None else None,
+                        "dropAt": round(drop - self.song0, 4), "beats": reel_beats},
+               "targets": self.tg, "slots": slots, "pieces": self.pieces, "effects": self.effects,
+               "cuts": cuts, "log": self.log, "stats": stats(self.pieces, self.fps)}
+        if self.missed:
+            out["firstDropMissed"] = self.missed
+        return out
+
+    def cut_jumps(self):
+        """Hard cuts whose relative luminance jumps by flash.cutDelta or more (darker side below flash.darkerBelow): the
+        mean luminance at the outgoing piece's last frame and the incoming piece's first frame (self.luma, a cached low
+        resolution probe of the recording, cached). -> [{"at" (reel s), "from", "to"}]; [] without a luma track."""
+        if self.luma is None:
+            return []
+        fl = self.cfg["flash"]
+        out = []
+        for a, b in zip(self.pieces, self.pieces[1:]):
+            la = float(self.luma(max(0.0, a["src"]["end"] - 1.0 / self.rfps)))
+            lb = float(self.luma(b["src"]["start"]))
+            if abs(la - lb) >= float(fl["cutDelta"]) and min(la, lb) < float(fl["darkerBelow"]):
+                out.append({"at": round(b["outStart"] / self.fps, 4), "from": round(la, 4), "to": round(lb, 4)})
+        return out
 
     def _on_anchor(self, p, first=False, kill_no=0):
         """Effects on an on-beat anchor: shake, an impact flash (re-spaced later), RGB split on the drop and every Nth
@@ -334,11 +389,88 @@ def stats(pieces, fps):
             "kills": sum(1 for a in anchors if a["kind"] == "kill")}
 
 
-def plan(moments_doc, smap, cfg=None, game=None, style=None, max_sec=None, rec_seconds=None):
-    """moments (moments.find_moments output) + song map (song_map.song_map output) [+ mapped reel style] -> plan."""
+def plan(moments_doc, smap, cfg=None, game=None, style=None, max_sec=None, rec_seconds=None, luma=None):
+    """moments (moments.find_moments output) + song map (song_map.song_map output) [+ mapped reel style] -> plan.
+    luma: source seconds -> relative luminance 0..1 (a LumaProbe), for the hard-cut flash check."""
     cfg = cfg or load_config()
     game = game or load_game(moments_doc.get("game") or "codm")
-    return _Planner(moments_doc, smap, cfg, game, style, max_sec, rec_seconds).build()
+    return _Planner(moments_doc, smap, cfg, game, style, max_sec, rec_seconds, luma).build()
+
+
+LUMA_CACHE = "beatdrop-luma.json"
+_LIN = [(c / 255 / 12.92) if c / 255 <= 0.04045 else ((c / 255 + 0.055) / 1.055) ** 2.4 for c in range(256)]
+
+
+class LumaProbe:
+    """Mean relative luminance (WCAG, linear light; the fx test's definition, flash-detect.mjs) of the recording at a
+    source time: one small seek and decode (16x9 rgb24, one frame) per cut edge, rounded to 1/lumaFps s and cached in
+    <cache_dir>/beatdrop-luma.json keyed by the file's size and mtime. Call save() after planning."""
+
+    W, H = 16, 9
+
+    def __init__(self, ffmpeg, recording, cache_dir, fps=10):
+        import json  # noqa: PLC0415
+        self.ffmpeg, self.recording, self.fps = ffmpeg, recording, float(fps)
+        st = os.stat(recording)
+        self.key = {"size": st.st_size, "mtime": int(st.st_mtime), "fps": fps}
+        self.cache = os.path.join(cache_dir, LUMA_CACHE)
+        self.values, self.probes = {}, 0
+        try:
+            with open(self.cache, encoding="utf-8") as f:
+                doc = json.load(f)
+            if doc.get("key") == self.key:
+                self.values = dict(doc["values"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+
+    def __call__(self, t):
+        import subprocess  # noqa: PLC0415
+        from clip_common import NO_WINDOW, child_kwargs  # noqa: PLC0415
+        q = str(int(round(max(0.0, t) * self.fps)))
+        if q in self.values:
+            return self.values[q]
+        n = self.W * self.H * 3
+        r = subprocess.run([self.ffmpeg, "-v", "error", "-nostdin", "-ss", f"{int(q) / self.fps:.3f}", "-i",
+                            self.recording, "-an", "-sn", "-frames:v", "1", "-vf", f"scale={self.W}:{self.H}:flags=area",
+                            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                           capture_output=True, timeout=120, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
+        fr = r.stdout[:n]
+        if r.returncode != 0 or len(fr) < n:
+            raise ClipError("beatdrop: the brightness probe of the recording failed: "
+                            + r.stderr.decode("utf-8", "replace")[-200:])
+        self.probes += 1
+        v = round(sum(0.2126 * _LIN[fr[j]] + 0.7152 * _LIN[fr[j + 1]] + 0.0722 * _LIN[fr[j + 2]]
+                      for j in range(0, n, 3)) / (self.W * self.H), 4)
+        self.values[q] = v
+        return v
+
+    def save(self):
+        import json  # noqa: PLC0415
+        os.makedirs(os.path.dirname(self.cache), exist_ok=True)
+        with open(self.cache, "w", encoding="utf-8") as f:
+            json.dump({"key": self.key, "values": self.values}, f)
+
+
+def measure_flash(path, sample, fps=60, node=None):
+    """The rendered file's flash rate with the fx test analyser (tools/fx-test.mjs analyseVideo, flash-detect.mjs).
+    -> the analyser's result ({"pass", "peakFlashesPerSecond", "limit", ...}). Raises ClipError when it cannot run:
+    an unmeasured montage is never published."""
+    import json  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    from clip_common import NO_WINDOW, child_kwargs  # noqa: PLC0415
+    node = node or shutil.which("node")
+    if not node:
+        raise ClipError("the flash check needs node (tools/fx-test.mjs): not found")
+    url = "file:///" + os.path.join(_HERE, "..", "..", "tools", "fx-test.mjs").replace("\\", "/")
+    js = (f"import({json.dumps(url)}).then(async m => {{ const r = await m.analyseVideo({json.dumps(path)}, "
+          f"{{ sample: {{ width: {int(sample['width'])}, height: {int(sample['height'])} }}, fps: {int(fps)} }}); "
+          "console.log(JSON.stringify(r)); }).catch(e => { console.error(String(e)); process.exit(2); });")
+    r = subprocess.run([node, "--input-type=module", "-e", js], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=1800, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
+    if r.returncode != 0:
+        raise ClipError("the flash check failed: " + (r.stderr or "")[-200:])
+    return json.loads(r.stdout.strip().splitlines()[-1])
 
 
 def render_pieces(pl):
@@ -421,25 +553,49 @@ def settings_of(data_dir):
     return v if isinstance(v, dict) else None
 
 
+STOPPED_ON_AIR = "stopped: on air"
+
+
 def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame=None, style=None,
-         seed_parts=(), live=on_air, audio_tracks=1, max_sec=None, lock_dir=None, cfg=None):
+         seed_parts=(), live=on_air, audio_tracks=1, max_sec=None, lock_dir=None, cfg=None, measure=None, poll_sec=2.0):
     """One BeatDrop montage, off air only, one heavy job at a time: the song (NCS library pick or the made-here bed),
-    its song map, the plan (wd/beatdrop-plan.json), the bed, the style's LUT and the one ffmpeg run (wd/beatdrop.mp4).
-    -> {"plan", "music" (the record for render.json), "returncode", "stderr", "file", "argv"}."""
+    its song map, the plan (wd/beatdrop-plan.json; cut edges probed for brightness), the bed, the style's LUT and the
+    one ffmpeg run (wd/beatdrop.mp4.part), then the flash check of the rendered file; only a file that passes becomes
+    wd/beatdrop.mp4.
+
+    On air (live() not False: a stream or recording, or unknown) before or during the render: the ffmpeg run is killed
+    (run_tool stop=), the part file removed, status "stopped: on air" (the job runs again later). Flash rate above the
+    limit, or not measurable: status "failed" with the reason; the file is not kept.
+    measure(path) -> the fx test analyser's result (default measure_flash).
+    -> {"status" ("done" | "failed" | "stopped: on air"), "reason", "plan", "music" (the record for render.json),
+        "returncode", "stderr", "file", "argv", "flash"}."""
     import song_map as smod  # noqa: PLC0415
-    from clip_common import HeavyJobLock, run_tool, write_json_atomic  # noqa: PLC0415
+    from clip_common import STOPPED_RC, HeavyJobLock, run_tool, write_json_atomic  # noqa: PLC0415
     cfg = cfg or load_config()
-    if live is None or live() is not False:
-        raise ClipError("the studio is live or recording (or that cannot be told): BeatDrop montages are made off air only")
+    fl = cfg["flash"]
+    res = {"status": STOPPED_ON_AIR, "reason": "a stream or recording is on (or that cannot be told)", "plan": None,
+           "music": None, "returncode": None, "stderr": "", "file": None, "argv": None, "flash": None}
+
+    def on():  # unknown counts as on air
+        return live is None or live() is not False
+
+    if on():
+        return res
     frame = frame or cfg["frame"]
     os.makedirs(wd, exist_ok=True)
+    part = os.path.join(wd, OUT + ".part")
     with HeavyJobLock(lock_dir, job="beatdrop"):
         song, record = pick_music(data_dir, settings_of(data_dir), seed_parts, live=live)
+        res["music"] = record
         if song is None:
             path, record = made_here_song(wd, float(max_sec or cfg["maxSec"]) + 8.0, seed_parts)
             song = {"path": path, "root": wd}
+            res["music"] = record
         smap = smod.song_map(song["path"], song["root"], live=live)
-        pl = plan(moments_doc, smap, cfg, style=style, max_sec=max_sec)
+        probe = LumaProbe(ffmpeg, recording, wd, int(fl["lumaFps"]))
+        pl = plan(moments_doc, smap, cfg, style=style, max_sec=max_sec, luma=probe)
+        probe.save()
+        res["plan"] = pl
         write_json_atomic(os.path.join(wd, PLAN), pl)
         wav = music_bed(wd, pl, song["path"], song["root"], cfg)
         lut = None
@@ -448,19 +604,50 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
             ref = rstyle.clip_colour(recording, render_pieces(pl))
             rstyle.write_lut(os.path.join(wd, rstyle.LUT_FILE), style["colour"], style["colour"]["strength"], ref)
             lut = rstyle.LUT_FILE
-        if live() is not False:
-            raise ClipError("the studio went live: the BeatDrop montage was stopped before rendering")
-        argv = render_argv(pl, ffmpeg, recording, frame, encoder_args, audio_args, wav, OUT + ".part",
-                           lut=lut, audio_tracks=audio_tracks)
-        argv = graph_from_file(argv, wd)
-        r = run_tool(argv, cwd=wd, watch=OUT + ".part", stall_sec=300)
+        r = None
+        if not on():
+            argv = render_argv(pl, ffmpeg, recording, frame, encoder_args, audio_args, wav, OUT + ".part",
+                               lut=lut, audio_tracks=audio_tracks)
+            argv = graph_from_file(argv, wd)
+            res["argv"] = argv
+            r = run_tool(argv, cwd=wd, watch=OUT + ".part", stall_sec=300, stop=on, poll_sec=poll_sec)
+            res["returncode"], res["stderr"] = r.returncode, (r.stderr or "")[-400:]
         for f in (wav, lut, GRAPH):
             if f:
                 try:
                     os.remove(os.path.join(wd, f))
                 except OSError:
                     pass
-        if r.returncode == 0 and os.path.isfile(os.path.join(wd, OUT + ".part")):
-            os.replace(os.path.join(wd, OUT + ".part"), os.path.join(wd, OUT))
-    return {"plan": pl, "music": record, "returncode": r.returncode, "stderr": (r.stderr or "")[-400:],
-            "file": OUT if r.returncode == 0 else None, "argv": argv}
+        if r is None or r.returncode == STOPPED_RC:
+            _drop(part)
+            return res  # stopped: on air
+        if r.returncode != 0 or not os.path.isfile(part):
+            _drop(part)
+            res.update(status="failed", reason=f"ffmpeg exited {r.returncode}")
+            return res
+        try:
+            m = (measure or (lambda f: measure_flash(f, fl["sample"], pl["fps"])))(part)
+        except ClipError as e:
+            m = None
+            reason = f"flash not measured ({e}): not published"
+        else:
+            res["flash"] = {"peakFlashesPerSecond": m.get("peakFlashesPerSecond"), "limit": m.get("limit"),
+                            "pass": bool(m.get("pass"))}
+            reason = None
+            if not m.get("pass") or float(m.get("peakFlashesPerSecond") or 0) > float(fl["maxPerSec"]):
+                reason = (f"flash limit: the rendered montage measures {m.get('peakFlashesPerSecond')} flashes/s "
+                          f"(limit {float(fl['maxPerSec']):g}): not published")
+        if reason:
+            _drop(part)
+            res.update(status="failed", reason=reason)
+            return res
+        os.replace(part, os.path.join(wd, OUT))
+        res.update(status="done", reason=None, file=OUT)
+    return res
+
+
+def _drop(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass

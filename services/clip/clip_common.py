@@ -183,6 +183,7 @@ LOCAL_FLAGS = "flags.local.json"
 FFMPEG_THREADS = 4
 
 EXIT_FLAG_OFF = 3
+EXIT_ON_AIR = 4  # a job stopped because a stream or recording started (or that could not be told): run it again later
 
 
 class ClipError(Exception):
@@ -413,24 +414,29 @@ def lower_own_priority():
 
 
 STALLED_RC = -2  # run_tool(watch=...): the child wrote nothing for stall_sec and was stopped
+STOPPED_RC = -3  # run_tool(stop=...): stop() said stop (a stream or recording started); the child was stopped
 
 
-def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=2.0, setup_sec=300.0):
+def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=2.0, setup_sec=300.0, stop=None):
     """Runs a child at below-normal priority; returns CompletedProcess (text, utf-8, errors replaced).
 
     watch + stall_sec (2026-11-12, a render hung for 30 min after a GPU driver reset): the child is stopped when the
     file `watch` (its output; relative to cwd) has not grown for stall_sec seconds; before its first byte the child
     gets max(stall_sec, setup_sec) (a long seek or filter set-up writes nothing yet). The result then has returncode
-    STALLED_RC and says so in stderr. timeout still raises subprocess.TimeoutExpired."""
-    if watch is None or not stall_sec:
+    STALLED_RC and says so in stderr. timeout still raises subprocess.TimeoutExpired.
+
+    stop (2026-11-21, D415 review): a callable asked every poll_sec while the child runs; when it returns True the
+    child is killed and the result has returncode STOPPED_RC ("stopped: on air" in stderr). A caller that treats an
+    unknown live state as on air passes e.g. lambda: live() is not False."""
+    if (watch is None or not stall_sec) and stop is None:
         return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=timeout, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
     import tempfile  # noqa: PLC0415
-    path = watch if os.path.isabs(watch) or not cwd else os.path.join(cwd, watch)
+    path = None if watch is None or not stall_sec else (watch if os.path.isabs(watch) or not cwd else os.path.join(cwd, watch))
     with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:  # files, not pipes: no pipe can fill and block
         p = subprocess.Popen(argv, cwd=cwd, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
         t0 = last = time.monotonic()
-        size, stalled, grew = -1, False, False
+        size, stalled, grew, stopped = -1, False, False, False
         try:
             while True:
                 try:
@@ -438,15 +444,21 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
                     break
                 except subprocess.TimeoutExpired:
                     pass
+                if stop is not None and stop() and p.poll() is None:
+                    stopped = True
+                    p.kill()
+                    p.wait()
+                    break
                 now = time.monotonic()
-                try:
-                    s = os.path.getsize(path)
-                except OSError:
-                    s = -1
-                if s != size:
-                    grew = grew or size >= 0 or s > 0
-                    size, last = s, now
-                if now - last >= (stall_sec if grew else max(stall_sec, setup_sec)):
+                if path is not None:
+                    try:
+                        s = os.path.getsize(path)
+                    except OSError:
+                        s = -1
+                    if s != size:
+                        grew = grew or size >= 0 or s > 0
+                        size, last = s, now
+                if path is not None and now - last >= (stall_sec if grew else max(stall_sec, setup_sec)):
                     if p.poll() is not None:  # it ended between the wait and this check: its own exit code counts
                         break
                     stalled = True
@@ -465,6 +477,8 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
         fe.seek(0)
         out = fo.read().decode("utf-8", errors="replace")
         err = fe.read().decode("utf-8", errors="replace")
+    if stopped:
+        return subprocess.CompletedProcess(argv, STOPPED_RC, out, err + "\nstopped: on air")
     if stalled:
         return subprocess.CompletedProcess(argv, STALLED_RC, out,
                                            err + f"\nstalled: no output for {stall_sec:g} s; stopped")
