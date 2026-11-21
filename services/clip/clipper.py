@@ -1993,7 +1993,7 @@ def cmd_beatdrop(a):
 
     res = bd.make(a.recording, mdoc, wd, data_dir, ffmpeg, rnd.ENCODERS[encoder], rnd.AUDIO, frame=frame, style=style,
                   seed_parts=(os.path.basename(a.recording), "beatdrop"), audio_tracks=1 if info["has_audio"] else 0,
-                  max_sec=a.max_sec, render_json=render_path, write_render=write_render)
+                  max_sec=a.max_sec, render_json=render_path, write_render=write_render, profile=a.profile)
     if res["status"] == bd.STOPPED_ON_AIR:  # nothing written to render.json: the job runs again once off air
         eprint(f"beatdrop B1: {bd.STOPPED_ON_AIR} ({res['reason']})")
         return EXIT_ON_AIR
@@ -2101,6 +2101,8 @@ def build_parser():
     s.add_argument("--moments", type=os.path.abspath, help="BD1 moments JSON (default DIR/moments.json)")
     s.add_argument("--encoder", default="auto"); s.add_argument("--max-sec", type=float)
     s.add_argument("--width", type=int); s.add_argument("--height", type=int)
+    s.add_argument("--profile", type=os.path.abspath,
+                   help="profile JSON for the BD5 title brand and player name (default data/profile.local.json)")
     s.set_defaults(fn=cmd_beatdrop)
     s = sub.add_parser("recaption", help="render one reel again with its edited transcript (ED2, flag reel-captions)")
     common(s, recording=False)

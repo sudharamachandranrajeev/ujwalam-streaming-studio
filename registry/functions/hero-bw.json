@@ -1,0 +1,32 @@
+{
+  "id": "hero-bw",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Outro hero in black and white (BD5)",
+  "description": "The BeatDrop outro hero slot: the calm third-person piece fades to black and white over inMs (under 600 ms) with a slow push-in to `push` across the slot, and the player name (from the local profile at run time) fades in under it; colour returns over outMs (under 400 ms) at the slot's end. Saturation only, so no luminance flash. BeatDrop montages (D416). Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "push": { "type": "number", "minimum": 1.0, "maximum": 1.15 },
+        "nameSizeOfHeight": { "type": "number", "minimum": 0.04, "maximum": 0.14 },
+        "nameY": { "type": "number", "minimum": 0.6, "maximum": 0.9 },
+        "inMs": { "type": "integer", "minimum": 100, "maximum": 550 },
+        "outMs": { "type": "integer", "minimum": 100, "maximum": 350 }
+      }
+    },
+    "defaults": { "push": 1.08, "nameSizeOfHeight": 0.08, "nameY": 0.8, "inMs": 500, "outMs": 300 },
+    "safeRanges": { "push": [1.0, 1.15], "nameSizeOfHeight": [0.04, 0.14], "nameY": [0.6, 0.9], "inMs": [100, 550], "outMs": [100, 350] }
+  },
+  "canvases": ["V", "H"],
+  "themeTokens": [],
+  "durationMs": 550,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD5"
+}

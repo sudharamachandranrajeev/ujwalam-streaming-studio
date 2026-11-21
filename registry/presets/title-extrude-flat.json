@@ -1,0 +1,15 @@
+{
+  "id": "title-extrude-flat",
+  "version": "1.0.0",
+  "function": "title-extrude",
+  "functionVersion": "^1.0.0",
+  "name": "Flat title, small depth",
+  "params": { "sizeOfHeight": 0.11, "depth": 3, "glowAlpha": 0.2, "sweepAlpha": 0.0, "pop": 1.1, "inMs": 300, "outMs": 250 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "slam", "intensity": "low", "mood": "calm", "colourUse": "multi", "flashes": "none" },
+  "canvases": ["V", "H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["title-extrude-codm", "credits-roll-rise"]
+}

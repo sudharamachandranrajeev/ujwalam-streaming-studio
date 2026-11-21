@@ -1,0 +1,34 @@
+{
+  "id": "credits-roll",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Credits card (BD5)",
+  "description": "The BeatDrop credits slot: the song credit exactly as the music record's credit (montage_music.credit_text, the D414 posting gate's text), then the data lines (data/clip/beatdrop.json titles.creditLines and madeWith). Lines rise into place one after another (all in under 600 ms), hold, and fade out over outMs (under 400 ms). BeatDrop montages (D416). Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sizeOfHeight": { "type": "number", "minimum": 0.03, "maximum": 0.1 },
+        "lineGap": { "type": "number", "minimum": 1.0, "maximum": 2.0 },
+        "y": { "type": "number", "minimum": 0.2, "maximum": 0.6 },
+        "rise": { "type": "number", "minimum": 0.0, "maximum": 0.1 },
+        "staggerMs": { "type": "integer", "minimum": 0, "maximum": 120 },
+        "inMs": { "type": "integer", "minimum": 100, "maximum": 400 },
+        "outMs": { "type": "integer", "minimum": 100, "maximum": 350 }
+      }
+    },
+    "defaults": { "sizeOfHeight": 0.055, "lineGap": 1.45, "y": 0.36, "rise": 0.04, "staggerMs": 60, "inMs": 300, "outMs": 300 },
+    "safeRanges": { "sizeOfHeight": [0.03, 0.1], "lineGap": [1.0, 2.0], "y": [0.2, 0.6], "rise": [0.0, 0.1], "staggerMs": [0, 120], "inMs": [100, 400], "outMs": [100, 350] }
+  },
+  "canvases": ["V", "H"],
+  "themeTokens": [],
+  "durationMs": 600,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD5"
+}

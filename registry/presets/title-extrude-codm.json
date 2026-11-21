@@ -1,0 +1,15 @@
+{
+  "id": "title-extrude-codm",
+  "version": "1.0.0",
+  "function": "title-extrude",
+  "functionVersion": "^1.0.0",
+  "name": "CODM extruded title",
+  "params": { "sizeOfHeight": 0.13, "depth": 6, "glowAlpha": 0.45, "pop": 1.25, "inMs": 400, "outMs": 300 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "slam", "intensity": "medium", "mood": "electric", "colourUse": "multi", "flashes": "none" },
+  "canvases": ["V", "H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["title-extrude-flat", "title-pin-surface"]
+}

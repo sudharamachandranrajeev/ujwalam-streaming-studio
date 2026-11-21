@@ -1,0 +1,40 @@
+{
+  "id": "title-extrude",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Extruded title (BD5)",
+  "description": "BeatDrop cold-open title: '<brand> presents' on the title slot's first downbeat, then the song title on the intro's last downbeat, as layered 2D text (stacked offset copies for depth, a lighter top half, a light sweep and a soft glow; libass, no 3D engine). Enters as a slam (scale from pop to 1 over inMs, under 600 ms), leaves with a fade over outMs (under 400 ms). Colours and fonts from the game's look (data/games/<game>/beatdrop.json). BeatDrop montages (D416), flag beatdrop. Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sizeOfHeight": { "type": "number", "minimum": 0.06, "maximum": 0.2 },
+        "presentsOfSize": { "type": "number", "minimum": 0.3, "maximum": 0.8 },
+        "y": { "type": "number", "minimum": 0.15, "maximum": 0.45 },
+        "depth": { "type": "integer", "minimum": 2, "maximum": 10 },
+        "depthOfSize": { "type": "number", "minimum": 0.03, "maximum": 0.15 },
+        "outlineOfSize": { "type": "number", "minimum": 0.0, "maximum": 0.06 },
+        "glowAlpha": { "type": "number", "minimum": 0.0, "maximum": 0.8 },
+        "glowOfSize": { "type": "number", "minimum": 0.02, "maximum": 0.2 },
+        "sweepAlpha": { "type": "number", "minimum": 0.0, "maximum": 0.6 },
+        "sweepMs": { "type": "integer", "minimum": 300, "maximum": 2000 },
+        "pop": { "type": "number", "minimum": 1.0, "maximum": 1.4 },
+        "inMs": { "type": "integer", "minimum": 100, "maximum": 550 },
+        "outMs": { "type": "integer", "minimum": 100, "maximum": 350 }
+      }
+    },
+    "defaults": { "sizeOfHeight": 0.13, "presentsOfSize": 0.5, "y": 0.3, "depth": 6, "depthOfSize": 0.08, "outlineOfSize": 0.02, "glowAlpha": 0.45, "glowOfSize": 0.08, "sweepAlpha": 0.35, "sweepMs": 900, "pop": 1.25, "inMs": 400, "outMs": 300 },
+    "safeRanges": { "sizeOfHeight": [0.06, 0.2], "presentsOfSize": [0.3, 0.8], "y": [0.15, 0.45], "depth": [2, 10], "depthOfSize": [0.03, 0.15], "outlineOfSize": [0.0, 0.06], "glowAlpha": [0.0, 0.8], "glowOfSize": [0.02, 0.2], "sweepAlpha": [0.0, 0.6], "sweepMs": [300, 2000], "pop": [1.0, 1.4], "inMs": [100, 550], "outMs": [100, 350] }
+  },
+  "canvases": ["V", "H"],
+  "themeTokens": [],
+  "durationMs": 550,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD5"
+}

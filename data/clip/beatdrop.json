@@ -14,6 +14,15 @@
   "speed": { "min": 0.5, "max": 2.0 },
   "coldOpen": { "minSec": 6, "minBars": 2, "maxSec": 25, "shotSec": 2.0, "speed": 0.75, "leadBeats": 1, "$comment": "minSec is a soft target: an earlier first drop wins and the cold open is shortened (logged); below minBars bars no intro fits and the plan records firstDropMissed (D415 review)" },
   "title": { "bars": 2 },
+  "titles": {
+    "$comment": "BD5 (D416): the intro title, the in-scene pin, the outro hero and the credits (services/clip/beatdrop_titles.py). Each is a registry core function with presets (registry/functions/<fn>.json); the look (colours, fonts) comes from data/games/<game>/beatdrop.json `look`. Text: the brand and player name from data/profile.local.json at run time (never committed), the song title and the credit from the music record (the exact D414 credit text). `mode` pin: the title is tracked onto a flat area of the shot (OpenCV, CPU, bounded frames) and falls back to screen space when tracking is unsure (logged).",
+    "on": true,
+    "mode": "pin",
+    "presets": { "title-extrude": "title-extrude-codm", "title-pin": "title-pin-surface", "hero-bw": "hero-bw-push", "credits-roll": "credits-roll-rise" },
+    "presentsTemplate": "{brand} presents",
+    "creditLines": ["Clips and edit: {brand}"],
+    "madeWith": "Made with Ujwalam"
+  },
   "outro": { "heroBars": 2, "creditsBars": 2, "heroSpeed": 0.5 },
   "breakdown": { "speed": 0.5, "shotBars": 1 },
   "audio": { "gameGain": 0.2, "calmGain": 0.08, "keepPreSec": 0.03, "keepPostSec": 0.25, "musicLevelDb": -14 },

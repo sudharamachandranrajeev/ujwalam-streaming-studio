@@ -1,0 +1,15 @@
+{
+  "id": "credits-roll-rise",
+  "version": "1.0.0",
+  "function": "credits-roll",
+  "functionVersion": "^1.0.0",
+  "name": "Credits rise in",
+  "params": { "staggerMs": 60, "inMs": 300, "outMs": 300 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "slide", "intensity": "low", "mood": "calm", "colourUse": "none", "flashes": "none" },
+  "canvases": ["V", "H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["hero-bw-push", "title-extrude-flat"]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "title-pin",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Title pinned in the scene (BD5)",
+  "description": "Places the BeatDrop title on a flat area of the shot: OpenCV corner features inside a box around the title's anchor are tracked frame to frame (pyramidal Lucas-Kanade with a forward-backward check) at trackWidth px, and a RANSAC homography gives the anchor, scale and roll per frame, so the camera moves past the text. CPU only, at most maxFrames decoded frames per montage. Under minPoints tracked points or an inlier share under minInlierRatio, that piece's title falls back to screen space and the plan log says why. maxErrPx: the accepted distance from the tracked surface on the fixtures (plan section 7). BeatDrop montages (D416). Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trackWidth": { "type": "integer", "minimum": 160, "maximum": 640 },
+        "maxFrames": { "type": "integer", "minimum": 60, "maximum": 1800 },
+        "boxW": { "type": "number", "minimum": 0.2, "maximum": 0.9 },
+        "boxH": { "type": "number", "minimum": 0.1, "maximum": 0.6 },
+        "maxPoints": { "type": "integer", "minimum": 20, "maximum": 400 },
+        "minPoints": { "type": "integer", "minimum": 6, "maximum": 100 },
+        "minInlierRatio": { "type": "number", "minimum": 0.3, "maximum": 0.95 },
+        "fbMaxPx": { "type": "number", "minimum": 0.3, "maximum": 3.0 },
+        "ransacPx": { "type": "number", "minimum": 0.5, "maximum": 5.0 },
+        "maxErrPx": { "type": "number", "minimum": 1.0, "maximum": 10.0 }
+      }
+    },
+    "defaults": { "trackWidth": 480, "maxFrames": 900, "boxW": 0.5, "boxH": 0.34, "maxPoints": 200, "minPoints": 12, "minInlierRatio": 0.6, "fbMaxPx": 1.0, "ransacPx": 2.0, "maxErrPx": 3.0 },
+    "safeRanges": { "trackWidth": [160, 640], "maxFrames": [60, 1800], "boxW": [0.2, 0.9], "boxH": [0.1, 0.6], "maxPoints": [20, 400], "minPoints": [6, 100], "minInlierRatio": [0.3, 0.95], "fbMaxPx": [0.3, 3.0], "ransacPx": [0.5, 5.0], "maxErrPx": [1.0, 10.0] }
+  },
+  "canvases": ["V", "H"],
+  "themeTokens": [],
+  "durationMs": 0,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD5"
+}

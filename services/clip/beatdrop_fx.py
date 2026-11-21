@@ -102,6 +102,25 @@ def _ease_window(a, ti, b, to):
     return (f"(between(t,{a:.4f},{b:.4f})*min(1,min((t-{a:.4f})/{ti:.4f},({b:.4f}-t)/{to:.4f})))")
 
 
+def moving_windows(effects, fps=60):
+    """[(fn, start s, end s)] of the effects that move the picture (zoom, slide), the same windows graph() draws them
+    in. Codex BD5 review: a title pinned to the footage cannot follow these (it is tracked before the effects)."""
+    out = []
+    for e in effects:
+        p, t = e["params"], e["at"]
+        if e["fn"] == "scope-zoom-transition":
+            out.append((e["fn"], t - p["inFrames"] / fps, t + p["outFrames"] / fps))
+        elif e["fn"] == "ragdoll-slowmo":
+            out.append((e["fn"], t, t + (p["zoomInMs"] + p["zoomOutMs"]) / 1000.0))
+        elif e["fn"] == "hero-bw":
+            out.append((e["fn"], t, e["end"]))
+        elif e["fn"] == "whip-pan":
+            out.append((e["fn"], t - p["frames"] / fps / 2.0, t + p["frames"] / fps / 2.0))
+        elif e["fn"] == "shot-shake":
+            out.append((e["fn"], t, t + p["frames"] / fps))
+    return out
+
+
 def graph(effects, frame, fps=60):
     """effects -> (filter graph fragment reading [fxin] and writing [fxout]) or None when there is nothing to draw.
     Order: zoom (scope push, ragdoll pulse), offsets (whip, shake), directional blur, RGB split, bloom, letterbox,
@@ -123,6 +142,12 @@ def graph(effects, frame, fps=60):
         ti, to, s = p["zoomInMs"] / 1000.0, p["zoomOutMs"] / 1000.0, p["zoom"] - 1.0
         zterms.append(f"{s:.4f}*(between(it,{t:.4f},{t + ti:.4f})*sin(PI/2*(it-{t:.4f})/{ti:.4f})"
                       f"+gt(it,{t + ti:.4f})*lte(it,{t + ti + to:.4f})*cos(PI/2*(it-{t + ti:.4f})/{to:.4f}))")
+    for e in by.get("hero-bw", []):  # BD5 (D416): slow linear push-in, eased back to 1 over outMs (no snap at the end)
+        p, a, b = e["params"], e["at"], e["end"]
+        to = min(p["outMs"] / 1000.0, (b - a) / 2)
+        m = b - to
+        zterms.append(f"{p['push'] - 1.0:.4f}*(between(it,{a:.4f},{m:.4f})*(it-{a:.4f})/{max(m - a, 0.001):.4f}"
+                      f"+gt(it,{m:.4f})*lte(it,{b:.4f})*cos(PI/2*(it-{m:.4f})/{max(to, 0.001):.4f}))")
     if zterms:
         chain.append(f"zoompan=z='min(3,1+{'+'.join(zterms)})':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
                      f":s={ow}x{oh}:fps={fps}")
@@ -153,6 +178,10 @@ def graph(effects, frame, fps=60):
         en = "+".join(_between(e["at"], e["at"] + e["params"]["frames"] / fps) for e in by["rgb-split"])
         px = int(max(e["params"]["shift"] for e in by["rgb-split"]) * ow)
         chain.append(f"format=gbrp,rgbashift=rh=-{px}:bh={px}:enable='{en}',format=yuv420p")
+    if by.get("hero-bw"):  # BD5: saturation to 0 over inMs, back over outMs (no luminance change, no flash)
+        k = "+".join(_ease_window(e["at"], e["params"]["inMs"] / 1000.0, e["end"], e["params"]["outMs"] / 1000.0)
+                     for e in by["hero-bw"])
+        chain.append(f"hue=s='max(0,1-min(1,{k}))'")
     pre = ",".join(chain) if chain else "null"
     bloom = by.get("bloom-grade")
     lines = []

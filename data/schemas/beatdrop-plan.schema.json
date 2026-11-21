@@ -20,7 +20,8 @@
         "period": { "type": "number", "exclusiveMinimum": 0, "maximum": 2 },
         "firstDrop": { "type": ["number", "null"], "minimum": 0, "maximum": 600 },
         "dropAt": { "type": "number", "minimum": 0, "maximum": 600 },
-        "beats": { "type": "array", "maxItems": 3000, "items": { "type": "number", "minimum": 0, "maximum": 600 } }
+        "beats": { "type": "array", "maxItems": 3000, "items": { "type": "number", "minimum": 0, "maximum": 600 } },
+        "downbeats": { "type": "array", "maxItems": 1000, "items": { "type": "number", "minimum": 0, "maximum": 600 } }
       }
     },
     "targets": {
@@ -36,11 +37,11 @@
       "type": "object", "additionalProperties": false, "required": ["title", "hero", "credits"],
       "properties": {
         "title": { "type": "object", "additionalProperties": false, "required": ["start", "end", "content"],
-          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": "null" } } },
+          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": ["object", "null"] } } },
         "hero": { "type": "object", "additionalProperties": false, "required": ["start", "end", "content"],
-          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": "null" } } },
+          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": ["object", "null"] } } },
         "credits": { "type": "object", "additionalProperties": false, "required": ["start", "end", "content"],
-          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": "null" } } }
+          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": ["object", "null"] } } }
       }
     },
     "pieces": {
@@ -82,7 +83,7 @@
       "items": {
         "type": "object", "additionalProperties": false, "required": ["fn", "at", "params"],
         "properties": {
-          "fn": { "enum": ["scope-zoom-transition", "whip-pan", "impact-flash", "rgb-split", "shot-shake", "letterbox", "ragdoll-slowmo", "bloom-grade", "cut-soften"] },
+          "fn": { "enum": ["scope-zoom-transition", "whip-pan", "impact-flash", "rgb-split", "shot-shake", "letterbox", "ragdoll-slowmo", "bloom-grade", "cut-soften", "hero-bw"] },
           "at": { "type": "number", "minimum": 0 },
           "end": { "type": "number", "minimum": 0 },
           "mode": { "enum": ["flash", "pulse"] },

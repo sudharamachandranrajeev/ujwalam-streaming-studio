@@ -1,0 +1,15 @@
+{
+  "id": "hero-bw-push",
+  "version": "1.0.0",
+  "function": "hero-bw",
+  "functionVersion": "^1.0.0",
+  "name": "Black and white with push-in",
+  "params": { "push": 1.08, "inMs": 500, "outMs": 300 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "drift", "intensity": "low", "mood": "calm", "colourUse": "none", "flashes": "none" },
+  "canvases": ["V", "H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["credits-roll-rise", "bloom-grade-teal-white"]
+}

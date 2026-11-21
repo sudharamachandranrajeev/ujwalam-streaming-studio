@@ -916,10 +916,13 @@ class RenderedMontageTests(unittest.TestCase):
             json.dump({"clips": {"montageMusic": {"on": True, "folder": music, "mode": "random", "avoidLast": 3}}}, f)
         with open(os.path.join(cls.data, "flags.local.json"), "w", encoding="utf-8") as f:
             json.dump({"flags": {"clip-pipeline": True, "reel-styles": False}}, f)
+        profile = os.path.join(cls.tmp, "profile.json")  # BD5: placeholder-free test names, never the real profile
+        with open(profile, "w", encoding="utf-8") as f:
+            json.dump({"streamer": {"brand": "Test Brand", "name": "Test Streamer"}, "games": {"codm": {"ign": "TestPlayer"}}}, f)
         env = dict(os.environ, UJWALAM_DATA_ROOT=cls.data, UJWALAM_HEADLESS="1")
         cls.proc = subprocess.run([sys.executable, "-I", os.path.join(CLIP, "clipper.py"), "--data-dir", cls.data, "beatdrop",
                                   "--out", cls.out, "--recording", cls.rec, "--encoder", "libopenh264",
-                                  "--width", str(W), "--height", str(H), "--max-sec", "60"],
+                                  "--width", str(W), "--height", str(H), "--max-sec", "60", "--profile", profile],
                                  capture_output=True, text=True, timeout=900, env=env, creationflags=NOWIN)
         cls.wd = os.path.join(cls.out, "beatdrop", "clips", "B1")
         try:
@@ -968,6 +971,41 @@ class RenderedMontageTests(unittest.TestCase):
             pl = json.load(f)
         self.assertAlmostEqual(float(info["format"]["duration"]), pl["total"], delta=0.1)
 
+    def test_bd5_title_on_the_last_downbeat_and_slots(self):
+        """BD5 (D416): the song title appears on the intro's last downbeat (within one frame) in the rendered montage;
+        hero and credits slots filled; the credits carry the music record's credit exactly."""
+        import montage_music as mm  # noqa: PLC0415
+        with open(os.path.join(self.wd, "beatdrop-plan.json"), encoding="utf-8") as f:
+            pl = json.load(f)
+        with open(os.path.join(self.out, "beatdrop", "render.json"), encoding="utf-8") as f:
+            row = json.load(f)["clips"][0]
+        lines = pl["slots"]["title"]["content"]["lines"]
+        self.assertEqual([ln["role"] for ln in lines], ["presents", "title"])
+        drop_f = round(pl["song"]["dropAt"] * 60)
+        last_down = max(d for d in pl["song"]["downbeats"] if d < pl["song"]["dropAt"] - 1e-6)
+        self.assertEqual(lines[1]["from"], round(last_down * 60))
+        cnt = []
+        with av.open(self.video) as c:
+            for i, fr in enumerate(c.decode(c.streams.video[0])):
+                if i > drop_f:
+                    break
+                a = fr.to_ndarray(format="rgb24").astype(np.int32)[: int(0.6 * H)]
+                cnt.append(int(((a[:, :, 0] > 170) & (a[:, :, 0] - a[:, :, 2] > 100)).sum()))
+        on = [i for i in range(1, len(cnt)) if cnt[i] > 8 and cnt[i - 1] <= 8]
+        title_on = min(on, key=lambda i: abs(i - lines[1]["from"]))
+        pres_on = min(on, key=lambda i: abs(i - lines[0]["from"]))
+        segs = [s["place"] for ln in lines for s in ln["segments"]]
+        print(f"BD5 montage: title onset frame {title_on} vs last downbeat frame {lines[1]['from']} "
+              f"(error {abs(title_on - lines[1]['from'])} frame(s)); presents onset {pres_on} vs {lines[0]['from']}; "
+              f"pin segments {segs}; log {[x for x in pl['log'] if x.startswith(('title', 'hero', 'credits'))]}")
+        self.assertLessEqual(abs(title_on - lines[1]["from"]), 1)
+        self.assertLessEqual(abs(pres_on - lines[0]["from"]), 1)
+        self.assertEqual(max(cnt[drop_f - 1:drop_f + 1]), 0, "the title is gone by the drop")
+        cred = pl["slots"]["credits"]["content"]
+        self.assertEqual(cred["musicCredit"], mm.credit_text(row["music"]["credit"]))
+        self.assertEqual(pl["slots"]["hero"]["content"]["name"], "TestPlayer")
+        self.assertTrue(any(e["fn"] == "hero-bw" for e in pl["effects"]))
+
     def test_music_record_in_render_json(self):
         with open(os.path.join(self.out, "beatdrop", "render.json"), encoding="utf-8") as f:
             doc = json.load(f)
@@ -1007,6 +1045,25 @@ class RenderedMontageTests(unittest.TestCase):
         self.assertIn("flash limit", res["reason"])
         self.assertIsNone(res["file"])
         self.assertEqual([f for f in os.listdir(wd) if f.endswith((".mp4", ".part"))], [])
+
+    def test_title_prepare_error_removes_the_bed_and_title_files(self):
+        # Codex BD5 review: an error while the titles are prepared (after the music bed is made) leaves no temp files
+        from unittest import mock  # noqa: PLC0415
+        import beatdrop_titles as bt  # noqa: PLC0415
+        from clip_common import ClipError  # noqa: PLC0415
+        wd = os.path.join(self.tmp, "prep-err")
+        real = bt.prepare
+
+        def boom(wdir, *a, **k):
+            real(wdir, *a, **k)  # the ASS file and fonts exist, then the error
+            raise ClipError("font copy failed")
+        with mock.patch.object(bt, "prepare", boom):
+            with self.assertRaises(ClipError):
+                self._make(wd, live=lambda: False)
+        left = sorted(os.listdir(wd))
+        for f in ("music.wav", bt.ASS_FILE, bt.FONT_SUBDIR, bt.TRACK_FILE):
+            self.assertNotIn(f, left, left)
+        self.assertEqual([f for f in left if f.endswith((".wav", ".cube", ".txt", ".part"))], [], left)
 
     def test_live_flip_mid_render_stops_it(self):
         wd = os.path.join(self.tmp, "flip")
