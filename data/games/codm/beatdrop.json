@@ -14,8 +14,7 @@
     "titleFont": "Anton-Regular.ttf", "titleFamily": "Anton",
     "textFont": "Rajdhani-Bold.ttf", "textFamily": "Rajdhani",
     "face": "#FF8A1F", "faceTop": "#FFC27A", "extrude": "#4A1E00", "outline": "#1A0A00", "glow": "#2EE6FF", "text": "#FFFFFF",
-    "glyphWidthOfSize": 0.46,
-    "textGlyphWidthOfSize": 0.6
+    "glyphWidthOfSize": 0.46
   },
   "evidence": {
     "source": "plan docs/plan/2026-11-21-beatdrop-montages.md 1.3 (five BeatDrop references, measured 2026-11-21)",

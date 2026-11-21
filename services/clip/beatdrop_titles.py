@@ -407,17 +407,18 @@ def hero_events(c, ph, lk, frame, fps=60):
 CREDIT_WIDTH_OF_FRAME, CREDIT_BOTTOM_OF_FRAME = 0.92, 0.96
 
 
-def _wrap(line, n):
-    """line split at spaces into rows of at most n characters; a longer word (a link) is cut into n-character pieces."""
+def _wrap(line, fits):
+    """line split at spaces into rows that fits(row) accepts; a word too wide alone (a link) is cut where it still fits."""
     rows, cur = [], ""
     for w in line.split(" "):
-        while len(w) > n:
+        while not fits(w):
             if cur:
                 rows.append(cur)
                 cur = ""
-            rows.append(w[:n])
-            w = w[n:]
-        if cur and len(cur) + 1 + len(w) > n:
+            k = max(1, max((j for j in range(1, len(w) + 1) if fits(w[:j])), default=1))
+            rows.append(w[:k])
+            w = w[k:]
+        if cur and not fits(f"{cur} {w}"):
             rows.append(cur)
             cur = w
         else:
@@ -427,17 +428,25 @@ def _wrap(line, n):
     return rows or [""]
 
 
+def text_width(font_file):
+    """-> width(text, px size) in px: the font's own advance widths (Pillow/FreeType, as libass), the font from data/fonts."""
+    from PIL import ImageFont  # noqa: PLC0415 - pinned in requirements-bundle.lock.txt
+    font = ImageFont.truetype(os.path.join(FONTS_DIR, font_file), 100)
+    return lambda s, size: font.getlength(s) * size / 100.0
+
+
 def credit_layout(lines, pc, lk, frame):
     """Codex BD5 review: every credit character stays inside the frame. -> (rows [(text, source line index)], size):
-    lines wrapped to the frame width at the preset size (look textGlyphWidthOfSize: a wide average advance per em, so the
-    estimate errs wide), and the size lowered only when the rows would pass the bottom of the frame."""
+    lines wrapped to 92 % of the frame width measured with the credit font's own advance widths, and the size lowered
+    only when the rows would pass the bottom of the frame."""
     ow, oh = int(frame["width"]), int(frame["height"])
     size = float(pc["sizeOfHeight"]) * oh
-    gw, gap, y = float(lk.get("textGlyphWidthOfSize", 0.6)), float(pc["lineGap"]), float(pc["y"]) * oh
+    gap, y = float(pc["lineGap"]), float(pc["y"]) * oh
+    width = text_width(lk["textFont"])
     while True:
         bord = max(1.0, size * 0.06)
-        n = max(1, int((CREDIT_WIDTH_OF_FRAME * ow - 2 * bord) / (gw * size)))
-        rows = [(r, i) for i, line in enumerate(lines) for r in _wrap(line, n)]
+        room = CREDIT_WIDTH_OF_FRAME * ow - 2 * bord
+        rows = [(r, i) for i, line in enumerate(lines) for r in _wrap(line, lambda s: width(s, size) <= room)]
         bottom = y + (len(rows) - 1) * gap * size + 0.6 * size
         if bottom <= CREDIT_BOTTOM_OF_FRAME * oh or size <= 4.0:
             return rows, size

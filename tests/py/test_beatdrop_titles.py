@@ -93,12 +93,13 @@ def write_clip(path, noise=False):
 
 
 def mini_plan():
-    """One piece (the whole clip at speed 1), title slot over downbeats 0.25 / 1.0, hero 1.9-3.1, credits 3.1-4.0."""
+    """One piece (the whole clip at speed 1), title slot over downbeats 0.25 / 1.0 to the drop at 2.0 (the title line is
+    1 s: longer than its 400 ms entrance + 300 ms exit, so the settled pin can be measured), hero 2.0-3.1, credits 3.1-4.0."""
     return {"version": 1, "kind": "beatdrop", "status": "unverified", "fps": FPS, "songStart": 0.0, "total": N / FPS,
-            "frames": N, "song": {"bpm": 160.0, "period": 0.375, "firstDrop": 1.75, "dropAt": 1.75, "beats": [],
-                                  "downbeats": [0.25, 1.0, 1.75, 2.5, 3.25]},
-            "targets": {}, "slots": {"title": {"start": 0.25, "end": 1.75, "content": None},
-                                     "hero": {"start": 1.9, "end": 3.1, "content": None},
+            "frames": N, "song": {"bpm": 160.0, "period": 0.375, "firstDrop": 2.0, "dropAt": 2.0, "beats": [],
+                                  "downbeats": [0.25, 1.0, 2.0, 2.75, 3.5]},
+            "targets": {}, "slots": {"title": {"start": 0.25, "end": 2.0, "content": None},
+                                     "hero": {"start": 2.0, "end": 3.1, "content": None},
                                      "credits": {"start": 3.1, "end": 4.0, "content": None}},
             "pieces": [{"part": "cold-open", "src": {"start": 0.0, "end": N / FPS}, "speed": 1.0, "outStart": 0,
                         "outFrames": N, "anchor": None, "game": {"gain": 0.5, "keep": []}}],
@@ -157,11 +158,11 @@ class SlotTests(unittest.TestCase):
         prm, lk = self.bt.params(self.cfg)["credits-roll"], self.bt.look_of(self.game)
         frame = {"width": 1080, "height": 1920}
         lines = ["Music: " + "Artist Name " * 10 + "- " + "Song Title Words " * 9, "Watch: https://youtu.be/" + "x" * 90,
-                 self.cfg["titles"]["madeWith"]]
+                 "WMWMWMWM " * 12 + "W" * 60, self.cfg["titles"]["madeWith"]]
         rows, size = self.bt.credit_layout(lines, prm, lk, frame)
-        gw = float(lk["textGlyphWidthOfSize"])
+        width = self.bt.text_width(lk["textFont"])  # the font's own advance widths (wide W and M included)
         for text, _ in rows:
-            self.assertLessEqual(len(text) * gw * size + 2 * max(1.0, size * 0.06), 0.92 * 1080 + 1e-6, text)
+            self.assertLessEqual(width(text, size) + 2 * max(1.0, size * 0.06), 0.92 * 1080 + 1e-6, text)
         for i, line in enumerate(lines):
             self.assertEqual("".join(t for t, j in rows if j == i).replace(" ", ""), line.replace(" ", ""))
         bottom = float(prm["y"]) * 1920 + (len(rows) - 1) * float(prm["lineGap"]) * size + 0.6 * size
@@ -454,7 +455,8 @@ class RenderedTitlesTests(unittest.TestCase):
         before = spread(hc["from"] - 3)
         inside = max(spread(k) for k in range(hc["from"] + int(ph["inMs"] / 1000 * FPS) + 1, hc["to"] - int(ph["outMs"] / 1000 * FPS)))
         name_px = white(hc["from"] + 40, ph["nameY"] - 0.08, ph["nameY"] + 0.08)
-        cred_px = white(cc["to"] - 8, 0.25, 0.75)
+        # credits measured settled: after every line's staggered entrance, before the exit fade starts
+        cred_px = white(cc["to"] - int(self.prm["credits-roll"]["outMs"] / 1000 * FPS) - 2, 0.25, 0.75)
         print(f"BD5 hero: colour spread {before:.1f} before, max {inside:.1f} inside (after the fade); name {name_px} px; "
               f"credits {cred_px} px; lines {cc['lines']}")
         self.assertGreater(before, 30)
