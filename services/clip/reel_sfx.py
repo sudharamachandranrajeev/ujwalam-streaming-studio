@@ -14,10 +14,13 @@ from __future__ import annotations
 import os
 import wave
 
-import numpy as np
-
 WAV = "sfx.wav"
 SR = 48000
+
+
+def _np():
+    import numpy as np  # noqa: PLC0415 - lazy: clipper imports this module and must load on a bare interpreter
+    return np
 
 
 def _noise(rng, n):
@@ -26,6 +29,7 @@ def _noise(rng, n):
 
 def _sweep_lowpass(x, f0, f1, sr):
     """One-pole low-pass whose cut-off glides from f0 to f1 (exponentially) over the signal."""
+    np = _np()
     n = len(x)
     fc = f0 * (f1 / f0) ** (np.arange(n) / max(1, n - 1))
     a = 1.0 - np.exp(-2.0 * np.pi * fc / sr)
@@ -39,6 +43,7 @@ def _sweep_lowpass(x, f0, f1, sr):
 
 def _env(n, peak_at):
     """Rise to 1 at peak_at (0..1 of the length), then fall, both sine-shaped."""
+    np = _np()
     t = np.arange(n) / max(1, n - 1)
     up = np.sin(0.5 * np.pi * np.clip(t / max(peak_at, 1e-3), 0, 1)) ** 2
     down = np.cos(0.5 * np.pi * np.clip((t - peak_at) / max(1 - peak_at, 1e-3), 0, 1)) ** 2
@@ -54,6 +59,7 @@ def whoosh(rng, sr=SR, sec=0.45, soft=False):
 
 
 def impact(rng, sr=SR, sec=0.5):
+    np = _np()
     n = int(sec * sr)
     t = np.arange(n) / sr
     f = 45.0 + 75.0 * np.exp(-t / 0.04)
@@ -63,12 +69,14 @@ def impact(rng, sr=SR, sec=0.5):
 
 
 def riser(rng, sr=SR, sec=0.9):
+    np = _np()
     n = int(sec * sr)
     x = _sweep_lowpass(_noise(rng, n), 200.0, 6000.0, sr)
     return x * (np.arange(n) / max(1, n - 1)) ** 2
 
 
 def boom(rng, sr=SR, sec=1.2):
+    np = _np()
     n = int(sec * sr)
     t = np.arange(n) / sr
     return (np.sin(2 * np.pi * 50.0 * t) + 0.3 * np.sin(2 * np.pi * 100.0 * t)) * np.minimum(1.0, t / 0.01) * np.exp(-t / 0.45)
@@ -88,6 +96,7 @@ def _make(kind, rng, sr=SR):
 
 def synth(joins, total, kinds, peak_db, seed, path, sr=SR):
     """Writes a 16-bit stereo WAV `total` seconds long with each kind of effect on every join, peak at peak_db dBFS."""
+    np = _np()
     rng = np.random.default_rng(seed)
     n = int(round(total * sr))
     buf = np.zeros(n)

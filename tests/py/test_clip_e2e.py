@@ -10,6 +10,7 @@ backend (not offline here), so the captions seam is only checked as off.
 Run: python -I -m unittest discover -s tests/py -t tests/py -p test_clip_e2e.py
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -30,6 +31,7 @@ import clip_names as names  # noqa: E402
 import clipper  # noqa: E402
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+HAVE_NP = importlib.util.find_spec("numpy") is not None  # montage renders make sounds and music with numpy (FX3, D411)
 SECONDS = 14
 TRACKS = 3
 START_MS = int(datetime(2026, 11, 3, 7, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
@@ -51,7 +53,7 @@ def _tone(hz, spike):
             f":s=48000:d={SECONDS}")
 
 
-@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not on PATH")
+@unittest.skipUnless(HAVE_FFMPEG and HAVE_NP, "needs ffmpeg/ffprobe and numpy")
 class ClipPipelineE2E(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -111,6 +113,14 @@ class ClipPipelineE2E(unittest.TestCase):
         self.assertRegex(days[0], r"^2026-11-0[23]$")
         return os.path.join(self.clips, days[0])
 
+    def videos(self, d):
+        """Videos in d; each carries its D414 music sidecar (<video>.music.json), which is not a clip."""
+        files = os.listdir(d)
+        vids = sorted(n for n in files if n.endswith(".mp4"))
+        for v in vids:
+            self.assertIn(v + ".music.json", files, "every published video has its music sidecar (D414)")
+        return vids
+
     def test_run_ok_and_signals(self):
         self.assertEqual(self.rc, 0)
         cand = cc.load_json(os.path.join(self.run_dir, clipper.CANDIDATES))
@@ -129,19 +139,19 @@ class ClipPipelineE2E(unittest.TestCase):
         self.assertFalse(os.path.normpath(self.run_dir).startswith(os.path.normpath(self.clips)))
 
     def test_clips_folder_holds_only_finished_videos_one_folder_per_day(self):
-        files = sorted(os.listdir(self.day_dir()))
+        files = self.videos(self.day_dir())
         self.assertGreaterEqual(len(files), 2, files)
         for n in files:
             self.assertRegex(n, names.NAME_RE)
         kinds = {re.match(r"^[a-z0-9]+_([a-z-]+)_", n).group(1) for n in files}
         self.assertEqual(kinds, {"short", "won-reel"})
-        for _dp, _dn, fn in os.walk(self.clips):  # nothing but mp4 anywhere under the clips folder
+        for _dp, _dn, fn in os.walk(self.clips):  # nothing but mp4 and their music sidecars under the clips folder
             for n in fn:
-                self.assertTrue(n.endswith(".mp4"), n)
+                self.assertTrue(n.endswith((".mp4", ".mp4.music.json")), n)
 
     def test_all_audio_tracks_kept(self):
         day = self.day_dir()
-        for n in os.listdir(day):
+        for n in self.videos(day):
             s = _probe(os.path.join(day, n))
             self.assertEqual(sum(1 for x in s if x["codec_type"] == "audio"), TRACKS, n)
             v = next(x for x in s if x["codec_type"] == "video")
@@ -156,7 +166,7 @@ class ClipPipelineE2E(unittest.TestCase):
     def test_upload_list_lists_the_published_files(self):
         up = cc.load_json(os.path.join(self.data, "clips", "uploads.json"))
         listed = sorted(os.path.basename(f["file"]) for f in up["files"])
-        self.assertEqual(listed, sorted(os.listdir(self.day_dir())))
+        self.assertEqual(listed, self.videos(self.day_dir()))
         for f in up["files"]:
             self.assertEqual(f["run"], "rec-h-20261103-070000")
             self.assertEqual(f["posted"], [])
