@@ -5,8 +5,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { createLedger } from '../services/posting/index.mjs';
-import { uploadMetadata, uploadVideo, UploadError } from '../services/posting/youtube.mjs';
+import { createLedger, sha256File } from '../services/posting/index.mjs';
+import { sourceReplaced, uploadMetadata, uploadVideo, UploadError } from '../services/posting/youtube.mjs';
 
 // D409: every upload needs a publish time (uploadVideo refuses one without).
 const PUB = '2030-01-01T00:00:00.000Z';
@@ -111,6 +111,22 @@ test('uploadVideo: refuses if the video changed since approval (sha256 mismatch)
     post: basePost('d'.repeat(64)), sha256: 'e'.repeat(64), videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [] }), fetchImpl: async () => { throw new Error('must not call the network'); },
   }), (e) => e.code === 'video-changed');
+});
+
+test('uploadVideo: refuses a package whose clips-folder source was replaced (BD7c retake); a moved source does not stop it', async () => {
+  const video = tmpVideo(16);
+  const ledger = createLedger(path.join(path.dirname(video), 'ledger.json'));
+  const sha = await sha256File(video);
+  const src = tmpVideo(32); // the clips-folder file now holds the retake's bytes
+  const noNet = async () => { throw new Error('must not call the network'); };
+  await assert.rejects(uploadVideo({ publishAt: PUB,
+    post: basePost(sha, { source: { sha256: sha, clipId: 'c1', file: src } }), sha256: sha, videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
+    outputsStatus: async () => ({ sinks: [] }), fetchImpl: noNet,
+  }), (e) => e instanceof UploadError && e.code === 'superseded');
+  assert.equal(await sourceReplaced({ sha256: sha, file: video }), false); // same bytes
+  assert.equal(await sourceReplaced({ sha256: sha, file: path.join(path.dirname(src), 'moved-away.mp4') }), false); // tidy moved it
+  assert.equal(await sourceReplaced({ sha256: sha }), false); // an older package without a source file
+  assert.equal(await sourceReplaced({ sha256: sha, file: src }), true);
 });
 
 test('uploadVideo: refuses an already-uploaded post (never upload the same video twice)', async () => {

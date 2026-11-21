@@ -180,15 +180,25 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         prev = [r for r in (load_json(prev_path).get("files") or []) if os.path.isfile(r.get("file", ""))]             if os.path.isfile(prev_path) else []
     except ClipError:
         prev = []
-    done = {(r.get("id"), r.get("layout")) for r in prev}
+    done = {(r.get("id"), r.get("layout")): r for r in prev}
     rows, counters = [], {}
     tool = rdoc.get("tool") or ""
     for c, f, kind, when, label, canvas in name_rows(rdoc, game, layouts_by_id, det_weights, rec_start_local):
-        if not passed.get((c["id"], f["file"])) or (c["id"], f["layout"]) in done:
+        if not passed.get((c["id"], f["file"])):
             continue
         src = os.path.join(work, "clips", c["id"], f["file"])
         if not os.path.isfile(src):
             continue
+        old = done.get((c["id"], f["layout"]))
+        if old is not None:
+            # BD7c: a BeatDrop retake is a new render (new file name) under the same id and layout. Not yet posted: it
+            # replaces the published copy in place (as recaption does). Already posted: it is published as a new video.
+            if tool != "clipper.beatdrop" or old.get("source") == f["file"]:
+                continue
+            up = upload_row(data_dir, old["file"])
+            if up is None or not up.get("posted"):
+                _replace_published(old, src, c, label, rdoc, data_dir)
+                continue
         day = os.path.join(to, names.day_folder(when))
         os.makedirs(day, exist_ok=True)
         start_nn = counters.get((kind, canvas), 0) + 1
@@ -202,7 +212,8 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
             vbind = video_binding(os.path.join(day, name))  # Codex verify: the row describes these bytes only
         except OSError:
             vbind = None
-        rows.append({"id": c["id"], "layout": f["layout"], "file": os.path.join(day, name), "how": how, "kind": kind,
+        rows.append({"id": c["id"], "layout": f["layout"], "file": os.path.join(day, name), "source": f["file"],
+                     "how": how, "kind": kind,
                      "label": label, "seconds": round(float(c["end"]) - float(c["start"]), 3),
                      **({"thumbnail": True} if f.get("thumbnail") else {}),  # RP6: frame 0 is the cover
                      **({"music": prov} if prov is not None else {}),  # D414: where its music came from (posting gate)
@@ -213,7 +224,7 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                      **({"choices": lmix.choices_record(c, (c.get("learning") or {}).get("mixAt"))}
                         if tool.startswith("clipper.montage") else {})})
     run = run_name or os.path.basename(os.path.normpath(work))
-    write_json_atomic(prev_path, {"tool": "clipper.publish", "to": to, "files": prev + rows})
+    write_json_atomic(prev_path, {"tool": "clipper.publish", "to": to, "files": prev + rows})  # prev rows updated in place
     if data_dir and rows:
         add_uploads(data_dir, [{**{k: r[k] for k in ("file", "kind", "label", "seconds")}, "run": run,
                                 "recording": rdoc.get("recording"), "posted": [], "game": game,
@@ -223,6 +234,56 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                                 **({"video": r["video"]} if r.get("video") else {}),
                                 **({"choices": r["choices"]} if r.get("choices") else {})} for r in rows])
     return rows
+
+
+def upload_row(data_dir, file):
+    """The uploads.json row of a published file, or None (no data folder, no list, or not in it)."""
+    p = os.path.join(data_dir, UPLOADS) if data_dir else None
+    try:
+        doc = load_json(p) if p and os.path.isfile(p) else {}
+    except ClipError:
+        return None
+    return next((x for x in doc.get("files") or [] if isinstance(x, dict) and x.get("file") == file), None)
+
+
+def _replace_published(old, src, c, label, rdoc, data_dir):
+    """BD7c: the published copy `old` (a published.json row, updated in place) gets the bytes of `src`, a new music
+    sidecar and video binding; its uploads.json row (when there is one) gets the new record, length, label and facts."""
+    tmp = old["file"] + ".part"
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    _link_or_copy(src, tmp)
+    os.replace(tmp, old["file"])
+    prov = music_provenance(c, bool(rdoc.get("musicRecords")))
+    try:
+        os.remove(old["file"] + MUSIC_SIDECAR)  # never a sidecar of the earlier render next to the new bytes
+    except OSError:
+        pass
+    write_music_sidecar(old["file"], prov)
+    try:
+        vbind = video_binding(old["file"])
+    except OSError:
+        vbind = None
+    fields = {"label": label, "seconds": round(float(c["end"]) - float(c["start"]), 3), "music": prov, "video": vbind,
+              "facts": rt.facts(c) or None}
+    old.update(source=os.path.basename(src), **{k: v for k, v in fields.items() if v is not None})
+    for k in [k for k, v in fields.items() if v is None]:
+        old.pop(k, None)
+    p = os.path.join(data_dir, UPLOADS) if data_dir else None
+    if not p or not os.path.isfile(p):
+        return
+    try:
+        doc = load_json(p)
+    except ClipError:
+        return
+    for x in doc.get("files") or []:
+        if isinstance(x, dict) and x.get("file") == old["file"]:
+            x.update({k: v for k, v in fields.items() if v is not None})
+            for k in [k for k, v in fields.items() if v is None]:
+                x.pop(k, None)  # a missing record is unknown to posting (held): never the earlier render's record
+    write_json_atomic(p, doc)
 
 
 def add_uploads(data_dir, rows):

@@ -61,6 +61,47 @@ class Publish(unittest.TestCase):
         self.assertTrue(all(os.path.isfile(u["file"] + pub.MUSIC_SIDECAR) for u in ups))
         self.assertEqual(sorted(os.path.basename(u["file"]).split(".")[0][-1] for u in ups), ["h", "v"])
 
+    def test_a_retake_replaces_the_unposted_copy_and_a_posted_one_gets_a_new_file(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        work, data, to = (os.path.join(tmp.name, x) for x in ("run/beatdrop", "data", "clips"))
+        os.makedirs(os.path.join(work, "clips", "B1"))
+
+        def render(name, music, body):
+            doc = rdoc(music, files=("beatdrop-h",))
+            doc["clips"][0]["files"][0]["file"] = name
+            with open(os.path.join(work, "clips", "B1", name), "wb") as fh:
+                fh.write(body)
+            for fn, obj in (("render.json", doc), ("report.json", {"results": [{"id": "B1", "file": name, "ok": True}]})):
+                with open(os.path.join(work, fn), "w", encoding="utf-8") as fh:
+                    json.dump(obj, fh)
+            return pub.publish(work, to, data, "codm", {}, run_name="run")
+
+        def uploads():
+            with open(os.path.join(data, pub.UPLOADS), encoding="utf-8") as fh:
+                return json.load(fh)["files"]
+        first = render("beatdrop-a.mp4", {"source": "made-here", "seed": 1}, b"first take")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(render("beatdrop-a.mp4", {"source": "made-here", "seed": 1}, b"first take"), [])  # same render
+        # retake, not yet posted: the same published file now holds the new bytes, music record and binding
+        self.assertEqual(render("beatdrop-b.mp4", {"source": "folder", "track": "x.mp3"}, b"second take!"), [])
+        ups = uploads()
+        self.assertEqual(len(ups), 1)
+        with open(first[0]["file"], "rb") as fh:
+            self.assertEqual(fh.read(), b"second take!")
+        self.assertEqual(ups[0]["music"], {"source": "user-folder", "track": "x.mp3"})
+        self.assertEqual(ups[0]["video"]["size"], len(b"second take!"))
+        with open(first[0]["file"] + pub.MUSIC_SIDECAR, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["music"]["source"], "user-folder")
+        # posted: the next retake is a new video beside it
+        doc = {"version": 1, "files": [dict(ups[0], posted=[{"platform": "youtube", "videoId": "V1"}])]}
+        with open(os.path.join(data, pub.UPLOADS), "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        third = render("beatdrop-c.mp4", {"source": "made-here", "seed": 2}, b"third")
+        self.assertEqual(len(third), 1)
+        self.assertNotEqual(third[0]["file"], first[0]["file"])
+        self.assertEqual(len(uploads()), 2)
+
     def test_user_folder_song_is_marked_for_the_gate(self):
         _, ups = self._run({"source": "folder", "track": "my-song.mp3"})
         self.assertTrue(all(u["music"]["source"] == "user-folder" for u in ups))  # posting never auto-posts these

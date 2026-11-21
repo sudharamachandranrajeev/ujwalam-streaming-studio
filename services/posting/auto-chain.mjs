@@ -85,7 +85,7 @@ export const SCAN_EVERY_MS = 15 * 60 * 1000;
 export const STATUS_EVERY_MS = 15 * 60 * 1000;
 /** At most this many status checks per pass (1 quota unit each). */
 export const STATUS_PER_PASS = 10;
-const PERMANENT = new Set(['not-approved', 'video-changed', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at', 'publish-at-required', 'music-credit-missing', 'music-unchecked']);
+const PERMANENT = new Set(['not-approved', 'video-changed', 'superseded', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at', 'publish-at-required', 'music-credit-missing', 'music-unchecked']);
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** PT3 (D408): the "Run auto-post now" request file (<dataDir>/posting/auto-run-now.json). The studio writes it (refused
@@ -430,6 +430,7 @@ const FAIL_TEXT = {
   'over-limit': 'The text is over a platform limit; edit it in the Posts view',
   'unresolved-placeholders': 'The text still has an unfilled placeholder; fill it in the Posts view',
   'video-changed': 'The video file changed after it was approved',
+  superseded: 'The clip was made again (a retake or new captions); the newer version is posted instead',
   'video-missing': 'The video file is missing',
   'not-approved': 'The package is not approved',
   'music-unchecked': "This package's music was never checked; package the clip again (or re-render it) to post it",

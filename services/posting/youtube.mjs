@@ -19,9 +19,9 @@
 //
 // Tests inject fetchImpl; the plan's own rule: "No test touches Google".
 
-import { createReadStream, readFileSync, statSync } from 'node:fs';
+import { createReadStream, lstatSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { checkLimits, composeField, loadLimits } from './index.mjs';
+import { checkLimits, composeField, loadLimits, sha256File } from './index.mjs';
 import { createLearningStore } from '../learning/store.mjs';
 import { creditMissing, readProvenanceSince } from './post-text.mjs';
 
@@ -254,6 +254,15 @@ async function setThumbnail(fetchImpl, accessToken, videoId, coverPath, net = {}
   } catch { return false; }
 }
 
+/** True when source.file (the clips-folder video a package came from) still exists and its bytes differ from source.sha256. */
+export async function sourceReplaced(source) {
+  const file = typeof source?.file === 'string' && path.isAbsolute(source.file) ? source.file : null;
+  if (!file || typeof source.sha256 !== 'string') return false;
+  let st; try { st = lstatSync(file); } catch { return false; }
+  if (!st.isFile()) return false;
+  return (await sha256File(file)) !== source.sha256;
+}
+
 /**
  * Uploads one approved post package. opts: { post, sha256, videoPath, coverPath?, accessToken, ledger,
  *   outputsStatus: async () => { sinks }, fetchImpl?, chunkSize?, now? }
@@ -273,6 +282,10 @@ export async function uploadVideo(opts) {
   if (typeof opts.publishAt !== 'string' || !opts.publishAt) throw new UploadError('publish-at-required', 'every upload needs a checked publish time; nothing was sent');
   if (opts.post.status !== 'approved') throw new UploadError('not-approved', 'only approved packages can be uploaded');
   if (opts.post.source?.sha256 !== opts.sha256) throw new UploadError('video-changed', 'the video changed since it was approved');
+  // BD7c: the clips-folder file this package was made from now holds other bytes (a BeatDrop retake or new captions
+  // replaced it in place): the newer version gets its own package; this one is never sent. A moved or deleted source
+  // (tidy, post-delete-uploaded) is not a newer version and does not stop the upload.
+  if (await sourceReplaced(opts.post.source)) throw new UploadError('superseded', 'the clip was made again; the newer version is posted instead; nothing was sent');
   if (!checkLimits(opts.post, opts.limits).ok) throw new UploadError('over-limit', 'the post is over a platform limit');
   if ((opts.post.unresolved ?? []).length) throw new UploadError('unresolved-placeholders', 'unresolved template placeholders remain');
   // D414: a montage with an NCS track is never sent without its credit in the description (fail closed)
