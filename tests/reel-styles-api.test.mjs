@@ -4,7 +4,7 @@
 // progress lines reach the task area and the job, and live / busy / flag off are refused. No video is copied.
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -99,4 +99,31 @@ test('analyse runs hidden, reports progress in the task area, and is refused liv
   await new Promise((ok) => setTimeout(ok, 30));
   assert.equal(bad.job().state, 'failed');
   assert.match(bad.job().note, /example 1 is missing/);
+});
+
+test('a stream or recording that starts ends the analysis tree (the D406 record-clips rule); previews in temp are cleared', async () => {
+  const tasks = createTasks();
+  let status = { sinks: [] };
+  const killed = [];
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  const pv = mkdtempSync(path.join(os.tmpdir(), 'ujw-rs-pv-'));
+  writeFileSync(path.join(pv, 'preview.mp4'), 'old');
+  const rs = createReelStyles({ dataDir: 'D:/data', clipRoot: ROOT, tasks, spawnFn: () => child, python: 'python.exe',
+    status: async () => status, killTreeFn: (c) => { killed.push(c); setImmediate(() => c.emit('close', 1)); }, watchMs: 10, previewDir: pv });
+  assert.throws(() => readdirSync(pv), 'the last session\'s preview folder is emptied at start');
+  status = { sinks: [{ id: 'rec', kind: 'record', state: 'live' }] };
+  assert.equal((await rs.run({ op: 'analyse', id: 'a' })).status, 409, 'refused while recording (outputs.status)');
+  status = { sinks: [] };
+  assert.equal((await rs.run({ op: 'analyse', id: 'a' })).status, 202);
+  await new Promise((ok) => setTimeout(ok, 40));
+  assert.equal(killed.length, 0, 'off air: runs on');
+  status = { sinks: [{ id: 'yt', kind: 'stream', state: 'live' }] };
+  await new Promise((ok) => setTimeout(ok, 60));
+  assert.deepEqual(killed, [child], 'the whole tree is ended once');
+  assert.equal(rs.job().state, 'failed');
+  assert.match(rs.job().note, /a stream or recording started/);
+  mkdirSync(pv); writeFileSync(path.join(pv, 'preview.mp4'), 'new');
+  rs.close();
+  assert.throws(() => readdirSync(pv), 'closed: the preview folder is gone');
 });

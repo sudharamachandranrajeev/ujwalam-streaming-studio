@@ -674,27 +674,33 @@ def cmd_live_review(a):
         files, errors = [], []
         m = _live_hook(c, ex, lim_live)
         sinfo = infos[c["file"]]
+        src_pieces = m["pieces"]
+        pk = _look_pick(ex, c["id"], os.path.basename(c["file"]))  # FX1: this clip's look
+        # RS4 (Codex RS review): live clips take the reel style too; a styled clip always renders through the pieces path
+        # (a single piece included) so its pace, zoom pulses, speed ramp and LUT are applied
+        sty, m, pk = _style_pick(ex, "live-clip", m, pk, c["id"], os.path.basename(c["file"]))
         # the canvas layout renders through the pieces path when a teaser opens the clip or captions are on; a save
         # without audio renders picture only there, so a planned teaser is always what is rendered (and recorded)
         pieces_path = (bool(m["hook"].get("teaser")) or (ex["cap_on"] and bool(sinfo.get("has_audio")))
                        or len(m["pieces"]) > 1  # CL2: a re-cut clip with its dead time removed
                        or bool(ex["thumb"])  # RP6: the start frame
                        or bool(ex["title"] and ex["tbrand"])  # RP4: the title card
-                       or bool(ex["music"] and sinfo.get("has_audio")))  # RP3: the music beds
-        src_pieces = m["pieces"]
+                       or bool(ex["music"] and sinfo.get("has_audio"))  # RP3: the music beds
+                       or sty is not None)  # RS4: the reel style
         if pieces_path and sinfo.get("has_audio"):
-            tdoc, cinfo = _caption_reel(ffmpeg, c["file"], m["pieces"], frame, wd, ex, m["seconds"])
+            tdoc, cinfo = _caption_reel(ffmpeg, c["file"], src_pieces, frame, wd, ex,
+                                        round(sum(p["end"] - p["start"] for p in src_pieces), 3))
         else:
             tdoc = None
             cinfo = ({"backend": "none", "status": "unavailable", "reason": "no audio"} if ex["cap_on"]
                      else {"backend": "none", "status": "off"})
         hook = m["hook"]
-        pk = _look_pick(ex, c["id"], os.path.basename(c["file"]))  # FX1: this clip's look
         if pieces_path:  # D411: transitions, the folder track and beat sync; captions follow that timeline
             m, tr, xd, mplan = _reel_timeline(ex, pk, m, "live-clip", ex["transition"], bool(sinfo.get("has_audio")),
-                                              c["id"], os.path.basename(c["file"]))
+                                              c["id"], os.path.basename(c["file"]), style=sty)
         else:
             tr, xd, mplan = None, 0.0, None
+        m, zoom, lut, strec = _style_render_plan(sty, m, xd, c["file"], wd, captions=tdoc is not None)
         ass, fdir, cinfo = _caption_ass(tdoc, cinfo, src_pieces, m["pieces"], xd, frame, wd, ex)
         thumb, trec = _thumbnail(ffmpeg, c["file"], m, "live-clip", frame, wd, ex) if pieces_path else (None, None)
         ttl, tirec = _title(wd, m["pieces"], xd, frame, ex, pk) if pieces_path else (None, None)
@@ -707,7 +713,7 @@ def cmd_live_review(a):
                 out_sec = None
                 if pieces_path and by_id[lid].get("kind") == "canvas":
                     name = _render_pieces(ffmpeg, c["file"], m["pieces"], frame, encoder, wd, lid, sinfo, fade_ms,
-                                          lim_live["maxSec"], ass, fdir, tr, thumb, ttl, mus)
+                                          lim_live["maxSec"], ass, fdir, tr, thumb, ttl, mus, zoom=zoom, lut=lut)
                     out_sec = _pieces_out_sec(m, xd, thumb, lim_live["maxSec"])
                 else:
                     name = rnd.render_variant(ffmpeg, c["file"], sinfo, c, by_id[lid], frame, encoder, wd)
@@ -729,12 +735,13 @@ def cmd_live_review(a):
         rti.cleanup(wd)
         rmu.cleanup(wd)
         rsfx.cleanup(wd)
+        _style_cleanup(wd)
         out_rows.append({"id": c["id"], "start": c["start"], "end": c["end"], "wallStart": c["wallStart"],
                          "source": os.path.basename(c["file"]), "sourcePath": c["file"],
                          "score": c["score"], "labels": c["labels"], "reasons": c["reasons"],
                          **({"pieces": m["pieces"]} if pieces_path else {}), "retimed": bool(c.get("retimed")),
                          "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec,
-                         "title": tirec, "music": murec, "look": pk, "sfx": sfxrec, "captions": cinfo, "hook": hook, "files": files,
+                         "title": tirec, "music": murec, "look": pk, "sfx": sfxrec, "style": strec, "captions": cinfo, "hook": hook, "files": files,
                          "errors": errors})
         _look_remember(ex, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
@@ -885,7 +892,7 @@ def _render_job(mk_argv, encoder, wd, part, what):
 
 
 def _render_pieces(ffmpeg, src, pieces, frame, encoder, wd, lid, sinfo, fade_ms, max_sec, ass=None, fdir=None,
-                   transition=None, thumbnail=None, title=None, music=None):
+                   transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None):
     """A canvas layout rendered from pieces (teaser + clip) with optional captions, the RP1 transition, the RP6
     start frame and the RP4 title card -> '<layout>.mp4'."""
     import clip_montage as mont  # noqa: PLC0415
@@ -894,7 +901,7 @@ def _render_pieces(ffmpeg, src, pieces, frame, encoder, wd, lid, sinfo, fade_ms,
         return mont.render_argv(ffmpeg, src, pieces, frame, rnd.ENCODERS[enc], rnd.AUDIO, fade_ms, name + ".part",
                                 audio_tracks=max(1, int(sinfo.get("audio_tracks") or 1)) if sinfo.get("has_audio") else 0,
                                 max_sec=max_sec, captions=ass, fontsdir=fdir, transition=transition, thumbnail=thumbnail,
-                                title=title, music=music)
+                                title=title, music=music, zoom=zoom, lut=lut)
     r, _ = _render_job(mk, encoder, wd, name + ".part", f"render {lid}")
     if r.returncode != 0:
         try:

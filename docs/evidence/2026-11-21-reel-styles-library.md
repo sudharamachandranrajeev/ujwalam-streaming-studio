@@ -33,6 +33,22 @@ Decision: D412 in `docs/plan/2026-10-29-v1-decisions.md`. Flag `reel-styles`, ON
 | `tests/py/test_clip_pipeline.py`, `test_clip_look.py` (15), `test_music_library.py` (15), `test_clip_live_montage.py` (6), `test_reel_title.py` (15), `test_clip_e2e.py` (7) | all OK | Re-run after RS4: the clipper with no style is unchanged. |
 | `tests/user-settings-clip-look.test.mjs` (4), `tests/studio-ui-server.test.mjs` (40), `tests/studio-qml-clips.test.mjs` (6), `tests/studio-qml-shell.test.mjs` (5) | all pass | The shell's list of flags that are ON now also has the D411 flags `reel-transitions`, `reel-music` and `clip-look`. They were already missing before this work, so this test was failing before. |
 
+## Codex review fixes (2026-11-21)
+
+Run one file at a time, `UJWALAM_HEADLESS=1`, temp data folder, BelowNormal, CPU only (studio open, off air per
+`tools/live-check.mjs`).
+
+| Test file | Result | What it shows |
+|---|---|---|
+| `tests/py/test_style_analyse.py` | 15/15 OK | New `GuardTests`: a 5.5 s example is refused as "longer than 3 s" or "larger than 0 MB" with nothing decoded; a stream or recording that starts mid-decode stops it at the next check (frame 20 of 165, check every 10); unknown on-air state stops it too; frame, wall-clock and memory caps; the hash is bounded and stoppable; `run_style` refuses a network path right before opening. The 60 s bound still holds (62.5 s, 218 MB). |
+| `tests/py/test_reel_style.py` | 22/23 OK, 1 skipped | New `TestReviewFixes`: the fixture passes the schema and limits; slow motion 0, -1, NaN or 50, zoom in 900 ms, out 450 ms, infinite shot length and NaN contrast are refused, as is an unknown key; a broken record is not loaded or picked and its card says "This style can't be used: ...". Local file check: `\\server`, `\\?\UNC`, `\\.\`, `\\?\C:`, `//server`, relative, missing, folder, removable/network/CD/RAM drive types, and paths through a junction are refused. Symbolic link part skipped (no developer mode). Preview refuses a path inside the style library, replaces the old preview, leaves no LUT and writes nothing into the style. |
+| `tests/py/test_clip_reel_style.py` | 5/5 OK | New: a single 8 s live-clip piece is paced, gets the LUT and the zoom, and the canvas render command carries `lut3d` once and `zoompan`; the live review path takes the pieces path when styled. |
+| `tests/py/test_clip_live_review_gate.py` (6), `test_reel_hook.py` (21) | all OK | Live review path unchanged otherwise. |
+| `tests/reel-styles-api.test.mjs` | 4/4 pass | New: refused while recording (from `outputs.status`); off air it runs on; a stream that starts ends the tree once (the record-clips rule) and the job says why; the preview folder is emptied at start and at close. |
+| `tests/reel-style-schema.test.mjs` | 3/3 pass | |
+| `tests/studio-qml-settings.test.mjs` | 21/21 pass | Card shows the record's problem. Found while re-running: since RS3 the reel styles instance sat inside the server's `readiness()` function, so the routes and `close()` could not reach it (`reelStyles is not defined`; the test hung on the open poll timer). Moved to the server's own scope. |
+| `tests/studio-ui-server.test.mjs` | 40/40 pass | |
+
 ## Limits (left out or unverified)
 
 - UNVERIFIED on real footage and real example reels: all numbers above come from synthetic videos.
@@ -44,6 +60,8 @@ Decision: D412 in `docs/plan/2026-10-29-v1-decisions.md`. Flag `reel-styles`, ON
 - LUT on fully saturated colours: gamut clipping moved `a` by up to 3.8 (planned -1.0, measured +2.8). `b`, which
   carried the main shift, was within 2.0. On a mid-saturated clip both are within 1.5 (RS2).
 - Preview shows colour and zoom pulses only. Pace, joins and music need a whole reel; the card says so.
-- The live clipper's reels (`live-clip`) do not use styles yet. Only the montage loop does: kill montages, won-match
-  reels and impact plays.
+- Symbolic links (as opposed to junctions) could not be made on this PC without developer mode; that one check is
+  skipped (UNVERIFIED). Junctions and every network or device path form are tested.
+- The live-clip wiring is tested on the planning and the render command line; a whole live review run with a style was
+  not rendered (UNVERIFIED end to end).
 - NVENC renders were not tested, because the studio was open.

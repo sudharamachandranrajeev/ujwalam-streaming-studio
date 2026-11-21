@@ -471,7 +471,7 @@ Column {
                 spacing: Theme.sp.xs
                 Words { text: sty.modelData.name; font.weight: Font.DemiBold }
                 Quiet { text: sty.modelData.examples.length + " example" + (sty.modelData.examples.length === 1 ? "" : "s") + ": " + sty.modelData.examples.map(e => e.name).join(", ") }
-                Quiet { objectName: "reelStyleSummary_" + sty.modelData.id; text: sty.modelData.analysed ? "Measured: " + sty.modelData.summary : "Not analysed yet." }
+                Quiet { objectName: "reelStyleSummary_" + sty.modelData.id; text: sty.modelData.problem ? sty.modelData.problem : sty.modelData.analysed ? "Measured: " + sty.modelData.summary : "Not analysed yet." }
                 Quiet {
                     visible: sty.modelData.omitted.length > 0
                     text: "Left out: " + sty.modelData.omitted.map(o => o.part + " (" + o.reason + ")").join("; ")

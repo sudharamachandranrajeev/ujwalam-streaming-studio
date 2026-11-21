@@ -126,6 +126,39 @@ class ClipperStyleTests(unittest.TestCase):
         cc.write_json_atomic(os.path.join(self.data, cc.LOCAL_FLAGS), {"flags": {"reel-styles": False}})
         self.assertIsNone(self.cl._style_pick({"reelStyles": self.data}, "montage", _reel(), None, "M1")[0])
 
+    def test_live_clip_takes_the_style_single_piece_too(self):
+        """Codex RS review: live clips (type live-clip = the reel style) get pace, zoom, ramp and LUT, a single piece
+        included: a styled clip renders through the pieces path, and that render carries the zoom and the LUT."""
+        self._style()
+        cc.write_json_atomic(os.path.join(self.data, cc.SETTINGS_FILE), {"clips": {"reelStyles": {"byType": {"reel": "warm"}}}})
+        one = {"pieces": [{"start": 0.0, "end": 8.0, "kills": 2}], "seconds": 8.0, "peaks": [2.0, 6.0], "hook": {}}
+        sty, m, _pk = self.cl._style_pick({"reelStyles": self.data}, "live-clip", one, None, "L1", "save.mp4")
+        self.assertEqual(sty["id"], "warm")
+        self.assertGreater(len(m["pieces"]), 1)  # an 8 s single piece is paced into shots
+        m2, zoom, lut, rec = self.cl._style_render_plan(sty, m, 0.0, "missing.mp4", self.tmp)
+        self.assertEqual(lut, "style.cube")
+        seen = {}
+        real = self.cl._render_job
+        def fake(mk, encoder, wd, part, what):
+            seen["argv"] = " ".join(mk(encoder))
+            raise cc.ClipError("stop here")
+        self.cl._render_job = fake
+        try:
+            with self.assertRaises(cc.ClipError):
+                self.cl._render_pieces("ffmpeg", "save.mp4", m2["pieces"], FRAME, "libopenh264", self.tmp, "v",
+                                       {"has_audio": True, "audio_tracks": 1}, 80, 30.0, zoom=zoom, lut=lut)
+        finally:
+            self.cl._render_job = real
+        self.assertEqual(seen["argv"].count("lut3d="), 1)
+        if zoom:
+            self.assertIn("zoompan", seen["argv"])
+        import inspect  # noqa: PLC0415 - the live review path wires it (a styled clip always takes the pieces path)
+        src = inspect.getsource(self.cl)
+        self.assertIn('_style_pick(ex, "live-clip"', src)
+        self.assertIn("or sty is not None)", src)
+        self.assertIn("ttl, mus, zoom=zoom, lut=lut)", src)
+        self.cl._style_cleanup(self.tmp)
+
     @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg missing")
     def test_rendered_reel_measures_back_close_to_the_style(self):
         import style_analyse as sa  # noqa: PLC0415

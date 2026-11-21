@@ -27,6 +27,8 @@ HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "services", "clip"))
 sys.path.insert(0, HERE)
 
+import clip_common as cc  # noqa: E402
+
 try:
     import av  # noqa: F401
     import cv2
@@ -212,6 +214,89 @@ class BoundTests(unittest.TestCase):
             self.assertEqual(len(out["result"]["zooms"]["pulses"]), 10)  # every third shot has one
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+@unittest.skipUnless(np is not None, "numpy/OpenCV/PyAV/RapidOCR missing (use the project venv)")
+class GuardTests(unittest.TestCase):
+    """Codex RS review: limits checked before decode; on air, frames, time and memory watched during it."""
+
+    @classmethod
+    def setUpClass(cls):
+        import style_analyse as sa  # noqa: PLC0415
+        cls.sa = sa
+        cls.tmp = tempfile.mkdtemp(prefix="ujw-rsg-")
+        cls.path = os.path.join(cls.tmp, "short.mkv")
+        sf.write(cls.path, dict(SPEC, shots=SPEC["shots"][:3], joins=SPEC["joins"][:2], texts=[]))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def cfg(self, **kw):
+        c = json.loads(json.dumps(self.sa.load_config()))
+        c.update(kw)
+        return c
+
+    def test_too_long_or_too_large_refused_before_decode(self):
+        self.assertAlmostEqual(self.sa.probe_example(self.path, self.cfg()), 5.5, delta=0.1)
+        decoded = []
+        real = self.sa._frames
+        self.sa._frames = lambda *a, **k: decoded.append(1) or real(*a, **k)
+        try:
+            with self.assertRaisesRegex(self.sa.ClipError, "longer than 3"):
+                self.sa.analyse_video(self.path, self.cfg(maxExampleSec=3), ocr=False)
+            with self.assertRaisesRegex(self.sa.ClipError, "larger than 0 MB"):
+                self.sa.analyse_video(self.path, self.cfg(maxExampleMB=0), ocr=False)
+        finally:
+            self.sa._frames = real
+        self.assertEqual(decoded, [])  # nothing was decoded
+
+    def test_stops_when_stream_or_recording_starts_mid_decode(self):
+        calls = []
+        def live():
+            calls.append(1)
+            return len(calls) > 1  # off air at the first check, on air at the second
+        cfg = self.cfg(guard={"checkEveryFrames": 10, "maxWallSecPerExample": 600, "maxMemMb": 100000})
+        g = self.sa.Guard(cfg, live)
+        with self.assertRaisesRegex(self.sa.ClipError, "a stream or recording started"):
+            self.sa.analyse_video(self.path, cfg, ocr=False, guard=g)
+        self.assertEqual(g.n, 20)  # stopped at the second check, not at the end (165 frames)
+        g = self.sa.Guard(cfg, lambda: None)  # unknown counts as on air
+        with self.assertRaisesRegex(self.sa.ClipError, "stream or recording"):
+            self.sa.analyse_video(self.path, cfg, ocr=False, guard=g)
+
+    def test_frame_time_and_memory_caps(self):
+        cfg = self.cfg(guard={"checkEveryFrames": 5, "maxWallSecPerExample": 10, "maxMemMb": 500})
+        g = self.sa.Guard(cfg, lambda: False).start(max_frames=3)
+        with self.assertRaisesRegex(self.sa.ClipError, "more frames"):
+            for _ in range(4):
+                g.tick()
+        t = [0.0]
+        g = self.sa.Guard(cfg, lambda: False, clock=lambda: t[0], memory=lambda: 10.0)
+        t[0] = 11.0
+        with self.assertRaisesRegex(self.sa.ClipError, "longer than 10 s"):
+            g.tick(force=True)
+        g = self.sa.Guard(cfg, lambda: False, memory=lambda: 900.0)
+        with self.assertRaisesRegex(self.sa.ClipError, "more than 500 MB"):
+            g.tick(force=True)
+
+    def test_hash_bounded_and_stoppable(self):
+        self.assertEqual(len(self.sa.sha256_file(self.path)), 64)
+        with self.assertRaisesRegex(self.sa.ClipError, "larger than"):
+            self.sa.sha256_file(self.path, chunk=1024, max_bytes=2048)
+        g = self.sa.Guard(self.cfg(), lambda: True)
+        with self.assertRaisesRegex(self.sa.ClipError, "stream or recording"):
+            self.sa.sha256_file(self.path, guard=g)
+
+    def test_run_style_rechecks_the_path_before_opening(self):
+        import reel_style as rs  # noqa: PLC0415
+        data = os.path.join(self.tmp, "data")
+        d = os.path.join(rs.styles_root(data), "net")
+        os.makedirs(d, exist_ok=True)
+        cc.write_json_atomic(os.path.join(d, "style.json"), {"version": 1, "id": "net", "name": "Net",
+                                                             "examples": [{"path": "\\\\server\\share\\a.mp4"}]})
+        with self.assertRaisesRegex(self.sa.ClipError, "network"):
+            self.sa.run_style(data, "net", live=lambda: False, ocr=False)
 
 
 if __name__ == "__main__":

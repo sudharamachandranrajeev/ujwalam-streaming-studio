@@ -481,8 +481,6 @@ export function createStudioServer(opts) {
     const config = loadReadinessConfig(opts.readinessConfigFile);
     const bc = loadBotConfig(opts.profileFile ? { profilePath: opts.profileFile } : {});
     const clipRoot = opts.clipRoot ?? (process.env.UJWALAM_CLIP_ROOT || REPO_ROOT);
-  // RS3 (D412) Settings > Clips > Reel styles: analysis and preview run hidden, off air, one at a time
-  const reelStyles = typeof opts.dataDir === 'string' ? createReelStyles({ dataDir: opts.dataDir, clipRoot, tasks, isLive: () => live === true, flagOn: () => !!flags && flags.isOn('reel-styles') }) : null;
     readinessRunner = createReadiness({
       host, core, config, now, dataDir: typeof opts.dataDir === 'string' ? opts.dataDir : null,
       flagOn: (id) => !!flags && flags.isOn(id),
@@ -745,6 +743,10 @@ export function createStudioServer(opts) {
   let pollTimer = null;
   let lastSnapshot = null;
   let live = false;
+  // RS3 (D412) Settings > Clips > Reel styles: analysis and preview run hidden, off air, one at a time; a stream or
+  // recording that starts ends their process tree (outputs.status, the record-clips rule)
+  const reelStyles = typeof opts.dataDir === 'string' ? createReelStyles({ dataDir: opts.dataDir, clipRoot: opts.clipRoot ?? (process.env.UJWALAM_CLIP_ROOT || REPO_ROOT), tasks,
+    isLive: () => live === true, status: () => host.call('outputs.status', {}), flagOn: () => !!flags && flags.isOn('reel-styles') }) : null;
   const renamed = new Map(); // 'layer:<id>' | 'scene:<id>' -> new name, until the host reloads the project (D292)
   let lastImport = null; // { file, project, bases }: server side only, never sent to the page
   let previewSeen = null; // last host preview edit seq handled (null: not read yet)
@@ -2467,6 +2469,7 @@ export function createStudioServer(opts) {
     },
     async close() {
       clearInterval(pollTimer);
+      reelStyles?.close(); // RS3: the preview folder in temp is emptied
       ytControlSvc?.close(); // D388: the YouTube chat readers and their timers
       stopDataWatch?.(); stopDataWatch = null;
       projectSync?.flush(); // write a pending layer edit now rather than lose it

@@ -74,20 +74,80 @@ def _r(v, n=3):
     return None if v is None else round(float(v), n)
 
 
-def sha256_file(path, chunk=1 << 20):
+def sha256_file(path, chunk=1 << 20, max_bytes=None, guard=None):
+    """SHA-256 of a file; bounded (max_bytes) and stoppable (guard) like the decode."""
     h = hashlib.sha256()
+    n = 0
     with open(path, "rb") as f:
         while True:
             b = f.read(chunk)
             if not b:
                 break
+            n += len(b)
+            if max_bytes is not None and n > max_bytes:
+                raise ClipError(f"{os.path.basename(path)}: larger than {max_bytes // 1048576} MB")
+            if guard and (n - len(b)) % (32 * chunk) == 0:  # the first chunk, then every 32 chunks
+                guard.tick(force=True)
             h.update(b)
     return h.hexdigest()
 
 
+class Guard:
+    """Codex RS review: the long job is watched while it runs, not only before. Every checkEveryFrames frames it asks
+    the same on-air rule the clip jobs use (clip_common.on_air: a stream or recording, or unknown, counts as on air)
+    and stops; it also stops past the frame, wall-clock and memory caps. The studio kills the process tree too
+    (reel-styles.mjs, the record-clips rule)."""
+
+    def __init__(self, cfg, live=None, max_frames=None, clock=time.monotonic, memory=None):
+        g = cfg["guard"]
+        self.live, self.clock, self.memory = live, clock, memory or peak_memory_mb
+        self.every, self.wall, self.mem = int(g["checkEveryFrames"]), float(g["maxWallSecPerExample"]), float(g["maxMemMb"])
+        self.max_frames = max_frames
+        self.n, self.t0 = 0, clock()
+
+    def start(self, max_frames=None):
+        self.n, self.t0, self.max_frames = 0, self.clock(), max_frames
+        return self
+
+    def tick(self, force=False):
+        self.n += 0 if force else 1
+        if self.max_frames is not None and self.n > self.max_frames:
+            raise ClipError("stopped: more frames than the length limit allows")
+        if not force and self.n % self.every:
+            return
+        if self.live is not None and self.live() is not False:
+            raise ClipError("stopped: a stream or recording started (styles are analysed off air only)")
+        if self.clock() - self.t0 > self.wall:
+            raise ClipError(f"stopped: took longer than {self.wall:.0f} s")
+        m = self.memory()
+        if m is not None and m > self.mem:
+            raise ClipError(f"stopped: used more than {self.mem:.0f} MB of memory")
+
+
+def probe_example(path, cfg):
+    """Length and size from the container before anything is decoded; over the limits = refused. -> seconds."""
+    import av  # noqa: PLC0415
+    size = os.path.getsize(path)
+    if size > int(cfg["maxExampleMB"]) * 1048576:
+        raise ClipError(f"{os.path.basename(path)}: larger than {cfg['maxExampleMB']} MB")
+    try:
+        with av.open(path) as c:
+            st = next((x for x in c.streams if x.type == "video"), None)
+            if st is None:
+                raise ClipError(f"{os.path.basename(path)}: no picture")
+            sec = c.duration / 1e6 if c.duration else (float(st.duration * st.time_base) if st.duration else None)
+    except av.error.FFmpegError as e:
+        raise ClipError(f"{os.path.basename(path)}: not a video this PC can read") from e
+    if sec is None or not math.isfinite(sec):
+        raise ClipError(f"{os.path.basename(path)}: its length cannot be read")
+    if sec > float(cfg["maxExampleSec"]) + 0.5:
+        raise ClipError(f"{os.path.basename(path)}: longer than {cfg['maxExampleSec']} s")
+    return sec
+
+
 # ---------------------------------------------------------------- frame pass
 
-def _frames(path, max_fps):
+def _frames(path, max_fps, guard=None):
     """Decoded frames as BGR (motion size) with their time; frames above max_fps are skipped."""
     import av  # noqa: PLC0415
     c = av.open(path)
@@ -105,6 +165,8 @@ def _frames(path, max_fps):
             if t < nxt - 0.5 * step:  # container times can be rounded to the ms: half a frame of slack
                 continue
             nxt = nxt + step if abs(t - nxt) < 0.5 * step else t + step
+            if guard:
+                guard.tick()
             yield t, fr, min(rate, float(max_fps))
     finally:
         c.close()
@@ -147,7 +209,7 @@ def _grid_features(gray, n=4, per=10):
     return np.concatenate(out).astype(np.float32) if out else None
 
 
-def frame_pass(path, cfg, progress=None, ocr=True):
+def frame_pass(path, cfg, progress=None, ocr=True, guard=None):
     """One decode of the example -> per-frame arrays and the text samples."""
     import cv2  # noqa: PLC0415
     np = _np()
@@ -166,7 +228,7 @@ def frame_pass(path, cfg, progress=None, ocr=True):
     hists = collections.deque(maxlen=L + 1)
     prev_gray = None
     text, next_text, fps = [], 0.0, None
-    for t, fr, fps in _frames(path, a["maxFps"]):
+    for t, fr, fps in _frames(path, a["maxFps"], guard):
         if fr.width < 16 or fr.height < 16:
             raise ClipError("picture too small")
         mh = max(8, int(round(mw * fr.height / fr.width / 2)) * 2)
@@ -512,10 +574,13 @@ def beat_phase(path, bpm, ml, mcfg):
 
 # ---------------------------------------------------------------- one example
 
-def analyse_video(path, cfg=None, progress=None, ocr=True):
+def analyse_video(path, cfg=None, progress=None, ocr=True, guard=None):
     cfg = cfg or load_config()
     t0 = time.perf_counter()
-    fp = frame_pass(path, cfg, progress, ocr=ocr)
+    sec = probe_example(path, cfg)  # refused before any decode when too long or too large
+    if guard:
+        guard.start(max_frames=int((min(sec, float(cfg["maxExampleSec"])) + 1.0) * float(cfg["analyse"]["maxFps"])) + 30)
+    fp = frame_pass(path, cfg, progress, ocr=ocr, guard=guard)
     np = _np()
     fps = float(fp["fps"])
     dur = float(fp["t"][-1] - fp["t"][0]) + 1.0 / fps
@@ -661,17 +726,20 @@ def run_style(data_dir, style_id, cfg=None, live=on_air, progress=None, ocr=True
     lock = os.path.join(data_dir, *cfg["stylesDir"].split("/"), ".analyse.lock")
     with _Lock(lock):
         per, exs = [], []
+        guard = Guard(cfg, live)
         for i, ex in enumerate(doc["examples"]):
             p = ex["path"]
-            if not os.path.isfile(p):
-                raise ClipError(f"example {i + 1} is missing: {os.path.basename(p)}")
+            bad = rs.local_file_problem(p)  # again right before it is opened (Codex RS review)
+            if bad:
+                raise ClipError(f"example {i + 1}: {bad}")
             if progress:
                 progress(f"example {i + 1}/{len(doc['examples'])}")
-            r = analyse_video(p, cfg, ocr=ocr)
+            r = analyse_video(p, cfg, ocr=ocr, guard=guard)
             if r["seconds"] > float(cfg["maxExampleSec"]):
                 raise ClipError(f"example {i + 1} is longer than {cfg['maxExampleSec']} s")
             per.append(r)
-            exs.append({"path": p, "sha256": sha256_file(p), "seconds": r["seconds"]})
+            exs.append({"path": p, "sha256": sha256_file(p, max_bytes=int(cfg["maxExampleMB"]) * 1048576, guard=guard),
+                        "seconds": r["seconds"]})
         merged = merge(per, cfg)
         doc = dict(doc, examples=exs, measured=merged, analysedAt=time.strftime("%Y-%m-%dT%H:%M:%S"),
                    perExample=[{k: r[k] for k in ("seconds", "fps", "analyseSec", "trackedShare")} for r in per])

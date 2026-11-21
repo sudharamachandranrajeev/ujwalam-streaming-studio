@@ -355,8 +355,17 @@ class RenderTests(unittest.TestCase):
         d = os.path.join(rs.styles_root(data), "warm")
         os.makedirs(d, exist_ok=True)
         cc.write_json_atomic(os.path.join(d, "style.json"), doc)
-        out = os.path.join(d, "preview.mp4")
+        with self.assertRaisesRegex(cc.ClipError, "never written inside the style library"):
+            rs.preview(data, "warm", os.path.abspath(self.src), os.path.join(d, "preview.mp4"))
+        pdir = os.path.join(self.tmp, "pv")  # Codex RS review: a temp folder, the last preview replaced
+        os.makedirs(pdir)
+        out = os.path.join(pdir, "preview.mp4")
+        with open(out, "wb") as f:
+            f.write(b"old")
         r = rs.preview(data, "warm", os.path.abspath(self.src), out, seconds=6.0)
+        self.assertEqual(sorted(os.listdir(pdir)), ["preview.mp4"])  # the LUT is gone, the old file replaced
+        self.assertEqual(sorted(os.listdir(d)), ["style.json"])  # nothing written into the style
+        self.assertTrue(rs.preview_dir().startswith(tempfile.gettempdir()))
         j = self.probe(out)
         v = next(s for s in j["streams"] if s["codec_type"] == "video")
         self.assertEqual(int(v["width"]), 540)
@@ -364,8 +373,77 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(len([s for s in j["streams"] if s["codec_type"] == "audio"]), 1)
         self.assertEqual(r["zoomTimes"], [1.5, 4.0] if doc["zooms"] else [])
         self.assertIsNotNone(r["shift"])
-        with self.assertRaisesRegex(cc.ClipError, "choose one of your clips"):
+        with self.assertRaisesRegex(cc.ClipError, "give the full path"):
             rs.preview(data, "warm", "relative.mp4", out)
+
+class TestReviewFixes(unittest.TestCase):
+    """Codex RS review: records checked against the schema and the runtime limits; example paths local files only."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="rs-rev-")
+        with open(FIXTURE, encoding="utf-8") as f:
+            self.doc = dict(json.load(f), id="warm")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_fixture_passes(self):
+        self.assertEqual(rs.style_problems(self.doc), [])
+
+    def test_bad_values_refused(self):
+        cases = [("ramps", "factor", 0), ("ramps", "factor", -1.0), ("ramps", "factor", float("nan")),
+                 ("ramps", "factor", 50.0), ("zooms", "inMs", 900), ("zooms", "outMs", 450),
+                 ("cuts", "shotSec", float("inf")), ("colour", "contrast", float("nan"))]
+        for part, k, v in cases:
+            d = json.loads(json.dumps(self.doc))
+            if d.get(part) is None:
+                continue
+            d[part][k] = v
+            self.assertTrue(rs.style_problems(d), (part, k, v))
+        d = json.loads(json.dumps(self.doc))
+        d["surprise"] = 1  # unknown top-level key: the schema refuses it
+        self.assertTrue(rs.schema_problems(d))
+
+    def test_broken_record_not_selectable_and_card_says_why(self):
+        data = os.path.join(self.tmp, "data")
+        sd = os.path.join(rs.styles_root(data), "warm")
+        os.makedirs(sd)
+        bad = json.loads(json.dumps(self.doc))
+        bad["ramps"] = {"factor": 0, "sec": 0.6}
+        cc.write_json_atomic(os.path.join(sd, "style.json"), bad)
+        self.assertIsNone(rs.load_style(data, "warm"))
+        card = rs.card(bad)
+        self.assertFalse(card["analysed"])
+        self.assertIn("can't be used", card["problem"])
+        cc.write_json_atomic(os.path.join(data, "settings.json"), {"clips": {"reelStyles": {"byType": {"reel": "warm"}}}})
+        self.assertIsNone(rs.pick(data, "reel", ["x"]))
+
+    def test_local_file_only(self):
+        f = os.path.join(self.tmp, "a.mp4")
+        with open(f, "wb") as h:
+            h.write(b"x")
+        self.assertIsNone(rs.local_file_problem(f, drive_type=lambda r: 3))
+        for p in (r"\\server\share\a.mp4", r"\\?\UNC\server\share\a.mp4", r"\\.\PhysicalDrive0", r"\\?\C:\a.mp4",
+                  "//server/share/a.mp4", "rel.mp4", os.path.join(self.tmp, "missing.mp4"), self.tmp):
+            self.assertIsNotNone(rs.local_file_problem(p, drive_type=lambda r: 3), p)
+        for t in (2, 4, 5, 6):  # removable, network (mapped), CD, RAM disk
+            self.assertIn("fixed drive", rs.local_file_problem(f, drive_type=lambda r, t=t: t))
+        if os.name == "nt":
+            self.assertIsNone(rs.local_file_problem(f))  # the temp folder is on this PC's own drive
+        if os.name == "nt":  # a junction needs no special rights: a path through it is refused
+            import _winapi  # noqa: PLC0415
+            j = os.path.join(self.tmp, "jn")
+            _winapi.CreateJunction(self.tmp, j)
+            self.assertIn("link", rs.local_file_problem(os.path.join(j, "a.mp4"), drive_type=lambda r: 3))
+            self.assertIn("link", rs.local_file_problem(j, drive_type=lambda r: 3))
+            os.rmdir(j)
+        link = os.path.join(self.tmp, "link.mp4")
+        try:
+            os.symlink(f, link)
+        except OSError:
+            self.skipTest("symbolic links need developer mode here (UNVERIFIED on this PC)")
+        self.assertIn("link", rs.local_file_problem(link, drive_type=lambda r: 3))
+
 
 if __name__ == "__main__":
     unittest.main()

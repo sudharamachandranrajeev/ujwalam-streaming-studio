@@ -62,6 +62,111 @@ def _clamp(v, r):
 
 # ---------------------------------------------------------------- the record
 
+SCHEMA_FILE = os.path.join(CLIP_DATA, "reel-style.schema.json")
+_schema_cache = {}
+
+
+def _schema():
+    if "s" not in _schema_cache:
+        _schema_cache["s"] = load_json(SCHEMA_FILE)
+    return _schema_cache["s"]
+
+
+_TYPES = {"object": dict, "array": list, "string": str, "boolean": bool, "null": type(None)}
+
+
+def _is_type(v, t):
+    if t in ("number", "integer"):
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool)
+        return ok and (t == "number" or float(v).is_integer())
+    return isinstance(v, _TYPES[t])
+
+
+def schema_problems(v, sch=None, where="style"):
+    """The record against data/clip/reel-style.schema.json (the keywords that schema uses; stdlib only, so the clip
+    worker needs no extra package). Also refuses numbers that are not finite. [] when fine."""
+    sch = _schema() if sch is None else sch
+    if isinstance(v, float) and not math.isfinite(v):
+        return [f"{where} is not a finite number"]
+    if "oneOf" in sch:
+        hits = [s for s in sch["oneOf"] if not schema_problems(v, s, where)]
+        return [] if len(hits) == 1 else [f"{where} has a value that is not allowed"]
+    t = sch.get("type")
+    if t is not None and not any(_is_type(v, x) for x in (t if isinstance(t, list) else [t])):
+        return [f"{where} has the wrong type"]
+    out = []
+    if "const" in sch and v != sch["const"]:
+        out.append(f"{where} must be {sch['const']}")
+    if "enum" in sch and v not in sch["enum"]:
+        out.append(f"{where} must be one of {', '.join(map(str, sch['enum']))}")
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        for k, bad in (("minimum", lambda a, b: a < b), ("maximum", lambda a, b: a > b),
+                       ("exclusiveMinimum", lambda a, b: a <= b), ("exclusiveMaximum", lambda a, b: a >= b)):
+            if k in sch and bad(v, sch[k]):
+                out.append(f"{where} is out of range ({k} {sch[k]})")
+    if isinstance(v, str):
+        if len(v) < sch.get("minLength", 0) or len(v) > sch.get("maxLength", 1 << 30):
+            out.append(f"{where} has the wrong length")
+        if "pattern" in sch and not re.search(sch["pattern"], v):
+            out.append(f"{where} is not in the right form")
+    if isinstance(v, list):
+        if len(v) < sch.get("minItems", 0) or len(v) > sch.get("maxItems", 1 << 30):
+            out.append(f"{where} has the wrong number of items")
+        if "items" in sch:
+            for i, x in enumerate(v):
+                out += schema_problems(x, sch["items"], f"{where}[{i}]")
+    if isinstance(v, dict):
+        props = sch.get("properties", {})
+        for k in sch.get("required", []):
+            if k not in v:
+                out.append(f"{where}.{k} is missing")
+        for k, x in v.items():
+            if k in props:
+                out += schema_problems(x, props[k], f"{where}.{k}")
+            elif sch.get("additionalProperties") is False:
+                out.append(f"{where} has an unknown key {k}")
+            elif isinstance(sch.get("additionalProperties"), dict):
+                out += schema_problems(x, sch["additionalProperties"], f"{where}.{k}")
+    return out
+
+
+def bounds_problems(doc, cfg):
+    """Runtime limits on the mapped parts (D412): what the renderer may be asked to do, whatever the file says."""
+    mp, out = cfg["map"], []
+
+    def within(v, r, what):
+        if not (_num(v) and float(r["min"]) <= v <= float(r["max"])):
+            out.append(f"{what} must be from {r['min']} to {r['max']}")
+    if isinstance(doc.get("cuts"), dict):
+        within(doc["cuts"].get("shotSec"), mp["shotSec"], "seconds per shot")
+    z = doc.get("zooms")
+    if isinstance(z, dict):
+        within(z.get("scale"), mp["zoomScale"], "zoom size")
+        if not (_num(z.get("inMs")) and 0 < z["inMs"] < 600):
+            out.append("zoom entrance must be under 600 ms")
+        if not (_num(z.get("outMs")) and 0 < z["outMs"] < 400):
+            out.append("zoom exit must be under 400 ms")
+    r = doc.get("ramps")
+    if isinstance(r, dict):
+        if not (_num(r.get("factor")) and r["factor"] > 0):
+            out.append("slow motion speed must be above 0")
+        else:
+            within(r["factor"], mp["rampFactor"], "slow motion speed")
+        if not (_num(r.get("sec")) and 0.1 <= r["sec"] <= 2.0):
+            out.append("slow motion length must be from 0.1 to 2 s")
+    c = doc.get("colour")
+    if isinstance(c, dict):
+        for k in ("L", "a", "b", "contrast"):
+            if not _num(c.get(k)):
+                out.append(f"colour {k} must be a number")
+        if _num(c.get("contrast")) and c["contrast"] <= 0:
+            out.append("colour contrast must be above 0")
+    mu = doc.get("music")
+    if isinstance(mu, dict) and mu.get("energyLevel") is not None and not (_num(mu["energyLevel"]) and 0 <= mu["energyLevel"] <= 1):
+        out.append("music energy must be from 0 to 1")
+    return out
+
+
 def style_problems(doc, cfg=None, analysed=True):
     """Problems with a style.json; [] when fine. analysed=False: a new style (name and examples only) is fine."""
     cfg = cfg or load_config()
@@ -109,6 +214,8 @@ def style_problems(doc, cfg=None, analysed=True):
                 out.append(f"colour.lut must be {LUT_FILE}")
             if not (_num(c.get("strength")) and 0 <= c["strength"] <= 1):
                 out.append("colour.strength must be from 0 to 1")
+        if not out:  # the whole record against the schema, then the runtime limits
+            out += schema_problems(doc) or bounds_problems(doc, cfg)
     return out
 
 
@@ -531,6 +638,48 @@ def pick(data_dir, reel_type, seed_parts=(), cfg=None):
 # ---------------------------------------------------------------- Settings > Clips > Reel styles (RS3)
 
 _VIDEO_EXT = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
+_DRIVE_FIXED = 3
+_REPARSE = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT
+
+
+def _drive_type(root):
+    if os.name != "nt":
+        return _DRIVE_FIXED
+    import ctypes  # noqa: PLC0415
+    return int(ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root)))
+
+
+def local_file_problem(p, drive_type=None):
+    """None when p is a regular file on a local fixed drive, reached with no link on the way; else why not, in plain
+    words. Network shares (\\\\server, \\\\?\\UNC), device paths (\\\\.\\, \\\\?\\), mapped network and removable drives,
+    links, junctions and other reparse points are refused (Codex RS review). Checked again right before each open."""
+    import stat  # noqa: PLC0415
+    drive_type = drive_type or _drive_type
+    name = os.path.basename(str(p)) or "the example"
+    if not isinstance(p, str) or not p or re.search(r"[\x00-\x1f]", p):
+        return "not a file path"
+    q = p.replace("/", "\\") if os.name == "nt" else p
+    if q.startswith("\\\\"):
+        return f"{name}: network and device paths are not allowed; use a file on this PC's own drive"
+    if not os.path.isabs(p):
+        return f"{name}: give the full path"
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return f"{name}: file not found"
+    if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE:
+        return f"{name}: links are not followed; use the file itself"
+    if not stat.S_ISREG(st.st_mode):
+        return f"{name}: not a regular file"
+    real = os.path.realpath(p)
+    if os.path.normcase(real) != os.path.normcase(os.path.abspath(p)):
+        return f"{name}: the path goes through a link or junction; use the file itself"
+    drive = os.path.splitdrive(real)[0]
+    if os.name == "nt" and not (len(drive) == 2 and drive[1] == ":"):
+        return f"{name}: not on a drive letter of this PC"
+    if drive_type((drive or "/") + ("\\" if os.name == "nt" else "")) != _DRIVE_FIXED:
+        return f"{name}: not on this PC's own fixed drive (network, removable or virtual drives are not used)"
+    return None
 
 
 def _slug(name, taken):
@@ -552,12 +701,10 @@ def example_problems(paths, cfg=None):
     for p in paths:
         if not isinstance(p, str) or not p or len(p) > int(cfg["pathMaxChars"]) or re.search(r"[\x00-\x1f]", p):
             out.append("an example path is not a file path")
-        elif not os.path.isabs(p):
-            out.append(f"{os.path.basename(p)}: give the full path")
         elif not p.lower().endswith(_VIDEO_EXT):
             out.append(f"{os.path.basename(p)}: not a video file ({', '.join(_VIDEO_EXT)})")
-        elif not os.path.isfile(p):
-            out.append(f"{os.path.basename(p)}: file not found")
+        elif local_file_problem(p):
+            out.append(local_file_problem(p))
     if len({os.path.normcase(os.path.abspath(p)) for p in paths if isinstance(p, str)}) != len(paths):
         out.append("the same example is added twice")
     return out
@@ -597,9 +744,11 @@ def save_tune(data_dir, style_id, tune, cfg=None):
 def card(doc, cfg=None):
     """What the Settings card shows of a style: numbers and plain words only (never frames or text from the videos)."""
     cfg = cfg or load_config()
-    analysed = doc.get("measured") is not None
+    probs = style_problems(doc, cfg) if doc.get("measured") is not None else []
+    analysed = doc.get("measured") is not None and not probs  # a broken record is never selectable
     eff = effective(doc, cfg) if analysed else {}
     return {"id": doc["id"], "name": doc["name"], "analysed": analysed,
+            "problem": ("This style can't be used: " + "; ".join(probs[:3]) + ". Analyse it again.") if probs else None,
             "examples": [{"name": os.path.basename(e["path"]), "path": e["path"], "seconds": e.get("seconds")} for e in doc["examples"]],
             "summary": doc.get("summary") or "not analysed yet", "tune": doc.get("tune") or {},
             "omitted": ((doc.get("measured") or {}).get("omitted")) or [],
@@ -621,6 +770,16 @@ def _encoder(ffmpeg):
     raise ClipError("this ffmpeg has no CPU H.264 encoder (libx264 or libopenh264)")
 
 
+PREVIEW_DIR = "ujwalam-reel-style-preview"
+
+
+def preview_dir():
+    """The one preview folder, in the temp folder (never inside the style library). The studio empties it when it starts
+    and closes; each preview replaces the last."""
+    import tempfile  # noqa: PLC0415
+    return os.path.join(tempfile.gettempdir(), PREVIEW_DIR)
+
+
 def preview(data_dir, style_id, src, out, ffmpeg="ffmpeg", seconds=8.0, cfg=None):
     """"Preview on my clip": the first seconds of one of the user's own clips with the style's colour (LUT fitted to
     that clip) and zoom pulses, rendered on the CPU at 540 px wide. Cuts, transitions and music need a whole reel, so
@@ -630,13 +789,23 @@ def preview(data_dir, style_id, src, out, ffmpeg="ffmpeg", seconds=8.0, cfg=None
     doc = load_style(data_dir, style_id, cfg)
     if not doc:
         raise ClipError("that style is not analysed yet (or is gone)")
-    if not (isinstance(src, str) and os.path.isabs(src) and os.path.isfile(src) and src.lower().endswith(_VIDEO_EXT)):
+    if not (isinstance(src, str) and src.lower().endswith(_VIDEO_EXT)):
         raise ClipError("choose one of your clips (a video file) to preview on")
+    bad = local_file_problem(src)  # again right before ffmpeg opens it
+    if bad:
+        raise ClipError(bad)
     eff = effective(doc, cfg)
     piece = {"start": 0.0, "end": float(seconds)}
     filters, shift, ztimes = ["scale=540:-2,setsar=1,fps=30"], None, []
     wd = os.path.dirname(os.path.abspath(out))
+    if os.path.normcase(os.path.realpath(wd)).startswith(os.path.normcase(os.path.realpath(styles_root(data_dir, cfg)))):
+        raise ClipError("previews are never written inside the style library")
     os.makedirs(wd, exist_ok=True)
+    for n in (os.path.basename(out), LUT_FILE):  # the last preview is replaced
+        try:
+            os.remove(os.path.join(wd, n))
+        except OSError:
+            pass
     if eff.get("colour"):
         lut = os.path.join(wd, LUT_FILE)
         shift = write_lut(lut, eff["colour"], eff["colour"]["strength"], clip_colour(src, [piece]), cfg)
@@ -649,6 +818,10 @@ def preview(data_dir, style_id, src, out, ffmpeg="ffmpeg", seconds=8.0, cfg=None
     argv = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-t", f"{seconds:.2f}", "-i", src, "-vf", ",".join(filters),
             *_encoder(ffmpeg), "-pix_fmt", "yuv420p", "-threads", "2", "-c:a", "aac", "-b:a", "128k", out]
     r = run_tool(argv, cwd=wd, timeout=300)
+    try:
+        os.remove(os.path.join(wd, LUT_FILE))
+    except OSError:
+        pass
     if r.returncode != 0 or not os.path.isfile(out):
         tail = (r.stderr or "").strip().splitlines()
         raise ClipError("the preview did not render" + (": " + tail[-1][:200] if tail else ""))
@@ -687,8 +860,7 @@ def main(argv=None):
             sid = b.get("id")
             if not (isinstance(sid, str) and _ID.match(sid)):
                 raise ClipError("unknown style")
-            out = preview(a.data_dir, sid, b.get("src"), os.path.join(styles_root(a.data_dir, cfg), sid, "preview.mp4"),
-                          a.ffmpeg, cfg=cfg)
+            out = preview(a.data_dir, sid, b.get("src"), os.path.join(preview_dir(), "preview.mp4"), a.ffmpeg, cfg=cfg)
         print(json.dumps(out))
         return 0
     except (ClipError, ValueError) as e:
