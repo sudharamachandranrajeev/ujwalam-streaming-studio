@@ -51,6 +51,8 @@ def kind_of(clip_id, doc_tool=None):
         return "impact-play"  # D326
     if str(clip_id).startswith("M") and (doc_tool or "").startswith("clipper.montage"):
         return "montage"
+    if str(clip_id).startswith("B") and (doc_tool or "") == "clipper.beatdrop":
+        return "montage"  # BD7c: a BeatDrop montage posts under the montage rules (names, auto-post, music gate)
     return "short"
 
 
@@ -69,6 +71,8 @@ def clip_time(clip, rec_start_local, kind):
 
 
 def _kills(clip):
+    if clip.get("pieces") is None and isinstance(clip.get("beatdrop"), dict):  # BD7c: the BeatDrop plan's own count
+        return int((clip["beatdrop"].get("stats") or {}).get("kills") or 0)
     return sum(int(p.get("kills") or 0) for p in clip.get("pieces") or [])
 
 
@@ -85,8 +89,8 @@ def name_rows(rdoc, game, layouts_by_id, det_weights=None, rec_start_local=None)
         for f in c.get("files") or []:
             lay = layouts_by_id.get(f.get("layout")) or ({"input": "v"} if str(f.get("layout", "")).endswith("-v") else
                                                           {"id": f.get("layout")})
-            if kind == "long-highlights":
-                lay = {"canvas": "h"}  # D406: cut of the H recording
+            if kind == "long-highlights" or f.get("layout") == "beatdrop-h":
+                lay = {"canvas": "h"}  # D406: cut of the H recording; BD7c: the BeatDrop H render
             out.append((c, f, kind, when, label, names.canvas_suffix(lay)))
     return out
 
@@ -306,7 +310,7 @@ def tidy_plan(recordings, clips, data_dir, game="game", layouts_by_id=None, det_
     if clips and os.path.isdir(clips):
         for d in _run_dirs(clips):
             run = os.path.basename(d)
-            subs = [d] + ([os.path.join(d, "montage")] if os.path.isdir(os.path.join(d, "montage")) else [])
+            subs = [d] + [os.path.join(d, s) for s in ("montage", "beatdrop") if os.path.isdir(os.path.join(d, s))]
             g = game
             dp = os.path.join(d, "detector-pass.json")
             if os.path.isfile(dp):
