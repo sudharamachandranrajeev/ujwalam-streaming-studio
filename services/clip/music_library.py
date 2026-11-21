@@ -22,6 +22,7 @@ import hashlib
 import math
 import os
 import random
+import stat
 import wave
 
 from clip_common import CLIP_DATA, ClipError, load_json, write_json_atomic
@@ -42,6 +43,41 @@ def load_config(path=None):
     if int(cfg["analysisSampleRate"]) != SR:
         raise ClipError("music library: analysis runs at 48 kHz (the loudness filter is made for it)")
     return cfg
+
+
+# ---------------------------------------------------------------- the folder: no links, nothing outside it
+
+REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+
+def is_link(path):
+    """True for a symbolic link, a junction or any other Windows reparse point (never followed: a link could lead
+    out of the music folder). An entry that cannot be read counts as a link."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return True
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & REPARSE)
+
+
+def inside(path, folder):
+    """True when path, fully resolved, is a plain file inside the fully resolved folder (checked right before a track
+    is opened: Codex review, a link or a swapped file never lets a file outside the folder be read)."""
+    if not folder or is_link(path):
+        return False
+    try:
+        root = os.path.realpath(folder)
+        real = os.path.realpath(path)
+        return os.path.commonpath([os.path.normcase(root), os.path.normcase(real)]) == os.path.normcase(root) \
+            and real != root and os.path.isfile(real)
+    except (OSError, ValueError):
+        return False
+
+
+def _open_checked(path, folder):
+    if not inside(path, folder):
+        raise ClipError(f"{os.path.basename(path)}: not a plain file inside the music folder (links are not followed)")
+    return path
 
 
 # ---------------------------------------------------------------- decode and analyse
@@ -68,7 +104,8 @@ def decode(path, sr=SR, channels=2, max_sec=None):
             chunks.append(o.to_ndarray().reshape(-1, channels))
     if not chunks:
         raise ClipError(f"{os.path.basename(path)}: no sound decoded")
-    x = np.concatenate(chunks).astype(np.float32)
+    x = np.concatenate(chunks).astype(np.float32, copy=False)  # PyAV gives float32 already: no extra copy
+    del chunks
     return x[: int(max_sec * sr)] if max_sec else x
 
 
@@ -79,14 +116,26 @@ def _onsets(mono, sr):
     if len(mono) < n_fft * 4:
         raise ClipError("track too short to analyse")
     frames = 1 + (len(mono) - n_fft) // hop
-    idx = np.arange(n_fft)[None, :] + hop * np.arange(frames)[:, None]
-    mag = np.abs(np.fft.rfft(mono[idx] * np.hanning(n_fft)[None, :], axis=1))
-    lm = np.log1p(10.0 * mag)
-    flux = np.maximum(0.0, np.diff(lm, axis=0)).sum(axis=1)
-    flux = np.concatenate([[0.0], flux])
+    win = np.hanning(n_fft).astype(np.float32)
     freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
-    centroid = float((mag * freqs[None, :]).sum() / max(1e-9, mag.sum()))
-    return flux, sr / hop, centroid
+    flux = np.zeros(frames)
+    num = den = 0.0
+    prev = None
+    batch = 256  # bounded memory (Codex review): 256 frames of 2048 at a time, never the whole track's matrix
+    for f0 in range(0, frames, batch):
+        f1 = min(frames, f0 + batch)
+        idx = np.arange(n_fft)[None, :] + hop * np.arange(f0, f1)[:, None]
+        mag = np.abs(np.fft.rfft(mono[idx] * win[None, :], axis=1))
+        lm = np.log1p(10.0 * mag)
+        if prev is not None:
+            lm_all = np.vstack([prev, lm])
+            flux[f0:f1] = np.maximum(0.0, np.diff(lm_all, axis=0)).sum(axis=1)
+        else:
+            flux[f0 + 1:f1] = np.maximum(0.0, np.diff(lm, axis=0)).sum(axis=1)
+        prev = lm[-1:]
+        num += float((mag * freqs[None, :]).sum())
+        den += float(mag.sum())
+    return flux, sr / hop, num / max(1e-9, den)
 
 
 def tempo(env, rate, cfg):
@@ -94,10 +143,13 @@ def tempo(env, rate, cfg):
     cfg.bpm.prefer (octave errors), then the phase whose beats hold the most onset strength."""
     np = _np()
     e = env - env.mean()
-    ac = np.correlate(e, e, mode="full")[len(e) - 1:]
     lo, hi = float(cfg["bpm"]["min"]), float(cfg["bpm"]["max"])
-    lags = np.arange(max(1, int(rate * 60.0 / hi)), int(rate * 60.0 / lo) + 1)
-    lags = lags[lags < len(ac) - 1]
+    lags = np.arange(max(1, int(rate * 60.0 / hi)) - 1, int(rate * 60.0 / lo) + 2)  # +-1 for the refinement
+    lags = lags[(lags >= 1) & (lags < len(e) - 1)]
+    ac = np.zeros(int(lags.max()) + 2 if len(lags) else 1)
+    for lg in lags:  # only the lags of the BPM range (Codex review), not the full autocorrelation
+        ac[lg] = float(np.dot(e[:-lg], e[lg:]))
+    lags = lags[1:-1] if len(lags) > 2 else lags
     if not len(lags):
         raise ClipError("track too short for a tempo")
     bpms = 60.0 * rate / lags
@@ -123,7 +175,8 @@ def _energy(mono, sr, step=0.5):
     k = len(mono) // n
     if k == 0:
         return []
-    rms = np.sqrt((mono[: k * n].reshape(k, n) ** 2).mean(axis=1) + 1e-12)
+    m = mono[: k * n].reshape(k, n)
+    rms = np.sqrt(np.einsum("ij,ij->i", m, m, dtype=np.float64) / n + 1e-12)  # no squared copy of the track
     return [round(float(20.0 * math.log10(v)), 2) for v in rms]
 
 
@@ -157,22 +210,28 @@ def guess_mood(bpm, energy_level, centroid, dyn_db):
     return "edm" if centroid > 2200 else "phonk"
 
 
-def analyse(path, cfg):
-    """Facts of one track. Raises ClipError when it cannot be read or is too short."""
+def analyse(path, cfg, root=None):
+    """Facts of one track. Raises ClipError when it cannot be read, is too short, or (root given) is not a plain file
+    inside root."""
     np = _np()
+    if root is not None:
+        _open_checked(path, root)
     from scene_music import measure_lufs  # noqa: PLC0415 - BS.1770 integrated loudness at 48 kHz
-    x = decode(path, SR, 2, max_sec=float(cfg["maxAnalyseSec"]))
-    dur = len(x) / SR
+    mono = decode(path, SR, 1, max_sec=float(cfg["maxAnalyseSec"]))[:, 0]  # mono float32: bounded memory
+    dur = len(mono) / SR
     if dur < float(cfg["minTrackSec"]):
         raise ClipError(f"{os.path.basename(path)}: shorter than {cfg['minTrackSec']:g} s")
-    mono = x.mean(axis=1).astype(np.float64)
     env, rate, centroid = _onsets(mono, SR)
     bpm, offset = tempo(env, rate, cfg)
     energy = _energy(mono, SR)
     drop, rise = _drop(energy, 0.5, dur)
     beat = 60.0 / bpm
     drop = round(float(offset + round((drop - offset) / beat) * beat), 3)  # on a beat
-    loud = measure_lufs(x.astype(np.float64))
+    mid = int(len(mono) / 2)
+    part = mono[max(0, mid - 10 * SR): mid + 10 * SR].astype(np.float64)  # the middle 20 s: a guide value only
+    # one channel, +3.01 dB = the same mono signal on both channels (BS.1770 sums channels); the bed is measured
+    # again when it is made
+    loud = measure_lufs(part[:, None]) + 10.0 * math.log10(2.0)
     e = sorted(energy)
     dyn = (e[int(0.95 * (len(e) - 1))] - e[int(0.10 * (len(e) - 1))]) if e else 0.0
     level = max(0.0, min(1.0, 0.45 * (bpm - 70.0) / 110.0 + 0.55 * min(1.0, _onset_rate(env, rate) / 6.0)))
@@ -198,17 +257,26 @@ def load_library(data_dir, cfg=None):
 
 
 def _track_id(path, st):
-    return hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}".encode("utf-8")).hexdigest()[:16]
+    """Path + size + mtime in ns + the first and last 64 KiB (Codex review: a file changed within the same second, or
+    copied over with its old time, is analysed again)."""
+    h = hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime_ns}".encode("utf-8"))
+    with open(path, "rb") as f:
+        h.update(f.read(65536))
+        if st.st_size > 65536:
+            f.seek(max(65536, st.st_size - 65536))
+            h.update(f.read(65536))
+    return h.hexdigest()[:16]
 
 
 def list_files(folder, cfg):
     exts = tuple(cfg["extensions"])
     out = []
-    for root, dirs, files in os.walk(folder):
-        dirs.sort()
+    for root, dirs, files in os.walk(folder, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not is_link(os.path.join(root, d)))  # no linked or junction folders
         for f in sorted(files):
-            if f.lower().endswith(exts):
-                out.append(os.path.join(root, f))
+            p = os.path.join(root, f)
+            if f.lower().endswith(exts) and not is_link(p):
+                out.append(p)
                 if len(out) >= int(cfg["maxFiles"]):
                     return out
     return out
@@ -231,10 +299,12 @@ def refresh(data_dir, folder, cfg=None, live=None):
     tracks, new = [], 0
     for p in list_files(folder, cfg):
         try:
+            if not inside(p, folder):
+                continue
             st = os.stat(p)
+            tid = _track_id(p, st)
         except OSError:
             continue
-        tid = _track_id(p, st)
         if tid in old:
             tracks.append(old[tid])
             continue
@@ -243,7 +313,7 @@ def refresh(data_dir, folder, cfg=None, live=None):
         new += 1
         row = {"id": tid, "file": p, "name": os.path.splitext(os.path.basename(p))[0], "licence": cfg["licence"]}
         try:
-            row.update(analyse(p, cfg))
+            row.update(analyse(p, cfg, folder))
         except (ClipError, OSError, ValueError, MemoryError) as e:
             row["error"] = str(e)[-160:]
         except Exception as e:  # noqa: BLE001 - a broken file never stops the clip run
@@ -256,7 +326,10 @@ def refresh(data_dir, folder, cfg=None, live=None):
 
 
 def usable(lib):
-    return [t for t in lib.get("tracks") or [] if not t.get("error") and t.get("bpm") and os.path.isfile(t.get("file", ""))]
+    """The tracks that can be used, each with root = the library's folder (checked again when it is opened)."""
+    root = lib.get("folder")
+    return [dict(t, root=root) for t in lib.get("tracks") or []
+            if not t.get("error") and t.get("bpm") and inside(t.get("file", ""), root)]
 
 
 # ---------------------------------------------------------------- matching
@@ -284,7 +357,7 @@ def score(track, target, need_sec, cfg=None):
     return float(s["mood"]) * m + float(s["energy"]) * e + float(s["length"]) * ln
 
 
-def match(tracks, target, need_sec, seed_parts, recent=(), cfg=None, n_avoid=3):
+def match(tracks, target, need_sec, seed_parts, recent=(), cfg=None, n_avoid=3, prefer_long=False):
     """(track, score) for this reel, or (None, best score) when nothing reaches the threshold. Seeded, weighted by
     score^sharpness; the last n_avoid tracks are left out while another fits."""
     cfg = cfg or load_config()
@@ -292,6 +365,8 @@ def match(tracks, target, need_sec, seed_parts, recent=(), cfg=None, n_avoid=3):
     ok = [(s, t) for s, t in scored if s >= float(cfg["score"]["threshold"])]
     if not ok:
         return None, round(max((s for s, _ in scored), default=0.0), 3)
+    if prefer_long:  # full bed / drop: a track as long as the reel is used while one fits (else it loops, render)
+        ok = [(s, t) for s, t in ok if float(t.get("duration", 0)) - float(t.get("beatOffset", 0)) >= need_sec] or ok
     avoid = set(list(recent)[-n_avoid:]) if n_avoid else set()
     free = [(s, t) for s, t in ok if t["id"] not in avoid] or ok
     rng = random.Random(int.from_bytes(hashlib.sha256("|".join(map(str, [*seed_parts, "track"])).encode()).digest()[:8], "little"))
@@ -355,10 +430,10 @@ def plan(track, mode, pieces, xd, strongest, title_end, level_db, cfg=None):
     elif mode == "drop":
         r0 = max(0.0, strongest - float(track["drop"]))
         src = float(track["drop"]) - (strongest - r0)
-        segs.append({"at": r0, "from": src, "len": min(total - r0, dur - src),
+        segs.append({"at": r0, "from": src, "len": total - r0,  # a short track loops (render), never silence
                      "fadeIn": float(bd["dropLeadFadeSec"]) if r0 > 0 else float(bd["startFadeSec"]), "fadeOut": float(bd["endFadeSec"])})
     elif mode == "full-bed":
-        segs.append({"at": 0.0, "from": off, "len": min(total, dur - off), "fadeIn": float(bd["startFadeSec"]), "fadeOut": float(bd["endFadeSec"])})
+        segs.append({"at": 0.0, "from": off, "len": total, "fadeIn": float(bd["startFadeSec"]), "fadeOut": float(bd["endFadeSec"])})
     else:
         raise ClipError(f"music mode {mode} is not known")
     beats = []
@@ -368,8 +443,14 @@ def plan(track, mode, pieces, xd, strongest, title_end, level_db, cfg=None):
         while t < s["from"] + s["len"]:
             beats.append(round(s["at"] + (t - s["from"]), 3))
             t += beat
-    return {"mode": mode, "total": round(total, 3), "levelDb": float(level_db), "track": track["id"], "name": track.get("name"),
-            "bpm": bpm, "segments": [{k: round(v, 3) for k, v in s.items()} for s in segs], "beats": beats}
+    out = {"mode": mode, "total": round(total, 3), "levelDb": float(level_db), "track": track["id"], "name": track.get("name"),
+           "bpm": bpm, "segments": [{k: round(v, 3) for k, v in s.items()} for s in segs], "beats": beats}
+    if any(s["from"] + s["len"] > dur - 0.01 for s in segs):  # Codex review: loop whole bars, crossfaded on a beat
+        bar = 4.0 * beat
+        xf = round(min(0.25, beat / 2.0), 3)
+        bars = max(1, int((dur - off - xf) / bar))
+        out["loop"] = {"a": round(off, 3), "b": round(off + bars * bar, 3), "xf": xf}
+    return out
 
 
 def render(rec, track, cfg=None):
@@ -378,13 +459,16 @@ def render(rec, track, cfg=None):
     np = _np()
     from scene_music import normalise  # noqa: PLC0415
     cfg = cfg or load_config()
-    need = max(s["from"] + s["len"] for s in rec["segments"])
-    x = decode(track["file"], SR, 2, max_sec=need + 0.5).astype(np.float64)
+    _open_checked(track["file"], track.get("root"))  # right before opening: still a plain file inside the folder
+    need = max(s["from"] + s["len"] for s in rec["segments"]) + 0.5
+    if rec.get("loop"):
+        need = min(need, float(rec["loop"]["b"]) + float(rec["loop"]["xf"]) + 0.5)
+    x = decode(track["file"], SR, 2, max_sec=need).astype(np.float64)
     n = int(round(rec["total"] * SR))
     out = np.zeros((n, 2))
     for s in rec["segments"]:
         a, f, ln = int(round(s["at"] * SR)), int(round(s["from"] * SR)), int(round(s["len"] * SR))
-        seg = x[f:f + ln].copy()
+        seg = take(x, f, ln, rec.get("loop"))
         ln = min(len(seg), n - a)
         if ln <= 0:
             continue
@@ -398,6 +482,26 @@ def render(rec, track, cfg=None):
     if float(np.abs(out).max(initial=0.0)) > 0:
         out = normalise(out, float(rec["levelDb"]), float(cfg["bed"]["peakCeilingDb"]))
     return out
+
+
+def take(x, f, ln, loop=None):
+    """ln samples of x from sample f. Past the end of the track (or of the loop): the loop's whole bars again, each
+    seam crossfaded over xf so the beat grid runs on (D411: never silence under a full bed). -> new array."""
+    np = _np()
+    if not loop or f + ln <= len(x):
+        return x[f:f + ln].copy()
+    la, lb, xf = int(round(loop["a"] * SR)), int(round(loop["b"] * SR)), max(1, int(round(loop["xf"] * SR)))
+    lb = min(lb, len(x) - xf)
+    if lb - la <= 2 * xf:
+        raise ClipError("music: the track is too short to loop")
+    fade = np.linspace(0.0, 1.0, xf)[:, None]
+    end = lb + xf if f < lb else len(x)
+    y = x[f:end].copy()
+    while len(y) < ln + xf:
+        c = x[la:lb + xf]
+        y[-xf:] = y[-xf:] * (1.0 - fade) + c[:xf] * fade
+        y = np.concatenate([y, c[xf:]])
+    return y[:ln]
 
 
 def write_wav(path, x):

@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import clip_rank as rank
 
+LIMIT_LINEAR = 0.631  # -4 dBFS true peak before AAC: the final limiter of a reel with music (D411, codec overshoot margin)
+
 
 def _specs(items):
     """Detector specs of montage.json: "M5" (every label of the detector) or "B2:ELIMINATED" (one label, any case)."""
@@ -505,7 +507,12 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
             argv += ["-i", music["sfx"]]
             parts.append(f"[{mi}:a]aresample=48000[msfx]")
             mixin.append("[msfx]")
-        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0[{alast}0]")
+        # Codex review: game + music + join sounds can peak together; summed as they are (the game keeps its level), then one limiter under
+        # -4 dBFS (AAC can add ~2 dB on harsh peaks; a slow release keeps the limiter from adding distortion), run 4x
+        # oversampled so it catches true (between-sample) peaks:
+        # the AAC encode stays under -1 dBTP. Still one audio encode.
+        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,aresample=192000,"
+                     f"alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1,aresample=48000[{alast}0]")
     maps = ["-map", "[vout]"] + [x for k in range(audio_tracks) for x in ("-map", f"[aout{k}]")]
     # CL1 (D350): nothing here adds time (no pad or hold; a crossfade only shortens: each join overlaps by xd); the fps
     # filter can round a piece by up to one frame, so the output is also cut at the type's maximum.

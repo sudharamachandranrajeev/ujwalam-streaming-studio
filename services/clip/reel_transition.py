@@ -142,6 +142,30 @@ def flash_rate_ok(pieces, tr, d=None):
     return all(b - a >= float(d["minFlashGapSec"]) - 1e-6 for a, b in zip(ts, ts[1:]))
 
 
+def respace(pieces, tr, d=None):
+    """Flash spacing checked again on the final timeline (Codex review: beat sync trims piece tails after plan_set
+    spaced the flashes): a flash join closer than minFlashGapSec to the last kept flash join becomes a non-flash kind
+    of its set (else a plain fade). The other joins and the join length stay as planned. -> new tr (or tr as is)."""
+    d = d or load_defaults()
+    if not tr or not tr.get("flash") or flash_rate_ok(pieces, tr, d):
+        return tr
+    from clip_montage import crossfade_sec  # noqa: PLC0415
+    s = d["setsById"].get(tr.get("set")) or {"joins": []}
+    calm = [j["xfade"] for j in s["joins"] if not j.get("flash")] or ["fade"]
+    joins, flash = list(tr["joins"]), list(tr["flash"])
+    last = None
+    for i, ((a, _b), f) in enumerate(zip(join_times(pieces, crossfade_sec(pieces, tr)), tr["flash"])):
+        if not f:
+            continue
+        if last is not None and a - last < float(d["minFlashGapSec"]) - 1e-6:
+            prev = joins[i - 1] if i else None
+            joins[i] = next((k for k in calm if k != prev), calm[0])
+            flash[i] = False
+        else:
+            last = a
+    return dict(tr, joins=joins, flash=flash, respaced=True)
+
+
 def beat_sync(pieces, xd, beats, max_shift=None, min_piece=1.0, d=None):
     """FX3 beatSync: each join moved up to max_shift seconds EARLIER onto the nearest beat at or before it, by trimming
     the tail of the piece before the join (a piece ends postSec after its last kill, so its kill is never cut); a piece

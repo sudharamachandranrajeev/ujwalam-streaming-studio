@@ -251,5 +251,41 @@ class RenderTests(unittest.TestCase):
         self.assertAlmostEqual(after, before, delta=0.15, msg="no cut from the current maximum setting")
 
 
+class TimelineTests(unittest.TestCase):
+    """Codex review of D411: captions are laid on the overlapping (cross-faded) timeline, so transitions stay."""
+
+    def test_retime_onto_the_output_timeline(self):
+        ps = [{"start": 10.0, "end": 14.0}, {"start": 20.0, "end": 24.0}]
+        doc = {"segments": [{"start": 1.0, "end": 2.0, "text": "a"},  # piece 1
+                            {"start": 3.5, "end": 4.6, "text": "b"},  # runs over the join
+                            {"start": 5.0, "end": 6.0, "text": "c"}]}  # piece 2
+        out = rcap.retime(doc, ps, ps, 0.25)
+        self.assertEqual(out["timeline"], "output")
+        seg = [(round(s["start"], 3), round(s["end"], 3)) for s in out["segments"]]
+        self.assertEqual(seg[0], (1.0, 2.0))
+        self.assertEqual(seg[-1], (4.75, 5.75), "piece 2 starts 0.25 s earlier (the join overlaps)")
+        self.assertLessEqual(seg[1][1], 4.6 - 0.25 + 1e-6, "a caption over the join ends in the next piece")
+        self.assertIs(rcap.retime(out, ps, ps, 0.25), out, "already on the output timeline: unchanged")
+        trimmed = [dict(ps[0], end=13.8), ps[1]]  # beat sync trimmed the first tail
+        late = rcap.retime({"segments": [{"start": 4.2, "end": 4.8, "text": "d"}]}, ps, trimmed, 0.25)
+        self.assertAlmostEqual(late["segments"][0]["start"], 3.8 - 0.25 + 0.2, places=3)
+        with self.assertRaises(ValueError):
+            rcap.retime(doc, ps, ps[:1], 0.25)
+
+    def test_recaption_falls_back_when_the_folder_track_is_gone(self):
+        d = tempfile.mkdtemp(prefix="fx4r-")
+        try:
+            ps = [{"start": 0.0, "end": 8.0, "kills": 1}, {"start": 12.0, "end": 20.0, "kills": 1}]
+            row = {"music": {"source": "folder", "track": "gone1", "mode": "full-bed", "total": 15.8, "levelDb": -16,
+                             "segments": [{"at": 0, "from": 0, "len": 15.8, "fadeIn": 0.1, "fadeOut": 1}]}}
+            mus, rec = clipper._recaption_music(os.path.join(d, "data"), d, row, ps, 0.2, "M9")
+            self.assertEqual(rec["source"], "made-here")
+            self.assertEqual(rec["was"], "gone1")
+            self.assertIn("gone", rec["fallback"])
+            self.assertTrue(os.path.isfile(os.path.join(d, mus["file"])), "a bed is made, no KeyError on seed")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,5 +40,24 @@ Branch `claude/clip-look`. Plan: `docs/plan/2026-11-21-clip-music-name-transitio
 - The mood guess on real music.
 - HUD avoidance for corner and lower-third positions.
 - The theme colour (it uses the accent from title.json, not the live theme), and the logo (not drawn yet).
-- Clips with captions keep hard cuts and get no beat sync.
 - FX5 (pack download) and FX6 (ACE-Step) are not started and need the user's yes.
+
+## Codex review fixes (2026-11-21)
+Every item has a test. All runs were one file at a time on the CPU (libopenh264), with `UJWALAM_HEADLESS=1`, a temp `UJWALAM_DATA_ROOT` and the studio off air.
+
+| Finding | Fix | Test (result) |
+|---|---|---|
+| P1 links in the music folder | `is_link`/`inside`: no symlinks, junctions or reparse points; resolved path checked right before each open | test_music_library SafetyTests.test_links_and_junctions_are_not_followed (junction and symlink made; only own.wav listed; render of an outside row refused) |
+| P1 mix can clip | one 4x-oversampled `alimiter` at -4 dBFS (attack 20 ms, release 400 ms) after `amix`, one audio encode | test_reel_transition_sets test_coincident_peaks_stay_under_minus_1_dbtp: **-2.50 dBTP** after AAC (ffmpeg ebur128 true peak) |
+| P2 beat sync after flash spacing | `reel_transition.respace` after every timing change (`_reel_timeline`) | RespaceTests (unit + clipper timeline) and test_rendered_flashes_after_beat_sync_trims: **1.5 flashes/s** from luminance |
+| P2 captions forced hard cuts | `reel_captions.retime` onto the cross-faded timeline; live review and montage keep transitions, join sounds and beat sync | test_reel_captions TimelineTests.test_retime_onto_the_output_timeline |
+| P2 short track left silence | `prefer_long` in match; `take()` loops whole bars with a beat crossfade | SafetyTests.test_short_track_loops_without_silence (12 s track under a 40 s reel, full-bed and drop: no 0.25 s window below a quarter of the median level) |
+| P2 recaption dropped folder music | `_recaption_music`: stored plan rendered again, or made-here bed with `fallback`/`was` in render.json | TimelineTests.test_recaption_falls_back_when_the_folder_track_is_gone |
+| P2 switches bypassed | look parts gated by `reel-music`, `reel-transitions`, `clip-look`; the first two now default ON | test_clip_look CodexReviewTests.test_each_part_obeys_its_own_switch; flags.test.mjs, studio-ui-flags-feedback.test.mjs |
+| P2 resume re-picked | `_resume_row` keeps the stored row; no history update | CodexReviewTests.test_resume_keeps_the_stored_row_and_makes_no_pick |
+| P2 full FFT / autocorrelation | 256-frame FFT batches, BPM-range lags only, mono decode, 20 s loudness guide | SafetyTests.test_analysis_of_a_240_s_track_stays_in_bounded_memory: **119 MB** peak (tracemalloc, bound 150 MB) |
+| P3 cache key in whole seconds | path + size + `st_mtime_ns` + sha1 of the first and last 64 KiB | SafetyTests.test_cache_key_sees_a_same_second_change |
+
+Re-run after the fixes (one file at a time): test_reel_transition_sets 14, test_music_library 15, test_clip_look 15, test_reel_captions 14 (2 skipped: fontTools not in the venv, as before), test_reel_music 12, test_reel_transition 9, test_reel_title 15, test_clip_montage 35, test_clip_live_montage 6, test_long_video 23, all pass. Node: flags 10, studio-ui-flags-feedback 16, learning-mix 26, user-settings-reel-transition 3, user-settings-clip-look 4, all pass.
+
+Mix level note: the limiter acts only on peaks above -4 dBFS, so a reel's game sound keeps its level (test_reel_music ducking check: within 1 dB of the plain reel).

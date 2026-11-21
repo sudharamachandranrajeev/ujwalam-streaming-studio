@@ -13,7 +13,7 @@ after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true });
 
 describe('committed definitions', () => {
   // New features ship off (AGENTS.md). The only exceptions are flags the user asked to have on, each with its decision.
-  const ON_BY_DECISION = { 'preview-edit': 'D330', 'reel-thumbnail': 'D368', 'outputs-panel': 'D389', transitions: 'D391', 'scene-builder': 'D390', 'download-manager': 'D404', 'delete-processed-recordings': 'D405', 'long-highlights-video': 'D406' };
+  const ON_BY_DECISION = { 'preview-edit': 'D330', 'reel-thumbnail': 'D368', 'outputs-panel': 'D389', transitions: 'D391', 'scene-builder': 'D390', 'download-manager': 'D404', 'delete-processed-recordings': 'D405', 'long-highlights-video': 'D406', 'clip-look': 'D411', 'reel-transitions': 'D411', 'reel-music': 'D411' };
   test('data/flags.json is valid and every default is off, except the ones a decision turned on', () => {
     const defs = loadDefinitions(DEFAULT_FLAGS_FILE);
     assert.ok(defs.length >= 1);

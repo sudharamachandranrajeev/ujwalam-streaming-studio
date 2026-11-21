@@ -138,5 +138,50 @@ class PickTests(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class CodexReviewTests(unittest.TestCase):
+    """Codex review of D411: each look part obeys its own switch; --resume keeps the stored decisions of a kept reel."""
+
+    def test_each_part_obeys_its_own_switch(self):
+        import clipper  # noqa: PLC0415
+        lk = {"cfg": CFG, "look": cl.merge(CFG, {}), "override": None, "history": {},
+              "gates": {"music": False, "transitions": True, "name": True}}
+        pk = clipper._look_pick({"look": lk}, "M1", "rec.mp4")
+        self.assertIsNone(pk["music"], "reel-music off: no music from the look")
+        self.assertEqual(pk["off"], ["music"])
+        self.assertIsNotNone(pk["transitions"])
+        lk["gates"] = {"music": True, "transitions": False, "name": True}
+        pk = clipper._look_pick({"look": lk}, "M1", "rec.mp4")
+        self.assertIsNone(pk["transitions"], "reel-transitions off: hard cuts")
+        self.assertIsNone(clipper._look_transition({}, pk, [{"start": 0, "end": 3}, {"start": 5, "end": 8}], "legacy"))
+
+    def test_resume_keeps_the_stored_row_and_makes_no_pick(self):
+        import argparse  # noqa: PLC0415
+        import clipper  # noqa: PLC0415
+        d = tempfile.mkdtemp(prefix="fx1r-")
+        try:
+            with open(os.path.join(d, "montage-v.mp4"), "wb") as f:
+                f.write(b"x")
+            open(os.path.join(d, "montage-v.mp4.part"), "wb").close()
+            row = {"id": "M1", "files": [{"file": "montage-v.mp4"}], "look": {"music": "drop", "seed": 7},
+                   "music": {"source": "folder", "track": "t1"}}
+            a = argparse.Namespace(resume=True)
+            kept = clipper._resume_row(a, d, "M1", [row])
+            self.assertEqual(kept, dict(row, resumed=True), "the stored look, music and transition stay")
+            self.assertFalse(os.path.exists(os.path.join(d, "montage-v.mp4.part")))
+            self.assertIsNone(clipper._resume_row(a, d, "M2", [row]), "no stored row: rendered (or kept without a pick)")
+            self.assertIsNone(clipper._resume_row(argparse.Namespace(resume=False), d, "M1", [row]))
+            hist = {}
+            remembered = []
+            real = cl.remember
+            cl.remember = lambda *x, **k: remembered.append(x) or hist
+            try:
+                clipper._look_remember({"look": {"dataDir": d, "cfg": CFG, "history": hist}}, None)
+            finally:
+                cl.remember = real
+            self.assertEqual(remembered, [], "a kept reel adds nothing to the history")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

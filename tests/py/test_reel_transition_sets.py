@@ -130,6 +130,49 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(rt.beat_sync(short, 0.2, [c - 0.2])[1], [0.0], "a piece never gets shorter than 1 s")
 
 
+def allflash():
+    return dict(D, setsById=dict(D["setsById"], allflash=dict(D["setsById"]["punchy"], id="allflash",
+                                                              joins=[{"xfade": "fadewhite", "weight": 1, "flash": True},
+                                                                     {"xfade": "slideleft", "weight": 0.01}])))
+
+
+def trimmed_for_flashes():
+    """A plan whose flash joins are exactly minFlashGapSec apart, then piece tails trimmed by 0.25 s each (what beat
+    sync may do after the plan): two flash joins come closer than the gap."""
+    d = allflash()
+    ps = many(8, 0.73, 1.0)  # joins 0.51 s apart: every other join flashes, 1.02 s apart
+    tr = rt.plan_set(ps, "allflash", 3, d)
+    trim = [dict(p, end=round(p["end"] - (0.25 if i % 4 == 2 else 0.0), 3)) for i, p in enumerate(ps)]
+    return d, ps, tr, trim
+
+
+class RespaceTests(unittest.TestCase):
+    def test_flash_spacing_checked_again_after_trims(self):
+        d, ps, tr, trim = trimmed_for_flashes()
+        self.assertTrue(rt.flash_rate_ok(ps, tr, d))
+        self.assertFalse(rt.flash_rate_ok(trim, tr, d), "the trims bring two flash joins too close")
+        tr2 = rt.respace(trim, tr, d)
+        self.assertTrue(rt.flash_rate_ok(trim, tr2, d))
+        self.assertTrue(tr2.get("respaced"))
+        self.assertEqual(len(tr2["joins"]), len(tr["joins"]))
+        self.assertIs(rt.respace(ps, tr, d), tr, "a plan that is fine stays as it is")
+
+    def test_clipper_timeline_respaces_after_beat_sync(self):
+        import clipper  # noqa: PLC0415
+        d, ps, tr, trim = trimmed_for_flashes()
+        real = (rt.load_defaults, clipper._look_music_plan)
+        rt_ld = rt.load_defaults
+        try:
+            rt.load_defaults = lambda *a, **k: d
+            clipper._look_music_plan = lambda ex, pk, pieces, xd, t, reel, typ, ass, *s: (trim, {"track": {"id": "t"}})
+            m, tr_out, xd, _ = clipper._reel_timeline({"look": None}, {"transitions": "allflash", "seed": 3, "music": "full-bed"},
+                                                      {"pieces": ps, "seconds": 1}, "montage", None, True, "M1")
+        finally:
+            rt.load_defaults, clipper._look_music_plan = rt_ld, real[1]
+        self.assertEqual(m["pieces"], trim)
+        self.assertTrue(rt.flash_rate_ok(trim, tr_out, d))
+
+
 class ArgvTests(unittest.TestCase):
     def graph(self, **kw):
         a = mont.render_argv("ffmpeg", "s.mp4", many(4), FRAME, [], [], 80, "o.mp4", **kw)
@@ -149,6 +192,7 @@ class ArgvTests(unittest.TestCase):
         _, g = self.graph(music={"sfx": "sfx.wav"})
         self.assertIn("[amus0][msfx]amix=inputs=2", g)
         self.assertNotIn("sidechaincompress", g)
+        self.assertEqual(g.count("alimiter="), 1, "one final limiter in the one audio encode")
 
 
 @unittest.skipUnless(np is not None, "numpy not installed (use the project venv)")
@@ -218,6 +262,46 @@ class RenderTests(unittest.TestCase):
         raw = dict(rt.plan_set(dense, "allflash", 5, stress), joins=["fadewhite"] * 19)
         self.render("raw.mp4", dense, raw)
         self.assertGreater(flashes_per_second(self.frames("raw.mp4"), 60.0), 3.0, "the check catches a reel over the limit")
+
+    def test_rendered_flashes_after_beat_sync_trims(self):
+        d, _ps, tr, trim = trimmed_for_flashes()
+        tr2 = rt.respace(trim, tr, d)
+        self.render("respaced.mp4", trim, tr2)
+        rate = flashes_per_second(self.frames("respaced.mp4"), 60.0)
+        print(f"fx3 flash after beat-sync trims, respaced: {rate:.1f} flashes/s")
+        self.assertLessEqual(rate, 1.5)
+
+    def test_coincident_peaks_stay_under_minus_1_dbtp(self):
+        import re  # noqa: PLC0415
+        loud = os.path.join(self.tmp, "loud.mp4")
+        r = cc.run_tool(["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "color=c=0x808080:s=180x320:r=30:d=8",
+                         "-f", "lavfi", "-i", "aevalsrc=exprs=0.99*sin(2*PI*220*t)|0.99*sin(2*PI*220*t):s=48000:d=8",
+                         "-c:v", "libopenh264", "-c:a", "aac", "-b:a", "256k", "-shortest", loud], timeout=300)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        n = 48000 * 7
+        t = np.arange(n) / 48000
+        burst = np.floor(t * 4) % 2 == 0  # noise hits every 0.5 s on two tones, clipped at full scale, all in phase
+        full = np.clip(0.6 * np.sin(2 * np.pi * 220 * t) + 0.6 * np.sin(2 * np.pi * 331 * t)
+                       + burst * np.random.default_rng(1).normal(0, 0.4, n), -0.99, 0.99)
+        pcm = (np.repeat(full[:, None], 2, axis=1) * 32767).astype("<i2")
+        for name in ("bed.wav", "hit.wav"):
+            with wave.open(os.path.join(self.tmp, name), "wb") as w:
+                w.setnchannels(2)
+                w.setsampwidth(2)
+                w.setframerate(48000)
+                w.writeframes(pcm.tobytes())
+        ps = [piece(0, 3.5), piece(4, 7.5)]
+        tr = rt.plan_set(ps, "clean", 1)
+        duck = {"threshold": 0.9, "ratio": 1, "attackMs": 20, "releaseMs": 300}  # no ducking: every source at full scale
+        argv = mont.render_argv("ffmpeg", loud, ps, FRAME, ["-c:v", "libopenh264", "-b:v", "800k"], ["-c:a", "aac", "-b:a", "256k"],
+                                80, "peaks.mp4", transition=tr, music={"file": "bed.wav", "duck": duck, "sfx": "hit.wav"})
+        r = cc.run_tool(argv, cwd=self.tmp, timeout=600)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = cc.run_tool(["ffmpeg", "-nostats", "-hide_banner", "-nostdin", "-i", "peaks.mp4", "-af", "ebur128=peak=true",
+                         "-f", "null", "-"], cwd=self.tmp, timeout=120)
+        tp = float(re.findall(r"Peak:\s+(-?[\d.]+|-inf) dBFS", r.stderr)[-1])
+        print(f"fx3 coincident peaks: true peak {tp:.2f} dBTP")
+        self.assertLessEqual(tp, -1.0)
 
     def test_audio_encoded_once(self):
         import reel_sfx as sfx  # noqa: PLC0415

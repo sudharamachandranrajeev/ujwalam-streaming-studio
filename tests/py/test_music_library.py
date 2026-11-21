@@ -90,7 +90,7 @@ class LibraryTests(unittest.TestCase):
             f.write("x")
         cls.data = os.path.join(cls.tmp, "data")
         cls.lib = ml.refresh(cls.data, cls.folder, cls.cfg, live=lambda: False)
-        cls.by = {t["name"]: t for t in cls.lib["tracks"]}
+        cls.by = {t["name"]: dict(t, root=cls.folder) for t in cls.lib["tracks"]}  # root as usable() gives it
 
     @classmethod
     def tearDownClass(cls):
@@ -111,7 +111,7 @@ class LibraryTests(unittest.TestCase):
         cc.write_json_atomic(os.path.join(self.data, "music", "library.json"), lib)
         calls = []
         real = self.ml.analyse
-        self.ml.analyse = lambda p, c: calls.append(p) or real(p, c)
+        self.ml.analyse = lambda p, *a: calls.append(p) or real(p, *a)
         try:
             again = self.ml.refresh(self.data, self.folder, self.cfg, live=lambda: False)
         finally:
@@ -219,6 +219,103 @@ class LibraryTests(unittest.TestCase):
 
 
 @unittest.skipUnless(np is not None, "numpy/PyAV missing (use the project venv)")
+class SafetyTests(unittest.TestCase):
+    """Codex review of D411: links, short tracks, memory and the cache key."""
+
+    def setUp(self):
+        import music_library as ml  # noqa: PLC0415
+        self.ml, self.cfg = ml, ml.load_config()
+        self.tmp = tempfile.mkdtemp(prefix="fx4s-")
+        self.folder = os.path.join(self.tmp, "music")
+        os.makedirs(self.folder)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_links_and_junctions_are_not_followed(self):
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        write_wav(os.path.join(outside, "secret.wav"), calm_track(12.0))
+        write_wav(os.path.join(self.folder, "own.wav"), calm_track(12.0))
+        made = []
+        try:
+            import _winapi  # noqa: PLC0415 - a junction needs no admin rights
+            _winapi.CreateJunction(outside, os.path.join(self.folder, "jn"))
+            made.append("junction")
+        except (ImportError, OSError):
+            pass
+        try:
+            os.symlink(os.path.join(outside, "secret.wav"), os.path.join(self.folder, "link.wav"))
+            made.append("symlink")
+        except (OSError, NotImplementedError):
+            pass
+        if not made:
+            self.skipTest("this account can make neither a junction nor a symlink")
+        files = self.ml.list_files(self.folder, self.cfg)
+        self.assertEqual([os.path.basename(f) for f in files], ["own.wav"], made)
+        lib = self.ml.refresh(os.path.join(self.tmp, "data"), self.folder, self.cfg, live=lambda: False)
+        self.assertEqual([t["name"] for t in lib["tracks"]], ["own"])
+        if "junction" in made:
+            via = os.path.join(self.folder, "jn", "secret.wav")
+            self.assertFalse(self.ml.inside(via, self.folder))
+            with self.assertRaises(cc.ClipError):
+                self.ml.analyse(via, self.cfg, self.folder)
+        # a library row pointing outside (edited file, or the folder swapped) is never opened
+        row = dict(lib["tracks"][0], file=os.path.join(outside, "secret.wav"))
+        self.assertEqual(self.ml.usable(dict(lib, tracks=[row])), [])
+        rec = self.ml.plan(row, "full-bed", [{"start": 0.0, "end": 4.0}], 0.0, 1.0, None, -16, self.cfg)
+        with self.assertRaises(cc.ClipError):
+            self.ml.render(rec, dict(row, root=self.folder), self.cfg)
+
+    def test_short_track_loops_without_silence(self):
+        p = os.path.join(self.folder, "short.wav")
+        write_wav(p, calm_track(12.0))
+        lib = self.ml.refresh(os.path.join(self.tmp, "data"), self.folder, self.cfg, live=lambda: False)
+        tr = self.ml.usable(lib)[0]
+        ps = [{"start": 0.0, "end": 20.0}, {"start": 30.0, "end": 50.0}]  # 40 s reel, 12 s track
+        for mode in ("full-bed", "drop"):
+            rec = self.ml.plan(tr, mode, ps, 0.0, 30.0, None, -16, self.cfg)
+            self.assertIn("loop", rec, mode)
+            x = self.ml.render(rec, tr, self.cfg)
+            self.assertEqual(len(x), 40 * SR)
+            s0 = int(rec["segments"][0]["at"] * SR) + SR
+            win = x[s0: len(x) - SR, 0][: (len(x) - SR - s0) // (SR // 4) * (SR // 4)].reshape(-1, SR // 4)
+            rms = np.sqrt((win ** 2).mean(axis=1))
+            self.assertGreater(rms.min(), 0.25 * np.median(rms), f"{mode}: no gap or dip at a loop seam")
+        long_t = dict(tr, id="long", duration=120.0)
+        got, _ = self.ml.match([tr, long_t], {"energy": tr["energyLevel"], "moods": [tr["mood"]]}, 40, ["x"], (), self.cfg,
+                               prefer_long=True)
+        self.assertEqual(got["id"], "long", "a track as long as the reel wins")
+
+    def test_analysis_of_a_240_s_track_stays_in_bounded_memory(self):
+        import tracemalloc  # noqa: PLC0415
+        p = os.path.join(self.folder, "long.wav")
+        write_wav(p, hype_track(240.0, 120.0, 60.0))
+        tracemalloc.start()
+        try:
+            facts = self.ml.analyse(p, dict(self.cfg, maxAnalyseSec=600), self.folder)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        print(f"fx4 analyse 240 s: peak {peak / 1e6:.0f} MB, {facts['bpm']} BPM")
+        self.assertAlmostEqual(facts["bpm"], 120.0, delta=2.0)
+        self.assertLess(peak, 150e6, "the 240 s mono decode is 46 MB; the analysis adds bounded batches only")
+
+    def test_cache_key_sees_a_same_second_change(self):
+        p = os.path.join(self.folder, "a.wav")
+        write_wav(p, calm_track(6.0))
+        st = os.stat(p)
+        a = self.ml._track_id(p, st)
+        with open(p, "r+b") as f:  # same size, same time to the second: only the content changes
+            f.seek(st.st_size - 100)
+            f.write(b"\x01" * 100)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertNotEqual(self.ml._track_id(p, os.stat(p)), a)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1000))
+
+
+
+@unittest.skipUnless(np is not None, "numpy/PyAV missing (use the project venv)")
 class WiringTests(unittest.TestCase):
     def test_clipper_music_plan_and_fallback(self):
         import clipper  # noqa: PLC0415
@@ -242,8 +339,9 @@ class WiringTests(unittest.TestCase):
         _, none = clipper._look_music_plan(ex, dict(pk, music=None), ps, 0.22, tr, reel, "montage", None, "M1")
         self.assertIsNone(none)
         self.assertEqual(clipper._music("wd", ps, 0.0, None, ex, "M1", pk=dict(pk, music=None)), (None, None))
-        _, kept = clipper._look_music_plan(ex, pk, ps, 0.22, tr, reel, "montage", "captions.ass", "M1")
-        self.assertEqual(kept["record"]["beatShifts"], [], "captions: the joins stay where the captions expect them")
+        _, kept = clipper._look_music_plan(ex, pk, ps, 0.22, tr, reel, "montage", None, "M1", "r.mp4")
+        self.assertEqual(kept["record"]["beatShifts"], mp["record"]["beatShifts"],
+                         "captions are made on the final timeline, so beat sync stays on (Codex review)")
 
 
 if __name__ == "__main__":
