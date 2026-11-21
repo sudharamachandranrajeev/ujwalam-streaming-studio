@@ -166,7 +166,8 @@ class SlotTests(unittest.TestCase):
             self.assertLessEqual(width(text, size) + 2 * max(1.0, size * 0.06), 0.92 * 1080 + 1e-6, text)
         for i, line in enumerate(lines):
             self.assertEqual("".join(t for t, j in rows if j == i).replace(" ", ""), line.replace(" ", ""))
-        bottom = float(prm["y"]) * 1920 + (len(rows) - 1) * float(prm["lineGap"]) * size + 0.6 * size
+        bottom = (float(prm["y"]) * 1920 + (len(rows) - 1) * float(prm["lineGap"]) * size + 0.6 * size
+                  + float(prm["rise"]) * 1920)  # the entrance rise included
         self.assertLessEqual(bottom, 0.96 * 1920)
         print(f"BD5 credits on 9:16: {len(lines)} lines -> {len(rows)} rows at {size:.1f} px")
         # a long unspaced word with combining marks is never cut between a base letter and its mark

@@ -69,3 +69,4 @@ also lowers the size while any row is too wide (down to 4 px). 18 tests OK.
 Codex verify round 5: a credit that cannot fit whole even at 4 px was returned as fitted. It now raises, so the render
 fails and nothing is posted with a cut credit (real credits are capped at 120/160 characters, so only junk input hits
 this). The long-word cut uses a binary search (a linear search was quadratic on a 4000-character word). 18 tests OK.
+Codex verify round 6: the height check ignored the entrance rise; it is included now. 18 tests OK.

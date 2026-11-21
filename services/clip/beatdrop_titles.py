@@ -456,7 +456,8 @@ def credit_layout(lines, pc, lk, frame):
         bord = max(1.0, size * 0.06)
         room = CREDIT_WIDTH_OF_FRAME * ow - 2 * bord
         rows = [(r, i) for i, line in enumerate(lines) for r in _wrap(line, lambda s: width(s, size) <= room)]
-        bottom = y + (len(rows) - 1) * gap * size + 0.6 * size
+        # the lowest row at its lowest point: the entrance starts `rise` below its place (credits_events)
+        bottom = y + (len(rows) - 1) * gap * size + 0.6 * size + float(pc["rise"]) * oh
         wide = any(width(r, size) > room for r, _ in rows)
         if bottom <= CREDIT_BOTTOM_OF_FRAME * oh and not wide:
             return rows, size
