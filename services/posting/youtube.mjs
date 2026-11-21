@@ -59,6 +59,13 @@ export function uploadMetadata(post, { publishAt = null } = {}) {
   };
 }
 
+/** PT2: true when an error answer names a quota reason (errors[].reason quotaExceeded | uploadLimitExceeded | dailyLimitExceeded). */
+export async function quotaReason(res) {
+  let text = '';
+  try { text = typeof res.text === 'function' ? await res.text() : ''; } catch { text = ''; }
+  return /"reason"\s*:\s*"(quotaExceeded|uploadLimitExceeded|dailyLimitExceeded)"/.test(String(text));
+}
+
 /** Starts a resumable session; returns the session URL from the Location header. */
 async function initiateSession(fetchImpl, accessToken, metadata, bytes) {
   const res = await fetchImpl(UPLOAD_INIT_URL, {
@@ -66,7 +73,12 @@ async function initiateSession(fetchImpl, accessToken, metadata, bytes) {
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': String(bytes) },
     body: JSON.stringify(metadata),
   });
-  if (!res.ok) throw new UploadError('upload-init-failed', `HTTP ${res.status} starting the resumable session`);
+  if (!res.ok) {
+    // PT2 (D408): YouTube's quota answer (403 with reason quotaExceeded or uploadLimitExceeded) is its own code, so the
+    // chain can fall back to the unit-sum quota model and wait for the next day instead of retrying.
+    if (res.status === 403 && await quotaReason(res)) throw new UploadError('quota-exceeded', 'YouTube says the upload quota for today is used up');
+    throw new UploadError('upload-init-failed', `HTTP ${res.status} starting the resumable session`);
+  }
   const loc = res.headers.get('location');
   if (!loc) throw new UploadError('upload-init-failed', 'no session URL in the response');
   return loc;

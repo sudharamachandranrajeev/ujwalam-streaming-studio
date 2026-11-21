@@ -72,7 +72,7 @@ describe('auto-post settings routes (D375)', () => {
     assert.equal(r.status, 200);
     const j = r.json();
     assert.equal(j.exists, false); assert.equal(j.card.intervalHours, 1); assert.equal(j.card.maxAheadDays, 60);
-    assert.equal(j.quota.uploadsPerDayFit, 6); assert.equal(j.limits.maxPerDay, 100);
+    assert.equal(j.quota.uploadsPerDayFit, 24); assert.equal(j.limits.maxPerDay, 24); assert.equal(j.quota.model, 'upload-bucket'); // PT2 (D408)
     assert.deepEqual(j.flags, { autoPost: false, schedule: false, deleteUploaded: false });
   });
 

@@ -106,7 +106,7 @@ export function checkCard(body) {
   if (!Number.isInteger(c.maxPerDay) || c.maxPerDay < 1 || c.maxPerDay > MAX_PER_DAY) add('maxPerDay', `uploads per day must be a whole number from 1 to ${MAX_PER_DAY}`);
   const sched = {};
   for (const k of CARD_SCHEDULE_KEYS) if (c[k] !== undefined) sched[k] = c[k];
-  const s = checkUserSchedule(sched);
+  const s = checkUserSchedule(sched, { strict: true });
   problems.push(...s.problems);
   return { card: { autoUpload: c.autoUpload === true, kinds: kinds ?? [], minScore: c.minScore, maxPerDay: c.maxPerDay, ...s.values }, problems };
 }

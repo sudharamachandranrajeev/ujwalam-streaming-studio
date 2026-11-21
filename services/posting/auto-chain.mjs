@@ -57,11 +57,11 @@ import { clipsFolder } from '../studio-ui/user-settings.mjs';
 import { createDataNotifier } from '../common/data-reload.mjs';
 import { READONLY_SCOPE, createYoutubeAuth } from './oauth.mjs';
 import { UploadError, checkUploadStatus, uploadPost } from './youtube.mjs';
-import { DEFAULT_SCHEDULE, SCHEDULE_FLAG, ScheduleError, chunkDeadlineMs, fallbackBps, isRetry, loadScheduleConfig, marginMs, minLeadMs, planQueueSlots, toIso, userScheduleFile } from './schedule.mjs';
+import { DEFAULT_SCHEDULE, SCHEDULE_FLAG, ScheduleError, chunkDeadlineMs, fallbackBps, isRetry, loadScheduleConfig, marginMs, minLeadMs, planQueueSlots, savedChannelTimes, slotClash, toIso, userScheduleFile } from './schedule.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
 import { ensureScheduleSeed } from './schedule-seed.mjs';
 import { backlogOrder, clipFacts } from './backlog-order.mjs';
-import { createQuotaBudget } from './quota-budget.mjs';
+import { createQuotaBudget, loadQuota, quotaFallback, recordQuotaExceeded } from './quota-budget.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
 
@@ -162,6 +162,8 @@ const REASON_TEXT = {
   'quota-day-used': "Waiting: today's YouTube quota is used up; continues after midnight Pacific time (ask Google for more: docs/plan/2026-11-12-growth-setup-notes.md)",
   'quota-unreadable': "Waiting: the YouTube quota settings or today's count could not be read (data/posting/quota.json, Settings > Posting & growth > Auto-post, posting/quota-day.sqlite)",
   'quota-busy': "Waiting: today's YouTube quota count was busy; tried again shortly",
+  'quota-exceeded': 'Waiting: YouTube said the upload quota is used up for today; tried again tomorrow, counted the old way (1,650 units each) until then',
+  'schedule-clash': 'Getting a new public time: a post was scheduled on the channel within an hour of the planned one',
 };
 
 /** Plain words for a queue reason code (or a failure code). */
@@ -248,7 +250,8 @@ export function createPostChain(opts) {
   const scheduleOn = () => flags.isOn(SCHEDULE_FLAG);
   const outputsStatus = streamOnly(async () => { if (!latest) throw new Error('no output status yet'); return latest; });
   // D375 daily budget: uploads per day and quota units, persisted; every API read goes through apiFetch and is counted.
-  const budget = opts.budget ?? createQuotaBudget({ dataDir, nowMs });
+  // opts.quotaFile (tests): another quota data file than data/posting/quota.json.
+  const budget = opts.budget ?? createQuotaBudget({ dataDir, nowMs, ...(opts.quotaFile ? { quota: () => loadQuota(dataDir, opts.quotaFile, { nowMs: nowMs() }) } : {}) });
   const apiFetch = budget.meter(opts.fetchImpl ?? fetch);
   const getAuth = () => opts.auth ?? createYoutubeAuth({ browserOpen: async () => { throw new Error('sign-in is never started from the background'); } });
 
@@ -400,6 +403,24 @@ export function createPostChain(opts) {
       }
       // A slot that was due for its re-check but could not be checked (or was moved later) waits for its turn.
       if (cur.nextAt && Date.parse(cur.nextAt) > nowMs()) continue;
+      // PT2 (D408) the one hard rule, right before this upload session starts: a channel read older than
+      // recheckMaxAgeMinutes is made again (a failed read keeps the item waiting), then the slot must be at least the gap
+      // from every channel time and every other queue time. A clash gives it the next free slot now; it uploads later.
+      if (!cur.session) {
+        const readAt = Date.parse(queue.schedule()?.readAt ?? '');
+        if (!Number.isFinite(readAt) || nowMs() - readAt > cfg.recheckMaxAgeMinutes * 60000) {
+          await ensureSlots(auth, new Set([item.id]));
+          const again = queue.get(item.id);
+          if (!again || again.state !== 'queued' || again.publishAt !== publishAt || (again.nextAt && Date.parse(again.nextAt) > nowMs())) continue;
+        }
+        const clash = slotClash({ item: queue.get(item.id), items: queue.items(), channelTimes: savedChannelTimes({ schedule: queue.schedule() }, nowMs()), cfg });
+        if (clash !== null) {
+          queue.patch(item.id, { publishAt: null, reslot: true, reason: 'schedule-clash', nextAt: null });
+          log(`posting: ${item.id}: ${REASON_TEXT['schedule-clash']}`);
+          await ensureSlots(auth);
+          continue;
+        }
+      }
       // Every upload start or resume counts against today's budget: checked and charged in one locked step right before it.
       const why = budget.reserveUpload(capOf);
       if (why) { overBudget(due.slice(n).filter((i) => queue.get(i.id)?.state === 'queued'), why); return; }
@@ -464,6 +485,16 @@ export function createPostChain(opts) {
           taskEnd = { state: 'waiting', note: 'Paused while the stream runs; it resumes after' }; // also the check before the first chunk
           queue.patch(item.id, { state: 'queued', reason: 'stream-live' });
           queue.setNote({ blocked: 'stream-live' });
+          return;
+        } else if (code === 'quota-exceeded') {
+          // PT2 (D408): YouTube's own quota answer. The bucket model falls back to the unit sum for today and tomorrow
+          // (quota-budget.mjs), the user is told in plain words, and the item waits (no attempt used; its slot is kept
+          // and re-checked before the next try). Nothing else uploads in this pass.
+          taskEnd = { state: 'waiting', note: 'Waiting: the YouTube upload quota is used up for today' };
+          try { recordQuotaExceeded(dataDir, nowMs()); } catch { /* the budget still blocks on the next quota answer */ }
+          notice('quota-fallback');
+          queue.patch(item.id, { state: 'queued', reason: 'quota-exceeded', nextAt: new Date(nowMs() + MAX_DELAY_MS).toISOString() });
+          log(`posting: ${REASON_TEXT['quota-exceeded']}`);
           return;
         } else if (code === 'oauth-no-client' || code === 'oauth-reauth-needed') {
           queue.patch(item.id, { state: 'queued', reason: code === 'oauth-no-client' ? 'no-oauth-client' : 'not-signed-in', nextAt: new Date(nowMs() + SIGNIN_WAIT_MS).toISOString() });
@@ -558,7 +589,8 @@ export function createPostChain(opts) {
     let rules;
     try { rules = rulesSrc.get(); } catch (e) { notice('bad-rules', e?.message); return { skipped: 'bad-rules', detail: e?.code ?? 'error' }; }
     if (!rules.rules.length) { notice('no-rules'); return { skipped: 'no-rules' }; }
-    notice(null); // rules fine; a sign-in wait below says so again
+    // rules fine; a sign-in wait below says so again. PT2: the quotaExceeded fallback is said while it lasts.
+    if (quotaFallback(dataDir, nowMs())) notice('quota-fallback'); else notice(null);
     if (!recovered) { recovered = true; queue.recover(); }
     if (opts.scanFolder !== false && nowMs() - lastScan >= (opts.scanEveryMs ?? SCAN_EVERY_MS)) { lastScan = nowMs(); await scanFolder(readProfile()); }
     const store = createPostStore({ ledgerFile, dataDir });

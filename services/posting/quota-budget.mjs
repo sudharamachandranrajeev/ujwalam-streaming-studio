@@ -23,7 +23,7 @@
 //   createQuotaBudget({ dataDir, nowMs?, quota?, busyWaitMs? }) -> { state(), uploadBlock(maxPerDay),
 //     reserveUpload(maxPerDay), readBlock(units), reserveRead(units), refundRead(units, day), reserveScan(units, fetchImpl),
 //     meter(fetchImpl), chargeUpload(), chargeRead(units) }
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +34,15 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 export const DEFAULT_QUOTA = path.join(REPO, 'data', 'posting', 'quota.json');
 export const QUOTA_DAY_NAME = 'quota-day.sqlite';
 export const LEGACY_DAY_NAME = 'quota-day.json';
+/** PT2 (D408): the quota model fallback state, written when YouTube answers quotaExceeded under the bucket model. */
+export const QUOTA_MODEL_NAME = 'quota-model.json';
+export const QUOTA_MODELS = Object.freeze(['upload-bucket', 'unit-sum']);
+/** Plain words for the Settings quota line and the task bar. */
+export const QUOTA_MODEL_TEXT = Object.freeze({
+  'upload-bucket': "Uploads use YouTube's own upload allowance (up to 100 a day); each one still costs 50 quota units for its cover picture.",
+  'unit-sum': 'Uploads are counted the old way: 1,650 quota units each, so about 6 a day fit in 10,000 units.',
+  fallback: 'YouTube said the upload quota was used up, so uploads wait for tomorrow and are counted the old way (1,650 units each) until then.',
+});
 export const BUSY_WAIT_MS = 3 * 1000;
 /** Rows older than this many days are dropped (only today's rows count; a few days are kept for diagnosis). */
 const KEEP_DAYS = 8;
@@ -65,15 +74,47 @@ function userQuota(dataDir) {
  * uploads a day fit: floor((quota - read reserve) / (insert + thumbnail)). 0 when not even one fits: then nothing
  * uploads until the quota is raised. Throws when the data file or an existing user settings file is bad.
  */
-export function loadQuota(dataDir, file = DEFAULT_QUOTA) {
+export function loadQuota(dataDir, file = DEFAULT_QUOTA, { nowMs = Date.now() } = {}) {
   const j = readJson(file);
   const n = (k) => { const v = j?.[k]; if (!Number.isFinite(v) || v < 0) throw new QuotaError('quota-unreadable', `quota setting ${k} is not valid`); return v; };
   const user = userQuota(dataDir);
   const quota = user.quotaUnitsPerDay ?? n('quotaUnitsPerDay');
-  const perUpload = n('insertUnits') + n('thumbnailUnits');
+  // PT2: a file without a model is the old unit sum (D375).
+  const shipped = j?.model ?? 'unit-sum';
+  if (!QUOTA_MODELS.includes(shipped)) throw new QuotaError('quota-unreadable', 'quota setting model is not valid');
+  const fb = shipped === 'upload-bucket' ? quotaFallback(dataDir, nowMs) : null;
+  const model = fb ? 'unit-sum' : shipped;
   const reserve = n('readReserveUnits');
-  const fit = Math.max(0, perUpload > 0 ? Math.floor((quota - reserve) / perUpload) : MAX_PER_DAY);
-  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, readReserveUnits: reserve, uploadsPerDayFit: Math.min(fit, MAX_PER_DAY), userSet: user.quotaUnitsPerDay !== undefined };
+  const thumb = n('thumbnailUnits');
+  const perUpload = model === 'upload-bucket' ? thumb : n('insertUnits') + thumb;
+  const bucket = model === 'upload-bucket' ? Math.floor(n('uploadBucketPerDay')) : null;
+  let fit = Math.max(0, perUpload > 0 ? Math.floor((quota - reserve) / perUpload) : MAX_PER_DAY);
+  if (bucket !== null) fit = Math.min(fit, bucket);
+  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, readReserveUnits: reserve, uploadsPerDayFit: Math.min(fit, MAX_PER_DAY), userSet: user.quotaUnitsPerDay !== undefined,
+    model, uploadsCap: bucket, fallback: fb, modelText: fb ? QUOTA_MODEL_TEXT.fallback : QUOTA_MODEL_TEXT[model] };
+}
+
+/** PT2: the active quotaExceeded fallback ({ since, until }: Pacific days) or null. It ends after `until`. Never throws. */
+export function quotaFallback(dataDir, nowMs = Date.now()) {
+  if (typeof dataDir !== 'string') return null;
+  const j = readJson(path.join(dataDir, 'posting', QUOTA_MODEL_NAME));
+  if (!isPlain(j) || j.model !== 'unit-sum' || typeof j.until !== 'string' || !DAY_RE.test(j.until)) return null;
+  return pacificDay(nowMs) <= j.until ? { since: j.since ?? null, until: j.until } : null;
+}
+
+/** PT2: YouTube answered quotaExceeded under the bucket model: count the old way for today and fallbackDays more Pacific
+ *  days, then try the bucket again. -> the saved state. */
+export function recordQuotaExceeded(dataDir, nowMs = Date.now(), file = DEFAULT_QUOTA) {
+  const fd = readJson(file)?.fallbackDays;
+  const days = Number.isInteger(fd) && fd >= 0 && fd <= 30 ? fd : 1;
+  const today = pacificDay(nowMs);
+  const [y, m, d] = today.split('-').map(Number);
+  const until = new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+  const state = { model: 'unit-sum', since: today, until, at: new Date(nowMs).toISOString(), reason: 'quotaExceeded' };
+  const f = path.join(dataDir, 'posting', QUOTA_MODEL_NAME);
+  mkdirSync(path.dirname(f), { recursive: true });
+  writeFileSync(`${f}.tmp`, JSON.stringify(state, null, 2)); renameSync(`${f}.tmp`, f);
+  return state;
 }
 
 export const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
@@ -123,7 +164,7 @@ const asQuotaError = (e) => (e instanceof QuotaError ? e
 export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = null, busyWaitMs = BUSY_WAIT_MS }) {
   const file = path.join(dataDir, 'posting', QUOTA_DAY_NAME);
   const legacyFile = path.join(dataDir, 'posting', LEGACY_DAY_NAME);
-  const getQuota = quota ?? (() => loadQuota(dataDir));
+  const getQuota = quota ?? (() => loadQuota(dataDir, DEFAULT_QUOTA, { nowMs: nowMs() }));
 
   /** Every counter row must have the table's shape (the CHECK constraints may be missing from a replaced file). */
   function checkRows(db) {
@@ -200,6 +241,7 @@ export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = n
   };
   const uploadWhy = (s, q, maxPerDay) => {
     if (Number.isInteger(maxPerDay) && s.uploads.n >= maxPerDay) return 'daily-cap-reached';
+    if (Number.isInteger(q.uploadsCap) && s.uploads.n >= q.uploadsCap) return 'quota-day-used'; // PT2 upload bucket (counted per UTC day)
     if (s.units.n + q.perUploadUnits > q.quotaUnitsPerDay - q.readReserveUnits) return 'quota-day-used';
     return null;
   };

@@ -14,7 +14,7 @@ import { checkPostStatus } from '../services/posting/youtube.mjs';
 import { tasksDir } from '../services/studio-ui/tasks.mjs';
 import { READONLY_SCOPE, SCOPE } from '../services/posting/oauth.mjs';
 import { DELETE_FLAG } from '../services/posting/delete-uploaded.mjs';
-import { createQuotaBudget } from '../services/posting/quota-budget.mjs';
+import { createQuotaBudget, loadQuota } from '../services/posting/quota-budget.mjs';
 
 const tmp = [];
 const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-e2e-post-')); tmp.push(d); return d; };
@@ -39,7 +39,7 @@ async function fakeGoogle() {
   // `channelError` = HTTP answer for channels.list ('scope' -> 403 insufficientPermissions, 500 -> server error);
   // `hideOwnUploads` leaves our own uploads out of the channel list (to prove the queue's own slots count by themselves).
   const opt = { initFailures: 0, chunkFailOnce: false, dropFinalAnswer: false, queryAfterComplete: 'resource' /* | 'gone' | 'error' */, stallFinal: null /* | 'hold' | 'finalize' */,
-    channel: [], channelError: null, hideOwnUploads: false };
+    channel: [], channelError: null, hideOwnUploads: false, initQuota: 0 /* PT2: 403 quotaExceeded answers */, onVideo: null /* PT2: called when a video completes */ };
   const sessions = new Map(); const videos = []; const log = [];
   let chunkFailed = false;
   const srv = createServer((req, res) => {
@@ -52,6 +52,7 @@ async function fakeGoogle() {
       if (req.method === 'POST' && url.pathname === '/upload/youtube/v3/videos') {
         log.push('init');
         if (opt.initFailures > 0) { opt.initFailures--; return send(503, { error: 'busy' }); }
+        if (opt.initQuota > 0) { opt.initQuota--; return send(403, { error: { code: 403, errors: [{ domain: 'youtube.quota', reason: 'quotaExceeded' }] } }); }
         const id = `s${sessions.size + 1}`;
         sessions.set(id, { meta: JSON.parse(body.toString('utf8')), total: Number(req.headers['x-upload-content-length']), got: Buffer.alloc(0), video: null });
         return send(200, undefined, { location: `http://127.0.0.1:${srv.address().port}/session/${id}` });
@@ -86,6 +87,7 @@ async function fakeGoogle() {
         if (s.got.length >= s.total) {
           s.video = { id: `vid${videos.length + 1}`, status: { uploadStatus: 'uploaded', privacyStatus: s.meta.status.privacyStatus, ...(s.meta.status.publishAt ? { publishAt: s.meta.status.publishAt } : {}) }, snippet: s.meta.snippet };
           videos.push({ ...s.video, bytes: s.got.length });
+          if (opt.onVideo) opt.onVideo(s.video);
           if (opt.dropFinalAnswer) return req.socket.destroy(); // upload completed on the server, the answer never arrives
           return send(200, s.video);
         }
@@ -281,6 +283,13 @@ const SCHED_OFF = { isOn: (id) => id !== 'post-schedule' && id !== DELETE_FLAG }
 const authSched = { ...authOk, grantedScopes: async () => [SCOPE, READONLY_SCOPE] };
 const vid = (id, privacyStatus, publishAt) => ({ id, status: { privacyStatus, uploadStatus: 'processed', ...(publishAt ? { publishAt } : {}) } });
 /** The clip maker publishes one more finished video into uploads.json (same run). */
+/** PT2: a quota file with the D375 unit-sum model (each upload 1600 + 50 units), for the tests written for it. */
+function unitSumQuota(e) {
+  const f = path.join(e.dataDir, 'quota-unit-sum.json');
+  writeFileSync(f, JSON.stringify({ model: 'unit-sum', quotaUnitsPerDay: 10000, insertUnits: 1600, thumbnailUnits: 50, readReserveUnits: 100 }));
+  return f;
+}
+
 function addRow(e, r) {
   const f = path.join(e.dataDir, 'clips', 'uploads.json');
   const doc = JSON.parse(readFileSync(f, 'utf8'));
@@ -388,9 +397,9 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
     const rules = JSON.parse(readFileSync(path.join(e.dataDir, 'rules.json'), 'utf8'));
     writeFileSync(path.join(e.dataDir, 'rules.json'), JSON.stringify({ ...rules, maxUploadsPerDay: 2 }));
-    const budget = createQuotaBudget({ dataDir: e.dataDir, nowMs: () => e.clock.t });
+    const budget = createQuotaBudget({ dataDir: e.dataDir, nowMs: () => e.clock.t, quota: () => loadQuota(e.dataDir, unitSumQuota(e)) });
     budget.chargeUpload(); budget.chargeUpload(); // two uploads already started today (earlier approvals, retries)
-    const c = schedChain(e, g);
+    const c = schedChain(e, g, { quotaFile: unitSumQuota(e) }); // PT2: the D375 unit sum (the fallback model)
     await c.afterRun(e.runDir, IDLE);
     let it = e.queue().items()[0];
     assert.equal(g.videos.length, 0); assert.equal(g.count('init'), 0); assert.equal(g.count('channels'), 0);
@@ -413,7 +422,7 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     mkdirSync(path.join(e.dataDir, 'posting'), { recursive: true });
     const own = path.join(e.dataDir, 'posting', 'schedule.json');
     writeFileSync(own, JSON.stringify({ quotaUnitsPerDay: 1700 })); // 1700 - 100 reserve < 1650 per upload
-    const c = schedChain(e, g);
+    const c = schedChain(e, g, { quotaFile: unitSumQuota(e) }); // PT2: the D375 unit sum (the fallback model)
     await c.afterRun(e.runDir, IDLE);
     assert.equal(g.count('init'), 0); assert.equal(e.queue().items()[0].reason, 'quota-day-used');
     writeFileSync(own, '{ broken');
@@ -461,7 +470,9 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     await c.afterRun(e.runDir, IDLE);
     assert.equal(g.videos.length, 1); assert.equal(g.count('init'), 1, 'no session started with a too-close time');
     const it = e.queue().items()[1];
-    assert.equal(it.state, 'queued'); assert.equal(it.publishAt, null); assert.equal(it.reason, 'slot-passed'); assert.equal(it.attempts, 0);
+    // PT2 (D408): the read was 6 h old right before the second session, so the channel was read again and the too-close
+    // slot got the next free one at once (before PT2 it was dropped here and given on the next pass).
+    assert.equal(it.state, 'queued'); assert.equal(it.publishAt, iso(T0 + 6 * HOUR + 20 * MIN + HOUR + 15 * MIN)); assert.equal(it.attempts, 0);
     assert.deepEqual(failedUploadTasks(e), [], 'a re-slot is not shown as a failed task');
     await c.tick(IDLE);
     assert.equal(g.videos.length, 2);
@@ -760,6 +771,48 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     e.clock.t = T0 + 6 * HOUR + MIN; await c.tick(IDLE); // the cap is now T0 + 30 h: the slot fits
     it = e.queue().items()[0];
     assert.equal(it.state, 'done'); assert.deepEqual(sent(g), [iso(T0 + 26 * HOUR)]);
+  });
+
+  // ---- PT2 (D408): the one hard rule, re-checked right before each upload session; the quota fallback ----
+  test('PT2: a post scheduled by hand during the pass clashes with the next slot: re-read before its session, new slot, never within the gap', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0], ROWS[2]]); g.opt.hideOwnUploads = true; const c = schedChain(e, g);
+    let hand = null;
+    g.opt.onVideo = () => {
+      if (hand !== null) return;
+      // The first upload took 11 minutes (older than recheckMaxAgeMinutes 10) and someone scheduled a post by hand
+      // 20 minutes after the second clip's slot.
+      e.clock.t += 11 * MIN;
+      hand = FIRST + 6 * HOUR + 20 * MIN;
+      g.opt.channel = [vid('hand', 'private', iso(hand))];
+    };
+    await c.afterRun(e.runDir, IDLE);
+    assert.deepEqual(sent(g), [iso(FIRST)], 'the second clip did not go up on its old slot');
+    assert.equal(g.count('channels'), 2, 'the channel was read again right before the second session');
+    const second = e.queue().items()[1];
+    assert.equal(second.state, 'queued');
+    assert.ok(Math.abs(Date.parse(second.publishAt) - hand) >= 6 * HOUR, 'new slot keeps the gap from the hand-scheduled post');
+    assert.ok(Math.abs(Date.parse(second.publishAt) - FIRST) >= 6 * HOUR, 'and from the clip that went up');
+    await c.tick(IDLE);
+    assert.equal(g.videos.length, 2);
+    for (const t of sent(g)) assert.ok(Math.abs(Date.parse(t) - hand) >= 6 * HOUR);
+  });
+
+  test('PT2: YouTube answers quotaExceeded: the clip waits (no attempt), the quota falls back to the unit sum with a plain notice, the bucket returns later', async () => {
+    const { loadQuota } = await import('../services/posting/quota-budget.mjs');
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); const c = schedChain(e, g);
+    assert.equal(loadQuota(e.dataDir, undefined, { nowMs: T0 }).model, 'upload-bucket');
+    g.opt.initQuota = 1;
+    await c.afterRun(e.runDir, IDLE);
+    const it = e.queue().items()[0];
+    assert.equal(g.videos.length, 0); assert.equal(it.state, 'queued'); assert.equal(it.reason, 'quota-exceeded'); assert.equal(it.attempts, 0);
+    assert.ok(Date.parse(it.nextAt) > T0, 'waits');
+    const q = loadQuota(e.dataDir, undefined, { nowMs: T0 });
+    assert.equal(q.model, 'unit-sum'); assert.equal(q.uploadsPerDayFit, 6); assert.match(q.modelText, /used up/);
+    const notice = JSON.parse(readFileSync(path.join(tasksDir(e.dataDir), 'auto-post-notice.json'), 'utf8'));
+    assert.match(notice.title, /upload quota is used up/);
+    assert.match(readQueueSummary(e.dataDir, null, T0).message, /quota is used up for today/);
+    // Two Pacific days later the bucket model is back.
+    assert.equal(loadQuota(e.dataDir, undefined, { nowMs: T0 + 3 * 24 * HOUR }).model, 'upload-bucket');
   });
 
 });

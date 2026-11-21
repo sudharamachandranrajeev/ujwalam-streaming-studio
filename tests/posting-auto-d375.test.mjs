@@ -22,7 +22,7 @@ import { readChannelSchedule } from '../services/posting/schedule-read.mjs';
 
 const tmp = [];
 /** The random-daily card values shipped in data/posting/schedule.json (D403). */
-const RD = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 90, customTimes: {}, skipDates: [] }; // custom times: user 2026-11-20
+const RD = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 60, customTimes: {}, skipDates: [] }; // custom times: user 2026-11-20
 const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-d375-')); tmp.push(d); return d; };
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 const HOUR = 3600 * 1000; const DAY = 24 * HOUR;
@@ -141,7 +141,8 @@ describe('auto-post card settings (auto-settings.mjs)', () => {
   test('defaults: upload on, every kind, the ranker floor, as many a day as the quota fits, 1 h gap, 60 days, random-daily 3-6 a day 09:00-23:00 90 min (D403)', () => {
     const d = defaultCard(mk());
     const q = loadQuota(mk());
-    assert.equal(q.uploadsPerDayFit, Math.floor((10000 - 100) / 1650));
+    // PT2 (D408): the upload bucket (100 a day, 50 units each for the cover) capped by the 24 the hour gap allows.
+    assert.equal(q.model, 'upload-bucket'); assert.equal(q.uploadsPerDayFit, 24); assert.equal(q.uploadsCap, 100); assert.equal(q.perUploadUnits, 50);
     assert.deepEqual(d, { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore(), maxPerDay: q.uploadsPerDayFit, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000, ...RD });
     assert.ok(RULE_KINDS.includes('impact-play'));
   });
@@ -162,7 +163,7 @@ describe('auto-post card settings (auto-settings.mjs)', () => {
     assert.equal(s.custom, false); assert.equal(s.error, null);
     assert.deepEqual(s.card, { ...card, ...RD });
     assert.ok(Number.isInteger(sched.seed), 'D403: the random plan seed is made at the first save');
-    assert.equal(s.quota.uploadsPerDayFit, Math.floor((20000 - 100) / 1650)); assert.equal(s.quota.userSet, true);
+    assert.equal(s.quota.uploadsPerDayFit, 24); assert.equal(s.quota.userSet, true);
   });
   test('a hand-written rules file shows as custom; a broken one is reported, the defaults still show', () => {
     const dataDir = mk(); mkdirSync(path.dirname(userRulesFile(dataDir)), { recursive: true });
@@ -423,9 +424,11 @@ describe('Codex review: delete race, slot re-check, daily budget', () => {
     const dataDir = mk();
     mkdirSync(path.dirname(userScheduleFile(dataDir)), { recursive: true });
     writeFileSync(userScheduleFile(dataDir), JSON.stringify({ quotaUnitsPerDay: 1000 }));
-    const q = loadQuota(dataDir);
+    const unitSum = path.join(dataDir, 'unit-sum.json'); // PT2: the D375 unit sum is the fallback model
+    writeFileSync(unitSum, JSON.stringify({ model: 'unit-sum', quotaUnitsPerDay: 10000, insertUnits: 1600, thumbnailUnits: 50, readReserveUnits: 100 }));
+    const q = loadQuota(dataDir, unitSum);
     assert.equal(q.uploadsPerDayFit, 0); assert.equal(q.quotaUnitsPerDay, 1000);
-    assert.equal(defaultCard(dataDir).maxPerDay, 1);
+    assert.equal(defaultCard(dataDir).maxPerDay, 18, 'bucket model: (1000 - 100) / 50 covers');
   });
 });
 

@@ -24,10 +24,10 @@ Column {
     property bool loaded: false
     property bool started: false          // the load is on its way or done (Settings starts it as soon as the flags are known)
     property int gen: 0                   // a newer load or reset drops older answers
-    property var card: ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 90, customTimes: ({}), skipDates: [] })
+    property var card: ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 60, customTimes: ({}), skipDates: [] })
     property string orig: ""              // the card as loaded, to see a change
     property var quota: ({})
-    property int maxPerDayLimit: 100
+    property int maxPerDayLimit: 24
     property string flagsText: ""
     property string timesInfo: "Loading..."
     property var times: []                // [{text, id, movable}]
@@ -67,10 +67,13 @@ Column {
         const per = typeof quota.perUploadUnits === "number" ? quota.perUploadUnits : 0;
         const reserve = typeof quota.readReserveUnits === "number" ? quota.readReserveUnits : 0;
         const q = card.quotaUnitsPerDay;
-        const n = per > 0 ? Math.max(0, Math.floor((q - reserve) / per)) : maxPerDayLimit;
-        if (n === 0) return "No upload fits in a quota of " + q.toLocaleString(Qt.locale("en_US"), "f", 0) + " units a day (one upload needs "
+        // PT2: the upload bucket caps the count too (uploadsCap), and never more than the 24 the hour gap allows.
+        const cap = typeof quota.uploadsCap === "number" ? quota.uploadsCap : maxPerDayLimit;
+        const n = Math.min(maxPerDayLimit, cap, per > 0 ? Math.max(0, Math.floor((q - reserve) / per)) : maxPerDayLimit);
+        const model = typeof quota.modelText === "string" && quota.modelText !== "" ? quota.modelText + " " : "";
+        if (n === 0) return model + "No upload fits in a quota of " + q.toLocaleString(Qt.locale("en_US"), "f", 0) + " units a day (one upload needs "
             + (per + reserve).toLocaleString(Qt.locale("en_US"), "f", 0) + "): nothing uploads until the quota is raised.";
-        return "About " + n + " uploads a day fit in the quota." + (card.maxPerDay > n ? " More than that a day stop at the quota and wait for the next day." : "");
+        return model + "About " + n + " uploads a day fit in the quota." + (card.maxPerDay > n ? " More than that a day stop at the quota and wait for the next day." : "");
     }
 
     onActiveChanged: { if (!active) reset(); else if (!started) load() }
@@ -94,7 +97,7 @@ Column {
         gen++;
         started = false;
         loaded = false;
-        card = ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 90, customTimes: ({}), skipDates: [] });
+        card = ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 60, customTimes: ({}), skipDates: [] });
         orig = "";
         quota = ({});
         flagsText = "";
@@ -143,7 +146,7 @@ Column {
         const c = b.card || ({}), fl = b.flags || ({});
         quota = b.quota || ({});
         const lim = (b.limits || ({})).maxPerDay;
-        maxPerDayLimit = typeof lim === "number" ? lim : 100;
+        maxPerDayLimit = typeof lim === "number" ? lim : 24;
         const ks = Array.isArray(c.kinds) ? c.kinds : [];
         card = {
             autoUpload: c.autoUpload === true,
@@ -158,7 +161,7 @@ Column {
             postsPerDayMax: clamp(c.postsPerDayMax, 1, 24, 6),
             windowStart: hhmm(minutesOf(c.windowStart, 540)),
             windowEnd: hhmm(minutesOf(c.windowEnd, 1380)),
-            minGapMinutes: clamp(c.minGapMinutes, 15, 1440, 90),
+            minGapMinutes: clamp(c.minGapMinutes, 60, 1440, 60),
             customTimes: cleanWeek(c.customTimes),
             skipDates: Array.isArray(c.skipDates) ? c.skipDates.filter(s => /^\d{4}-\d{2}-\d{2}$/.test(String(s))).map(String) : []
         };
@@ -665,14 +668,14 @@ Column {
                     label: "Post until"
                     enabled: ap.randomDaily
                     from: 30
-                    to: 1439
+                    to: 1440
                     stepSize: 30
                     textFromValue: (v) => ap.hhmm(v)
                     valueFromText: (t) => ap.minutesOf(String(t).trim(), 1380)
                     want: ap.minutesOf(ap.card.windowEnd, 1380)
                     onValueModified: ap.set("windowEnd", ap.hhmm(value))
                 }
-                Quiet { text: "No post goes up after this time of day." }
+                Quiet { text: "No post goes up after this time of day. 00:00 to 24:00 is the whole day." }
             }
             Field {
                 label: "At least apart:"
@@ -681,13 +684,13 @@ Column {
                     label: "At least apart"
                     enabled: ap.randomDaily
                     suffix: " min"
-                    from: 15
+                    from: 60
                     to: 1440
                     stepSize: 15
                     want: ap.card.minGapMinutes
-                    onValueModified: ap.setNum("minGapMinutes", value, 15, 1440)
+                    onValueModified: ap.setNum("minGapMinutes", value, 60, 1440)
                 }
-                Quiet { text: "Every post, yours from Ujwalam or already on the channel, is at least this far from the next." }
+                Quiet { text: "Every post, yours from Ujwalam or already on the channel, is at least this far from the next. An hour is the least: that rule is always kept." }
             }
             Field {
                 label: "YouTube quota:"
@@ -876,12 +879,12 @@ Column {
         if (a === "ap-quota" && !isNaN(n)) return setNum("quotaUnitsPerDay", n, 1000, 10000000);
         if (a === "ap-daymin" && !isNaN(n)) return setNum("postsPerDayMin", n, 1, 24);
         if (a === "ap-daymax" && !isNaN(n)) return setNum("postsPerDayMax", n, 1, 24);
-        if (a === "ap-gapmin" && !isNaN(n)) return setNum("minGapMinutes", n, 15, 1440);
+        if (a === "ap-gapmin" && !isNaN(n)) return setNum("minGapMinutes", n, 60, 1440);
         if (a === "ap-window" && p.length >= 3) { // ap-window:<from minutes>:<until minutes>
             const s = parseInt(p[1], 10), e = parseInt(p[2], 10);
             if (isNaN(s) || isNaN(e)) return false;
             set("windowStart", hhmm(clamp(s, 0, 1439, 540)));
-            return set("windowEnd", hhmm(clamp(e, 0, 1439, 1380)));
+            return set("windowEnd", hhmm(clamp(e, 0, 1440, 1380)));
         }
         if (a === "ap-placement") {
             if (!placements.includes(arg)) return false;
