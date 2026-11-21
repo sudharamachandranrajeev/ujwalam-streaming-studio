@@ -24,9 +24,14 @@ export function testFiles(root = ROOT) {
   return [...list('tests'), ...list('tests/outputs')];
 }
 
-/** How many of the other files run at once: node's default total (cores - 1) minus the studio group, at least 1. */
+/** Cores kept free beside both groups: with 11 other files at once on 16 cores, each full CI run timed out a different
+ *  set of heavy files (event-core swaps, hard kills, soak, launcher restarts) that all pass alone (2026-11-20, 3 runs). */
+export const SPARE_CORES = 2;
+
+/** How many of the other files run at once: node's default total (cores - 1) minus the studio group and the spare
+ *  cores, at least 1. */
 export function otherAtOnce(cores = os.availableParallelism()) {
-  return Math.max(1, cores - 1 - STUDIO_AT_ONCE);
+  return Math.max(1, cores - 1 - STUDIO_AT_ONCE - SPARE_CORES);
 }
 
 /** The tests/helpers files that start the studio exe themselves (they import the build tool). */

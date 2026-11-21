@@ -41,7 +41,7 @@ test('the split reads each file: a stub tree splits by the import of the studio 
 });
 
 test('both groups together stay at node\'s default total: the other files get the cores the studio group leaves', () => {
-  assert.equal(otherAtOnce(16), 11);
+  assert.equal(otherAtOnce(16), 9); // 15 - 4 studio - 2 spare
   assert.equal(otherAtOnce(4), 1);
   assert.equal(otherAtOnce(1), 1);
 });
