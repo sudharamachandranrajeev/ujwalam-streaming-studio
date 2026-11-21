@@ -205,6 +205,11 @@ auto-posted.
 
 6.4 **Match Replay check.** Please open one Match Replay in CODM and tell me which camera buttons it shows
 (first person only, third person, free camera, other players). That decides BD6.
+Answered by the user 2026-11-21: third-person view yes; FPP/TPP switch during playback yes; HUD can be hidden (clean
+frame) yes; slow motion yes, 0.5x selectable. Free camera and other players not asked (UNVERIFIED). BD6 is go: the
+replay is recorded from the capture card with the HUD hidden; alignment to the original match uses sound and the match
+timer shown before the HUD is hidden; 0.5x playback is recorded as native slow motion (retimed to 1x where the beat
+plan needs real time).
 
 6.5 **Option order.** Proposed order: BD1-BD3 (moments, song map, beat-locked edit) and BD4 first, then BD5, BD7,
 LV1, RR1, and BD6 when 6.4 is answered.
