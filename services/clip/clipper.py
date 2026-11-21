@@ -89,6 +89,7 @@ import reel_thumbnail as rth  # noqa: E402
 import reel_title as rti  # noqa: E402
 import reel_music as rmu  # noqa: E402
 import reel_sfx as rsfx  # noqa: E402
+import reel_style as rstyle  # noqa: E402
 import reel_transition as rt  # noqa: E402
 import clip_signals as sig  # noqa: E402
 import clip_validate as val  # noqa: E402
@@ -1070,6 +1071,7 @@ def _reel_extras(a, data_dir):
                       # reel-transitions, name = the clip-look switch itself (the old reel-title switch is retired)
                       "gates": {"music": mu_on, "transitions": flag_on(data_dir, rt.FLAG), "name": True}} if lcfg else None),
             "transition": rt.active(data_dir),  # RP1: None = hard cut (flag off, or the user chose Cut)
+            "reelStyles": data_dir if rstyle.on(data_dir) else None,  # RS4 (D412): styles picked per reel (flag reel-styles)
             "thumb": rth.load_config() if th_on else None,  # RP6: the start frame (flag reel-thumbnail)
             "brand": rth.brand() if th_on else None,
             "title": rti.load_config() if ti_on else None,  # FX2: the name display (flag clip-look, or the retired reel-title)
@@ -1091,6 +1093,71 @@ def _thumbnail(ffmpeg, src, reel, typ, frame, wd, ex, matches=None):
     if rec.get("error"):
         eprint(f"thumbnail: not made ({rec['error'][-120:]}); the reel opens without it")
     return rec.get("file"), rec
+
+
+STYLE_TYPE = {"match-reel": "reel", "live-clip": "reel", "impact-play": "impact", "montage": "montage"}  # RS4 (D412)
+
+
+def _style_pick(ex, typ, m, pk, *seed_parts):
+    """RS4 (D412): this reel's style (reel_style.pick: the one chosen for the type, or a seeded pick with the pool) with
+    the user's tuning, and what it changes before the timeline: the pace (long pieces cut into shots of the style's
+    length; a kill is never cut through), the name style and the music energy target. No style: everything as before.
+    -> (style parts or None, m, pk)."""
+    dd = ex.get("reelStyles")
+    st = rstyle.pick(dd, STYLE_TYPE.get(typ), seed_parts) if dd else None
+    if not st:
+        return None, m, pk
+    eff = dict(rstyle.effective(st), id=st["id"], name=st["name"])
+    if eff["cuts"]:
+        keep = list(m.get("peaks") or [])
+        if eff["ramps"] and keep:  # the first kill keeps a shot long enough for its speed ramp (slow part + catch-up)
+            f, sec = float(eff["ramps"]["factor"]), float(eff["ramps"]["sec"])
+            keep[0] = (keep[0], sec + 2.0 * sec * (1.0 / f - 1.0) + 0.3)
+        ps = rstyle.pace(m["pieces"], float(eff["cuts"]["shotSec"]), keep=keep)
+        if len(ps) != len(m["pieces"]):
+            m = dict(m, pieces=ps, seconds=round(sum(p["end"] - p["start"] for p in ps), 3))
+    if eff["music"] and eff["music"].get("energyLevel") is not None:
+        m = dict(m, styleMusicEnergy=float(eff["music"]["energyLevel"]))
+    if pk and pk.get("name") and eff["text"] and eff["text"].get("nameStyle") and pk["name"] != eff["text"]["nameStyle"]:
+        pk = dict(pk, name=eff["text"]["nameStyle"], nameFrom="style")  # only when the name part is on
+    return eff, m, pk
+
+
+def _style_render_plan(sty, m, xd, vrec, wd, captions=False):
+    """RS4 (D412): the style's zoom pulses (on the kills, off the joins), one speed ramp on the first kill it fits
+    around (not with captions: slow motion would put the words out of step), and the LUT fitted to this reel's own
+    footage (written to wd; lut3d once, after the joins). -> (m, zoom or None, lut file name or None, style record)."""
+    if not sty:
+        return m, None, None, None
+    ps, peaks = [dict(p) for p in m["pieces"]], sorted(m.get("peaks") or [])
+    rec = {"id": sty["id"], "name": sty["name"], "pace": (sty["cuts"] or {}).get("shotSec"),
+           "transitions": (sty["transitions"] or {}).get("mode")}
+    zoom = rstyle.zoom_for(sty["zooms"], rstyle.reel_moments(ps, xd, peaks), rstyle.join_windows(ps, xd))
+    if zoom:
+        rec["zoom"] = {"times": zoom["times"], "scale": zoom["scale"]}
+    if sty["ramps"] and not captions:
+        for i, p in enumerate(ps):
+            k = next((t for t in peaks if p["start"] <= t < p["end"]), None)
+            r = rstyle.ramp_for(sty["ramps"], p, k) if k is not None else None
+            if r:
+                ps[i] = dict(p, ramp=r)
+                rec["ramp"] = {"piece": i, "at": r["at"], "factor": r["factor"]}
+                break
+    lut = None
+    if sty["colour"]:
+        ref = rstyle.clip_colour(vrec, ps)
+        rec["colour"] = rstyle.write_lut(os.path.join(wd, rstyle.LUT_FILE), sty["colour"], sty["colour"]["strength"], ref)
+        lut = rstyle.LUT_FILE
+    if m.get("styleMusicEnergy") is not None:
+        rec["musicEnergy"] = m["styleMusicEnergy"]
+    return dict(m, pieces=ps), zoom, lut, rec
+
+
+def _style_cleanup(wd):
+    try:
+        os.remove(os.path.join(wd, rstyle.LUT_FILE))
+    except OSError:
+        pass
 
 
 def _look_pick(ex, *seed_parts):
@@ -1224,6 +1291,8 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
     mv, mcfg = lk["look"]["music"], lk["mlcfg"]
     total = sum(float(p["end"]) - float(p["start"]) for p in pieces) - (len(pieces) - 1) * xd
     target = mlib.target_for(reel, typ, mcfg)
+    if reel.get("styleMusicEnergy") is not None:  # RS4 (D412): the reel style's music energy target
+        target = dict(target, energy=round(float(reel["styleMusicEnergy"]), 3))
     track, sc = mlib.match(lk["tracks"], target, total, seed_parts, lk["history"].get("track") or [], mcfg,
                            n_avoid=int(lk["cfg"]["historyN"]["track"]), prefer_long=pk["music"] != "intro-outro")
     if track is None:
@@ -1343,11 +1412,14 @@ def _caption_ass(doc, info, src_pieces, pieces, xd, frame, wd, ex):
     return ass, fd, dict(info, **rcap.summary(doc, n), transcript=rcap.TRANSCRIPT, burned=bool(n))
 
 
-def _reel_timeline(ex, pk, m, typ, legacy_tr, has_audio, *seed_parts):
+def _reel_timeline(ex, pk, m, typ, legacy_tr, has_audio, *seed_parts, style=None):
     """D411: the reel's joins, its folder track and beat sync, in that order; after beat sync the flash spacing is
     checked again on the final timeline (Codex review). -> (m with the final pieces, tr, xd, music plan)."""
     import clip_montage as mont  # noqa: PLC0415
-    tr = _look_transition(ex, pk, m["pieces"], legacy_tr)
+    if style is not None and style.get("transitions") is not None:  # RS4 (D412): the style's joins (hard = cuts)
+        tr = rstyle.transitions_for(style["transitions"], m["pieces"], "|".join(str(x) for x in seed_parts), rt)
+    else:
+        tr = _look_transition(ex, pk, m["pieces"], legacy_tr)
     xd = mont.crossfade_sec(m["pieces"], tr)
     mplan = None
     if has_audio:
@@ -1511,9 +1583,11 @@ def cmd_montage(a):
         tdoc, cinfo = _caption_reel(ffmpeg, vrec, m["pieces"], frame, wd, ex, m["seconds"])
         exr = lmix.reel_choices(ex, mix, cid, vrec)  # RP5: this reel's transition/title/music (ex as is without a mix)
         pk = _look_pick(exr, cid, os.path.basename(vrec))  # FX1: this reel's look
+        sty, m, pk = _style_pick(ex, typ, m, pk, cid, os.path.basename(vrec))  # RS4: this reel's style (or None)
         # D411: the joins (each cross-faded join shortens the reel), the folder track and beat sync; captions follow
         m, tr, xd, mplan = _reel_timeline(exr, pk, m, typ, exr["transition"], bool(vinfo.get("has_audio", True)),
-                                          cid, os.path.basename(vrec))
+                                          cid, os.path.basename(vrec), style=sty)
+        m, zoom, lut, strec = _style_render_plan(sty, m, xd, vrec, wd, captions=tdoc is not None)
         ass, fdir, cinfo = _caption_ass(tdoc, cinfo, src_pieces, m["pieces"], xd, frame, wd, ex)
         thumb, trec = _thumbnail(ffmpeg, vrec, m, typ, frame, wd, ex, matches)  # RP6
         ttl, tirec = _title(wd, m["pieces"], xd, frame, exr, pk)  # FX2
@@ -1523,7 +1597,7 @@ def cmd_montage(a):
             return mont.render_argv(ffmpeg, vrec, m["pieces"], frame, rnd.ENCODERS[enc], rnd.AUDIO,
                                     int(cfg["audioFadeMs"]), "montage-v.mp4.part",
                                     audio_tracks=max(1, vinfo["audio_tracks"]), max_sec=lim[typ]["maxSec"], captions=ass,
-                                    fontsdir=fdir, transition=tr, thumbnail=thumb, title=ttl, music=mus)
+                                    fontsdir=fdir, transition=tr, thumbnail=thumb, title=ttl, music=mus, zoom=zoom, lut=lut)
         if os.path.isfile(done):
             # Codex verify (D411): a finished file with no stored row (the run stopped between the file and its row)
             # is never kept with guessed decisions: it is rendered again with this run's decisions
@@ -1538,6 +1612,7 @@ def cmd_montage(a):
         rti.cleanup(wd)
         rmu.cleanup(wd)
         rsfx.cleanup(wd)
+        _style_cleanup(wd)
         files, errors = [], []
         hook = m.get("hook") or {"on": False}
         if r.returncode == 0:
@@ -1569,7 +1644,7 @@ def cmd_montage(a):
         out_sec = _pieces_out_sec(m, xd, thumb, lim[typ]["maxSec"])
         rows.append({"id": cid, "start": 0.0, "end": out_sec, "score": m["score"], "labels": m["labels"],
                      "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec, "title": tirec, "music": murec,
-                     "look": pk, "sfx": sfxrec,
+                     "look": pk, "sfx": sfxrec, "style": strec,
                      "pieces": m["pieces"], "part": m.get("part"), "parts": m.get("parts"),
                      # the overlaps of a cross fade can take a reel planned at its shortest length below it
                      "trimmed": m.get("trimmed"), "belowMin": m.get("belowMin") or (out_sec < lim[typ]["minSec"]) or None, "kills": m.get("kills"), "streakKills": m.get("streakKills"),

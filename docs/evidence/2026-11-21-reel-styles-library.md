@@ -1,0 +1,49 @@
+# Reel styles library RS1-RS4 (D412), 2026-11-21
+
+Plan: `docs/plan/2026-11-21-reel-styles-library.md`. Branch `claude/reel-styles` (not merged, not pushed).
+Decision: D412 in `docs/plan/2026-10-29-v1-decisions.md`. Flag `reel-styles`, ON by default (requested feature).
+
+## How it was tested
+
+- The user's studio was open (off air) the whole time. Before each test run, `node tools/live-check.mjs` was run and
+  its exit code was checked. No GPU or NVENC render ran. All renders used libopenh264 on the CPU, at BelowNormal
+  priority, on tiny synthetic videos (`tests/py/style_fixtures.py`: coloured shots with moving shapes, label boxes,
+  joins, zooms, slow motion, colour casts and beat audio).
+- Each test file ran on its own, with `UJWALAM_HEADLESS=1` and a temporary `UJWALAM_DATA_ROOT`. Full CI was not run.
+  The pre-commit quick checks ran on each commit: build, lint, build-host, build-studio, validate-*, private-scan and
+  legacy-verify.
+- No example reel, real footage or clips-corpus file was used, read or copied.
+
+## Results per test file
+
+| File | Result | What it shows |
+|---|---|---|
+| `tests/py/test_style_analyse.py` | 10/10 OK | Known truth: cuts within 1 frame (hard) or 2 frames (gradual), with the kinds exact. Beat share 1.0. Zoom pulses within 0.1 s and 0.02 of scale. Speed ramp within 0.35 s and 0.05 of factor. Text start and length within 0.5 s, band and corner exact, height within 3 % of the label. Colour a/b within 1.5. A quiet single shot gives no cuts, zooms or ramps. Bound: a 60 s 540x960 30 fps H.264 example took 62.98-63.89 s and peaked at 217 MB (limit 150 s, 800 MB); 29 cuts, 10 zoom pulses, 16 texts found. |
+| `tests/py/test_reel_style.py` | 19/19 OK | Record rules, mapping, tuning, plan helpers. The job refuses on air, when on-air state is unknown, and while busy. A written record is valid and nothing is copied. `pick` follows the settings and the flag. `create` and tune rules work. CPU renders measured back: zoom 1.150 at 2.0 and 5.0 s (in 0.133 s, out 0.2 s, no cut or flash). Speed ramp keeps 6.0 s with one audio stream: slow part measured at 1.9 s, factor 0.467 (planned 1.85 s, 0.5). Mute works. LUT planned a +4.80 b +8.00, measured a +5.23 b +7.71. "Preview on my clip" is 540 px wide, 6.0 s, one audio stream, with zoom pulses at 1.5 and 4.0 s. |
+| `tests/py/test_clip_reel_style.py` | 4/4 OK | RS4. With no style (no settings, flag off, or another type), pieces, look and command line are the very same as before. A chosen style gives: pace (6 s pieces cut into about 1.2 s shots, kills kept), the name style, the music energy, its joins, zooms away from joins, one ramp (none with captions, none forced into short pieces) and the LUT, which is cleaned up afterwards. A rendered reel measures back: 3 of 3 soft joins (2 measured as fade, 1 as flash), zoom planned [1.5, 4.02, 6.54, 9.06] and measured [1.5, 4.017, 6.533, 9.067], LUT b within 2.0 and a within 4.5 (see below), lut3d once, one audio stream. |
+| `tests/reel-style-schema.test.mjs` | 3/3 pass | The JSON schema accepts the example record. It refuses zoom entrances of 600 ms or more, exits of 400 ms or more, stored frames or text, a bad sha256 and unknown tune keys. Parts that could not be measured can be null. |
+| `tests/user-settings-reel-styles.test.mjs` | 2/2 pass | `clips.reelStyles` checks. It saves type by type, the pool is replaced whole, and a broken value reads as none. |
+| `tests/reel-styles-api.test.mjs` | 3/3 pass | The studio side runs the real Python CLI. Create writes only `style.json` (no video copy). A repeated name gets its own id. Missing or relative paths and tuning before analysis are refused. Analyse runs hidden (`windowsHide`, `-I`) and its progress lines reach the task area. It is refused while live, while busy and with the flag off. A failed run shows its reason. |
+| `tests/studio-qml-settings.test.mjs` | 21/21 pass (with the rebuilt shell) | The Reel styles card opens with no QML errors. The style per type and "Join the mix" are saved with Save. |
+| `tests/flags.test.mjs` | 10/10 pass | `reel-styles` is ON, backed by D412. |
+| `tests/studio-ui-flags-feedback.test.mjs` | 16/16 pass | ON list. |
+| `tests/registry.test.mjs` | 14/14 pass | `zoom-pulse` and `speed-ramp` functions and their 4 presets. |
+| `tests/py/test_clip_montage.py` | 35/35 OK | `render_argv` without zoom or LUT is unchanged. |
+| `tests/py/test_reel_transition.py`, `test_reel_transition_sets.py` | 9/9, 14/14 OK | |
+| `tests/py/test_clip_pipeline.py`, `test_clip_look.py` (15), `test_music_library.py` (15), `test_clip_live_montage.py` (6), `test_reel_title.py` (15), `test_clip_e2e.py` (7) | all OK | Re-run after RS4: the clipper with no style is unchanged. |
+| `tests/user-settings-clip-look.test.mjs` (4), `tests/studio-ui-server.test.mjs` (40), `tests/studio-qml-clips.test.mjs` (6), `tests/studio-qml-shell.test.mjs` (5) | all pass | The shell's list of flags that are ON now also has the D411 flags `reel-transitions`, `reel-music` and `clip-look`. They were already missing before this work, so this test was failing before. |
+
+## Limits (left out or unverified)
+
+- UNVERIFIED on real footage and real example reels: all numbers above come from synthetic videos.
+- Speed ramps are marked `unverified: true` in every record: slow motion in real reels (frame blending, optical flow)
+  may not read as repeated motion.
+- Text: overlays that stay still while the picture moves are left out of the motion fit. On real HUDs this is
+  UNVERIFIED. Only band, corner and size are kept, never the words.
+- Joins: a cross dissolve, or a fade between shots of very different brightness, can read as a flash.
+- LUT on fully saturated colours: gamut clipping moved `a` by up to 3.8 (planned -1.0, measured +2.8). `b`, which
+  carried the main shift, was within 2.0. On a mid-saturated clip both are within 1.5 (RS2).
+- Preview shows colour and zoom pulses only. Pace, joins and music need a whole reel; the card says so.
+- The live clipper's reels (`live-clip`) do not use styles yet. Only the montage loop does: kill montages, won-match
+  reels and impact plays.
+- NVENC renders were not tested, because the studio was open.
