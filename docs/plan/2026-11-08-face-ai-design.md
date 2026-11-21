@@ -2,6 +2,8 @@
 
 Status: built behind flag `face-ai` (off by default), decision D295 proposed. Measurements:
 `docs/evidence/2026-11-08-face-ai.md`. Live use is the user's decision after reading those numbers.
+Live avatar driven by the face (tracker service, avatar layer, chat expressions, offline body mocap): addendum
+`docs/plan/2026-11-21-ujwalam-facial-mocap-addendum.md` (accepted 2026-11-21, queued after the clip work).
 
 The user's request: "add background removal for facecam and mocap features with facial tracking". Mocap, in the
 user's words: the camera follows my face, effects on my face, and an avatar driven by my face from any reference
