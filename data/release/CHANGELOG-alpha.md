@@ -2,6 +2,15 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.36 — 2026-11-21
+
+- Auto-post works: it now reads your profile, so the clips waiting with an unfilled channel handle or Discord link get it filled in and upload as scheduled posts. If a value is ever missing, the task bar names it instead of skipping in silence.
+- Settings > Posting & growth > Auto-post: choose Random each day (3-6 posts at random times), Custom times (your own times for each weekday, with days off and a preview of the next 10 posts) or Fill gaps.
+- "What gets posted" in the same card: switch each clip kind on or off, Upload automatically, and the daily maximum, without editing a file. The card and task bar say plainly when auto-post is on but nothing can upload (no rules, a rules mistake, not signed in).
+- Your backlog of clips goes out shuffled, kinds mixed, parts of a split reel in order.
+- Recordings are deleted once all their clips and the review are made ("Delete clipped recordings", on). Sessions you keep for labelling stay; Settings > Clips > Recordings lists them.
+- One Setup file carries everything (no separate downloads to start); optional models come from Settings > Downloads with pause, resume and cancel, never while live.
+
 ## 0.1.0-alpha.35 — 2026-11-19
 
 - Clip scanning is faster: the recording is decoded on the graphics card while you are off air (a 10-minute stretch took 260 s instead of 426 s, with exactly the same clips found). Going live stops it within two seconds, and an interrupted scan picks up where it stopped.

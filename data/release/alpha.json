@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 35,
+  "current": 36,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -46,6 +46,7 @@
     { "n": 32, "date": "2026-11-16", "title": "Go live chooser, outputs as destination cards, new light and night look" },
     { "n": 33, "date": "2026-11-16", "title": "Main window fits small and large screens, steadier top bar, clearer disabled controls" },
     { "n": 34, "date": "2026-11-17", "title": "Add audio in the mixer, every sound gets a strip, layers back on the left, windows open full size" },
-    { "n": 35, "date": "2026-11-19", "title": "Faster clip scan, audio tools and ducking, late devices, Setup.exe and in-app update, lighter idle load" }
+    { "n": 35, "date": "2026-11-19", "title": "Faster clip scan, audio tools and ducking, late devices, Setup.exe and in-app update, lighter idle load" },
+    { "n": 36, "date": "2026-11-21", "title": "Auto-post fixed, custom posting times, rules in the app, recordings cleaned up, one-file Setup" }
   ]
 }
