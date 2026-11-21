@@ -199,6 +199,24 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     assert.deepEqual(c.saved.clips.reelTransition, { kind: 'cut', ms: 0 });
   });
 
+  test('Settings > Clips: Clip look shows every style ticked and mixing on; ticks, locks and mixing are saved at Save (D411)', async () => {
+    const q = await probe(['settings-open', 'settings-page:Clips']);
+    assert.equal(q.s.settings.look.randomise, true);
+    assert.deepEqual(q.s.settings.look.transitions.styles, ['punchy', 'cinematic', 'clean']);
+    assert.deepEqual(q.s.settings.look.name.styles, ['lower-third', 'corner-tag', 'kinetic']);
+    assert.equal(q.saved, null, 'nothing saved by looking');
+    const p = await probe(['settings-open', 'settings-page:Clips', 'settings-look-tick:transitions:punchy:off', 'settings-look-lock:name:corner-tag',
+      'settings-look-random:off', 'settings-look-tick:music:drop:off', 'settings-save'], 9000);
+    const l = p.saved.clips.look;
+    assert.equal(l.randomise, false);
+    assert.deepEqual(l.transitions.styles, ['cinematic', 'clean']);
+    assert.equal(l.name.lock, 'corner-tag');
+    assert.deepEqual(l.music.modes, ['intro-outro', 'full-bed']);
+    assert.equal(l.music.levelDb, -16);
+    const u = await probe(['settings-open', 'settings-page:Clips', 'settings-look-lock:name:kinetic', 'settings-look-tick:name:kinetic:off', 'settings-save'], 9000);
+    assert.equal(u.saved.clips.look.name.lock, null, 'unticking the locked style clears the lock');
+  });
+
   test('Settings > Clips: Record while live is a switch row with its explanation, on by default; off is saved at Save', async () => {
     const p = await probe(['settings-open', 'settings-page:Clips']);
     assert.deepEqual(p.s.settings.recordLive, { on: true, text: 'Record while live', visible: true,

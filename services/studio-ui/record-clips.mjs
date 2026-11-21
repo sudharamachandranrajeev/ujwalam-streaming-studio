@@ -294,7 +294,7 @@ export function parseProgress(line) {
 
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
 const iso = (ms) => new Date(ms).toISOString();
-const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes'];
+const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes', 'look']; // look: FX (D411) clip look for this job only
 const pickJob = (j) => Object.fromEntries(JOB_KEYS.filter((k) => j[k] !== undefined).map((k) => [k, j[k]]));
 
 /** The queue and the child. feed(status) is called with each outputs.status. */
@@ -429,7 +429,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     job.activeAt = now(); job.progressAt = null; // the stall warning measures silence from here (tasks.mjs stallOf)
     // stdin: the parent pipe (D234): when the launcher is gone (even hard-killed) the clipper ends itself and its ffmpeg
     // children (clip_common.end_tree_when_parent_gone), so nothing runs on unseen after Ujwalam closed (D311 proposed).
-    child = spawnFn(spec.exe, spec.argv, { stdio: ['pipe', fd, 'pipe'], windowsHide: true, cwd: clipRoot, env: { ...process.env, [PARENT_PIPE_ENV]: '1', ...(job.captionsOk === false ? { UJWALAM_REEL_CAPTIONS: 'off' } : {}) } });
+    child = spawnFn(spec.exe, spec.argv, { stdio: ['pipe', fd, 'pipe'], windowsHide: true, cwd: clipRoot, env: { ...process.env, [PARENT_PIPE_ENV]: '1', ...(job.captionsOk === false ? { UJWALAM_REEL_CAPTIONS: 'off' } : {}), ...(job.look ? { UJWALAM_CLIP_LOOK: JSON.stringify(job.look) } : {}) } });
     child.stdin?.on?.('error', () => {});
     closeSync(fd);
     // stderr: copied to the log and scanned for `ujwalam-progress {...}` lines (the task bar's progress).
@@ -533,7 +533,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     const ask = asks.find((x) => x.id === a?.id);
     if (!ask) return;
     asks = asks.filter((x) => x !== ask);
-    if (a.make === true) add({ ...pickJob(ask) }, `making clips from ${ask.name} (you said yes)`);
+    if (a.make === true) add({ ...pickJob(ask), ...(a.look && typeof a.look === 'object' && !Array.isArray(a.look) ? { look: a.look } : {}) },`making clips from ${ask.name} (you said yes)`);
     else log(`clips: not making clips from ${ask.name} (you said no)`);
     if (a.remember === true) {
       const mode = a.make === true ? 'after' : 'off';

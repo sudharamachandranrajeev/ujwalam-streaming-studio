@@ -64,7 +64,7 @@ Dialog {
     // ---- loaded and draft state ----
     property bool ready: false
     property bool busy: false        // the settings are on their way: one open at a time
-    property var info: ({})          // GET ui/api/settings: {settings, clips, reelLengths, reelHooks, reelTransition}
+    property var info: ({})          // GET ui/api/settings: {settings, clips, reelLengths, reelHooks, reelTransition, look}
     property var flagList: []        // GET ui/api/flags
     property var start: ({})
     property var draft: ({})
@@ -181,6 +181,7 @@ Dialog {
             hooks: hooks,
             transKind: tr.kind || "",
             transMs: typeof tr.ms === "number" ? tr.ms : 0,
+            look: info.look && info.look.look ? JSON.parse(JSON.stringify(info.look.look)) : null, // FX (D411) clip look
             recDir: f.recordings || "",
             clipDir: f.clips || "",
             theme: Theme.id,
@@ -207,6 +208,21 @@ Dialog {
         draft = d;
     }
 
+    // ---- the clip look (FX1-FX4, D411): ticks per group, randomise, locks and tunables, all in the draft ----
+    function lookGroup(g) { return ((info.look || {}).groups || {})[g] || { ticks: "", options: [] } }
+    function setLook(g, k, v) {
+        const d = Object.assign({}, draft), l = JSON.parse(JSON.stringify(d.look || {}));
+        if (g === "") l[k] = v; else l[g][k] = v;
+        d.look = l;
+        draft = d;
+    }
+    function tickLook(g, id, on) { // keeps the order of the options; an unticked lock is cleared
+        const tk = lookGroup(g).ticks, cur = (draft.look[g] || {})[tk] || [];
+        const next = lookGroup(g).options.map(o => o.id).filter(x => x === id ? on : cur.includes(x));
+        setLook(g, tk, next);
+        if (!on && draft.look[g].lock === id) setLook(g, "lock", null);
+    }
+
     // ---- checks, changes and the body Save sends ----
     function reelProblems() {
         let bad = "";
@@ -223,7 +239,7 @@ Dialog {
         for (const k of ["recording", "live", "recordLive", "top3", "theme", "effects", "motion", "snap", "transKind"])
             if (d[k] !== s[k]) return true;
         if ((d.killsOn ? d.kills : -1) !== s.killsN) return true;
-        if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks)) return true;
+        if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks) || !same(d.look, s.look)) return true;
         if (transMsNow(d) !== (kindRange(d.transKind) ? s.transMs : 0)) return true;
         if (d.recDir.trim() !== s.recDir.trim() || d.clipDir.trim() !== s.clipDir.trim()) return true;
         for (const id in flagDraft) if ((flagStart[id] === true) !== flagDraft[id]) return true;
@@ -246,6 +262,7 @@ Dialog {
             const ms = transMsNow(d);
             if (d.transKind !== s.transKind || ms !== (kindRange(d.transKind) ? s.transMs : 0)) clips.reelTransition = { kind: d.transKind, ms: ms };
         }
+        if (d.look && !same(d.look, s.look)) clips.look = d.look; // clip look: sent whole, only when changed
         out.clips = clips;
         out.folders = { recordings: d.recDir.trim() || null, clips: d.clipDir.trim() || null };
         const ui = {};
@@ -853,6 +870,7 @@ Dialog {
             open: opened, page: page, query: query, shownPages: shownPages, sections: sections, navGroups: heads,
             motion: draft.motion, motionChoices: motionChoices.length, dirty: dirty, theme: draft.theme, effects: draft.effects,
             flagRows: rows, reelLengths: { rows: reelRows, error: reelError }, reelHooks: hooks,
+            look: draft.look, // FX (D411)
             reelTransition: k ? { kind: k.id, label: k.label, ms: transMsNow(draft), msEnabled: !!r, min: r ? r.min : 0, max: r ? r.max : 0 } : null,
             recordLive: { on: draft.recordLive, text: "Record while live", visible: page === "Clips",
                 hint: "Records the stream (H and V) to your recordings folder so reels can be made after it ends. Uses about 10 GB per hour." },
@@ -917,6 +935,15 @@ Dialog {
             if (!draft.hooks[p[1]]) return false;
             setIn("hooks", p[1], "on", on(p[2]));
             setIn("hooks", p[1], "sec", parseInt(p[3], 10));
+            return true;
+        case "settings-look-tick": // settings-look-tick:<group>:<id>:on|off
+            if (!draft.look || !lookGroup(p[1]).options.some(o => o.id === p[2])) return false;
+            tickLook(p[1], p[2], on(p[3]));
+            return true;
+        case "settings-look-random": if (!draft.look) return false; setLook("", "randomise", on(p[1])); return true;
+        case "settings-look-lock": // settings-look-lock:<group>:<id or none>
+            if (!draft.look || !(p[2] === "none" || lookGroup(p[1]).options.some(o => o.id === p[2]))) return false;
+            setLook(p[1], "lock", p[2] === "none" ? null : p[2]);
             return true;
         case "settings-transition":
             if (!transKinds().some(t => t.id === p[1])) return false;

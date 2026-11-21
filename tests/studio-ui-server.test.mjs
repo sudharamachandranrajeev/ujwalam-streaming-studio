@@ -402,6 +402,10 @@ describe('settings and clip answers', () => {
     assert.deepEqual(JSON.parse(readFileSync(path.join(dataDir, 'clips', 'answer.json'), 'utf8')), { id: 'x-1', make: true, remember: true });
     assert.equal((await post(port, a, '/ui/api/clips/answer', { id: 'x-1', make: 'yes' })).status, 400);
     assert.equal((await post(port, a, '/ui/api/clips/answer', { id: 'x-1', make: true, path: 'C:/' })).status, 400);
+    // D411: a clip look for this one recording, checked like clip_look.override_from_env
+    assert.equal((await post(port, a, '/ui/api/clips/answer', { id: 'x-2', make: true, look: { music: 'drop', name: 'off' } })).status, 200);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(dataDir, 'clips', 'answer.json'), 'utf8')).look, { music: 'drop', name: 'off' });
+    assert.equal((await post(port, a, '/ui/api/clips/answer', { id: 'x-2', make: true, look: { name: 'centre' } })).status, 400);
   });
   test('while live: settings refused with a plain reason', async () => {
     hostLive = true;

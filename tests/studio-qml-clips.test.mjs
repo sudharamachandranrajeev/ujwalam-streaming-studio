@@ -117,4 +117,13 @@ describe('QML studio: clips chip, question and My clips (headless probe)', { ski
     assert.equal(r.opened.length, 1);
     assert.match(r.opened[0], /clips/i);
   });
+
+  test('"Make clips?": a music, transition and name style for this one recording goes with the answer (D411); As in Settings sends none', async () => {
+    const ask = { id: 'rec-7', name: 'rec-7', kind: 'recording', minutes: 5 };
+    const r = await probe({ status: { state: 'idle', available: true, asks: [ask], queued: [], last: null },
+      actions: ['clips-ask', 'clips-look:music:drop', 'clips-look:transitions:off', 'clips-look:name:kinetic', 'clips-look:name:', 'clips-answer:yes'] });
+    assert.deepEqual(done(r.p), [true, true, true, true, true, true]);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(r.dataDir, 'clips', 'answer.json'), 'utf8')),
+      { id: ask.id, make: true, remember: false, look: { music: 'drop', transitions: 'off' } });
+  });
 });

@@ -18,6 +18,7 @@
 //   clips.reelTransition: the join between the pieces of a reel (RP1; kinds and the length range in
 //                         data/clip/transitions.json, read by services/clip/reel_transition.py): { kind, ms }.
 //                         Absent = the default kind. Used while the reel-transitions flag is on.
+//   clips.look: the clip look (FX1-FX4, D411): ticks per style group, randomise, locks and tunables (data/clip/look.json).
 //   folders.recordings: where recordings are saved (used from the next start); null = <host data>/recordings
 //   folders.clips: where finished clips are saved; null = <dataDir>/clips
 //   ui.motion (D290), ui.guide (D294 proposed): see the blocks below
@@ -198,6 +199,91 @@ export function reelTransitionInfo(dataDir) {
 }
 // ---- reel transition end
 
+// ---- clip look (FX1-FX4, D411) begin: clips.look checks and read; also marked "clip look" in readSettings,
+// settingsProblems and writeSettings. Same rules and messages as services/clip/clip_look.py look_problems() (shared
+// cases: tests/fixtures/clip-look-cases.json). Any part may be left out; the rest keeps its default (data/clip/look.json).
+export const CLIP_LOOK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'clip', 'look.json');
+export const LOOK_GROUPS = Object.freeze(['music', 'transitions', 'name']);
+const LOOK_KEYS = Object.freeze({ music: ['modes', 'sources', 'folder', 'levelDb', 'lock'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
+  name: ['styles', 'position', 'colour', 'sizePct', 'durationSec', 'logo', 'lock'] });
+let lookCache = null;
+/** data/clip/look.json, or null when unreadable. */
+export function lookDefaults(file = CLIP_LOOK_FILE) {
+  if (file === CLIP_LOOK_FILE && lookCache) return lookCache;
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    if (!LOOK_GROUPS.every((g) => Array.isArray(j.groups?.[g]?.options) && j.defaults?.[g])) return null;
+    if (file === CLIP_LOOK_FILE) lookCache = j;
+    return j;
+  } catch { return null; }
+}
+const lookIds = (d, g) => d.groups[g].options.map((o) => o.id);
+const lookTicks = (v, allowed, where) => (!Array.isArray(v) || v.some((x) => typeof x !== 'string') || new Set(v).size !== v.length
+  || v.some((x) => !allowed.includes(x)) ? [`${where} must be a list of ${allowed.join(', ')} (each once)`] : []);
+const lookRange = (v, r, where, integer = false) => (isNum(v) && v >= r.min && v <= r.max && (!integer || Number.isInteger(v)) ? [] : [`${where} must be from ${r.min} to ${r.max}`]);
+const plainObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** Problems with a clips.look value; [] when fine. */
+export function lookProblems(v, d = lookDefaults()) {
+  if (!d) return ['the clip look is not available (data/clip/look.json is missing)'];
+  if (!plainObj(v)) return ['clips.look must be an object'];
+  const out = [];
+  for (const k of Object.keys(v)) if (k !== 'randomise' && !LOOK_GROUPS.includes(k)) out.push(`unknown clips.look setting ${k}`);
+  if ('randomise' in v && typeof v.randomise !== 'boolean') out.push('clips.look.randomise must be true or false');
+  for (const g of LOOK_GROUPS) {
+    if (!(g in v)) continue;
+    const gv = v[g]; const w = `clips.look.${g}`;
+    if (!plainObj(gv)) { out.push(`${w} must be an object`); continue; }
+    for (const k of Object.keys(gv)) if (!LOOK_KEYS[g].includes(k)) out.push(`unknown ${w} setting ${k}`);
+    const tk = d.groups[g].ticks;
+    if (tk in gv) out.push(...lookTicks(gv[tk], lookIds(d, g), `${w}.${tk}`));
+    if ('lock' in gv && gv.lock !== null && !lookIds(d, g).includes(gv.lock)) out.push(`${w}.lock must be empty or one of ${lookIds(d, g).join(', ')}`);
+    for (const b of ['sfx', 'beatSync', 'logo']) if (b in gv && typeof gv[b] !== 'boolean') out.push(`${w}.${b} must be true or false`);
+  }
+  const m = plainObj(v.music) ? v.music : {};
+  if ('sources' in m) out.push(...lookTicks(m.sources, d.sources.map((s) => s.id), 'clips.look.music.sources'));
+  if ('folder' in m && (typeof m.folder !== 'string' || m.folder.length > d.folderMaxChars || /[\x00-\x1f]/.test(m.folder))) out.push(`clips.look.music.folder must be a folder path up to ${d.folderMaxChars} characters`);
+  if ('levelDb' in m) out.push(...lookRange(m.levelDb, d.levelDb, 'clips.look.music.levelDb'));
+  const n = plainObj(v.name) ? v.name : {};
+  if ('position' in n && !d.positions.includes(n.position)) out.push(`clips.look.name.position must be one of ${d.positions.join(', ')}`);
+  if ('colour' in n && !(n.colour === 'theme' || (typeof n.colour === 'string' && /^#[0-9A-Fa-f]{6}$/.test(n.colour)))) out.push('clips.look.name.colour must be theme or a colour like #FF3B5C');
+  if ('sizePct' in n) out.push(...lookRange(n.sizePct, d.sizePct, 'clips.look.name.sizePct', true));
+  if ('durationSec' in n) out.push(...lookRange(n.durationSec, d.durationSec, 'clips.look.name.durationSec'));
+  return out;
+}
+
+/** Problems with a one-clip look choice from "Make clips?" ({ music?, transitions?, name? }: an option id or "off",
+ *  same as clip_look.override_from_env); [] when fine. Nothing of it is saved. */
+export function lookOverrideProblems(v, d = lookDefaults()) {
+  if (!d) return ['the clip look is not available (data/clip/look.json is missing)'];
+  if (!plainObj(v)) return ['look must be an object'];
+  return Object.entries(v).flatMap(([g, x]) => (!LOOK_GROUPS.includes(g) ? [`unknown look part ${g}`]
+    : x === 'off' || lookIds(d, g).includes(x) ? [] : [`look.${g} must be off or one of ${lookIds(d, g).join(', ')}`]));
+}
+
+const readLook = (v) => (v !== undefined && lookDefaults() && lookProblems(v).length === 0 ? structuredClone(v) : null);
+
+/** The stored look after a patch: group by group, part by part. */
+function mergeLook(cur, patch) {
+  if (patch === undefined) return cur ?? null;
+  const out = structuredClone(cur ?? {});
+  if ('randomise' in patch) out.randomise = patch.randomise;
+  for (const g of LOOK_GROUPS) if (patch[g]) out[g] = { ...(out[g] ?? {}), ...structuredClone(patch[g]) };
+  return Object.keys(out).length ? out : null;
+}
+
+/** For the Settings page: { groups, sources, positions, ranges, defaults, look (defaults + the user's value) }, or null. */
+export function lookInfo(dataDir) {
+  const d = lookDefaults();
+  if (!d) return null;
+  const mine = readSettings(dataDir).clips.look ?? {};
+  const look = structuredClone(d.defaults);
+  if ('randomise' in mine) look.randomise = mine.randomise;
+  for (const g of LOOK_GROUPS) Object.assign(look[g], mine[g] ?? {});
+  return { flag: d.flag, groups: d.groups, sources: d.sources, positions: d.positions, levelDb: d.levelDb, sizePct: d.sizePct,
+    durationSec: d.durationSec, defaults: d.defaults, look };
+}
+// ---- clip look end
 // ---- match gate (D286 proposed) begin: clips.matchGate checks and read; also one line each in DEFAULTS,
 // readSettings, settingsProblems and writeSettings, marked "match gate"
 const okMinKills = (v) => v === null || (Number.isInteger(v) && v >= MIN_KILLS.min && v <= MIN_KILLS.max);
@@ -332,7 +418,8 @@ export function readSettings(dataDir) {
       recordLive: typeof c.recordLive === 'boolean' ? c.recordLive : DEFAULTS.clips.recordLive, matchGate: readMatchGate(c.matchGate),
       ...(Object.keys(readReelLengths(c.reelLengths)).length ? { reelLengths: readReelLengths(c.reelLengths) } : {}), // reel length
       ...(Object.keys(readReelHooks(c.reelHooks)).length ? { reelHooks: readReelHooks(c.reelHooks) } : {}), // reel hook
-      ...(readReelTransition(c.reelTransition) ? { reelTransition: readReelTransition(c.reelTransition) } : {}) }, // reel transition
+      ...(readReelTransition(c.reelTransition) ? { reelTransition: readReelTransition(c.reelTransition) } : {}), // reel transition
+      ...(readLook(c.look) ? { look: readLook(c.look) } : {}) }, // clip look
     folders: { recordings: dir(f.recordings), clips: dir(f.clips) },
     ...uiRead(j), // D290
   };
@@ -350,6 +437,7 @@ export function settingsProblems(patch, { forbidden = [] } = {}) {
     else if (k === 'reelLengths') out.push(...reelLengthProblems(v)); // reel length
     else if (k === 'reelHooks') out.push(...reelHookProblems(v)); // reel hook
     else if (k === 'reelTransition') out.push(...reelTransitionProblems(v)); // reel transition
+    else if (k === 'look') out.push(...lookProblems(v)); // clip look
     else if (k === 'recordLive') { if (typeof v !== 'boolean') out.push('clips.recordLive must be true or false'); } // LC2
     else if (!['recording', 'live'].includes(k)) out.push(`unknown clip setting ${k}`);
     else if (!CLIP_MODES.includes(v)) out.push(`clips.${k} must be one of ${CLIP_MODES.join(', ')}`);
@@ -376,6 +464,8 @@ export function writeSettings(dataDir, patch) {
   if (rls) next.clips.reelLengths = rls; else delete next.clips.reelLengths;
   const rhs = mergeReelHooks(cur.clips.reelHooks, patch.clips?.reelHooks); // reel hook: per type, defaults not stored
   if (rhs) next.clips.reelHooks = rhs; else delete next.clips.reelHooks;
+  const lk = mergeLook(cur.clips.look, patch.clips?.look); // clip look: group by group
+  if (lk) next.clips.look = lk; else delete next.clips.look;
   for (const k of ['recordings', 'clips']) if (typeof next.folders[k] === 'string') mkdirSync(next.folders[k], { recursive: true });
   mkdirSync(dataDir, { recursive: true });
   const f = path.join(dataDir, SETTINGS_FILE);

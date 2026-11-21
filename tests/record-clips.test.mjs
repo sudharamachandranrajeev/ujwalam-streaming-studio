@@ -209,6 +209,27 @@ test('ask: a question per recording; yes + remember sets "after"; no makes nothi
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
 
+test('ask: a clip look chosen for this one recording reaches the clipper (UJWALAM_CLIP_LOOK); nothing is saved (D411)', async () => {
+  const s = setup();
+  try {
+    const rc = make(s);
+    rc.feed(s.S('live')); rc.feed(s.S('stopped'));
+    const [ask] = s.status().asks;
+    const look = { music: 'drop', transitions: 'off', name: 'corner-tag' };
+    writeFileSync(path.join(s.dataDir, 'clips', 'answer.json'), JSON.stringify({ id: ask.id, make: true, look }));
+    rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1);
+    assert.deepEqual(JSON.parse(s.spawned[0].o.env.UJWALAM_CLIP_LOOK), look);
+    assert.equal('look' in readSettings(s.dataDir).clips, false, 'the one-clip choice is not saved');
+    s.spawned[0].c.emit('exit', 0);
+    rc.feed(s.S('live')); rc.feed(s.S('stopped'));
+    const [a2] = s.status().asks;
+    writeFileSync(path.join(s.dataDir, 'clips', 'answer.json'), JSON.stringify({ id: a2.id, make: true }));
+    rc.feed(s.S('stopped'));
+    assert.equal(s.spawned[1].o.env.UJWALAM_CLIP_LOOK, undefined, 'without a choice: the settings decide');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
 test('while: the moment watcher is on only while recording or live; the moments are edited when it stops', async () => {
   const s = setup();
   try {

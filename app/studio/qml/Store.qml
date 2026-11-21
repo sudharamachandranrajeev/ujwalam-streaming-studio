@@ -727,8 +727,10 @@ QtObject {
         }
         return false;
     }
-    function answerClips(id, make, remember) {
-        Api.post("ui/api/clips/answer", { id: id, make: make, remember: remember }, (ok, r, err) => {
+    function answerClips(id, make, remember, look) { // look (D411): this recording's clip look, or null for Settings
+        const b = { id: id, make: make, remember: remember };
+        if (look) b.look = look;
+        Api.post("ui/api/clips/answer", b, (ok, r, err) => {
             say(!ok ? "Answer not saved: " + err
                 : make ? "Making clips. You can keep working; the Clips label shows when they are ready." : "No clips made.");
         });
