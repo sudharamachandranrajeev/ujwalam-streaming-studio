@@ -99,7 +99,8 @@ import learning_mix as lmix  # noqa: E402
 import match_gate as mg  # noqa: E402
 import music_library as mlib  # noqa: E402
 from clip_common import (  # noqa: E402
-    CLIP_DATA, EXIT_FLAG_OFF, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir, end_tree_when_parent_gone, eprint, find_tool, flag_on, load_config,
+    CLIP_DATA, EXIT_FLAG_OFF, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
+    end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
     load_json, lower_own_priority, match_gate_settings, media_info, on_air, progress_line, resolve_data_dir, run_tool,
     write_json_atomic,
 )
@@ -1027,11 +1028,14 @@ def _long_video_steps(a, lv, out):
     kills = sum(g["kills"] for g in p["segments"])
     write_json_atomic(os.path.join(out, RENDER), {
         "tool": lv.TOOL, "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": os.path.basename(rec),
+        "musicRecords": 1,  # D414: never treated as a legacy clip by posting
         "frame": frame, "configVersion": cfg.get("version"), "transition": tr,
         "flash": "no flash effect: cross fade or cut only", "failed": 0 if ok else 1,
         "clips": [{"id": lv.CLIP_ID, "start": 0.0, "end": expected, "score": round(sum(g["score"] for g in p["segments"]), 3),
                    "labels": [], "kills": kills, "pieces": p["segments"], "dropped": p["dropped"],
-                   "captions": {"backend": "none", "status": "off"}, "files": files, "errors": errors}]})
+                   "captions": {"backend": "none", "status": "off"},
+                   "music": None,  # D414: the long video adds no music (the stream's own sound only)
+                   "files": files, "errors": errors}]})
     if not ok:
         return {"status": "failed", "reason": err[:200]}
     res = val.validate_file(ffmpeg, ffprobe, os.path.join(wd, lv.FILE), None, frame, {"targets": []},
@@ -2063,6 +2067,7 @@ def main(argv=None):
         if not clips_allowed(data_dir):
             eprint(f"clipper: clips are off (Settings > Clips, or the '{FLAG}' flag)")
             return EXIT_FLAG_OFF
+        ensure_provenance_since(data_dir)  # D414: music records start no later than this run's first render
         if getattr(a, "out", None):
             a.out = os.path.abspath(a.out)
             check_out_dir(a.out, corpus_dir())

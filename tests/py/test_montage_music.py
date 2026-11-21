@@ -124,6 +124,42 @@ class MontageMusicTests(unittest.TestCase):
         self.assertEqual((r["artist"], r["complete"], r["review"], r["source"]), ("", False, True, "changed"))
         self.assertNotIn(tid, {x["id"] for x in self.rows().values()}, "the old typed credit is dropped, not kept as missing")
 
+    def test_identity_is_the_whole_file_cached_bounded_and_stoppable(self):
+        """Codex verify: two files with the same size and first MiB but another ending get other ids; the hash is
+        cached by path + size + mtime_ns; it stops on air mid-file and refuses a file over identity.maxBytes."""
+        a, b = os.path.join(self.tmp, "a.mp3"), os.path.join(self.tmp, "b.mp3")
+        head = b"x" * (2 * mm.CHUNK)
+        with open(a, "wb") as f:
+            f.write(head + b"tail-one")
+        with open(b, "wb") as f:
+            f.write(head + b"tail-two")
+        self.assertNotEqual(mm._id(a, self.cfg, OFF), mm._id(b, self.cfg, OFF))
+        cache = {}
+        tid = mm._id(a, self.cfg, OFF, cache)
+        calls = []
+        self.assertEqual(mm._id(a, self.cfg, lambda: calls.append(1) or True, cache), tid, "cached: no read, no on-air ask")
+        self.assertEqual(calls, [])
+        st = os.stat(a)
+        os.utime(a, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        with self.assertRaises(mm.ClipError):  # changed: hashed again, and now on air -> stopped
+            mm._id(a, self.cfg, lambda: True, cache)
+        big = os.path.join(self.tmp, "big.mp3")
+        with open(big, "wb") as f:
+            f.write(b"y" * (40 * mm.CHUNK))
+        n = []
+        def turns_live():
+            n.append(1)
+            return len(n) > 1
+        with self.assertRaises(mm.ClipError) as e:  # a stream starts mid-file: stopped at the next check
+            mm._id(big, self.cfg, turns_live)
+        self.assertIn("off air", str(e.exception))
+        small = dict(self.cfg, identity=dict(self.cfg["identity"], maxBytes=mm.CHUNK))
+        with self.assertRaises(mm.ClipError):
+            mm._id(big, small, OFF)
+        doc = mm.scan(self.data, self.folder, self.cfg, tags=tags, live=OFF)
+        saved = mm.load_json(os.path.join(self.data, *self.cfg["identity"]["cache"].split("/")))["files"]
+        self.assertEqual(sorted(v["id"] for v in saved.values()), sorted(doc["tracks"]))
+
     def test_scan_off_air_only(self):
         for live in (lambda: True, lambda: None, None):
             with self.assertRaises(mm.ClipError):

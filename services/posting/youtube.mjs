@@ -23,7 +23,7 @@ import { createReadStream, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { checkLimits, composeField, loadLimits } from './index.mjs';
 import { createLearningStore } from '../learning/store.mjs';
-import { creditMissing } from './post-text.mjs';
+import { creditMissing, readProvenanceSince } from './post-text.mjs';
 
 const UPLOAD_INIT_URL = 'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status';
 const THUMBNAIL_URL = (videoId) => `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${encodeURIComponent(videoId)}`;
@@ -276,7 +276,9 @@ export async function uploadVideo(opts) {
   if (!checkLimits(opts.post, opts.limits).ok) throw new UploadError('over-limit', 'the post is over a platform limit');
   if ((opts.post.unresolved ?? []).length) throw new UploadError('unresolved-placeholders', 'unresolved template placeholders remain');
   // D414: a montage with an NCS track is never sent without its credit in the description (fail closed)
-  if (creditMissing(opts.post)) throw new UploadError('music-credit-missing', 'the montage song credit is missing from the description; nothing was sent');
+  const mg = creditMissing(opts.post, Number.isFinite(opts.provenanceSince) ? opts.provenanceSince : null);
+  if (mg === 'music-credit-missing') throw new UploadError(mg, 'the montage song credit is missing from the description; nothing was sent');
+  if (mg) throw new UploadError(mg, "the package's music was never checked; package it again; nothing was sent");
   const existing = opts.ledger.get(opts.sha256, opts.post.target);
   if (existing?.status === 'uploaded') throw new UploadError('already-uploaded', `already uploaded as ${existing.videoId}`);
 
@@ -359,7 +361,7 @@ export async function uploadPost(opts) {
   const accessToken = await auth.accessToken();
   const r = await uploadVideo({
     post, sha256, videoPath: video.file, coverPath: cover?.file, accessToken,
-    ledger: store.ledger, limits: opts.limits ?? loadLimits(), outputsStatus: opts.outputsStatus, fetchImpl: opts.fetchImpl, now: opts.now, sessions: opts.sessions, publishAt: opts.publishAt, minLeadMs: opts.minLeadMs, marginMs: opts.marginMs, chunkDeadlineMs: opts.chunkDeadlineMs, fallbackBps: opts.fallbackBps, nowMs: opts.nowMs, beforeChunk: opts.beforeChunk, beforeNewSession: opts.beforeNewSession, chunkSize: opts.chunkSize, signal: opts.signal, requestMs: opts.requestMs, chunkRequestMs: opts.chunkRequestMs,
+    ledger: store.ledger, limits: opts.limits ?? loadLimits(), provenanceSince: readProvenanceSince(store.dataDir), outputsStatus: opts.outputsStatus, fetchImpl: opts.fetchImpl, now: opts.now, sessions: opts.sessions, publishAt: opts.publishAt, minLeadMs: opts.minLeadMs, marginMs: opts.marginMs, chunkDeadlineMs: opts.chunkDeadlineMs, fallbackBps: opts.fallbackBps, nowMs: opts.nowMs, beforeChunk: opts.beforeChunk, beforeNewSession: opts.beforeNewSession, chunkSize: opts.chunkSize, signal: opts.signal, requestMs: opts.requestMs, chunkRequestMs: opts.chunkRequestMs,
     recordUploaded: async ({ videoId }) => { store.ledger.annotate(sha256, post.target, { videoId }); },
   });
   // LL2 (D338): a "posted" label row in the local learning store when the store knows the data folder. Never fails the upload.

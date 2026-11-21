@@ -129,7 +129,7 @@ async function fakeGoogle() {
 const ROWS = [
   { name: 'codm_montage_20261109-100000_kills-5_01_v.mp4', kind: 'montage', seconds: 45, music: { source: 'generated' } },
   { name: 'codm_montage_20261109-100000_kills-9_02_h.mp4', kind: 'montage', seconds: 90, music: { source: 'generated' } },
-  { name: 'codm_won-reel_20261109-100000_victory-kills-4_01_v-full-crop.mp4', kind: 'won-reel', seconds: 50 },
+  { name: 'codm_won-reel_20261109-100000_victory-kills-4_01_v-full-crop.mp4', kind: 'won-reel', seconds: 50, music: { source: 'none' } },
 ];
 
 // Task bar (D311 proposed): a re-slotted or deadline-stopped upload is waiting, not failed, so its task file is removed.

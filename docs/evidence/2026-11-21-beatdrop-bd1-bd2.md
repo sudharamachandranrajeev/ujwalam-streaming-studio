@@ -88,4 +88,21 @@ Rule for every kind that carries music (montage, won-match reel, impact play, li
 | `tests/py/test_clip_output_layout.py`: a render with `musicRecords` whose clip has no record publishes `{source: unknown}` to the row and the sidecar; an unknown-shape record is unknown | pass (17/17) |
 | posting-uploads 12, posting-e2e 61, posting-auto-d375 51 | pass |
 
+## Codex verify fixes (2026-11-21, D414 item 7)
+
+Fixed already (Codex verify of dc85dcb + 2e1883b): song-map guard, song-map open, library open.
+
+| Finding | Fix | Test (result) |
+|---|---|---|
+| P1 legacy pass too wide | `music-provenance.json` `since`, written once (link, first writer wins) by posting, clipper main and publish; legacy only for clips older than it | `tests/montage-music.test.mjs` "the legacy pass covers only clips older than the provenance start": newer won-reel + impact play held with no folder and no history; older posted; start written once, never moved (pass, 11/11 in file) |
+| P2 identity = first MiB | whole-file SHA-256, bounded (200 MB, 30 s), on-air check every 32 MiB, cache by path + size + mtime_ns | `tests/py/test_montage_music.py` same size and first MiB, other tail: other ids; cache hit reads nothing; changed mtime re-hashes; stops when a stream starts mid-file; over the size cap refused (pass, 11/11) |
+| P2 lock race | temp + fsync + os.link; stale only on a dead or reused pid, or a torn record older than 60 s; stale lock moved aside and checked | `tests/py/test_moments.py` four processes start together: one WON, three BUSY; fresh torn lock busy; old torn lock taken; reused pid taken; no temp files left (pass, 10/10); detector_pass 37/37 |
+| P1 run packaging skipped the gate | packageRun reads render.json records through the same gate; every package carries `source.music`; approve and upload refuse `music-unchecked` | `tests/posting.test.mjs` "packageRun music gate": folder song render-only, missing record music-unknown, made-here packaged with its check; approve and upload refuse a stripped package made after the start, an old one passes (pass, 18/18) |
+| P1 sidecar forgery | sidecar bound to the video (size, SHA-256 of first and last MiB); mismatch or no binding = unknown | `tests/montage-music.test.mjs` folder scan: a sidecar on other bytes and an unbound one read as unknown (pass); `tests/py/test_clip_output_layout.py` sidecar carries the binding (pass, 18/18) |
+| P2 long video legacy | long-video render.json: `musicRecords: 1`, `music: null` | `test_clip_output_layout.py` "every render writer keeps music records": all 4 render.json writers in clipper.py set musicRecords and the long video's clip entry has music (source check, pass) |
+
+Re-run after the fixes, one file at a time, CPU only: analytics 12, cli-data-dir 3, learning-mix 26, learning-signals 10, posting-auto-chain 15, posting-auto-d375 51, posting-auto 14, posting-custom-schedule 15, posting-e2e 61, posting-live-check 8, posting-preview 12, posting-pt1-text 5, posting-pt2-hard-gap 10, posting-pt3-actions 9, posting-pt5-settings 11, posting-rules-in-data 8, posting-schedule 28, posting-uploads 12, posting-youtube-cli 6, posting-youtube 9, studio-ui-posting-auto 8, studio-ui-posting-queue 6, studio-ui-posting-youtube 11, studio-ui-posting 8; python long_video 23, learning_mix 9, song_map 9, clip_live_review_gate 6. All passed. Two e2e fixtures (a won-reel added after the first run) now carry a record: a clip made after the start without one is held, as intended.
+
+Residual (accepted, D414): the data folder is the user's own; whoever can write it can rewrite a video and its sidecar together.
+
 Still UNVERIFIED: the Montage music card does not yet show the "file changed, check the credit" note (it shows the credit as incomplete). The legacy rule has not run against the user's real clips folder.

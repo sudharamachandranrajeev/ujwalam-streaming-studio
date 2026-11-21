@@ -5,7 +5,8 @@
   reel-style example rule, reel_style.local_file_problem, for a folder);
 - scan(data_dir, folder): every track in the folder gets a credit record (artist, title, the NCS line, link) read from
   its tags, else from an "Artist - Title [NCS Release]" file name; a record the user edited is kept as edited. Codex BD
-  review: records are keyed by the track's identity (its size and the SHA-256 of its first MB), not its name, so a
+  review: records are keyed by the track's identity (its size and the SHA-256 of the whole file, computed once per
+  path + size + modified time and cached, bounded in size and time, stopped when a stream starts), not its name, so a
   credit never moves to another song of the same name; a file whose identity changed loses its edited credit and is
   marked for review (incomplete: its montages are not posted). Off air only; tags are read with the demuxer named from
   the extension and the file protocol only (style_analyse.safe_open_audio);
@@ -29,6 +30,7 @@ import random
 import re
 import stat
 import sys
+import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -78,17 +80,55 @@ def folder_problem(folder, drive_type=None):
     return None
 
 
-IDENTITY_BYTES = 1 << 20
+CHUNK = 1 << 20
+LIVE_EVERY = 32  # chunks between on-air checks while hashing
 
 
-def _id(path):
-    """The track's identity: size + SHA-256 of the first MB (bounded read). Survives a copy to a new disk or folder;
-    another song under the same name gets another id."""
+def _id(path, cfg=None, live=on_air, cache=None):
+    """The track's identity: size + SHA-256 of the whole file (Codex verify: not only its first MB, so a re-tagged or
+    edited file is another track). Bounded (cfg identity.maxBytes, maxSec per file) and stoppable: it asks live()
+    every LIVE_EVERY MB and stops with ClipError on air (unknown counts as on air). cache (a dict, saved by scan) maps
+    the path to {size, mtimeNs, id}, so a file is hashed once until it changes. Raises OSError / ClipError."""
+    lim = (cfg or load_config())["identity"]
+    st = os.stat(path)
+    key = os.path.normcase(os.path.abspath(path))
+    hit = (cache or {}).get(key)
+    if isinstance(hit, dict) and hit.get("size") == st.st_size and hit.get("mtimeNs") == st.st_mtime_ns \
+            and isinstance(hit.get("id"), str) and ID.match(hit["id"]):
+        return hit["id"]
+    if st.st_size > lim["maxBytes"]:
+        raise ClipError(f"{os.path.basename(path)} is larger than {lim['maxBytes'] // (1 << 20)} MB; not used")
     h = hashlib.sha256()
+    t0 = time.monotonic()
+    n = 0
     with open(path, "rb") as fh:
         size = os.fstat(fh.fileno()).st_size
-        h.update(fh.read(IDENTITY_BYTES))
-    return hashlib.sha256(f"{size}:{h.hexdigest()}".encode()).hexdigest()[:16]
+        while True:
+            if n % LIVE_EVERY == 0 and (live is None or live() is not False):
+                raise ClipError("the music folder is looked at off air only (after the stream)")
+            if time.monotonic() - t0 > lim["maxSec"]:
+                raise ClipError(f"{os.path.basename(path)} took too long to read; not used")
+            b = fh.read(CHUNK)
+            if not b:
+                break
+            h.update(b)
+            n += 1
+            if n * CHUNK > lim["maxBytes"]:
+                raise ClipError(f"{os.path.basename(path)} grew while it was read; not used")
+    tid = hashlib.sha256(f"{size}:{h.hexdigest()}".encode()).hexdigest()[:16]
+    if cache is not None:
+        cache[key] = {"size": st.st_size, "mtimeNs": st.st_mtime_ns, "id": tid}
+    return tid
+
+
+def _identity_cache(data_dir, cfg):
+    p = os.path.join(data_dir, *cfg["identity"]["cache"].split("/"))
+    try:
+        doc = load_json(p)
+        files = doc.get("files") if isinstance(doc, dict) else None
+        return p, (files if isinstance(files, dict) else {})
+    except (OSError, ValueError, ClipError):
+        return p, {}
 
 
 def _clean(v, n):
@@ -194,12 +234,21 @@ def scan(data_dir, folder, cfg=None, tags=None, live=on_air):
     mx = cfg["credit"]["maxChars"]
     new = {}
     by_name = {str(r.get("file", "")).lower(): tid for tid, r in old.items() if isinstance(r, dict)}
+    cpath, cache = _identity_cache(data_dir, cfg)
+    seen = {}
     for p in list_files(folder, cfg):
         name = os.path.basename(p)
         try:
-            tid = _id(p)
+            tid = _id(p, cfg, live, cache)
         except OSError:
             continue
+        except ClipError as e:
+            if "off air" in str(e):
+                raise
+            eprint(f"montage music: {e}")
+            continue
+        key = os.path.normcase(os.path.abspath(p))
+        seen[key] = cache[key]
         if tid in old and old[tid].get("edited"):
             new[tid] = {k: v for k, v in dict(old[tid], file=name).items() if k != "missing"}
             continue
@@ -224,6 +273,7 @@ def scan(data_dir, folder, cfg=None, tags=None, live=on_air):
             new[tid] = dict(r, missing=True)
     doc = {"version": 1, "folder": os.path.abspath(folder), "tracks": new}
     _save(_credits_path(data_dir, cfg), doc)
+    _save(cpath, {"version": 1, "files": seen})
     return doc
 
 

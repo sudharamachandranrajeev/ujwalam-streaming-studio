@@ -109,7 +109,7 @@ export async function main(argv, out = (s) => console.log(s), err = (s) => conso
     if (existsSync(profileFile)) profile = JSON.parse(readFileSync(profileFile, 'utf8'));
     else out('posting: no local profile; {handles.x} and {links.x} placeholders stay unresolved and are flagged');
     const r = await packageRun({
-      runDir: a.run, ledgerFile: path.join(dataDir, 'posting', LEDGER_NAME), profile,
+      runDir: a.run, ledgerFile: path.join(dataDir, 'posting', LEDGER_NAME), profile, dataDir,
       ffmpeg: typeof a.ffmpeg === 'string' ? a.ffmpeg : undefined,
       targets: typeof a.targets === 'string' ? a.targets.split(',').filter(Boolean) : undefined,
     });

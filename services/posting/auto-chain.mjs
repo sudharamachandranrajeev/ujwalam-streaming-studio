@@ -84,7 +84,7 @@ export const SCAN_EVERY_MS = 15 * 60 * 1000;
 export const STATUS_EVERY_MS = 15 * 60 * 1000;
 /** At most this many status checks per pass (1 quota unit each). */
 export const STATUS_PER_PASS = 10;
-const PERMANENT = new Set(['not-approved', 'video-changed', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at', 'publish-at-required', 'music-credit-missing']);
+const PERMANENT = new Set(['not-approved', 'video-changed', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at', 'publish-at-required', 'music-credit-missing', 'music-unchecked']);
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** PT3 (D408): the "Run auto-post now" request file (<dataDir>/posting/auto-run-now.json). The studio writes it (refused
@@ -431,6 +431,7 @@ const FAIL_TEXT = {
   'video-changed': 'The video file changed after it was approved',
   'video-missing': 'The video file is missing',
   'not-approved': 'The package is not approved',
+  'music-unchecked': "This package's music was never checked; package the clip again (or re-render it) to post it",
   'music-credit-missing': 'The montage song credit (artist and title) is missing from the description; add it in Settings > Clips > Montage music',
   'unknown-post': 'The package was not found',
   'went-public-early': 'Uploaded, but its planned public time had already passed, so YouTube may have made it public at once; check it in YouTube Studio',
@@ -1012,7 +1013,7 @@ export function createPostChain(opts) {
         const runName = path.basename(runDir);
         // 1. Shorts with the clipper's scores (candidates.json + report.json). A montage-only run has neither: not an error.
         let packedClips = 0;
-        try { packedClips = (await pack({ runDir, ledgerFile, profile, ffmpeg: opts.ffmpeg, targets: [UPLOAD_TARGET] })).packaged.length; } catch (e) {
+        try { packedClips = (await pack({ runDir, ledgerFile, profile, dataDir, ffmpeg: opts.ffmpeg, targets: [UPLOAD_TARGET] })).packaged.length; } catch (e) {
           if (!['no-candidates', 'no-report'].includes(e?.code)) log(`posting: could not package clips of ${runName}: ${String(e?.message ?? 'error').slice(0, 120)}`);
         }
         // 2. Every validated published video of this run in uploads.json (short | montage | won-reel); same-bytes files are skipped.

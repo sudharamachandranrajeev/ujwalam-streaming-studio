@@ -8,6 +8,7 @@
   "history": "clips/montage-music/history.json",
   "extensions": [".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus"],
   "maxFiles": 2000,
+  "identity": { "$comment": "Codex verify (D414): a track's id is its size + the SHA-256 of the whole file, hashed once per path + size + modified time (cache below), off air only, at most maxBytes and maxSec per file", "cache": "clips/montage-music/identity.json", "maxBytes": 209715200, "maxSec": 30 },
   "folderMaxChars": 400,
   "avoidLast": { "default": 3, "min": 0, "max": 20 },
   "defaults": { "on": true, "folder": "", "mode": "random", "fixedTrack": null, "avoidLast": 3 },

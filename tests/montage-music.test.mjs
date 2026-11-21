@@ -11,8 +11,8 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createPostStore, loadLimits, packageUploads } from '../services/posting/index.mjs';
-import { creditMissing, legacyMadeHere, musicCredit, musicOf } from '../services/posting/post-text.mjs';
-import { MUSIC_SIDECAR, scanClipsFolder } from '../services/posting/clips-source.mjs';
+import { PROVENANCE_FILE, creditMissing, legacyMadeHere, musicCredit, musicOf, readProvenanceSince } from '../services/posting/post-text.mjs';
+import { MUSIC_SIDECAR, scanClipsFolder, videoBinding } from '../services/posting/clips-source.mjs';
 import { uploadVideo } from '../services/posting/youtube.mjs';
 import { createMontageMusic, montageMusicOpProblems } from '../services/studio-ui/montage-music.mjs';
 import { pythonIn } from '../services/studio-ui/record-clips.mjs';
@@ -124,7 +124,7 @@ describe('posting', () => {
     assert.ok(pkgDir, 'one package carries the credit');
     const post = JSON.parse(readFileSync(path.join(pkgDir, 'post.json'), 'utf8'));
     assert.ok(post.description.endsWith(TEXT), post.description);
-    assert.equal(post.source.montageMusic.library, 'ncs');
+    assert.deepEqual(post.source.music, { checked: 1, use: 'credit', library: 'ncs', trackId: 'a'.repeat(16) });
     assert.equal(creditMissing(post), null);
     assert.ok(withSong);
     // the user removes the credit from the description: approve refuses, and an upload would refuse too
@@ -199,19 +199,52 @@ describe('posting', () => {
     const day = path.join(clips, '2026-11-21'); mkdirSync(day);
     const put = (name, music) => {
       const f = path.join(day, name); writeFileSync(f, Buffer.from(name.repeat(8)));
-      if (music) writeFileSync(`${f}${MUSIC_SIDECAR}`, JSON.stringify({ version: 1, music }));
+      if (music) writeFileSync(`${f}${MUSIC_SIDECAR}`, JSON.stringify({ version: 1, music, video: videoBinding(f) }));
       return f;
     };
     put('codm_montage_20261121-120000_kills-5_01_v.mp4', { source: 'generated' });
     put('codm_montage_20261121-120500_kills-6_02_v.mp4', null);
     put('codm_montage_20261121-121000_kills-7_03_v.mp4', { source: 'user-folder', track: 'x' });
     put('codm_montage_20261121-121500_kills-8_04_v.mp4', { source: 'unknown' });
+    // Codex verify: a sidecar bound to other bytes (copied from another video, or the video changed) is unknown
+    const forged = put('codm_won-reel_20261121-122000_victory-kills-4_05_v.mp4', { source: 'generated' });
+    writeFileSync(forged, Buffer.from('other bytes, same name'));
+    const unbound = put('codm_won-reel_20261121-122500_victory-kills-5_06_v.mp4', null);
+    writeFileSync(`${unbound}${MUSIC_SIDECAR}`, JSON.stringify({ version: 1, music: { source: 'generated' } }));
     const s = scanClipsFolder({ dataDir, folder: clips, probeSeconds: () => 40 });
-    assert.equal(s.rows.length, 4);
+    assert.equal(s.rows.length, 6);
+    assert.deepEqual(s.rows[4].music, { source: 'unknown' }, 'bound to other bytes');
+    assert.deepEqual(s.rows[5].music, { source: 'unknown' }, 'no binding');
     assert.deepEqual(s.rows[0].music, { source: 'generated' });
     assert.equal(s.rows[1].music, undefined);
     const r = await packageUploads({ dataDir, ledgerFile: path.join(dataDir, 'posting', 'ledger.json'), rows: s.rows, profile: {}, ffmpeg: process.execPath });
     assert.equal(r.packaged.length, 2, JSON.stringify(r.skipped));
-    assert.deepEqual(r.skipped.map((x) => x.reason).sort(), ['music-unknown', 'render-only']);
+    assert.deepEqual(r.skipped.map((x) => x.reason).sort(), ['music-unknown', 'music-unknown', 'music-unknown', 'render-only']);
+  });
+
+  test('Codex verify: the legacy pass covers only clips older than the provenance start, written once and never moved', async () => {
+    const e = setup(LEGACY.filter((x) => x.kind === 'won-reel' || x.kind === 'impact-play'));
+    const file = path.join(e.dataDir, ...PROVENANCE_FILE.split('/'));
+    mkdirSync(path.dirname(file), { recursive: true });
+    const since = Date.now() - 3600_000;
+    writeFileSync(file, JSON.stringify({ version: 1, since: new Date(since).toISOString() }));
+    // a won-reel and an impact play made after it (their sidecars lost): held, even with no folder and no pick history
+    assert.equal(legacyMadeHere(e.dataDir), true);
+    const r = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: {}, ffmpeg: process.execPath, flags: { isOn: () => true } });
+    assert.deepEqual(r.skipped.map((s) => s.reason), ['music-unknown', 'music-unknown']);
+    assert.equal(readProvenanceSince(e.dataDir), since, 'never moved');
+    // clips older than the start (here: a start after them; a creation time cannot be set back on Windows): posted
+    writeFileSync(file, JSON.stringify({ version: 1, since: new Date(Date.now() + 60_000).toISOString() }));
+    const r2 = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: {}, ffmpeg: process.execPath, flags: { isOn: () => true } });
+    assert.equal(r2.packaged.length, 2, JSON.stringify(r2.skipped));
+    // a fresh data folder: the start is made on the first run, after the clips already there
+    const f = setup(LEGACY.slice(1, 2));
+    assert.equal(readProvenanceSince(f.dataDir), null);
+    const r3 = await packageUploads({ dataDir: f.dataDir, ledgerFile: f.ledgerFile, profile: {}, ffmpeg: process.execPath });
+    assert.equal(r3.packaged.length, 1, JSON.stringify(r3.skipped));
+    const made = readProvenanceSince(f.dataDir);
+    assert.ok(Number.isFinite(made));
+    await packageUploads({ dataDir: f.dataDir, ledgerFile: f.ledgerFile, profile: {}, ffmpeg: process.execPath });
+    assert.equal(readProvenanceSince(f.dataDir), made, 'written once');
   });
 });

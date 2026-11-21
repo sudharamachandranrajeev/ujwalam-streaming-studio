@@ -176,7 +176,8 @@ class PublishTests(unittest.TestCase):
         for r in rows:
             side = r["file"] + pub.MUSIC_SIDECAR
             if r.get("music"):
-                self.assertEqual(read_json(side), {"version": 1, "music": r["music"]})
+                self.assertEqual(read_json(side), {"version": 1, "music": r["music"], "video": pub.video_binding(r["file"])})
+                self.assertEqual(set(read_json(side)["video"]), {"size", "head", "tail"})
             else:
                 self.assertFalse(os.path.exists(side))
         # a new render (musicRecords set) whose clip has no record fails closed: unknown in the row and the sidecar
@@ -188,6 +189,32 @@ class PublishTests(unittest.TestCase):
         lrows = pub.publish(live, self.clips, self.data, "codm", LAYOUTS, WEIGHTS)
         self.assertEqual([r.get("music") for r in lrows], [{"source": "unknown"}])
         self.assertEqual(read_json(lrows[0]["file"] + pub.MUSIC_SIDECAR)["music"], {"source": "unknown"})
+        # Codex verify: publish wrote the provenance start once, before the videos landed; it is never moved
+        since = read_json(os.path.join(self.data, "clips", "music-provenance.json"))["since"]
+        self.assertEqual(pub.ensure_provenance_since(self.data), since)
+
+    def test_every_render_writer_keeps_music_records(self):
+        """Codex verify (D414 item 6): every render.json clipper.py writes (plain variants, live saves, montage, long
+        video) sets musicRecords and gives each clip entry its "music" record, so no new render reads as legacy."""
+        import ast  # noqa: PLC0415
+        src = open(os.path.join(os.path.dirname(pub.__file__), "clipper.py"), encoding="utf-8").read()
+        writers = 0
+        for node in ast.walk(ast.parse(src)):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "write_json_atomic" and len(node.args) == 2):
+                continue
+            target, doc = node.args
+            if not (isinstance(target, ast.Call) and any(isinstance(a, ast.Name) and a.id == "RENDER" for a in target.args)):
+                continue
+            if not isinstance(doc, ast.Dict):
+                continue
+            writers += 1
+            keys = [k.value for k in doc.keys if isinstance(k, ast.Constant)]
+            self.assertIn("musicRecords", keys, f"render.json writer at line {node.lineno}")
+            clips = doc.values[keys.index("clips")] if "clips" in keys else None
+            if isinstance(clips, ast.List):  # a literal clip entry (the long video) must carry "music"
+                for d in clips.elts:
+                    self.assertIn("music", [k.value for k in d.keys if isinstance(k, ast.Constant)], f"line {node.lineno}")
+        self.assertEqual(writers, 4, "plain, live saves, montage, long video")
 
     def test_live_clip_uses_its_wall_time(self):
         ts = WHEN.timestamp()

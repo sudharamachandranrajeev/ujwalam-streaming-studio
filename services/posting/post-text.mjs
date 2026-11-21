@@ -3,7 +3,8 @@
 // data/games/<id>/posting.json per game); a line that names a fact the clip does not have is left out (never guessed),
 // a line over the platform's title limit (data/posting/limits.json) is left out, and the last N lines used are not used
 // again. The pick is seeded by the clip's bytes, so the same clip gets the same text. Pure except the history file.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSettings } from '../studio-ui/user-settings.mjs';
@@ -141,12 +142,84 @@ export function legacyMadeHere(dataDir, cfg = montageCfg()) {
   if (typeof folder !== 'string' || folder.trim() || !cfg || typeof cfg.history !== 'string') return false;
   return !existsSync(path.join(dataDir, ...cfg.history.split('/')));
 }
-/** Fail closed before approve and upload: a post with a montage track must still carry its credit text. null = fine. */
-export function creditMissing(post) {
-  const mc = post?.source?.musicCredit;
-  if (post?.source?.montageMusic === undefined && mc === undefined) return null;
-  if (typeof mc !== 'string' || !mc.trim()) return 'music-credit-missing';
-  return typeof post.description === 'string' && post.description.includes(mc) ? null : 'music-credit-missing';
+/**
+ * Codex verify (D414): the moment music records started. Written once, the first time this code (or the publish step,
+ * clip_publish.py ensure_provenance_since) runs, and never moved later. Only a clip older than it can be a legacy clip;
+ * a newer clip with no record is unknown and held, whatever the settings say later.
+ */
+export const PROVENANCE_FILE = 'clips/music-provenance.json';
+export function readProvenanceSince(dataDir) {
+  if (typeof dataDir !== 'string') return null;
+  try {
+    const j = JSON.parse(readFileSync(path.join(dataDir, ...PROVENANCE_FILE.split('/')), 'utf8'));
+    const ms = Date.parse(j?.since);
+    return Number.isFinite(ms) ? ms : null;
+  } catch { return null; }
+}
+export function ensureProvenanceSince(dataDir, now = () => new Date()) {
+  const have = readProvenanceSince(dataDir);
+  if (have !== null || typeof dataDir !== 'string') return have;
+  const file = path.join(dataDir, ...PROVENANCE_FILE.split('/'));
+  mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  const fd = openSync(tmp, 'wx');
+  try { writeSync(fd, JSON.stringify({ version: 1, since: now().toISOString() })); fsyncSync(fd); } finally { closeSync(fd); }
+  try { linkSync(tmp, file); } catch (e) { if (e?.code !== 'EEXIST') throw e; } finally { try { unlinkSync(tmp); } catch { /* gone */ } }
+  return readProvenanceSince(dataDir); // whoever linked first wins; never moved
+}
+/** When a clip was made, as late as its files say (creation or last change, the later): null when none can be read. */
+export function clipTimeMs(...files) {
+  let t = null;
+  for (const f of files) {
+    try { const s = statSync(f); const v = Math.max(s.birthtimeMs || 0, s.mtimeMs || 0); if (v > 0) t = Math.max(t ?? 0, v); } catch { /* none */ }
+  }
+  return t;
+}
+/** -> { pass, since } for one posting run: the settings rule (legacyMadeHere) and the provenance start (made once). */
+export function legacyContext(dataDir) {
+  return { pass: legacyMadeHere(dataDir), since: ensureProvenanceSince(dataDir) };
+}
+/** True only when the settings rule passes and the clip (its files) is older than the provenance start. */
+export function legacyFor(ctx, ...files) {
+  if (!ctx?.pass || !Number.isFinite(ctx.since)) return false;
+  const t = clipTimeMs(...files);
+  return t !== null && Math.floor(t) <= ctx.since; // the start is kept to the millisecond: the same millisecond counts as before
+}
+/** clip_publish.py music_provenance for a render.json clip entry (packageRun reads the run folder directly). */
+export function renderMusic(rdoc, clipId) {
+  const c = Array.isArray(rdoc?.clips) ? rdoc.clips.find((x) => isPlain(x) && x.id === clipId) : undefined;
+  if (!isPlain(c) || !('music' in c)) return rdoc?.musicRecords ? { source: 'unknown' } : undefined;
+  const m = c.music;
+  if (m === null) return { source: 'none' };
+  if (!isPlain(m)) return { source: 'unknown' };
+  if (m.source === 'ncs') return { source: 'ncs', trackId: m.trackId, credit: m.credit ?? null };
+  if (m.source === 'folder') return { source: 'user-folder', track: m.track };
+  if (m.source === 'made-here' || (m.source === undefined && !('track' in m) && 'seed' in m)) return { source: 'generated' };
+  return { source: 'unknown' };
+}
+/** What a package records about its music so approve and upload check it again (source.music). */
+export function musicStamp(mm, music) {
+  return music.use === 'credit'
+    ? { checked: 1, use: 'credit', library: mm.library, trackId: String(mm.trackId ?? '').slice(0, 32) }
+    : { checked: 1, use: 'post' };
+}
+/**
+ * Fail closed before approve and upload. null = fine; 'music-credit-missing' = a library song's credit is not in the
+ * description; 'music-unchecked' = the package carries no music check (source.music) and was made after the
+ * provenance start (sinceMs; packages from before it predate the gate and pass as before).
+ */
+export function creditMissing(post, sinceMs = null) {
+  const s = isPlain(post?.source) ? post.source : {};
+  const mc = s.musicCredit;
+  const credit = () => (typeof mc === 'string' && mc.trim() && typeof post.description === 'string' && post.description.includes(mc) ? null : 'music-credit-missing');
+  if (s.music !== undefined) {
+    if (!isPlain(s.music) || s.music.checked !== 1) return 'music-unchecked';
+    if (s.music.use === 'post') return null;
+    return s.music.use === 'credit' ? credit() : 'music-unchecked';
+  }
+  if (s.montageMusic !== undefined || mc !== undefined) return credit();
+  if (Number.isFinite(sinceMs)) { const at = Date.parse(post?.createdAt); if (!(Number.isFinite(at) && at < sinceMs)) return 'music-unchecked'; }
+  return null;
 }
 // ---- montage music credit end
 

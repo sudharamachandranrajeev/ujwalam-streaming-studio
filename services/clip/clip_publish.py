@@ -23,7 +23,9 @@ from datetime import datetime
 import clip_names as names
 import learning_mix as lmix
 import reel_thumbnail as rt
-from clip_common import ClipError, load_json, write_json_atomic
+import hashlib
+
+from clip_common import ClipError, ensure_provenance_since, load_json, write_json_atomic
 
 PUBLISHED = "published.json"
 UPLOADS = os.path.join("clips", "uploads.json")
@@ -124,9 +126,23 @@ def write_music_sidecar(video, prov):
     if prov is None:
         return
     try:
-        write_json_atomic(video + MUSIC_SIDECAR, {"version": 1, "music": prov})
+        write_json_atomic(video + MUSIC_SIDECAR, {"version": 1, "music": prov, "video": video_binding(video)})
     except (OSError, ClipError):
         pass  # no sidecar = unknown = a montage is not posted (fail closed)
+
+
+BIND_BYTES = 1 << 20
+
+
+def video_binding(video):
+    """Codex verify (D414): ties a sidecar to its video: size + SHA-256 of the first and last MiB. clips-source.mjs
+    musicSidecar checks it; another video (or a changed one) makes the record unknown."""
+    with open(video, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        head = hashlib.sha256(fh.read(BIND_BYTES)).hexdigest()
+        fh.seek(max(0, size - BIND_BYTES))
+        tail = hashlib.sha256(fh.read(BIND_BYTES)).hexdigest()
+    return {"size": size, "head": head, "tail": tail}
 
 
 def _link_or_copy(src, dst):
@@ -147,6 +163,7 @@ def _passed(report):
 
 def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=None, rec_start_local=None):
     """Links each PASS video of the run folder `work` into the clips folder `to`. Returns the rows written."""
+    ensure_provenance_since(data_dir)  # D414: before any video lands in the clips folder
     rdoc = load_json(os.path.join(work, "render.json"))
     rep_path = os.path.join(work, "report.json")
     passed = _passed(load_json(rep_path) if os.path.isfile(rep_path) else None)

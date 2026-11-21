@@ -8,7 +8,8 @@
 // seconds from ffprobe, run 'clips-folder'). packageUploads({ rows }) then packages the ones that have no package yet
 // (same-bytes files are skipped by the ledger). Reads only; never changes a file.
 import { spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { clipsFolder } from '../studio-ui/user-settings.mjs';
 
@@ -29,12 +30,34 @@ export function ffprobeSeconds(file) {
   return r.status === 0 && Number.isFinite(v) && v > 0 ? Number(v.toFixed(3)) : null;
 }
 
-/** clip_publish.py write_music_sidecar: <video>.music.json { version, music } -> the music record, or null. */
+/** clip_publish.py video_binding: size + SHA-256 of the first and last MiB of the video, or null. */
+const BIND_BYTES = 1 << 20;
+export function videoBinding(file) {
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    const size = fstatSync(fd).size;
+    const part = (at) => { const buf = Buffer.alloc(Math.min(BIND_BYTES, size - at)); readSync(fd, buf, 0, buf.length, at); return createHash('sha256').update(buf).digest('hex'); };
+    return { size, head: part(0), tail: part(Math.max(0, size - BIND_BYTES)) };
+  } catch { return null; } finally { if (fd !== undefined) closeSync(fd); }
+}
+/**
+ * clip_publish.py write_music_sidecar: <video>.music.json { version, music, video } -> the music record, or null (no
+ * sidecar). Codex verify (D414): the sidecar is bound to its video (size + first and last MiB); a sidecar that is
+ * unreadable, unbound or bound to other bytes gives { source: 'unknown' } (held). Residual: whoever can write the data
+ * folder can rewrite both, the same trust as uploads.json.
+ */
 export const MUSIC_SIDECAR = '.music.json';
 export function musicSidecar(file) {
   const p = `${file}${MUSIC_SIDECAR}`;
   if (!realFile(p)) return null;
-  try { const j = JSON.parse(readFileSync(p, 'utf8')); return isPlain(j?.music) ? j.music : null; } catch { return null; }
+  const unknown = { source: 'unknown' };
+  try {
+    const j = JSON.parse(readFileSync(p, 'utf8'));
+    if (!isPlain(j?.music) || !isPlain(j?.video)) return unknown;
+    const v = videoBinding(file);
+    return v && v.size === j.video.size && v.head === j.video.head && v.tail === j.video.tail ? j.music : unknown;
+  } catch { return unknown; }
 }
 
 export function scanClipsFolder({ dataDir, folder = clipsFolder(dataDir), probeSeconds = ffprobeSeconds } = {}) {
