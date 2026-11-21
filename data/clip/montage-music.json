@@ -1,0 +1,22 @@
+{
+  "$comment": "Montage music: the user's NCS (NoCopyrightSounds) library (D413 item 2, D414). Settings > Clips > Montage music holds the folder, random or a fixed track, and how many recent tracks are not repeated. Each track has a credit record (artist, title, the NCS line, an optional link) read from the file's tags or from an 'Artist - Title [NCS Release]' file name, editable, stored at <data>/<credits>. NCS usage policy (ncs.io/usage-policy, read by the user's session 2026-11-21): use on YouTube and Twitch, monetised, is allowed when the artist and song are credited in the description; so a post with a library track always carries its credit, and a post with a track and no credit is never sent. A montage whose track is not from this library is rendered only and never auto-posted. Read by services/clip/montage_music.py and services/studio-ui (user-settings.mjs, montage-music.mjs) and services/posting/post-text.mjs.",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-21",
+  "library": "ncs",
+  "credits": "clips/montage-music/credits.json",
+  "history": "clips/montage-music/history.json",
+  "extensions": [".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus"],
+  "maxFiles": 2000,
+  "identity": { "$comment": "Codex verify (D414): a track's id is its size + the SHA-256 of the whole file, hashed once per path + size + modified time (cache below), off air only, at most maxBytes and maxSec per file", "cache": "clips/montage-music/identity.json", "maxBytes": 209715200, "maxSec": 30 },
+  "folderMaxChars": 400,
+  "avoidLast": { "default": 3, "min": 0, "max": 20 },
+  "defaults": { "on": true, "folder": "", "mode": "random", "fixedTrack": null, "avoidLast": 3 },
+  "modes": ["random", "fixed"],
+  "credit": {
+    "line": "Music provided by NoCopyrightSounds",
+    "maxChars": { "artist": 120, "title": 160, "line": 200, "link": 200 },
+    "template": ["Song: {artist} - {title} [NCS Release]", "{line}", "{link}"],
+    "nameTag": "NCS"
+  }
+}

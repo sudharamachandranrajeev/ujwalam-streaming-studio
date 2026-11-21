@@ -225,6 +225,15 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     assert.deepEqual(p.saved.clips.reelStyles, { byType: { reel: 'fast-warm', montage: null }, pool: ['calm'] });
   });
 
+  test('Settings > Clips: Montage music is on by default with a random song; only the changed parts are saved at Save (D414)', async () => {
+    const q = await probe(['settings-open', 'settings-page:Clips']);
+    assert.deepEqual(q.s.settings.montageMusic, { on: true, folder: '', mode: 'random', fixedTrack: null, avoidLast: 3 });
+    assert.equal(node(q.p, 'montageMusicOn').checked, true);
+    assert.equal(q.saved, null, 'nothing saved by looking');
+    const p = await probe(['settings-open', 'settings-page:Clips', 'settings-montage:avoidLast:5', 'settings-montage:on:off', 'settings-save'], 9000);
+    assert.deepEqual(p.saved.clips.montageMusic, { on: false, avoidLast: 5 });
+  });
+
   test('Settings > Clips: Record while live is a switch row with its explanation, on by default; off is saved at Save', async () => {
     const p = await probe(['settings-open', 'settings-page:Clips']);
     assert.deepEqual(p.s.settings.recordLive, { on: true, text: 'Record while live', visible: true,

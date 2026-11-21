@@ -37,7 +37,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 import time
 import zipfile
 
@@ -46,12 +45,11 @@ import g1_scan
 import g1_text as gt
 import game_pack
 import match_gate
-from clip_common import CLIP_DATA, ClipError, REPO_ROOT, load_json, write_json_atomic
+from clip_common import CLIP_DATA, LOCK_NAME, ClipError, HeavyJobLock, REPO_ROOT, load_json, write_json_atomic  # noqa: F401 - HeavyJobLock, LOCK_NAME: re-exported (clipper, tests)
 
 TOOL_VERSION = 1
 HITS = "detector-hits.jsonl"
 SUMMARY = "detector-pass.json"
-LOCK_NAME = "ujwalam-clip-heavy.lock"
 
 OCR_REGION_MODES = ("full", "rois")
 # RapidOCR text-detector input rule for band crops: "max" with a side limit above any 1080p band never rescales a band
@@ -788,68 +786,6 @@ def drop_checkpoint(path):
             os.remove(os.path.join(folder, f))
         except OSError:
             pass
-
-
-# ---------------------------------------------------------------- one heavy job
-
-def _pid_alive(pid):
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        k = ctypes.windll.kernel32
-        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not h:
-            return False
-        code = ctypes.c_ulong()
-        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
-        k.CloseHandle(h)
-        return bool(ok) and code.value == 259  # STILL_ACTIVE
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
-class HeavyJobLock:
-    """One heavy clip job at a time across processes (user limit 2026-10-27). A stale lock (dead pid) is taken."""
-
-    def __init__(self, folder=None):
-        self.path = os.path.join(folder or tempfile.gettempdir(), LOCK_NAME)
-        self.held = False
-
-    def __enter__(self):
-        for _ in range(2):
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                try:
-                    with open(self.path, encoding="utf-8") as f:
-                        pid = json.load(f).get("pid")
-                except (OSError, ValueError, AttributeError):
-                    pid = None
-                if _pid_alive(pid):
-                    raise ClipError(f"another heavy clip job is running (pid {pid}); one at a time") from None
-                try:
-                    os.remove(self.path)
-                except OSError:
-                    pass
-                continue
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"pid": os.getpid(), "job": "detector-pass", "at": time.time()}, f)
-            self.held = True
-            return self
-        raise ClipError("could not take the heavy-job lock")
-
-    def __exit__(self, *exc):
-        if self.held:
-            try:
-                os.remove(self.path)
-            except OSError:
-                pass
-            self.held = False
-        return False
 
 
 # ---------------------------------------------------------------- pass

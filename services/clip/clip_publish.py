@@ -23,7 +23,9 @@ from datetime import datetime
 import clip_names as names
 import learning_mix as lmix
 import reel_thumbnail as rt
-from clip_common import ClipError, load_json, write_json_atomic
+import hashlib
+
+from clip_common import ClipError, ensure_provenance_since, load_json, write_json_atomic
 
 PUBLISHED = "published.json"
 UPLOADS = os.path.join("clips", "uploads.json")
@@ -89,6 +91,60 @@ def name_rows(rdoc, game, layouts_by_id, det_weights=None, rec_start_local=None)
     return out
 
 
+MUSIC_SIDECAR = ".music.json"
+
+
+def music_provenance(c, records=False):
+    """Codex BD review (D414): where a rendered clip's music came from, from its own render.json entry ("music", the
+    record clipper.py _music writes). -> {"source": "none"} (no music), {"source": "generated"} (made here: RP3 beds,
+    D411 made-here fallback), {"source": "user-folder", "track"} (the D411 music folder: render only, never posted),
+    {"source": "ncs", "trackId", "credit"} (the NCS library: posted with its credit), {"source": "unknown"} (a record
+    of an unknown shape, or a render that keeps records but wrote none for this clip: held), or None (an older render
+    without records: posting's legacy rule decides)."""
+    if not isinstance(c, dict) or "music" not in c:
+        # a render that keeps music records (render.json musicRecords) but wrote none for this clip: unknown, held
+        # (fail closed); an older render without records: no record, posting's legacy rule decides
+        return {"source": "unknown"} if records else None
+    m = c["music"]
+    if m is None:
+        return {"source": "none"}
+    if not isinstance(m, dict):
+        return {"source": "unknown"}
+    src = m.get("source")
+    if src == "ncs":
+        return {"source": "ncs", "trackId": m.get("trackId"), "credit": m.get("credit")}
+    if src == "folder":
+        return {"source": "user-folder", "track": m.get("track")}
+    if src == "made-here" or (src is None and "track" not in m and "seed" in m):
+        return {"source": "generated"}
+    return {"source": "unknown"}
+
+
+def write_music_sidecar(video, prov):
+    """<video>.music.json next to the published video: the clips-folder scan (services/posting/clips-source.mjs) reads
+    it for a video that has no uploads.json row. Unknown provenance writes nothing (posting refuses a montage then)."""
+    if prov is None:
+        return
+    try:
+        write_json_atomic(video + MUSIC_SIDECAR, {"version": 1, "music": prov, "video": video_binding(video)})
+    except (OSError, ClipError):
+        pass  # no sidecar = unknown = a montage is not posted (fail closed)
+
+
+BIND_BYTES = 1 << 20
+
+
+def video_binding(video):
+    """Codex verify (D414): ties a sidecar to its video: size + SHA-256 of the first and last MiB. clips-source.mjs
+    musicSidecar checks it; another video (or a changed one) makes the record unknown."""
+    with open(video, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        head = hashlib.sha256(fh.read(BIND_BYTES)).hexdigest()
+        fh.seek(max(0, size - BIND_BYTES))
+        tail = hashlib.sha256(fh.read(BIND_BYTES)).hexdigest()
+    return {"size": size, "head": head, "tail": tail}
+
+
 def _link_or_copy(src, dst):
     try:
         os.link(src, dst)
@@ -107,6 +163,7 @@ def _passed(report):
 
 def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=None, rec_start_local=None):
     """Links each PASS video of the run folder `work` into the clips folder `to`. Returns the rows written."""
+    ensure_provenance_since(data_dir)  # D414: before any video lands in the clips folder
     rdoc = load_json(os.path.join(work, "render.json"))
     rep_path = os.path.join(work, "report.json")
     passed = _passed(load_json(rep_path) if os.path.isfile(rep_path) else None)
@@ -133,9 +190,17 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                                    lambda n: names.clip_name(game, kind, when, label, n, canvas), start_nn)
         counters[(kind, canvas)] = nn
         how = _link_or_copy(src, os.path.join(day, name))
+        prov = music_provenance(c, bool(rdoc.get("musicRecords")))
+        write_music_sidecar(os.path.join(day, name), prov)
+        try:
+            vbind = video_binding(os.path.join(day, name))  # Codex verify: the row describes these bytes only
+        except OSError:
+            vbind = None
         rows.append({"id": c["id"], "layout": f["layout"], "file": os.path.join(day, name), "how": how, "kind": kind,
                      "label": label, "seconds": round(float(c["end"]) - float(c["start"]), 3),
                      **({"thumbnail": True} if f.get("thumbnail") else {}),  # RP6: frame 0 is the cover
+                     **({"music": prov} if prov is not None else {}),  # D414: where its music came from (posting gate)
+                     **({"video": vbind} if vbind else {}),
                      # PT1 (D408): the clip's facts (medal, kills, result, mode; only the known ones) for its post text
                      **({"facts": rt.facts(c)} if rt.facts(c) else {}),
                      # RP5 (D373): the edit choices a reel was made with, so its results can be linked to them
@@ -148,6 +213,8 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                                 "recording": rdoc.get("recording"), "posted": [], "game": game,
                                 **({"facts": r["facts"]} if r.get("facts") else {}),
                                 **({"thumbnail": True} if r.get("thumbnail") else {}),
+                                **({"music": r["music"]} if r.get("music") else {}),
+                                **({"video": r["video"]} if r.get("video") else {}),
                                 **({"choices": r["choices"]} if r.get("choices") else {})} for r in rows])
     return rows
 

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ujwalam.local/schemas/moments.schema.json",
+  "title": "BD1 moment finder settings per game (data/games/<id>/moments.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["game", "version", "status", "checked", "evidence", "analysis", "guard", "gunshot", "hitmarker", "kills", "scope", "flick", "vertical", "thirdPerson"],
+  "$defs": {
+    "box": {
+      "type": "object", "additionalProperties": false, "required": ["x0", "y0", "x1", "y1"],
+      "properties": { "x0": { "$ref": "#/$defs/frac" }, "y0": { "$ref": "#/$defs/frac" }, "x1": { "$ref": "#/$defs/frac" }, "y1": { "$ref": "#/$defs/frac" } }
+    },
+    "frac": { "type": "number", "minimum": 0, "maximum": 1 },
+    "pos": { "type": "number", "exclusiveMinimum": 0 },
+    "int": { "type": "integer", "minimum": 1 },
+    "luma": { "type": "number", "minimum": 0, "maximum": 255 },
+    "det": { "type": "string", "pattern": "^[A-Z][A-Z0-9]{0,7}$" }
+  },
+  "properties": {
+    "$comment": { "type": "string" },
+    "game": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "status": { "enum": ["unverified", "verified"] },
+    "checked": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "evidence": {
+      "type": "object", "additionalProperties": false, "required": ["doc", "source", "frames", "realFootage"],
+      "properties": { "doc": { "type": "string" }, "source": { "type": "string" }, "frames": { "type": "integer", "minimum": 0 }, "realFootage": { "type": "string" } }
+    },
+    "analysis": {
+      "type": "object", "additionalProperties": false, "required": ["width", "height", "flowWidth", "flowHeight"],
+      "properties": { "width": { "$ref": "#/$defs/int" }, "height": { "$ref": "#/$defs/int" }, "flowWidth": { "$ref": "#/$defs/int" }, "flowHeight": { "$ref": "#/$defs/int" } }
+    },
+    "guard": {
+      "type": "object", "additionalProperties": false, "required": ["checkEveryFrames", "maxFramesPerSec", "maxWallSecPerMin", "maxMemMb", "maxSec"],
+      "properties": { "checkEveryFrames": { "$ref": "#/$defs/int" }, "maxFramesPerSec": { "$ref": "#/$defs/int" }, "maxWallSecPerMin": { "$ref": "#/$defs/pos" },
+        "maxMemMb": { "$ref": "#/$defs/pos" }, "maxSec": { "$ref": "#/$defs/pos" } }
+    },
+    "gunshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bandHz", "sampleRate", "fft", "hop", "thresholdMad", "minGapSec", "weaponZone", "flashRise", "flashBaseFrames", "confirmFrames"],
+      "properties": {
+        "bandHz": { "type": "array", "items": { "type": "number", "minimum": 20, "maximum": 24000 }, "minItems": 2, "maxItems": 2 },
+        "sampleRate": { "enum": [16000, 24000, 48000] }, "fft": { "enum": [256, 512, 1024, 2048] }, "hop": { "type": "integer", "minimum": 64, "maximum": 1024 },
+        "thresholdMad": { "$ref": "#/$defs/pos" }, "minGapSec": { "$ref": "#/$defs/pos" }, "weaponZone": { "$ref": "#/$defs/box" },
+        "flashRise": { "$ref": "#/$defs/luma" }, "flashBaseFrames": { "$ref": "#/$defs/int" }, "confirmFrames": { "type": "integer", "minimum": 0, "maximum": 5 }
+      }
+    },
+    "hitmarker": {
+      "type": "object", "additionalProperties": false, "required": ["zone", "whiteLevel", "minWhiteShare", "maxWhiteShare"],
+      "properties": { "zone": { "$ref": "#/$defs/box" }, "whiteLevel": { "$ref": "#/$defs/luma" }, "minWhiteShare": { "$ref": "#/$defs/frac" }, "maxWhiteShare": { "$ref": "#/$defs/frac" } }
+    },
+    "kills": {
+      "type": "object", "additionalProperties": false, "required": ["detectors", "killcam", "clusterSec", "lookbackSec"],
+      "properties": { "detectors": { "type": "array", "items": { "$ref": "#/$defs/det" }, "uniqueItems": true },
+        "killcam": { "type": "array", "items": { "$ref": "#/$defs/det" }, "uniqueItems": true },
+        "clusterSec": { "$ref": "#/$defs/pos" }, "lookbackSec": { "type": "number", "minimum": 0, "maximum": 3 } }
+    },
+    "scope": {
+      "type": "object", "additionalProperties": false, "required": ["centreRadius", "ringInner", "ringOuter", "ringMaxLuma", "minContrast", "minFrames"],
+      "properties": { "centreRadius": { "$ref": "#/$defs/frac" }, "ringInner": { "$ref": "#/$defs/frac" }, "ringOuter": { "type": "number", "minimum": 0, "maximum": 1.2 },
+        "ringMaxLuma": { "$ref": "#/$defs/luma" }, "minContrast": { "$ref": "#/$defs/luma" }, "minFrames": { "$ref": "#/$defs/int" } }
+    },
+    "flick": {
+      "type": "object", "additionalProperties": false, "required": ["minShiftShare", "minFrames", "minTotalShare", "windowSec", "minGapSec"],
+      "properties": { "minShiftShare": { "$ref": "#/$defs/frac" }, "minFrames": { "$ref": "#/$defs/int" }, "minTotalShare": { "$ref": "#/$defs/pos" },
+        "windowSec": { "$ref": "#/$defs/pos" }, "minGapSec": { "$ref": "#/$defs/pos" } }
+    },
+    "vertical": {
+      "type": "object", "additionalProperties": false, "required": ["minShiftShare", "minFrames", "windowSec", "minGapSec"],
+      "properties": { "minShiftShare": { "$ref": "#/$defs/frac" }, "minFrames": { "$ref": "#/$defs/int" }, "windowSec": { "$ref": "#/$defs/pos" }, "minGapSec": { "$ref": "#/$defs/pos" } }
+    },
+    "thirdPerson": {
+      "type": "object", "additionalProperties": false, "required": ["bodyZone", "minMotionShare", "maxZoneDiffRatio", "minFrames"],
+      "properties": { "bodyZone": { "$ref": "#/$defs/box" }, "minMotionShare": { "$ref": "#/$defs/frac" }, "maxZoneDiffRatio": { "$ref": "#/$defs/frac" }, "minFrames": { "$ref": "#/$defs/int" } }
+    }
+  }
+}

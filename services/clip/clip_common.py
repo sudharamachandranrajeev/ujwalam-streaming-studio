@@ -18,7 +18,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import uuid
+from datetime import datetime, timezone
 
 # No console window on Windows (D191): every subprocess call passes **NO_WINDOW.
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
@@ -682,3 +685,135 @@ def media_info(ffprobe, path):
 
 def eprint(*a):
     print(*a, file=sys.stderr)
+
+
+LOCK_NAME = "ujwalam-clip-heavy.lock"
+PROVENANCE_FILE = ("clips", "music-provenance.json")  # services/posting/post-text.mjs PROVENANCE_FILE (keep in step)
+
+
+def ensure_provenance_since(data_dir):
+    """Codex verify (D414): the moment music records started, written once (temp file, flushed, linked into place so
+    the first writer wins) and never moved; only a clip older than it can be a legacy clip in posting. Best effort:
+    returns the ISO time or None."""
+    if not data_dir:
+        return None
+    path = os.path.join(data_dir, *PROVENANCE_FILE)
+    def read():
+        try:
+            with open(path, encoding="utf-8") as fh:
+                v = json.load(fh).get("since")
+            return v if isinstance(v, str) else None
+        except (OSError, ValueError, AttributeError):
+            return None
+    have = read()
+    if have:
+        return have
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "since": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"}, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass
+    except OSError:
+        return None
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return read()
+
+
+# ---------------------------------------------------------------- one heavy job
+
+def _pid_alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+LOCK_BYTE = 1 << 20  # Windows: the locked byte sits past the owner text, so a busy reader can still read who holds it
+
+
+class HeavyJobLock:
+    """One heavy clip job at a time across processes (user limit 2026-10-27): the detector pass, the BD1 moment
+    finder, the BD2 song map and the montage-music scan share this one lock. Codex verify: an OS-held lock on a lock
+    file that is never deleted (msvcrt.locking LK_NBLCK on Windows, fcntl.flock LOCK_EX|LOCK_NB elsewhere), held for
+    the job's life; the kernel frees it when the process ends, however it ends, so there is no staleness rule. The
+    owner text in the file (pid, job, time) is written after locking and is for the busy message only."""
+
+    def __init__(self, folder=None, job="detector-pass"):
+        self.job = job
+        self.path = os.path.join(folder or tempfile.gettempdir(), LOCK_NAME)
+        self.held = False
+        self.fh = None
+
+    def _owner(self):
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                rec = json.loads(fh.read(4096).split("\n", 1)[0] or "{}")
+            return rec if isinstance(rec, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def __enter__(self):
+        fh = open(self.path, "a+b")  # created when missing, never truncated before the lock is ours, never deleted
+        try:
+            if os.name == "nt":
+                import msvcrt  # noqa: PLC0415
+                fh.seek(LOCK_BYTE)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl  # noqa: PLC0415
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            o = self._owner()
+            since = time.strftime("%H:%M:%S", time.localtime(o["at"])) if isinstance(o.get("at"), (int, float)) else "?"
+            raise ClipError(f"another heavy clip job is running ({o.get('job', 'unknown job')} since {since}, "
+                            f"pid {o.get('pid', '?')}); one at a time") from None
+        try:
+            fh.seek(0)
+            fh.truncate()
+            fh.write((json.dumps({"pid": os.getpid(), "job": self.job, "at": time.time()}) + "\n").encode("utf-8"))
+            fh.flush()
+        except OSError:
+            pass  # the owner text is display only
+        self.fh, self.held = fh, True
+        return self
+
+    def __exit__(self, *exc):
+        if self.held:
+            try:
+                if os.name == "nt":
+                    import msvcrt  # noqa: PLC0415
+                    self.fh.seek(LOCK_BYTE)
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl  # noqa: PLC0415
+                    fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            finally:
+                self.fh.close()
+                self.fh, self.held = None, False
+        return False

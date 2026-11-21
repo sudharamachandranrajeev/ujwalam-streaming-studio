@@ -19,6 +19,7 @@
 //                         data/clip/transitions.json, read by services/clip/reel_transition.py): { kind, ms }.
 //                         Absent = the default kind. Used while the reel-transitions flag is on.
 //   clips.look: the clip look (FX1-FX4, D411): ticks per style group, randomise, locks and tunables (data/clip/look.json).
+//   clips.montageMusic: the NCS library for BeatDrop montages (D413/D414): { on, folder, mode, fixedTrack, avoidLast }.
 //   folders.recordings: where recordings are saved (used from the next start); null = <host data>/recordings
 //   folders.clips: where finished clips are saved; null = <dataDir>/clips
 //   ui.motion (D290), ui.guide (D294 proposed): see the blocks below
@@ -316,6 +317,41 @@ function mergeReelStyles(cur, patch) {
   return Object.keys(out).length ? out : null;
 }
 // ---- reel styles end
+// ---- montage music (D413 item 2, D414) begin: clips.montageMusic checks and read; also marked "montage music" in
+// readSettings, settingsProblems and writeSettings. { on, folder, mode: random|fixed, fixedTrack: track id|null,
+// avoidLast }: the user's NCS library for BeatDrop montages (data/clip/montage-music.json; the folder's drive rule and
+// the credits live in services/clip/montage_music.py). Requested feature: on by default.
+export const MONTAGE_MUSIC_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'clip', 'montage-music.json');
+let mmCache = null;
+/** data/clip/montage-music.json, or null when unreadable. */
+export function montageMusicDefaults() {
+  if (mmCache) return mmCache;
+  try { const j = JSON.parse(readFileSync(MONTAGE_MUSIC_FILE, 'utf8')); if (plainObj(j.defaults) && Array.isArray(j.modes)) mmCache = j; return mmCache; } catch { return null; }
+}
+const TRACK_ID = /^[0-9a-f]{16}$/;
+/** Problems with a clips.montageMusic value; [] when fine. */
+export function montageMusicProblems(v, d = montageMusicDefaults()) {
+  if (!d) return ['montage music is not available (data/clip/montage-music.json is missing)'];
+  if (!plainObj(v)) return ['clips.montageMusic must be an object'];
+  const out = [];
+  for (const k of Object.keys(v)) if (!Object.hasOwn(d.defaults, k)) out.push(`unknown clips.montageMusic setting ${k}`);
+  if ('on' in v && typeof v.on !== 'boolean') out.push('clips.montageMusic.on must be true or false');
+  if ('folder' in v && (typeof v.folder !== 'string' || v.folder.length > d.folderMaxChars || /[\x00-\x1f]/.test(v.folder)
+    || (v.folder !== '' && (!path.win32.isAbsolute(v.folder) || v.folder.startsWith('\\\\'))))) out.push('clips.montageMusic.folder must be empty or a full folder path on this PC (like D:\\Music\\NCS)');
+  if ('mode' in v && !d.modes.includes(v.mode)) out.push(`clips.montageMusic.mode must be one of ${d.modes.join(', ')}`);
+  if ('fixedTrack' in v && v.fixedTrack !== null && !(typeof v.fixedTrack === 'string' && TRACK_ID.test(v.fixedTrack))) out.push('clips.montageMusic.fixedTrack must be empty or a track of the folder');
+  if ('avoidLast' in v) out.push(...lookRange(v.avoidLast, d.avoidLast, 'clips.montageMusic.avoidLast', true));
+  if (v.mode === 'fixed' && 'fixedTrack' in v && v.fixedTrack === null) out.push('pick the track to use every time, or choose random');
+  return out;
+}
+const readMontageMusic = (v) => (v !== undefined && montageMusicDefaults() && montageMusicProblems(v).length === 0 ? structuredClone(v) : null);
+/** The value the Settings page shows: the defaults plus the user's saved parts. */
+export function montageMusicInfo(dataDir) {
+  const d = montageMusicDefaults();
+  if (!d) return null;
+  return { defaults: d.defaults, modes: d.modes, avoidLast: d.avoidLast, value: { ...d.defaults, ...(readSettings(dataDir).clips.montageMusic ?? {}) } };
+}
+// ---- montage music end
 // ---- match gate (D286 proposed) begin: clips.matchGate checks and read; also one line each in DEFAULTS,
 // readSettings, settingsProblems and writeSettings, marked "match gate"
 const okMinKills = (v) => v === null || (Number.isInteger(v) && v >= MIN_KILLS.min && v <= MIN_KILLS.max);
@@ -452,7 +488,8 @@ export function readSettings(dataDir) {
       ...(Object.keys(readReelHooks(c.reelHooks)).length ? { reelHooks: readReelHooks(c.reelHooks) } : {}), // reel hook
       ...(readReelTransition(c.reelTransition) ? { reelTransition: readReelTransition(c.reelTransition) } : {}), // reel transition
       ...(readLook(c.look) ? { look: readLook(c.look) } : {}), // clip look
-      ...(readReelStyles(c.reelStyles) ? { reelStyles: readReelStyles(c.reelStyles) } : {}) }, // reel styles
+      ...(readReelStyles(c.reelStyles) ? { reelStyles: readReelStyles(c.reelStyles) } : {}), // reel styles
+      ...(readMontageMusic(c.montageMusic) ? { montageMusic: readMontageMusic(c.montageMusic) } : {}) }, // montage music
     folders: { recordings: dir(f.recordings), clips: dir(f.clips) },
     ...uiRead(j), // D290
   };
@@ -472,6 +509,7 @@ export function settingsProblems(patch, { forbidden = [] } = {}) {
     else if (k === 'reelTransition') out.push(...reelTransitionProblems(v)); // reel transition
     else if (k === 'look') out.push(...lookProblems(v)); // clip look
     else if (k === 'reelStyles') out.push(...reelStylesProblems(v)); // reel styles
+    else if (k === 'montageMusic') out.push(...montageMusicProblems(v)); // montage music
     else if (k === 'recordLive') { if (typeof v !== 'boolean') out.push('clips.recordLive must be true or false'); } // LC2
     else if (!['recording', 'live'].includes(k)) out.push(`unknown clip setting ${k}`);
     else if (!CLIP_MODES.includes(v)) out.push(`clips.${k} must be one of ${CLIP_MODES.join(', ')}`);
@@ -502,6 +540,9 @@ export function writeSettings(dataDir, patch) {
   if (lk) next.clips.look = lk; else delete next.clips.look;
   const rst = mergeReelStyles(cur.clips.reelStyles, patch.clips?.reelStyles); // reel styles: type by type
   if (rst) next.clips.reelStyles = rst; else delete next.clips.reelStyles;
+  // montage music: part by part (a saved value that no longer passes is dropped, not merged)
+  if (patch.clips?.montageMusic) next.clips.montageMusic = { ...(cur.clips.montageMusic ?? {}), ...structuredClone(patch.clips.montageMusic) };
+  if (next.clips.montageMusic && montageMusicProblems(next.clips.montageMusic).length) delete next.clips.montageMusic;
   for (const k of ['recordings', 'clips']) if (typeof next.folders[k] === 'string') mkdirSync(next.folders[k], { recursive: true });
   mkdirSync(dataDir, { recursive: true });
   const f = path.join(dataDir, SETTINGS_FILE);

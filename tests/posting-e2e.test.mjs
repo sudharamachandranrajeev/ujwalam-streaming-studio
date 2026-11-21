@@ -10,6 +10,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { createPostChain, createUploadQueue, readQueueSummary, requestRunNow } from '../services/posting/auto-chain.mjs';
 import { createPostStore } from '../services/posting/index.mjs';
+import { videoBinding } from '../services/posting/clips-source.mjs';
 import { checkPostStatus } from '../services/posting/youtube.mjs';
 import { tasksDir } from '../services/studio-ui/tasks.mjs';
 import { READONLY_SCOPE, SCOPE } from '../services/posting/oauth.mjs';
@@ -127,9 +128,9 @@ async function fakeGoogle() {
 }
 
 const ROWS = [
-  { name: 'codm_montage_20261109-100000_kills-5_01_v.mp4', kind: 'montage', seconds: 45 },
-  { name: 'codm_montage_20261109-100000_kills-9_02_h.mp4', kind: 'montage', seconds: 90 },
-  { name: 'codm_won-reel_20261109-100000_victory-kills-4_01_v-full-crop.mp4', kind: 'won-reel', seconds: 50 },
+  { name: 'codm_montage_20261109-100000_kills-5_01_v.mp4', kind: 'montage', seconds: 45, music: { source: 'generated' } },
+  { name: 'codm_montage_20261109-100000_kills-9_02_h.mp4', kind: 'montage', seconds: 90, music: { source: 'generated' } },
+  { name: 'codm_won-reel_20261109-100000_victory-kills-4_01_v-full-crop.mp4', kind: 'won-reel', seconds: 50, music: { source: 'none' } },
 ];
 
 // Task bar (D311 proposed): a re-slotted or deadline-stopped upload is waiting, not failed, so its task file is removed.
@@ -144,7 +145,7 @@ function setup(rows = ROWS) {
   const out = rows.map((r, i) => {
     const file = path.join(clips, r.name);
     writeFileSync(file, Buffer.from(`${r.name}-${i}`.repeat(8)));
-    return { file, label: 'x', seconds: r.seconds, kind: r.kind, run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-09T09:00:00.000Z' };
+    return { file, label: 'x', seconds: r.seconds, kind: r.kind, ...(r.music ? { music: r.music } : {}), video: videoBinding(file), run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-09T09:00:00.000Z' };
   });
   mkdirSync(path.join(dataDir, 'clips', 'runs', 'run1'), { recursive: true });
   writeFileSync(path.join(dataDir, 'clips', 'uploads.json'), JSON.stringify({ version: 1, files: out }));
@@ -296,7 +297,7 @@ function addRow(e, r) {
   const doc = JSON.parse(readFileSync(f, 'utf8'));
   const file = path.join(path.dirname(doc.files[0].file), r.name);
   writeFileSync(file, Buffer.from(`${r.name}-late`.repeat(8)));
-  doc.files.push({ file, label: 'x', seconds: r.seconds, kind: r.kind, run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-09T10:30:00.000Z' });
+  doc.files.push({ file, label: 'x', seconds: r.seconds, kind: r.kind, ...(r.music ? { music: r.music } : {}), video: videoBinding(file), run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-09T10:30:00.000Z' });
   writeFileSync(f, JSON.stringify(doc));
 }
 
@@ -689,7 +690,7 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     g.opt.initFailures = 1; // the first clip's session start fails; the other two upload at FIRST + 6 h and FIRST + 12 h
     await c.afterRun(e.runDir, IDLE);
     assert.deepEqual(sent(g), [iso(FIRST + 6 * HOUR), iso(FIRST + 12 * HOUR)]);
-    e.clock.t = T0 + 30 * MIN; addRow(e, { name: 'codm_montage_20261109-100000_kills-7_03_v.mp4', kind: 'montage', seconds: 45 });
+    e.clock.t = T0 + 30 * MIN; addRow(e, { name: 'codm_montage_20261109-100000_kills-7_03_v.mp4', kind: 'montage', seconds: 45, music: { source: 'generated' } });
     await c.afterRun(e.runDir, IDLE);
     const items = e.queue().items();
     assert.equal(items[1].sentPublishAt, iso(FIRST + 6 * HOUR)); assert.equal(items[2].sentPublishAt, iso(FIRST + 12 * HOUR));

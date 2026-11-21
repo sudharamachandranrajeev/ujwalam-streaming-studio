@@ -45,6 +45,17 @@ const canvasOf = (status, rungId) => (Array.isArray(status?.rungs) ? status.rung
 const sinksOf = (status, kind) => (Array.isArray(status?.sinks) ? status.sinks : []).filter((s) => s.kind === kind && typeof s.id === 'string');
 export const isRecording = (status) => sinksOf(status, 'record').some((s) => ACTIVE.has(s.state));
 export const isLive = (status) => sinksOf(status, 'stream').some((s) => ACTIVE.has(s.state));
+/** Sink states that are known to be off; any other state (reconnecting, a new or unknown one) counts as on air. */
+export const OFF_STATES = new Set(['stopped', 'idle', 'offline', 'not-started', 'failed', 'ended']);
+/**
+ * Codex verify (D414): streaming or recording for background disk work (the auto-post folder scan). isLive or isRecording,
+ * or an unreadable status, a malformed sink, or a stream/record sink in any state not known to be off (fail closed).
+ */
+export function outputsOnAir(status) {
+  if (!Array.isArray(status?.sinks)) return true;
+  if (isLive(status) || isRecording(status)) return true;
+  return status.sinks.some((s) => !s || typeof s !== 'object' || ((s.kind === 'stream' || s.kind === 'record') && (s.active === true || !OFF_STATES.has(s.state))));
+}
 
 /** Recordings that ended between two outputs.status answers: { h, v } file paths (v may be null), or null. */
 export function finishedRecording(prev, cur) {

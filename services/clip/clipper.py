@@ -99,7 +99,8 @@ import learning_mix as lmix  # noqa: E402
 import match_gate as mg  # noqa: E402
 import music_library as mlib  # noqa: E402
 from clip_common import (  # noqa: E402
-    CLIP_DATA, EXIT_FLAG_OFF, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir, end_tree_when_parent_gone, eprint, find_tool, flag_on, load_config,
+    CLIP_DATA, EXIT_FLAG_OFF, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
+    end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
     load_json, lower_own_priority, match_gate_settings, media_info, on_air, progress_line, resolve_data_dir, run_tool,
     write_json_atomic,
 )
@@ -435,10 +436,12 @@ def cmd_render(a):
                           "seconds": round(time.monotonic() - t1, 2), "sourceAudioTracks": sinfo.get("audio_tracks")})
             print(f"render {c['id']}/{lid}: {files[-1]['seconds']} s")
         out_rows.append({"id": c["id"], "start": c["start"], "end": c["end"], "captions": cinfo, "files": files,
+                         "music": None,  # D414: plain variants carry no music bed (the record posting reads)
                          "errors": errors})
         progress_line("render", n, len(cands), f"clip {c['id']} {'failed' if errors else 'done'}")
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": doc["recording"],
+        "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
         "encoder": encoder, "frame": frame, "layoutsVersion": lay_doc.get("version"),
         "seconds": round(time.monotonic() - t0, 2), "failed": failed, "clips": out_rows,
     })
@@ -751,6 +754,7 @@ def cmd_live_review(a):
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": "live-saves",
+        "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
         "saves": len(rows), "encoder": encoder, "frame": frame, "layoutsVersion": lay_doc.get("version"),
         "failed": failed, "matchGate": gate_info, "clips": out_rows,
     })
@@ -1024,11 +1028,14 @@ def _long_video_steps(a, lv, out):
     kills = sum(g["kills"] for g in p["segments"])
     write_json_atomic(os.path.join(out, RENDER), {
         "tool": lv.TOOL, "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": os.path.basename(rec),
+        "musicRecords": 1,  # D414: never treated as a legacy clip by posting
         "frame": frame, "configVersion": cfg.get("version"), "transition": tr,
         "flash": "no flash effect: cross fade or cut only", "failed": 0 if ok else 1,
         "clips": [{"id": lv.CLIP_ID, "start": 0.0, "end": expected, "score": round(sum(g["score"] for g in p["segments"]), 3),
                    "labels": [], "kills": kills, "pieces": p["segments"], "dropped": p["dropped"],
-                   "captions": {"backend": "none", "status": "off"}, "files": files, "errors": errors}]})
+                   "captions": {"backend": "none", "status": "off"},
+                   "music": None,  # D414: the long video adds no music (the stream's own sound only)
+                   "files": files, "errors": errors}]})
     if not ok:
         return {"status": "failed", "reason": err[:200]}
     res = val.validate_file(ffmpeg, ffprobe, os.path.join(wd, lv.FILE), None, frame, {"targets": []},
@@ -1573,6 +1580,7 @@ def cmd_montage(a):
     def _write_render(clips):  # render.json with the rows given; failed is read when it is called
         write_json_atomic(os.path.join(out, RENDER), {
             "tool": "clipper.montage", "toolVersion": TOOL_VERSION, "createdAt": _now(),
+            "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
             "recording": os.path.basename(a.recording), "vRecording": os.path.basename(vrec), "encoder": encoder,
             "vRecordingPath": vrec, "audioFadeMs": int(cfg["audioFadeMs"]),  # ED2: clipper.py recaption renders from these
             "reelHook": {"version": ex["hcfg"]["version"], "flag": rh.FLAG, "types": ex["hooks"]},
@@ -2059,6 +2067,7 @@ def main(argv=None):
         if not clips_allowed(data_dir):
             eprint(f"clipper: clips are off (Settings > Clips, or the '{FLAG}' flag)")
             return EXIT_FLAG_OFF
+        ensure_provenance_since(data_dir)  # D414: music records start no later than this run's first render
         if getattr(a, "out", None):
             a.out = os.path.abspath(a.out)
             check_out_dir(a.out, corpus_dir())

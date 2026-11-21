@@ -593,7 +593,124 @@ Column {
             loadRecs();
         });
     }
-    Component.onCompleted: { loadRecs(); rsLoad() }
+    Component.onCompleted: { loadRecs(); rsLoad(); mmLoad() }
+
+    // D414 montage music: the user's NCS library. The switch, folder, random or fixed and "not again for" are in the dialog
+    // draft (Save / Discard); a track's credit has its own Save / Discard (it changes the credit file, not the settings).
+    property var mmInfo: ({ tracks: [], folderProblem: null })
+    property string mmNote: ""
+    property var mmEdit: ({})  // track id -> the credit fields not saved yet
+    readonly property var mm: cp.d.montageMusic || null
+    function mmLoad() {
+        Api.get("ui/api/montage-music", (ok, b, err) => {
+            if (!ok) { mmNote = "Montage music is not available: " + err; return }
+            mmInfo = b;
+            mmNote = b.problem ? "Could not read the folder: " + b.problem : b.folderProblem ? "Music folder: " + b.folderProblem : "";
+        });
+    }
+    function mmField(tr, k) { const e = mmEdit[tr.id]; return e && k in e ? e[k] : (tr[k] || "") }
+    function mmSet(id, k, v) { const all = Object.assign({}, mmEdit), e = Object.assign({}, all[id] || {}); e[k] = v; all[id] = e; mmEdit = all }
+    function mmDrop(id) { const all = Object.assign({}, mmEdit); delete all[id]; mmEdit = all }
+    function mmSave(tr) {
+        const c = { artist: mmField(tr, "artist"), title: mmField(tr, "title"), line: mmField(tr, "line"), link: mmField(tr, "link") };
+        Api.post("ui/api/montage-music", { op: "credit", id: tr.id, credit: c }, (ok, b, err) => {
+            mmNote = ok ? "" : "Credit not saved: " + err;
+            if (ok) mmDrop(tr.id);
+            mmLoad();
+        });
+    }
+
+    UCard {
+        title: "MONTAGE MUSIC"
+        visible: !!cp.mm
+        Quiet {
+            text: "Kill montages are cut to a song from your NCS (NoCopyrightSounds) folder. Each post gets the song's credit " +
+                  "(artist and title) in its description; a montage whose song has no credit is never posted. " +
+                  "A montage with a song from anywhere else is made but never posted on its own."
+        }
+        USwitch {
+            objectName: "montageMusicOn"
+            width: parent.width
+            text: "Use my NCS music for montages"
+            hint: "Off: montages use the music from Clip look."
+            checked: !!cp.mm && cp.mm.on === true
+            onToggled: cp.box.setMontage("on", checked)
+        }
+        UField {
+            objectName: "montageMusicFolder"
+            width: Math.min(parent.width, 520)
+            label: "NCS music folder"
+            placeholderText: "Like D:\\Music\\NCS (a folder on this PC)"
+            enabled: !!cp.mm && cp.mm.on
+            text: cp.mm ? cp.mm.folder : ""
+            onTextEdited: cp.box.setMontage("folder", text)
+        }
+        Row {
+            spacing: Theme.sp.s
+            UCombo {
+                objectName: "montageMusicMode"
+                width: 220
+                label: "Song choice"
+                enabled: !!cp.mm && cp.mm.on
+                model: [{ value: "random", text: "A random song" }, { value: "fixed", text: "Always one song" }]
+                currentIndex: cp.mm && cp.mm.mode === "fixed" ? 1 : 0
+                onChose: (v) => cp.box.setMontage("mode", v)
+            }
+            UCombo {
+                objectName: "montageMusicTrack"
+                width: 300
+                label: "The song"
+                enabled: !!cp.mm && cp.mm.on && cp.mm.mode === "fixed"
+                model: [{ value: "", text: "Pick a song" }].concat((cp.mmInfo.tracks || []).filter(x => !x.missing).map(x => ({ value: x.id, text: x.file })))
+                currentIndex: Math.max(0, model.findIndex(m => cp.mm && m.value === cp.mm.fixedTrack))
+                onChose: (v) => cp.box.setMontage("fixedTrack", v || null)
+            }
+            USpin {
+                objectName: "montageMusicAvoid"
+                anchors.verticalCenter: parent.verticalCenter
+                label: "Not again for"
+                enabled: !!cp.mm && cp.mm.on && cp.mm.mode === "random"
+                from: ((cp.box.info.montageMusic || {}).avoidLast || {}).min || 0
+                to: ((cp.box.info.montageMusic || {}).avoidLast || {}).max || 20
+                suffix: " montages"
+                value: cp.mm ? cp.mm.avoidLast : 3
+                onValueModified: cp.box.setMontage("avoidLast", value)
+            }
+        }
+        Quiet { objectName: "montageMusicNote"; visible: text !== ""; text: cp.mmNote; color: Theme.c.text }
+        Quiet { text: (cp.mmInfo.tracks || []).length ? "Song credits (read from the file's tags or name; fix any that are wrong):" : "Save a folder to see its songs here." }
+        Repeater {
+            model: cp.mmInfo.tracks || []
+            delegate: Column {
+                id: tr
+                required property var modelData
+                width: parent.width
+                spacing: Theme.sp.xs
+                Words { text: tr.modelData.file + (tr.modelData.missing ? " (file not in the folder now)" : ""); font.weight: Font.DemiBold }
+                Quiet {
+                    objectName: "montageCreditState_" + tr.modelData.id
+                    text: tr.modelData.complete ? "Credit ready." : "No full credit yet: montages with this song are not posted until the artist and title are filled in."
+                }
+                Row {
+                    spacing: Theme.sp.s
+                    UField { objectName: "montageArtist_" + tr.modelData.id; width: 200; label: "Artist"; text: cp.mmField(tr.modelData, "artist"); onTextEdited: cp.mmSet(tr.modelData.id, "artist", text) }
+                    UField { objectName: "montageTitle_" + tr.modelData.id; width: 240; label: "Song title"; text: cp.mmField(tr.modelData, "title"); onTextEdited: cp.mmSet(tr.modelData.id, "title", text) }
+                }
+                Row {
+                    spacing: Theme.sp.s
+                    UField { width: 240; label: "Credit line"; text: cp.mmField(tr.modelData, "line"); onTextEdited: cp.mmSet(tr.modelData.id, "line", text) }
+                    UField { width: 200; label: "Link (optional)"; placeholderText: "https://"; text: cp.mmField(tr.modelData, "link"); onTextEdited: cp.mmSet(tr.modelData.id, "link", text) }
+                }
+                Row {
+                    spacing: Theme.sp.s
+                    opacity: cp.mmEdit[tr.modelData.id] ? 1 : 0  // kept in the layout so nothing jumps
+                    enabled: !!cp.mmEdit[tr.modelData.id]
+                    UButton { objectName: "montageCreditSave_" + tr.modelData.id; text: "Save credit"; onClicked: cp.mmSave(tr.modelData) }
+                    UButton { text: "Discard"; onClicked: cp.mmDrop(tr.modelData.id) }
+                }
+            }
+        }
+    }
 
     UCard {
         title: "RECORDINGS"

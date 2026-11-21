@@ -1,0 +1,16 @@
+{
+  "$comment": "BD2 song map (plan docs/plan/2026-11-21-beatdrop-montages.md section 5 BD2, D414). Settings for services/clip/song_map.py: the beat grid (tempo from music_library, then a least-squares fit of period and phase to the onset times), downbeats (the beat phase with the most low-band energy), sections (intro, build, drop, breakdown, outro) from bar energy, the drop times and the strong transients a gunshot can land on. Output is numbers only (schema data/schemas/song-map.schema.json). All values are the agent's proposal, checked on synthetic tracks only; real tracks UNVERIFIED.",
+  "version": "0.1.0",
+  "status": "proposed",
+  "checked": "2026-11-21",
+  "fft": 2048,
+  "hop": 480,
+  "beatsPerBar": 4,
+  "fit": { "rounds": 4, "tolerance": 0.15, "minInliers": 8, "peakPercentile": 60, "groupSec": 0.15 },
+  "onsetRefine": { "fft": 256, "hop": 32, "share": 0.5 },
+  "lowBandHz": 150,
+  "sections": { "lowPercentile": 20, "highPercentile": 90, "minBars": 2, "buildRiseDbPerBar": 0.5, "buildMinBars": 2, "buildMaxBars": 8 },
+  "transients": { "percentile": 80, "max": 400 },
+  "maxAnalyseSec": 420,
+  "guard": { "checkEveryFrames": 200, "maxWallSec": 120, "maxMemMb": 1500, "maxFrames": 60000 }
+}

@@ -28,7 +28,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { resolveString } from '../project/scene-preset.mjs';
-import { cleanFacts, createTextHistory, draftText } from './post-text.mjs';
+import { trustedRow } from './clips-source.mjs';
+import { cleanFacts, createTextHistory, creditMissing, draftText, legacyContext, legacyFor, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -287,6 +288,9 @@ export async function packageRun(opts) {
   const runName = path.basename(runDir);
   const packaged = []; const skipped = [];
   let ffmpeg = null;
+  // Codex verify (D414): manual run packaging goes through the same music gate as packageUploads
+  const rdoc = readJson(path.join(runDir, 'render.json'));
+  const legacy = legacyContext(opts.dataDir);
 
   for (let idx = 0; idx < cands.candidates.length; idx++) {
     const c = cands.candidates[idx];
@@ -299,6 +303,10 @@ export async function packageRun(opts) {
       const row = rows.find((r) => isRealFile(path.join(runDir, 'clips', c.id, r.file)));
       if (!row) { skipped.push({ clipId: c.id, target, reason: 'no-pass-variant' }); continue; }
       const src = path.join(runDir, 'clips', c.id, row.file);
+      const rm = renderMusic(rdoc, c.id);
+      const mm = musicOf({ kind: 'short', ...(rm ? { music: rm } : {}) }, { legacyMadeHere: legacyFor(legacy, src, path.join(runDir, 'render.json')) });
+      const music = musicCredit(mm);
+      if (music.use === 'refuse') { skipped.push({ clipId: c.id, target, reason: music.renderOnly ? 'render-only' : music.unknown ? 'music-unknown' : 'music-credit-missing', detail: music.reason }); continue; }
       const sha = await sha256File(src);
       if (ledger.get(sha, target)) { skipped.push({ clipId: c.id, target, reason: 'already-packaged' }); continue; }
       const dir = path.join(runDir, 'posts', c.id, target);
@@ -321,6 +329,7 @@ export async function packageRun(opts) {
       };
       // PT5 (D410): the user's tone, emoji, own hashtags and footer; the defaults change nothing
       Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: 'short', seed: sha, titleMax: limits.targets?.[target]?.fields?.title?.max ?? null, fits: limitsFit(post, limits) }));
+      if (music.use === 'credit') post.description = post.description ? `${post.description}\n\n${music.text}` : music.text; // D414: last, after the prefs
       const dur = Number(row.facts?.duration);
       const peak = Number.isFinite(Number(c.anchor)) && Number.isFinite(Number(c.start)) ? Number(c.anchor) - Number(c.start) : 0;
       const at = Math.min(Math.max(peak, 0), Number.isFinite(dur) && dur > 0.4 ? dur - 0.2 : Math.max(peak, 0));
@@ -334,7 +343,8 @@ export async function packageRun(opts) {
         ...post,
         privacy: 'private',
         status: 'draft',
-        source: { run: runName, clipId: c.id, layout: row.layout, startSec: c.start, endSec: c.end, score: Number.isFinite(c.score) ? c.score : null, sha256: sha },
+        source: { run: runName, clipId: c.id, layout: row.layout, startSec: c.start, endSec: c.end, score: Number.isFinite(c.score) ? c.score : null, sha256: sha,
+          music: musicStamp(mm, music), ...(music.use === 'credit' ? { musicCredit: music.text } : {}) },
         video: { file: videoName, bytes: statSync(dst).size },
         cover: coverOk ? { file: 'cover.jpg', atSec: Number(at.toFixed(3)) } : null,
         captions,
@@ -401,7 +411,11 @@ export async function packageUploads(opts) {
   const ledger = createLedger(opts.ledgerFile);
   let ffmpeg = null;
   let flags = null;
-  for (const row of doc.files) {
+  const legacy = legacyContext(opts.dataDir); // D414: clips rendered before music records (settings rule + provenance start)
+  for (const raw of doc.files) {
+    // Codex verify: an uploads.json row counts only while it still describes the file (scan rows are checked already)
+    const row = !Array.isArray(opts.rows) && isPlain(raw) && typeof raw.file === 'string' && path.isAbsolute(raw.file) && isRealFile(raw.file)
+      ? trustedRow(raw, raw.file, legacy.since) : raw;
     const file = isPlain(row) && typeof row.file === 'string' ? row.file : null;
     const skip = (reason) => skipped.push({ file: file ? path.basename(file) : '?', reason });
     if (!file || !UPLOAD_KINDS.includes(row.kind)) { skip('unknown-kind'); continue; }
@@ -412,6 +426,13 @@ export async function packageUploads(opts) {
     }
     if (Array.isArray(row.posted) && row.posted.some((p) => p?.platform === 'youtube')) { skip('already-posted'); continue; }
     if (!path.isAbsolute(file) || !isRealFile(file)) { skip('file-missing'); continue; }
+    // D414: a montage's song. NCS library track = its credit goes in the description, no credit = not sent; a song
+    // from anywhere else = render only, never posted (fail closed, plain-word reason)
+    // Codex BD review: from the render's own music record (row.music), so a folder-scanned montage is checked too; a
+    // montage whose music cannot be told is refused (music-unknown)
+    const mm = musicOf(row, { legacyMadeHere: legacyFor(legacy, file) });
+    const music = musicCredit(mm);
+    if (music.use === 'refuse') { skipped.push({ file: path.basename(file), reason: music.renderOnly ? 'render-only' : music.unknown ? 'music-unknown' : 'music-credit-missing', detail: music.reason }); continue; }
     const tail = CANVAS_TAIL.exec(path.basename(file));
     const vertical = tail ? tail[2].toLowerCase().startsWith('v') : false;
     const seconds = Number(row.seconds);
@@ -451,6 +472,7 @@ export async function packageUploads(opts) {
     };
     // PT5 (D410): the user's tone, emoji, own hashtags and footer (Settings > Posting & growth); the defaults change nothing
     Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: row.kind, seed: sha, titleMax, fits: limitsFit(post, limits) }));
+    if (music.use === 'credit') post.description = post.description ? `${post.description}\n\n${music.text}` : music.text; // D414: last, after the prefs
     const at = uploadCoverAt(row, seconds);
     const coverOk = await extractCover(ffmpeg, dst, at, path.join(dir, 'cover.jpg'));
     const stamp = now().toISOString();
@@ -464,6 +486,9 @@ export async function packageUploads(opts) {
         ...(cleanChoices(row.choices) ? { choices: cleanChoices(row.choices) } : {}), // RP5: the reel's edit choices
         // PT1: the clip's facts (medal, kills, result, mode; only the known ones) and its game, for post text and redrafts
         ...(Object.keys(facts).length ? { facts } : {}), ...(game ? { game } : {}), textVersion: TEXT_VERSION,
+        // D414: the montage's NCS track and the credit text the description must keep (checked again at approve and upload)
+        // Codex verify: every package records its music check (source.music), re-checked at approve and upload
+        music: musicStamp(mm, music), ...(music.use === 'credit' ? { musicCredit: music.text } : {}),
         // D375: when the clip was made (from its name; posting order is oldest first) and the clips-folder file it came
         // from (the file the flag post-delete-uploaded may remove after a confirmed upload). Local data only.
         ...(madeAtOf(path.basename(file)) ? { madeAt: madeAtOf(path.basename(file)) } : {}), file: path.resolve(file) },
@@ -661,6 +686,8 @@ export function createPostStore(opts) {
         if (!p.title) return 'empty-title';
         if (!checkLimits(p, limits()).ok) return 'over-limit';
         if (unresolvedKeys(p.title, p.description, ...p.tags, ...p.hashtags).length) return 'unresolved-placeholders';
+        const mg = creditMissing(p, readProvenanceSince(typeof opts.dataDir === 'string' ? opts.dataDir : null));
+        if (mg) return mg; // D414: a library song's credit was removed from the description, or the music was never checked
         const vf = path.join(e.dir, p.video?.file ?? '');
         if (!SAFE_NAME.test(String(p.video?.file)) || !isRealFile(vf) || await sha256File(vf) !== e.sha256) return 'video-changed';
       }

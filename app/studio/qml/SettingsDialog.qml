@@ -183,6 +183,7 @@ Dialog {
             transMs: typeof tr.ms === "number" ? tr.ms : 0,
             look: info.look && info.look.look ? JSON.parse(JSON.stringify(info.look.look)) : null, // FX (D411) clip look
             reelStyles: c.reelStyles ? JSON.parse(JSON.stringify(c.reelStyles)) : null, // RS3 (D412) style per reel type, mix
+            montageMusic: info.montageMusic && info.montageMusic.value ? JSON.parse(JSON.stringify(info.montageMusic.value)) : null, // D414 NCS library
             recDir: f.recordings || "",
             clipDir: f.clips || "",
             theme: Theme.id,
@@ -252,7 +253,7 @@ Dialog {
         for (const k of ["recording", "live", "recordLive", "top3", "theme", "effects", "motion", "snap", "transKind"])
             if (d[k] !== s[k]) return true;
         if ((d.killsOn ? d.kills : -1) !== s.killsN) return true;
-        if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks) || !same(d.look, s.look) || !same(d.reelStyles, s.reelStyles)) return true;
+        if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks) || !same(d.look, s.look) || !same(d.reelStyles, s.reelStyles) || !same(d.montageMusic, s.montageMusic)) return true;
         if (transMsNow(d) !== (kindRange(d.transKind) ? s.transMs : 0)) return true;
         if (d.recDir.trim() !== s.recDir.trim() || d.clipDir.trim() !== s.clipDir.trim()) return true;
         for (const id in flagDraft) if ((flagStart[id] === true) !== flagDraft[id]) return true;
@@ -277,6 +278,11 @@ Dialog {
         }
         if (d.look && !same(d.look, s.look)) clips.look = d.look; // clip look: sent whole, only when changed
         if (d.reelStyles && !same(d.reelStyles, s.reelStyles)) clips.reelStyles = d.reelStyles; // RS3: only when changed
+        if (d.montageMusic && !same(d.montageMusic, s.montageMusic)) { // D414: only the changed parts
+            const mm = {};
+            for (const k in d.montageMusic) if (!same(d.montageMusic[k], (s.montageMusic || {})[k])) mm[k] = d.montageMusic[k];
+            clips.montageMusic = mm;
+        }
         out.clips = clips;
         out.folders = { recordings: d.recDir.trim() || null, clips: d.clipDir.trim() || null };
         const ui = {};
@@ -885,6 +891,7 @@ Dialog {
             motion: draft.motion, motionChoices: motionChoices.length, dirty: dirty, theme: draft.theme, effects: draft.effects,
             flagRows: rows, reelLengths: { rows: reelRows, error: reelError }, reelHooks: hooks,
             look: draft.look, // FX (D411)
+            montageMusic: draft.montageMusic, // D414
             reelTransition: k ? { kind: k.id, label: k.label, ms: transMsNow(draft), msEnabled: !!r, min: r ? r.min : 0, max: r ? r.max : 0 } : null,
             recordLive: { on: draft.recordLive, text: "Record while live", visible: page === "Clips",
                 hint: "Records the stream (H and V) to your recordings folder so reels can be made after it ends. Uses about 10 GB per hour." },
@@ -895,6 +902,13 @@ Dialog {
             connectionsPage: connPg.active ? connPg.probe() : null,
             size: [width, height]
         };
+    }
+    // montage music (D414): the NCS library switch, folder, random or fixed track, in the draft
+    function setMontage(k, v) {
+        const d = Object.assign({}, draft), m = JSON.parse(JSON.stringify(d.montageMusic || {}));
+        m[k] = v;
+        if (k === "mode" && v === "random") m.fixedTrack = null;
+        d.montageMusic = m; draft = d;
     }
     function pageTitle(pid) { for (const t in pageIds) if (pageIds[t] === pid) return t; return "" }
 
@@ -955,6 +969,13 @@ Dialog {
             tickLook(p[1], p[2], on(p[3]));
             return true;
         case "settings-look-random": if (!draft.look) return false; setLook("", "randomise", on(p[1])); return true;
+        case "settings-montage": // settings-montage:<on|mode|avoidLast|fixedTrack>:<value> (D414; the folder is typed, not probed)
+            if (!draft.montageMusic) return false;
+            if (p[1] === "on") { setMontage("on", on(p[2])); return true }
+            if (p[1] === "mode" && ["random", "fixed"].includes(p[2])) { setMontage("mode", p[2]); return true }
+            if (p[1] === "avoidLast") { setMontage("avoidLast", parseInt(p[2], 10)); return true }
+            if (p[1] === "fixedTrack" && /^[0-9a-f]{16}$/.test(p[2])) { setMontage("fixedTrack", p[2]); return true }
+            return false;
         case "settings-reel-style": // settings-reel-style:<reel|impact|montage>:<style id or none>
             if (!["reel", "impact", "montage"].includes(p[1]) || !p[2]) return false;
             setReelStyle(p[1], p[2] === "none" ? "" : p[2]);

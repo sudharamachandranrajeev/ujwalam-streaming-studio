@@ -13,6 +13,7 @@ import {
   POSTING_FLAG, UNITS, checkLimits, cleanProfile, composeField, createLedger, createPostStore, loadLimits, loadTemplates, packageRun, renderText,
   unresolvedKeys, youtubeTagsLength,
 } from '../services/posting/index.mjs';
+import { uploadVideo } from '../services/posting/youtube.mjs';
 
 const tmp = [];
 const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-post-')); tmp.push(d); return d; };
@@ -131,7 +132,7 @@ describe('packager', { skip }, () => {
   test('packages only PASS variants, byte-copies video, makes cover, resolves text, no private text', async () => {
     const run = makeRun(); const data = mk();
     const ledgerFile = path.join(data, 'posting', 'ledger.json');
-    const r = await packageRun({ runDir: run, ledgerFile, profile: PROFILE });
+    const r = await packageRun({ runDir: run, ledgerFile, profile: PROFILE, dataDir: data });
     assert.deepEqual(r.packaged.map((p) => `${p.clipId}/${p.target}/${p.layout}`).sort(), ['c01/tiktok/full-crop', 'c01/youtube-shorts/full-crop']);
     assert.ok(r.skipped.some((s) => s.clipId === 'c01' && s.target === 'instagram-reels' && s.reason === 'no-pass-variant'));
     assert.equal(r.skipped.filter((s) => s.clipId === 'c02').length, 3);
@@ -161,8 +162,8 @@ describe('packager', { skip }, () => {
   test('second run never packages the same video for the same target again', async () => {
     const run = makeRun(); const data = mk();
     const ledgerFile = path.join(data, 'ledger.json');
-    await packageRun({ runDir: run, ledgerFile, profile: PROFILE });
-    const again = await packageRun({ runDir: run, ledgerFile, profile: PROFILE });
+    await packageRun({ runDir: run, ledgerFile, profile: PROFILE, dataDir: data });
+    const again = await packageRun({ runDir: run, ledgerFile, profile: PROFILE, dataDir: data });
     assert.equal(again.packaged.length, 0);
     assert.ok(again.skipped.some((s) => s.reason === 'already-packaged'));
   });
@@ -171,7 +172,7 @@ describe('packager', { skip }, () => {
     const run = makeRun(); const data = mk();
     const limits = loadLimits();
     limits.targets['youtube-shorts'].fields.title.max = 5;
-    const r = await packageRun({ runDir: run, ledgerFile: path.join(data, 'l.json'), profile: {}, limits, targets: ['youtube-shorts'] });
+    const r = await packageRun({ runDir: run, ledgerFile: path.join(data, 'l.json'), profile: {}, dataDir: data, limits, targets: ['youtube-shorts'] });
     const post = JSON.parse(readFileSync(path.join(r.packaged[0].dir, 'post.json'), 'utf8'));
     assert.ok(post.unresolved.includes('handles.youtube'));
     assert.match(post.description, /\{handles\.youtube\}/);
@@ -180,11 +181,48 @@ describe('packager', { skip }, () => {
   });
 });
 
+describe('packageRun music gate (Codex verify, D414)', { skip }, () => {
+  test('manual run packaging uses the render records: folder song = render only, unknown = held, made-here posts and carries its check', async () => {
+    const run = makeRun(); const data = mk();
+    writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', musicRecords: 1, clips: [{ id: 'c01', music: { source: 'folder', track: 't' } }] }));
+    const ledgerFile = path.join(data, 'posting', 'ledger.json');
+    const a = await packageRun({ runDir: run, ledgerFile, profile: PROFILE, dataDir: data, targets: ['youtube-shorts'] });
+    assert.equal(a.packaged.length, 0);
+    assert.equal(a.skipped.find((s) => s.clipId === 'c01').reason, 'render-only');
+    writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', musicRecords: 1, clips: [{ id: 'c01' }] }));
+    const b = await packageRun({ runDir: run, ledgerFile, profile: PROFILE, dataDir: data, targets: ['youtube-shorts'] });
+    assert.equal(b.skipped.find((s) => s.clipId === 'c01').reason, 'music-unknown', 'a new render without a record fails closed');
+    writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', musicRecords: 1, clips: [{ id: 'c01', music: null }] }));
+    const c = await packageRun({ runDir: run, ledgerFile, profile: PROFILE, dataDir: data, targets: ['youtube-shorts'] });
+    assert.equal(c.packaged.length, 1);
+    const post = JSON.parse(readFileSync(path.join(c.packaged[0].dir, 'post.json'), 'utf8'));
+    assert.deepEqual(post.source.music, { checked: 1, use: 'post' });
+  });
+  test('approve and upload re-check: a package made after the provenance start without a music check is refused', async () => {
+    const run = makeRun(); const data = mk();
+    writeFileSync(path.join(run, 'render.json'), JSON.stringify({ tool: 'clipper', musicRecords: 1, clips: [{ id: 'c01', music: null }] }));
+    const ledgerFile = path.join(data, 'posting', 'ledger.json');
+    const r = await packageRun({ runDir: run, ledgerFile, profile: PROFILE, dataDir: data, targets: ['youtube-shorts'] });
+    const file = path.join(r.packaged[0].dir, 'post.json');
+    const post = JSON.parse(readFileSync(file, 'utf8'));
+    delete post.source.music;
+    writeFileSync(file, JSON.stringify(post));
+    const store = createPostStore({ ledgerFile, dataDir: data });
+    assert.equal(await store.setStatus(store.list()[0].id, 'approved'), 'music-unchecked');
+    post.createdAt = '2020-01-01T00:00:00.000Z'; // a package from before the gate existed: passes as before
+    writeFileSync(file, JSON.stringify(post));
+    assert.equal((await store.setStatus(store.list()[0].id, 'approved')).status, 'approved');
+    await assert.rejects(uploadVideo({ post: { ...post, createdAt: new Date().toISOString(), status: 'approved' }, sha256: post.source.sha256,
+      ledger: createLedger(ledgerFile), limits: loadLimits(), publishAt: '2030-01-01T00:00:00Z', provenanceSince: Date.now() - 60000,
+      outputsStatus: async () => ({}) }), (e) => e.code === 'music-unchecked');
+  });
+});
+
 describe('store', { skip }, () => {
   async function setup(profile = PROFILE) {
     const run = makeRun(); const data = mk();
     const ledgerFile = path.join(data, 'ledger.json');
-    await packageRun({ runDir: run, ledgerFile, profile, targets: ['youtube-shorts'] });
+    await packageRun({ runDir: run, ledgerFile, profile, dataDir: data, targets: ['youtube-shorts'] });
     const store = createPostStore({ ledgerFile });
     return { run, ledgerFile, store, id: store.list()[0].id };
   }

@@ -244,7 +244,8 @@ class LockTests(unittest.TestCase):
                 with self.assertRaises(cc.ClipError):
                     with dp.HeavyJobLock(td):
                         pass
-            self.assertFalse(os.path.exists(os.path.join(td, dp.LOCK_NAME)))
+            with dp.HeavyJobLock(td) as lk:  # Codex verify: the lock file stays; the OS lock was released
+                self.assertTrue(lk.held)
 
     def test_stale_lock_taken(self):
         with tempfile.TemporaryDirectory() as td:
