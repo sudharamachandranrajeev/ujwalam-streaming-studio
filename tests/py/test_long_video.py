@@ -201,6 +201,16 @@ class Render(unittest.TestCase):
                           80, None, 12, render_job, None, {"e": []}, [])
             self.assertEqual(os.listdir(wd), [])
 
+    def test_cap_is_enforced_on_the_probed_file_and_planned_with_a_margin(self):
+        # Codex D406 re-review: the tolerance never lets a file over maxSec through; the plan leaves room for rounding
+        cfg = dict(CFG, maxSec=1200)
+        self.assertTrue(lv.duration_ok(1201, 1200))  # inside the duration tolerance ...
+        self.assertTrue(lv.over_cap(1201, cfg))  # ... but over the cap: failed, not published
+        self.assertFalse(lv.over_cap(1200, cfg))
+        segs = [dict(m(i * 1000, i * 1000 + 100, 1), kinds=["kills"], moments=1) for i in range(13)]  # 1300 s
+        keep, _ = lv.fit(segs, cfg["maxSec"] - lv.CAP_MARGIN_SEC, FADE, 12)
+        self.assertLessEqual(lv.video_seconds(keep, FADE, 12), 1200 - lv.CAP_MARGIN_SEC)
+
     def test_duration_tolerance(self):
         self.assertTrue(lv.duration_ok(900.9, 900))
         self.assertFalse(lv.duration_ok(890, 900))
@@ -225,6 +235,28 @@ class Step(unittest.TestCase):
             with open(os.path.join(d, cc.LOCAL_FLAGS), "w", encoding="utf-8") as f:
                 json.dump({"flags": {lv.FLAG: False}}, f)
             self.assertEqual(self._run(d)["status"], "off")
+
+    def test_abandoned_attempts_cleared_on_every_path(self):
+        # Codex D406 re-review: a retry that ends early (flag off, no recording) still removes a killed attempt's folder
+        for flag in (False, True):
+            with tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, cc.LOCAL_FLAGS), "w", encoding="utf-8") as f:
+                    json.dump({"flags": {lv.FLAG: flag}}, f)
+                old = os.path.join(d, "run", lv.SUBDIR, "clips", lv.CLIP_ID, lv.ATTEMPT_PREFIX + "x")
+                os.makedirs(old)
+                open(os.path.join(old, "part-000.mp4"), "wb").close()
+                self.assertIn(self._run(d)["status"], ("off", "skipped"))
+                self.assertFalse(os.path.exists(old))
+
+    def test_status_names_its_recording(self):
+        with tempfile.TemporaryDirectory() as d:
+            rec = os.path.join(d, "h.mkv")
+            open(rec, "wb").close()
+            import argparse
+            import clipper  # noqa: PLC0415
+            a = argparse.Namespace(out=os.path.join(d, "run"), data_dir=d, recording=rec, detect_ran=True)
+            os.makedirs(a.out, exist_ok=True)
+            self.assertEqual(clipper._long_video(a)["recording"], "h.mkv")
 
     def test_no_recording(self):
         with tempfile.TemporaryDirectory() as d:

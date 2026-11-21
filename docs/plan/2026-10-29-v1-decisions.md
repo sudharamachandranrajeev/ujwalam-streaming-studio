@@ -2352,3 +2352,5 @@ Codex review (2026-11-21), all five fixed on the same branch:
   with a short audio fade, no cross fade), so the video never exceeds maxSec as rendered.
 - countClips counts `long/published.json`, so a long video alone reaches auto-post.
 - Parts live in a per-attempt folder removed in finally; folders left by a kill are removed at the next start.
+
+- Re-review: the plan keeps 2 s under maxSec and a probed file over maxSec is failed and removed; abandoned attempt folders are cleared at the start of every long step; long.json names its recording and, with the flag on, the current one supersedes a stale longNotMade.

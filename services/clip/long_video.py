@@ -122,6 +122,15 @@ def fit(segs, max_sec, tr, batch_pieces=None):
         dropped.append(worst)
     return keep, dropped
 
+# Codex D406: the plan stays this far under maxSec, so frame and join rounding never push a correct render over the cap;
+# the probed file is checked against maxSec itself (over_cap) and never published over it.
+CAP_MARGIN_SEC = 2.0
+
+
+def over_cap(actual, cfg):
+    return float(actual) > float(cfg["maxSec"])
+
+
 def _minutes(sec):
     m = sec / 60.0
     return f"{m:.0f} minute{'' if round(m) == 1 else 's'}" if m >= 1 else f"{sec:.0f} seconds"
@@ -140,7 +149,7 @@ def plan(hits, ranking, mcfg, duration, matches, cfg, tr):
         return {"status": "skipped", "moments": len(moms), "seconds": round(total, 3),
                 "reason": f"the session had only about {_minutes(total)} of highlights; a long video needs at least "
                           f"{_minutes(lo)}"}
-    keep, dropped = fit(segs, hi, tr, bp)
+    keep, dropped = fit(segs, hi - CAP_MARGIN_SEC, tr, bp)
     secs = video_seconds(keep, tr, bp)
     if secs < lo:  # cannot happen with segments shorter than the band, but never ship below the minimum
         return {"status": "skipped", "moments": len(moms), "seconds": round(secs, 3),

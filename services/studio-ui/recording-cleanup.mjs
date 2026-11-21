@@ -159,10 +159,10 @@ export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(data
     if (gone.has(h) && (vReason || gone.has(key(vPath)))) continue; // deleted already
     let reason = null;
     if (used.some((r) => r.result !== 'done' || r.code !== 0)) reason = 'job-failed';
-    else if (used.some((r) => typeof r.longNotMade === 'string' && r.longNotMade)) reason = 'long-video-not-made'; // D406
-    // Codex D406 P1: with the long video on, a missing or null longNotMade is no proof (records from before D406 lack it):
-    // the session's long.json must say made or too short.
-    else if (longOn && !used.some((r) => longVideoDone(dataDir, r.name).done)) reason = 'long-video-not-made';
+    // D406: with the long video on, only the session's current long.json (made or too short, for this recording) is proof;
+    // it also supersedes a stale longNotMade of the clip job (the long job writes no record; Codex re-review). Off: a
+    // longNotMade string still keeps the recording.
+    else if (longOn ? !used.some((r) => longVideoDone(dataDir, r.name, s.h).done) : used.some((r) => typeof r.longNotMade === 'string' && r.longNotMade)) reason = 'long-video-not-made';
     else if (!vReason && used.some((r) => typeof r.reelsNotMade === 'string' && r.reelsNotMade)) reason = 'reels-not-made';
     else if (pending.has(h) || (vPath && pending.has(key(vPath)))) reason = 'job-pending';
     else if (keepList.all || keepList.names.has(name.toLowerCase())) reason = 'kept-for-labelling';
@@ -327,11 +327,13 @@ export function backfillVerdict({ dataDir, file, mtimeMs, clipsDirOf = clipsFold
 
 /** D406: has the long highlights video of a session been made (or did the clipper decide there is none: too short, no
  *  moments, switched off)? Reads <data>/clips/runs/<session>/long/long.json. -> { done, why }. */
-export function longVideoDone(dataDir, session) {
+export function longVideoDone(dataDir, session, file) {
   // Codex D406 P1: only made or skipped (too short, no moments) is proof; 'off' was written while the flag was off.
   if (typeof session !== 'string' || !session || path.basename(session) !== session || session === '..') return { done: false, why: 'no long video yet' };
   const j = readJson(path.join(clipsDir(dataDir), 'runs', session, 'long', 'long.json'));
   if (!j) return { done: false, why: 'no long video yet' };
+  // Codex D406: bound to the recording it was made from (clipper writes its file name); another file's is no proof.
+  if (typeof file !== 'string' || j.recording !== path.basename(file)) return { done: false, why: 'the long video is for another recording' };
   if (j.status === 'made' || j.status === 'skipped') return { done: true, why: j.status };
   if (j.status === 'off') return { done: false, why: 'made while the long video was switched off' };
   return { done: false, why: 'the long video failed' };
@@ -368,7 +370,7 @@ export function planBackfill({ dataDir, folder, nowMs = Date.now(), clipsDirOf =
     else b = backfillVerdict({ dataDir, file: h, mtimeMs: st.mtimeMs, clipsDirOf, times, windows });
     // D406: with the long highlights video on, a recording with no clip job also waits for its long video (made, or
     // decided none: runs/<session>/long/long.json). No job record is written meanwhile, so the next pass checks again.
-    if (b.proven && longOn) { const lv = longVideoDone(dataDir, session); if (!lv.done) b = { proven: false, reason: `long-video-not-made (${lv.why})` }; }
+    if (b.proven && longOn) { const lv = longVideoDone(dataDir, session, h); if (!lv.done) b = { proven: false, reason: `long-video-not-made (${lv.why})` }; }
     verdicts.push({ file: h, size: st?.size ?? null, decision: b.proven ? 'proven' : 'kept', reason: b.reason, session });
     if (v) verdicts.push({ file: v, size: vst?.size ?? null, decision: b.proven ? 'proven' : 'kept', reason: b.proven ? `${b.reason} (V of a proven H)` : `its H is kept (${b.reason})`, session });
     // The identity is taken now, at backfill time, and the entry is marked backfill (Codex round 1).

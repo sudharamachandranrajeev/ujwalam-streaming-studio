@@ -928,13 +928,15 @@ def _long_video(a):
     import long_video as lv  # noqa: PLC0415
     out = os.path.join(a.out, lv.SUBDIR)
     os.makedirs(out, exist_ok=True)
+    lv.clear_attempts(os.path.join(out, "clips", lv.CLIP_ID))  # Codex D406: every path, before any early return
     progress_line("long", 0, 1, "making the long highlights video")
     try:
         status = _long_video_steps(a, lv, out)
     except Exception as e:  # noqa: BLE001 - any error is reported; the shorts and reels stay as they are
         eprint(f"long video: FAILED: {type(e).__name__}: {str(e)[-200:]}")
         status = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[-200:]}"}
-    status = dict(status, createdAt=_now(), flag=lv.FLAG)
+    rec = getattr(a, "recording", None)
+    status = dict(status, createdAt=_now(), flag=lv.FLAG, recording=os.path.basename(rec) if rec else None)
     try:
         write_json_atomic(os.path.join(out, lv.STATUS), status)
     except (OSError, ClipError) as e:
@@ -1006,6 +1008,14 @@ def _long_video_steps(a, lv, out):
     if not lv.duration_ok(res["facts"]["duration"], expected):
         res["ok"] = False
         res["issues"].append(f"duration {res['facts']['duration']:.1f}s (want {expected:.1f}s)")
+    if lv.over_cap(res["facts"]["duration"], cfg):  # Codex D406: never published over maxSec, whatever the tolerance
+        res["ok"] = False
+        res["issues"].append(f"duration {res['facts']['duration']:.1f}s is over the {float(cfg['maxSec']):.0f}s cap")
+    if not res["ok"]:
+        try:
+            os.remove(os.path.join(wd, lv.FILE))
+        except OSError:
+            pass
     write_json_atomic(os.path.join(out, REPORT), {
         "tool": lv.TOOL, "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": os.path.basename(rec),
         "files": 1, "failed": 0 if res["ok"] else 1,

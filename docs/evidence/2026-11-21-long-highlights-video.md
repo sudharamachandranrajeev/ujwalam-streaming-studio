@@ -62,3 +62,11 @@ What the tests cover:
 Results after the fixes: test_long_video.py 20 OK; test_clip*.py 231 OK (37 skipped); record-clips 32 pass;
 recording-cleanup 27 pass; studio-ui-flags-feedback 16 pass; live-updates 27 pass.
 Still unverified: batch boundaries (every 12 segments) have a short audio fade-out/in, not a cross fade.
+
+## Codex re-review fixes (2026-11-21)
+
+- Cap: the plan fits maxSec minus 2 s (CAP_MARGIN_SEC); the probed file over maxSec fails its check and is removed, never published. Test: test_cap_is_enforced_on_the_probed_file_and_planned_with_a_margin.
+- Abandoned attempt folders are cleared at the start of the long step, on every path (flag off, no recording, too short). Test: test_abandoned_attempts_cleared_on_every_path.
+- long.json names its recording; with the flag on, the current long.json (made or skipped, same recording) is the proof and supersedes a stale longNotMade. Test: recording-cleanup.test.mjs 'Codex D406 re-review'.
+
+Results: test_long_video.py 23 OK; test_clip*.py 231 OK (37 skipped); recording-cleanup 28 pass.
