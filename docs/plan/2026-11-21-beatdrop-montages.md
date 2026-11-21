@@ -216,6 +216,12 @@ HDMI audio; local only, outside the repo, never committed; they show other playe
 A FPP with HUD and replay controls (47 s), B FPP with HUD (48 s), B2 FPP clean (51 s), C TPP clean (43 s), D TPP clean at
 0.5x (90 s). All have game audio (card HDMI, independent of the user's headphone monitoring). They are the first
 BD5 pin-tracking and BD6 alignment fixtures from real footage.
+Quality check 2026-11-21 (same clean TPP stretch): replay graphics Max is the sharpest (Laplacian median 182 vs 144 on
+Medium, Very High 167; scenes not identical, so indicative). "Ultra frame rate" does not reach the HDMI capture: about
+49 unique frames/s whether recorded at 60 or 120 (120 only duplicates). Use replay graphics Max, record at 60; slow
+motion comes from the replay's 0.5x, not from retiming 1x footage. A full match (5.5 min, Max, HUD and replay
+controls on) is recorded for the moment finder (encounter types). The replay can also show the enemy's point of view
+(user, 2026-11-21): BD6 can offer the victim's view of a kill as a reverse angle.
 
 6.5 **Option order.** Proposed order: BD1-BD3 (moments, song map, beat-locked edit) and BD4 first, then BD5, BD7,
 LV1, RR1, and BD6 when 6.4 is answered.
