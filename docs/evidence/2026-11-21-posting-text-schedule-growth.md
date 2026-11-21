@@ -194,7 +194,36 @@ Runs (one file at a time, same rules, all exit 0): posting-e2e 61, posting-auto-
   get facts only where their uploads.json row has them.
 - The Posts window buttons have not been clicked in the running studio. Only the probe-driven QML tests ran.
 
-## Not done
+## PT5 and PT4 (D410)
 
-- PT5 (the post text card in Settings: tone, emoji, hashtags, footer, a growth toggle) and PT4 (growth suggestions
-  from AN1) are not built yet.
+Same rules: each file was run on its own with `UJWALAM_HEADLESS=1` at BelowNormal priority, after the live check
+returned exit code 0 (off air, studio open). The data root was a temp folder, and `npm run build:studio` ran before the
+QML tests. Only fixtures and fakes were used. Nothing was uploaded, and no YouTube or Analytics request was made.
+
+| Test file | Result |
+|---|---|
+| tests/posting-pt5-settings.test.mjs (new: checks, text rules, kind order, server round trip across a restart) | PASS 8/8 |
+| tests/posting-pt4-growth.test.mjs (new: math on fixture numbers, < 8 posts, exploration <= 1/5, no change without the click, Apply, Undo, Dismiss, routes) | PASS 11/11 |
+| tests/studio-qml-posting.test.mjs (3 new PT5 cases) | PASS 15/15 |
+| tests/studio-qml-posts.test.mjs (2 new PT4 cases) | PASS 6/6 |
+| re-run, one at a time: all 21 tests/posting*.test.mjs, all 4 tests/studio-ui-posting*.test.mjs, studio-qml-posting, studio-qml-posts, learning-signals, learning-mix, analytics | PASS (30 files, 0 failures, 0 skipped) |
+
+What is shown:
+- PT5: the defaults change no text. Clean drops "!". Hype with emoji on adds one emoji only when the title still fits.
+  The footer and the user's own hashtags are added, with no repeats. A bad value is refused and nothing is written.
+  Saved settings come back after a new server starts on the same data folder, as after an update. Shares that do not
+  add up to 100 % block Save with a plain note. Discard writes nothing. Uneven shares change only the auto-post order.
+- PT4: from 12 posts at 19:00 (134 views in 24 h) and 12 at other times (100), the proposal is "Move 2 of your daily
+  posts to 18:00-21:00: +34 % 24 h views on 12 posts." All times are at least 60 min apart and inside the window. With
+  7 posts there is no proposal (reason few-posts). Showing a proposal writes only its record. Apply writes placement
+  custom and keeps the other settings. Undo restores the earlier file byte for byte, or removes the file if there was
+  none. It refuses after a later change. Exploration is at most 1 in 5 slots for every posts-a-day value from 1 to 24.
+
+UNVERIFIED (PT4/PT5):
+- "24 h views" is the first stored fetch at least 24 h after the video went public, not an exact 24 h count. The 7 d
+  number has the same caveat. Viewer activity by hour is not read, because the report was not checked.
+- The bands, the 10 % lift, the 3 posts per band, 2 moves and the 7-day dismiss are the agent's values, not the user's.
+- The emoji lists and the clean rule are the agent's choice. Text quality on real clips was not reviewed.
+- The new card and the Posts window banner were checked only by the probe-driven QML tests, not clicked in the running
+  studio. The preview picks its emoji from the post id, while packaging uses the clip's hash, so the emoji shown can
+  differ from the one used.

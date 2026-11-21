@@ -2502,3 +2502,41 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
     claim included). Younger than 60 s counts as alive (wait).
   - Known item: the studio has no single-instance guard. A second studio's chain refuses through the lock
     (`sender-elsewhere`); it is not stopped from starting.
+
+## D410 — Posting PT5 and PT4 as built (decided, 2026-11-21)
+
+As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. Evidence:
+`docs/evidence/2026-11-21-posting-text-schedule-growth.md`. Nothing in D409 is weakened: the 60-minute floor, the
+fail-closed channel reads, the single sender, the lock and publishAt on every upload are unchanged.
+
+- PT5: Settings > Posting & growth gains a card "Post text and growth" next to the Auto-post card, with the same
+  Save / Discard. The posts a day, window, gap (60 to 1440, floor 60), days off and "Run auto-post now" were already on
+  the Auto-post card and stay there. New: tone (hype or clean), emoji on or off, the user's own hashtags (up to 10),
+  a description footer (up to 500 characters), a preview on the three newest clips (read only), the share of each kind
+  (whole percent, must add up to 100), growth suggestions on or off, and a line that says which quota model is in use
+  and why.
+- The settings live in `<data>/posting/prefs.json` (`services/posting/post-prefs.mjs`), next to the other posting
+  settings, so they survive updates. Routes: `GET/POST /ui/api/posts/prefs` and `POST /ui/api/posts/prefs/preview`
+  (read only). No new flag: the card is part of the posting flag, and growth suggestions are on by default.
+- The defaults change no text: tone hype keeps the drafted lines as written and emoji are off by default. Clean replaces
+  "!" and never adds an emoji. With hype and emoji on, one emoji per kind (`data/posting/text-style.json`) is added at
+  the end of the title, only when it still fits the title limit. The prefs apply when a clip is packaged
+  (`packageUploads`, `packageRun`); posts already made keep their text.
+- Kind shares change only the order inside the daily cap (`mixOrder`), never the count or the gap. A learned RP5 mix
+  wins when one is in use. Even shares (the default) keep the order exactly as before.
+- PT4: `services/analytics/timing.mjs` reads the AN1 numbers already stored (`view()`: 24 h and 7 d checkpoints, views,
+  averageViewPercentage, subscribersGained). No new scope and no Google request. It groups them by local time band,
+  weekday and kind. With at least 8 posts that have a 24 h number, it proposes one change: the best band (at least 3
+  posts and at least 10 % more 24 h views than the other posts), for example "Move 2 of your daily posts to
+  18:00-21:00: +34 % 24 h views on 12 posts." Limits are in `data/posting/growth-timing.json` with source and date.
+- The proposal is a record (`<data>/posting/growth-suggestion.json`) shown in the Posts window with Apply and Dismiss.
+  Apply writes the user's schedule settings as placement custom (the same times each weekday), checked with the strict
+  60-minute floor. It keeps the earlier file for Undo and logs to `growth-log.jsonl`. Undo puts the file back byte for
+  byte. It refuses when the schedule was changed after Apply, so a later change is never overwritten. Dismiss hides the
+  same proposal for 7 days.
+- Exploration: at most 1 in 5 of the day's slots (rounded down; the config refuses more than 0.2) go to a band outside
+  the best one. The band is picked by Thompson sampling as in RP5, using `betaDraw` and `seededRng` from
+  `services/learning/mix.mjs`.
+- UNVERIFIED: "24 h views" is the first stored fetch at least 24 h after the video went public, so it can be later than
+  24 h. Viewer activity by hour is not read, because the report was not checked. The Analytics numbers arrive a day or
+  two late.
