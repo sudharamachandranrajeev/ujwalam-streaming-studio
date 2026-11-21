@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CAPTIONS_SKIPPED, CLIP_MAKER_FIX, clipRunSpec, clipTools, countClips, countSaves, createRecordClips, finishedRecording, isLive, jobStages, liveClipperTask, parseProgress, reelsNotMade, stageWords, trainNote } from '../services/studio-ui/record-clips.mjs';
+import { CAPTIONS_SKIPPED, CLIP_MAKER_FIX, clipRunSpec, clipTools, countClips, countSaves, createRecordClips, finishedRecording, isLive, jobStages, liveClipperTask, longNotMade, parseProgress, reelsNotMade, stageWords, trainNote } from '../services/studio-ui/record-clips.mjs';
 import { folderProblem, readSettings, settingsProblems, writeSettings } from '../services/studio-ui/user-settings.mjs';
 
 const RUNGS = [{ id: 'rec-h', canvas: 'H' }, { id: 'rec-v', canvas: 'V' }];
@@ -92,11 +92,12 @@ test('clipRunSpec: whole recording (after) and moments found while it ran (while
   const r = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { type: 'full', h: 'C:/r/h.mkv', v: 'C:/r/v.mkv', name: 'h' }, exists: has([script, gpu]) });
   assert.equal(r.spec.exe, gpu);
   assert.deepEqual(r.spec.argv, ['-I', script, '--data-dir', 'D', 'run', '--detect', '--threads', '4', '--encoder', 'h264_nvenc',
-    '--recording', 'C:/r/h.mkv', '--v-recording', 'C:/r/v.mkv', '--montage', '--publish', 'E:/clips', '--out', path.join('D', 'clips', 'runs', 'h')]);
+    '--recording', 'C:/r/h.mkv', '--v-recording', 'C:/r/v.mkv', '--montage', '--long-video', '--publish', 'E:/clips', '--out', path.join('D', 'clips', 'runs', 'h')]);
   assert.equal(r.spec.out, path.join('D', 'clips', 'runs', 'h'), 'the run works in app data');
   assert.equal(r.spec.folder, 'E:/clips', 'only finished videos go to the clips folder');
   const noV = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { type: 'full', h: 'C:/r/h.mkv', name: 'h' }, exists: has([script, gpu]) });
   assert.ok(!noV.spec.argv.includes('--montage'), 'no V recording: no montage');
+  assert.ok(noV.spec.argv.includes('--long-video'), 'D406: the long video is H only: made without a V recording');
   const job = { type: 'review', since: '2026-11-08T10:00:00.000Z', until: '2026-11-08T11:00:00.000Z', name: 'live-1' };
   assert.match(clipRunSpec({ clipRoot: root, dataDir: 'D', job, saves: null, exists: has([script, gpu]) }).reason, /no moments/);
   const rv = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job, saves: 'D/live-clips/s1', exists: has([script, gpu]) });
@@ -105,23 +106,25 @@ test('clipRunSpec: whole recording (after) and moments found while it ran (while
   // D304 proposed: a stream that was recorded gives live-review its H recording, so the match gate applies.
   const withRec = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { ...job, h: 'C:/r/h.mkv', v: 'C:/r/v.mkv' }, saves: 'D/live-clips/s1', exists: has([script, gpu, 'C:/r/h.mkv']) });
   assert.deepEqual(withRec.spec.argv.slice(4), ['live-review', '--saves', 'D/live-clips/s1', '--since', job.since, '--until', job.until,
-    '--recording', 'C:/r/h.mkv', '--threads', '4', '--encoder', 'h264_nvenc', '--publish', 'E:/clips', '--drop-used-saves', '--out', path.join('D', 'clips', 'runs', 'live-1')]);
+    '--recording', 'C:/r/h.mkv', '--threads', '4', '--long-video', '--encoder', 'h264_nvenc', '--publish', 'E:/clips', '--drop-used-saves', '--out', path.join('D', 'clips', 'runs', 'live-1')]);
   assert.ok(!withRec.spec.argv.includes('--montage'), 'a V recording that is gone: no montage');
   // D322 proposed (user 2026-11-10: no montage clips from a recorded stream): H and V there -> montage after the shorts.
   const withV = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { ...job, h: 'C:/r/h.mkv', v: 'C:/r/v.mkv' }, saves: 'D/live-clips/s1', exists: has([script, gpu, 'C:/r/h.mkv', 'C:/r/v.mkv']) });
   assert.deepEqual(withV.spec.argv.slice(4), ['live-review', '--saves', 'D/live-clips/s1', '--since', job.since, '--until', job.until,
-    '--recording', 'C:/r/h.mkv', '--threads', '4', '--v-recording', 'C:/r/v.mkv', '--montage', '--encoder', 'h264_nvenc', '--publish', 'E:/clips',
+    '--recording', 'C:/r/h.mkv', '--threads', '4', '--v-recording', 'C:/r/v.mkv', '--montage', '--long-video', '--encoder', 'h264_nvenc', '--publish', 'E:/clips',
     '--drop-used-saves', '--out', path.join('D', 'clips', 'runs', 'live-1')]);
   const vOnly = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { ...job, h: 'C:/r/h.mkv', v: 'C:/r/v.mkv' }, saves: 'D/live-clips/s1', exists: has([script, gpu, 'C:/r/v.mkv']) });
   assert.ok(!vOnly.spec.argv.includes('--montage'), 'no H recording: no detector hits, no montage');
   const goneRec = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { ...job, h: 'C:/r/h.mkv' }, saves: 'D/live-clips/s1', exists: has([script, gpu]) });
   assert.ok(!goneRec.spec.argv.includes('--recording'), 'a recording that is gone: no gate input, every save kept');
+  assert.ok(!goneRec.spec.argv.includes('--long-video'), 'D406: no H recording, no long video');
+  assert.ok(!rv.spec.argv.includes('--long-video'), 'D406: a stream that was not recorded has no long video');
   // 2026-11-10: the H recording is a canvas; the project's game layer places the detector boxes (D235).
   const P = 'D/projects/alpha.project.json';
   const withProj = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { ...job, h: 'C:/r/h.mkv' }, saves: 'D/live-clips/s1', project: P, exists: has([script, gpu, 'C:/r/h.mkv', P]) });
-  assert.deepEqual(withProj.spec.argv.slice(withProj.spec.argv.indexOf('--recording'), withProj.spec.argv.indexOf('--encoder')), ['--recording', 'C:/r/h.mkv', '--threads', '4', '--project', P]);
+  assert.deepEqual(withProj.spec.argv.slice(withProj.spec.argv.indexOf('--recording'), withProj.spec.argv.indexOf('--encoder')), ['--recording', 'C:/r/h.mkv', '--threads', '4', '--project', P, '--long-video']);
   const fullProj = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { type: 'full', h: 'C:/r/h.mkv', name: 'h' }, project: P, exists: has([script, gpu, P]) });
-  assert.deepEqual(fullProj.spec.argv.slice(fullProj.spec.argv.indexOf('--recording'), fullProj.spec.argv.indexOf('--publish')), ['--recording', 'C:/r/h.mkv', '--project', P]);
+  assert.deepEqual(fullProj.spec.argv.slice(fullProj.spec.argv.indexOf('--recording'), fullProj.spec.argv.indexOf('--publish')), ['--recording', 'C:/r/h.mkv', '--project', P, '--long-video']);
   const noProj = clipRunSpec({ clipRoot: root, dataDir: 'D', outRoot: 'E:/clips', job: { type: 'full', h: 'C:/r/h.mkv', name: 'h' }, project: P, exists: has([script, gpu]) });
   assert.ok(!noProj.spec.argv.includes('--project'), 'a missing project file is not passed');
 });
@@ -176,6 +179,7 @@ test('after: a stopped recording is clipped whole, hidden, then counted; off: no
     mkdirSync(path.join(out, 'montage'));
     writeFileSync(path.join(out, 'montage', 'published.json'), JSON.stringify({ files: [{ file: 'm' }] }));
     assert.equal(countClips(out), 3, 'published videos (short clips + montages)');
+    mkdirSync(path.join(out, 'long')); writeFileSync(path.join(out, 'long', 'long.json'), JSON.stringify({ status: 'made' })); // D406
     s.spawned[0].c.emit('exit', 0);
     assert.equal(s.status().state, 'idle');
     assert.deepEqual(s.status().last, { name: 'practice-h-1', kind: 'recording', result: 'done', code: 0, clips: 3, out, folder: path.join(s.dataDir, 'clips') });
@@ -332,11 +336,11 @@ test('parseProgress: only well-formed ujwalam-progress lines count; lengths capp
 });
 
 test('task panel: the stages of each job type in order, and their plain words', () => {
-  assert.deepEqual(jobStages({ type: 'full', h: 'a.mkv' }), ['detect', 'candidates', 'gate', 'render', 'validate', 'publish']);
-  assert.deepEqual(jobStages({ type: 'full', h: 'a.mkv', v: 'b.mkv' }), ['detect', 'candidates', 'gate', 'render', 'validate', 'publish', 'montage'], 'a V recording adds the montage');
-  assert.deepEqual(jobStages({ type: 'review', h: 'a.mkv' }), ['detect', 'gate', 'review', 'publish'], 'the stream recording gives the matches');
+  assert.deepEqual(jobStages({ type: 'full', h: 'a.mkv' }), ['detect', 'candidates', 'gate', 'render', 'validate', 'publish', 'long'], 'D406: the long video last, H only');
+  assert.deepEqual(jobStages({ type: 'full', h: 'a.mkv', v: 'b.mkv' }), ['detect', 'candidates', 'gate', 'render', 'validate', 'publish', 'montage', 'long'], 'a V recording adds the montage');
+  assert.deepEqual(jobStages({ type: 'review', h: 'a.mkv' }), ['detect', 'gate', 'review', 'publish', 'long'], 'the stream recording gives the matches (and the long video)');
   assert.deepEqual(jobStages({ type: 'review' }), ['review', 'publish']);
-  assert.deepEqual(jobStages({ type: 'review', h: 'a.mkv', v: 'b.mkv' }), ['detect', 'gate', 'review', 'publish', 'montage'], 'D322: a recorded stream adds the montage');
+  assert.deepEqual(jobStages({ type: 'review', h: 'a.mkv', v: 'b.mkv' }), ['detect', 'gate', 'review', 'publish', 'montage', 'long'], 'D322: a recorded stream adds the montage');
   assert.deepEqual(jobStages({ type: 'review', v: 'b.mkv' }), ['review', 'publish'], 'no H recording: no montage');
   assert.deepEqual(stageWords('detect', { type: 'full' }), { stageText: 'Reading the game screen', unit: 'frame', measured: true });
   assert.deepEqual(stageWords('gate', { type: 'full' }), { stageText: 'Sorting clips by match', unit: 'match', measured: true });
@@ -345,6 +349,8 @@ test('task panel: the stages of each job type in order, and their plain words', 
   assert.deepEqual(stageWords('montage', {}), { stageText: 'Making the kill montage', unit: null, measured: false }, 'no progress while it works');
   assert.equal(stageWords('publish', {}).measured, false);
   assert.equal(parseProgress('ujwalam-progress {"stage":"montage","done":0,"total":1,"note":"making the kill montage"}').stage, 'montage');
+  assert.deepEqual(stageWords('long', {}), { stageText: 'Making the long highlights video', unit: null, measured: false }, 'D406: no progress while it works');
+  assert.equal(parseProgress('ujwalam-progress {"stage":"long","done":0,"total":1,"note":"making the long highlights video"}').stage, 'long');
 });
 
 test('task panel: a long montage (no progress lines) is never called stuck; a silent detect is', async () => {
@@ -393,7 +399,7 @@ test('tasks: stderr progress lines drive the task title and bar; exit makes it d
     // Task panel (2026-11-10): before any progress line the task says "Starting", knows its 5 steps, and has no
     // progressAt (the stall warning then measures from activeAt).
     assert.deepEqual([task().stage, task().stageText, task().unit, task().stages, task().activeAt, task().progressAt],
-      ['detect', 'Starting', null, ['detect', 'candidates', 'gate', 'render', 'validate', 'publish', 'montage'], t0, null]);
+      ['detect', 'Starting', null, ['detect', 'candidates', 'gate', 'render', 'validate', 'publish', 'montage', 'long'], t0, null]);
     const err = s.spawned[0].c.stderr;
     s.advance(5000);
     err.write('warming up\nujwalam-progress {"stage":"detect","done":40,"total":100,"note":"scanning"}\n');
@@ -518,6 +524,8 @@ test('LC1: status.json and the task panel show the live clipper while a stream i
     // the review job: H only, so no --montage, and the finished task says why the reels were not made
     assert.equal(s.spawned.length, 1);
     assert.equal(s.spawned[0].argv.includes('--montage'), false);
+    const lout = path.join(s.dataDir, 'clips', 'runs', 'practice-h-1', 'long'); // D406: the long video was made
+    mkdirSync(lout, { recursive: true }); writeFileSync(path.join(lout, 'long.json'), JSON.stringify({ status: 'made' }));
     s.spawned[0].c.emit('exit', 0);
     const done = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'clip-practice-h-1.json'), 'utf8'));
     assert.equal(done.state, 'done');
@@ -691,6 +699,63 @@ test('Codex round 4: polls during a model check start no second check (P3); a ch
     assert.equal(s.spawned.length, 0, 'no job starts while live');
     rc.feed(s.S('stopped')); await tick();
     assert.equal(s.spawned.length >= 1, true, 'starts once off air');
+    rc.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+test('D406 longNotMade: null when made, too short, switched off or no H recording; the reason when it failed or never ran', () => {
+  const out = 'D:/runs/x';
+  const long = path.join(out, 'long', 'long.json');
+  let doc = null;
+  const readJson = (f) => { if (path.resolve(f) !== path.resolve(long) || !doc) throw new Error('missing'); return doc; };
+  const exists = () => true;
+  const job = { type: 'review', h: 'C:/r/a.mkv' };
+  assert.equal(longNotMade(job, out, { readJson, exists }), 'the long video step did not finish; see the log');
+  doc = { status: 'failed', reason: 'part 2 did not render: boom' };
+  assert.equal(longNotMade(job, out, { readJson, exists }), 'part 2 did not render: boom');
+  for (const status of ['made', 'skipped', 'off']) { doc = { status, reason: 'x' }; assert.equal(longNotMade(job, out, { readJson, exists }), null, status); }
+  doc = null;
+  assert.equal(longNotMade({ type: 'review' }, out, { readJson, exists }), null, 'no recording: nothing to make, nothing to delete');
+  assert.equal(longNotMade({ type: 'full', h: 'C:/r/a.mkv' }, out, { readJson, exists: () => false }), null, 'the recording is gone');
+  assert.equal(longNotMade({ type: 'train' }, out, { readJson, exists }), null);
+  assert.equal(longNotMade({ type: 'full', h: 'C:/r/a.mkv' }, out, { readJson, exists }), 'the long video step did not finish; see the log', 'full runs too; job.v plays no part');
+});
+
+test('D406: a finished job records longNotMade (jobs.jsonl, status, task note); a made long video records null', async () => {
+  const s = setup();
+  try {
+    writeSettings(s.dataDir, { clips: { recording: 'after', live: 'off' } });
+    const rc = make(s);
+    rc.feed(s.S('live')); rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1);
+    assert.ok(s.spawned[0].argv.includes('--long-video'));
+    const out = path.join(s.dataDir, 'clips', 'runs', 'practice-h-1');
+    mkdirSync(path.join(out, 'long'), { recursive: true });
+    writeFileSync(path.join(out, 'long', 'long.json'), JSON.stringify({ status: 'failed', reason: 'the parts did not join' }));
+    s.spawned[0].c.emit('exit', 0); await tick();
+    const recs = () => readFileSync(path.join(s.dataDir, 'clips', 'jobs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(recs()[0].longNotMade, 'the parts did not join');
+    assert.equal(s.status().last.longNotMade, 'the parts did not join');
+    const task = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', readdirSync(path.join(s.dataDir, 'tasks')).find((n) => n.startsWith('clip-practice'))), 'utf8'));
+    assert.match(task.note, /Long video not made: the parts did not join/);
+    rc.feed(s.S('live')); rc.feed(s.S('stopped'));
+    writeFileSync(path.join(out, 'long', 'long.json'), JSON.stringify({ status: 'made', reason: '12.0 minutes' }));
+    s.spawned[1].c.emit('exit', 0); await tick();
+    assert.equal(recs()[1].longNotMade, null);
+    rc.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('D406 live gate: the long stage runs inside the clip job, so it never starts while live and stops when a stream starts', async () => {
+  const s = setup();
+  try {
+    writeSettings(s.dataDir, { clips: { recording: 'after', live: 'after' } });
+    const rc = make(s);
+    rc.feed(s.S('live')); rc.feed(s.S('stopped', { stream: 'live' })); // recording ends while a stream is live
+    assert.equal(s.spawned.length, 0, 'nothing starts while live');
+    rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1);
+    rc.feed(s.S('stopped', { stream: 'live' }));
+    assert.equal(s.spawned[0].c.killed, true, 'a stream that starts stops the whole job, the long video with it');
     rc.stop();
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });

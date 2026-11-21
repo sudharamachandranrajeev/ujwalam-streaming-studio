@@ -86,6 +86,22 @@ describe('recording cleanup (D403)', () => {
     assert.ok(existsSync(x.h) && existsSync(y.h));
   });
 
+  test('D406: the recording waits for its long highlights video; a failed one keeps it; once made it goes', async () => {
+    const x = fixture();
+    x.job({ longNotMade: 'the long video step did not finish; see the log' });
+    let r = await x.run(); assert.deepEqual(r.kept.map((k) => k.reason), ['long-video-not-made']); assert.equal(r.deleted.length, 0);
+    x.job({ at: '2026-11-19T01:00:00.000Z', longNotMade: 'part 1 did not render: boom' });
+    r = await x.run(); assert.deepEqual(r.kept.map((k) => k.reason), ['long-video-not-made']);
+    assert.ok(existsSync(x.h) && existsSync(x.vf));
+    // H only (no V): the long video still decides (it never depends on V)
+    const y = fixture({ v: false }); y.job({ longNotMade: 'failed' });
+    r = await y.run(); assert.deepEqual(r.kept.map((k) => k.reason), ['long-video-not-made']);
+    x.job({ at: '2026-11-19T02:00:00.000Z', longNotMade: null });
+    r = await x.run(); assert.equal(r.deleted.length, 2, 'made: the latest job decides');
+    // the field is strict: anything but a string or null is no proof; older records without it still count
+    assert.equal(cleanupPlan({ dataDir: y.dataDir, records: [{ h: y.h, hId: fileIdentity(y.h), v: null, vId: null, type: 'full', kind: null, name: 'n', result: 'done', code: 0, reelsNotMade: null, longNotMade: 3, at: '2026-11-18T22:00:00Z' }] }).length, 0);
+  });
+
   test('Keep for labelling: a ticked session is kept; untick and it goes; an unreadable list keeps everything', async () => {
     const x = fixture(); x.job();
     assert.deepEqual(setKeep(x.dataDir, '2026-11-18 20-00-00 H', true), ['2026-11-18 20-00-00 h']);
@@ -256,6 +272,28 @@ describe('recordings with no clip job: their clips decide (user 2026-11-20: "Del
     const w = world();
     runFiles(w.dataDir, 'practice-h-1', { recording: 'other.mkv', ok: true });
     assert.equal(backfillVerdict({ dataDir: w.dataDir, file: w.f.old, mtimeMs: Date.now(), clipsDirOf: w.clipsDirOf }).reason, 'run-is-for-another-file');
+  });
+
+  test('D406 backfill: with the long video on, a proven recording waits for its long video (no record written, checked again each pass); a failed one keeps it', async () => {
+    const w = world(); setKeep(w.dataDir, 'alpha-20261104-200000', true);
+    const opts = { dataDir: w.dataDir, folder: w.folder, flagOn: true, status: OFF_AIR, nowMs: T, clipsDirOf: w.clipsDirOf, longOn: true };
+    const plan = planBackfill({ ...opts });
+    assert.equal(plan.records.length, 0, 'nothing proven while no long video exists');
+    assert.equal(plan.verdicts.find((v) => v.file === w.f.h).reason, 'long-video-not-made (no long video yet)');
+    let r = await runRecordingCleanup(opts);
+    assert.equal(r.deleted.length, 0);
+    const long = (stem, status) => { const d = path.join(w.dataDir, 'clips', 'runs', stem, 'long'); mkdirSync(d, { recursive: true }); writeFileSync(path.join(d, 'long.json'), JSON.stringify({ status })); };
+    long('alpha-20261101-200000', 'failed'); long('practice-h-1', 'skipped');
+    assert.equal(planBackfill({ ...opts }).verdicts.find((v) => v.file === w.f.h).reason, 'long-video-not-made (the long video failed)');
+    r = await runRecordingCleanup(opts);
+    assert.deepEqual(r.deleted.map((d) => path.basename(d.file)), ['practice-h-1.mkv'], 'too short (skipped) counts as done');
+    assert.ok(existsSync(w.f.h) && existsSync(w.f.v), 'a failed long video keeps the recording');
+    long('alpha-20261101-200000', 'made');
+    r = await runRecordingCleanup(opts);
+    assert.deepEqual(r.deleted.map((d) => path.basename(d.file)).sort(), ['alpha-20261101-200000.mkv', 'alpha-v-20261101-200000.mkv']);
+    // the flag off: the long video plays no part (the D403 behaviour)
+    const w2 = world();
+    assert.equal(planBackfill({ dataDir: w2.dataDir, folder: w2.folder, clipsDirOf: w2.clipsDirOf, nowMs: T, longOn: false }).verdicts.find((v) => v.file === w2.f.h).decision, 'proven');
   });
 
   test('the command line dry run prints and changes nothing', async () => {

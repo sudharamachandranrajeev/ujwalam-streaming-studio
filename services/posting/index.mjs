@@ -342,7 +342,7 @@ export async function packageRun(opts) {
 
 // ---------------------------------------------------------------- finished videos (uploads.json, D301)
 
-export const UPLOAD_KINDS = Object.freeze(['short', 'montage', 'won-reel', 'impact-play']);
+export const UPLOAD_KINDS = Object.freeze(['short', 'montage', 'won-reel', 'impact-play', 'long-highlights']); // D406: long-highlights = the session's long H video (youtube-video)
 /** Kinds packaged only while their feature flag is on (D326: impact-play reels, off by default). */
 export const KIND_FLAGS = Object.freeze({ 'impact-play': 'impact-play-reels' });
 export const CANVAS_TAIL = /_(\d{2})_(v(?:-[a-z0-9-]+)?|h)\.[a-z0-9]+$/i;
@@ -375,7 +375,7 @@ export function cleanChoices(c) {
 
 /** opts: { dataDir, ledgerFile, profile?, ffmpeg?, templates?, limits?, run?, now?, flags? }
  *  Packages every validated, published video in <dataDir>/clips/uploads.json that is not posted and not packaged yet
- *  (kinds short | montage | won-reel | impact-play; impact-play only while the flag impact-play-reels is on, read
+ *  (kinds short | montage | won-reel | impact-play | long-highlights; impact-play only while the flag impact-play-reels is on, read
  *  from <dataDir>/flags.local.json or opts.flags = { isOn(id) }). Packages go to <dataDir>/posting/packages/<run>/<kind>-<sha16>/<target>/.
  *  -> { packaged: [{ file, kind, target, dir }], skipped: [{ file, reason }] } */
 export async function packageUploads(opts) {

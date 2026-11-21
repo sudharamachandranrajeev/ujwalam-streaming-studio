@@ -87,6 +87,21 @@ describe('packageUploads', () => {
     const again = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: PROFILE, ffmpeg: FFMPEG });
     assert.equal(again.packaged.length, 0, 'a part is not packaged twice');
   });
+  test('D406: a long highlights video is packaged as a normal YouTube video with its own text; rules and the editor list the kind', async () => {
+    const e = setup([{ name: 'codm_long-highlights_20261120-200000_kills-41_01_h.mp4', kind: 'long-highlights', seconds: 742 }]);
+    const r = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: PROFILE, ffmpeg: FFMPEG });
+    assert.equal(r.packaged.length, 1);
+    assert.equal(r.packaged[0].target, 'youtube-video');
+    assert.deepEqual(r.packaged[0].unresolved, []);
+    const post = createPostStore({ ledgerFile: e.ledgerFile }).list()[0];
+    assert.match(JSON.stringify(post), /Stream highlights \(/);
+    assert.ok(loadTemplates().targets['youtube-video'].kinds['long-highlights'].title);
+    const v = validateRules({ version: 1, autoUpload: false, rules: [{ id: 'long', target: 'youtube-video', minScore: 0, kinds: ['long-highlights'], maxPerDay: 1 }] });
+    assert.deepEqual(v.rules[0].kinds, ['long-highlights']);
+    const { readRulesEditor, KIND_LABELS } = await import('../services/posting/auto-settings.mjs');
+    assert.equal(KIND_LABELS['long-highlights'], 'Long highlights videos');
+    assert.ok(readRulesEditor(e.dataDir).kinds.some((k) => k.id === 'long-highlights'));
+  });
   test('packages shorts, montages and reels; right target and text per kind; private draft; second run adds nothing', async () => {
     const e = setup([...ROWS,
       { name: 'codm_short_20261108-185900_double-kill_02_v.mp4', kind: 'short', seconds: 8, posted: [{ platform: 'youtube', videoId: 'old' }] },

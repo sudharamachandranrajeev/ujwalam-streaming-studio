@@ -40,6 +40,8 @@ def _stamp_time(text):
 
 
 def kind_of(clip_id, doc_tool=None):
+    if (doc_tool or "") == "clipper.long":
+        return "long-highlights"  # D406: the session's long highlights video (H)
     if str(clip_id).startswith("W"):
         return "won-reel"
     if str(clip_id).startswith("I") and (doc_tool or "").startswith("clipper.montage"):
@@ -56,7 +58,7 @@ def clip_time(clip, rec_start_local, kind):
     if rec_start_local is None:
         return None
     from datetime import timedelta
-    if kind in ("montage", "won-reel", "impact-play") and clip.get("pieces"):
+    if kind in ("montage", "won-reel", "impact-play", "long-highlights") and clip.get("pieces"):
         off = min(float(p["start"]) for p in clip["pieces"])
     else:
         off = float(clip.get("start") or 0.0)
@@ -80,6 +82,8 @@ def name_rows(rdoc, game, layouts_by_id, det_weights=None, rec_start_local=None)
         for f in c.get("files") or []:
             lay = layouts_by_id.get(f.get("layout")) or ({"input": "v"} if str(f.get("layout", "")).endswith("-v") else
                                                           {"id": f.get("layout")})
+            if kind == "long-highlights":
+                lay = {"canvas": "h"}  # D406: cut of the H recording
             out.append((c, f, kind, when, label, names.canvas_suffix(lay)))
     return out
 

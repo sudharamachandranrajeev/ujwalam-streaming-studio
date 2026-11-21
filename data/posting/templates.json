@@ -1,5 +1,5 @@
 {
-  "$comment": "P16a post text templates. A target may carry kinds.montage / kinds.won-reel text overrides (D301); a clip (kind short) uses the base text. youtube-video is the target for finished videos that are not Shorts (horizontal, or longer than the Shorts limit in limits.json). Placeholders only: {handles.x}, {links.x} come from the local profile (data/profile.local.json) at export time; {date} is the stream date (UTC, from candidates.json recordStartUtc); {n} is the clip's rank in the run. Never put names, brands or channel ids here. Chat text, viewer names, marker notes and candidate reasons are never used in post text.",
+  "$comment": "P16a post text templates. A target may carry kinds.montage / kinds.won-reel / kinds.long-highlights text overrides (D301, D406); a clip (kind short) uses the base text. youtube-video is the target for finished videos that are not Shorts (horizontal, or longer than the Shorts limit in limits.json). Placeholders only: {handles.x}, {links.x} come from the local profile (data/profile.local.json) at export time; {date} is the stream date (UTC, from candidates.json recordStartUtc); {n} is the clip's rank in the run. Never put names, brands or channel ids here. Chat text, viewer names, marker notes and candidate reasons are never used in post text.",
   "version": "0.1.0",
   "layoutPreference": ["full-crop", "blurred-fill", "game-facecam"],
   "targets": {
@@ -41,6 +41,12 @@
           "description": "Victory reel {n} from the stream on {date}.\n\nLive on {handles.youtube}\nCommunity: {links.discord}",
           "tags": ["gaming", "victory", "stream"],
           "hashtags": ["#victory"]
+        },
+        "long-highlights": {
+          "title": "Stream highlights ({date})",
+          "description": "The best moments of the stream on {date}: kills, streaks and wins in the order they happened.\n\nLive on {handles.youtube}\nCommunity: {links.discord}",
+          "tags": ["gaming", "highlights", "stream", "full highlights"],
+          "hashtags": ["#gaming", "#highlights"]
         }
       }
     },

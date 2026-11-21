@@ -13,7 +13,7 @@ import path from 'node:path';
 import { clipsFolder } from '../studio-ui/user-settings.mjs';
 
 /** clip_names.py NAME_RE (keep the two in step). */
-export const CLIP_NAME = /^([a-z0-9-]+)_(short|montage|won-reel|impact-play)_(\d{8}-\d{6})_([a-z0-9-]+)_(\d{2,3})_(v|h|v-[a-z0-9-]+)\.mp4$/;
+export const CLIP_NAME = /^([a-z0-9-]+)_(short|montage|won-reel|impact-play|long-highlights)_(\d{8}-\d{6})_([a-z0-9-]+)_(\d{2,3})_(v|h|v-[a-z0-9-]+)\.mp4$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 export const FOLDER_RUN = 'clips-folder';
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);

@@ -747,6 +747,8 @@ def cmd_live_review(a):
         if status["status"] != "made":
             print(f"montage: NOT MADE ({status['reason']}); the short clips are kept"
                   f"{' and published' if a.publish else ''}")
+    if getattr(a, "long_video", False) and getattr(a, "recording", None):
+        _long_video(a)  # D406: last; its outcome never changes the exit code (see DIR/long/long.json)
     return 0  # a montage outcome never changes the exit code (D322 proposed): see render.json `montage`
 
 
@@ -917,6 +919,98 @@ def _live_montage(a):
                 "reason": f"a montage file failed its check (exit {rc}); {videos} passing video(s) kept"}
     return {"status": "made", "rc": 0, "videos": videos,
             "reason": f"{videos} montage/reel video(s)" if videos else "no montage or reel in this recording"}
+
+
+def _long_video(a):
+    """D406 long highlights video of the H recording (long_video.py) into DIR/long, published with --publish. Runs
+    last, after the shorts and reels, so nothing here can lose them. Writes DIR/long/long.json (the studio reads it:
+    a recording is kept until it says made, skipped or off). -> {"status": made|skipped|off|failed, "reason", ...}."""
+    import long_video as lv  # noqa: PLC0415
+    out = os.path.join(a.out, lv.SUBDIR)
+    os.makedirs(out, exist_ok=True)
+    progress_line("long", 0, 1, "making the long highlights video")
+    try:
+        status = _long_video_steps(a, lv, out)
+    except Exception as e:  # noqa: BLE001 - any error is reported; the shorts and reels stay as they are
+        eprint(f"long video: FAILED: {type(e).__name__}: {str(e)[-200:]}")
+        status = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[-200:]}"}
+    status = dict(status, createdAt=_now(), flag=lv.FLAG)
+    try:
+        write_json_atomic(os.path.join(out, lv.STATUS), status)
+    except (OSError, ClipError) as e:
+        eprint(f"long video: status not saved ({type(e).__name__}); the recording is kept")
+    print(f"long video: {status['status'].upper()} ({status.get('reason')})")
+    progress_line("long", 1, 1, f"long video {status['status']}")
+    return status
+
+
+def _long_video_steps(a, lv, out):
+    data_dir = resolve_data_dir(a.data_dir)
+    if not lv.on(data_dir):
+        return {"status": "off", "reason": f"the long highlights video is switched off (flag {lv.FLAG})"}
+    rec = getattr(a, "recording", None)
+    if not rec or not os.path.isfile(rec):
+        return {"status": "skipped", "reason": "the stream was not recorded"}
+    if not _own_hits(a) and not getattr(a, "detect_ran", False):
+        a.detect_ran = True
+        cmd_detect(a)  # the moments need the kills of the whole recording (HeavyJobLock inside)
+    hits_path = _own_hits(a)
+    if not hits_path:
+        return {"status": "failed", "reason": "no detector hits for the recording"}
+    ffmpeg, ffprobe = _tools(a)
+    info = media_info(ffprobe, rec)
+    if not info.get("has_audio"):
+        return {"status": "failed", "reason": "the recording has no sound"}
+    hits, _ = sig.read_hits(hits_path, info["duration"])
+    ranking = load_config("ranking", a.ranking)
+    mcfg = load_config("montage", getattr(a, "montage_config", None))
+    cfg = lv.load_config()
+    matches, _ = _reel_matches(a, hits_path, info["duration"])
+    tr = lv.transition(data_dir, cfg, rt)
+    p = lv.plan(hits, ranking, mcfg, info["duration"], matches, cfg, tr)
+    if p["status"] != "planned":
+        return p
+    print(f"long video: {p['moments']} moment(s) -> {len(p['segments'])} segment(s), {p['seconds']:.0f} s, "
+          f"{p['dropped']} lowest-scored segment(s) dropped to fit")
+    wd = os.path.join(out, "clips", lv.CLIP_ID)
+    os.makedirs(wd, exist_ok=True)
+    frame = cfg["frame"]
+    tracks = max(1, int(info.get("audio_tracks") or 1))
+    ok, expected, err = lv.render(ffmpeg, rec, p["segments"], frame, rnd.pick_encoder(a.encoder), wd, tracks,
+                                  int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"], _render_job, rnd.run_tool,
+                                  rnd.ENCODERS, rnd.AUDIO)
+    files, errors = [], []
+    if ok:
+        files.append({"layout": lv.LAYOUT, "file": lv.FILE, "geometry": "canvas", "sourceAudioTracks": tracks})
+    else:
+        errors.append({"layout": lv.LAYOUT, "error": err})
+    kills = sum(g["kills"] for g in p["segments"])
+    write_json_atomic(os.path.join(out, RENDER), {
+        "tool": lv.TOOL, "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": os.path.basename(rec),
+        "frame": frame, "configVersion": cfg.get("version"), "transition": tr,
+        "flash": "no flash effect: cross fade or cut only", "failed": 0 if ok else 1,
+        "clips": [{"id": lv.CLIP_ID, "start": 0.0, "end": expected, "score": round(sum(g["score"] for g in p["segments"]), 3),
+                   "labels": [], "kills": kills, "pieces": p["segments"], "dropped": p["dropped"],
+                   "captions": {"backend": "none", "status": "off"}, "files": files, "errors": errors}]})
+    if not ok:
+        return {"status": "failed", "reason": err[:200]}
+    res = val.validate_file(ffmpeg, ffprobe, os.path.join(wd, lv.FILE), None, frame, {"targets": []},
+                            decode=not getattr(a, "no_decode", False), source_tracks=tracks)
+    if not lv.duration_ok(res["facts"]["duration"], expected):
+        res["ok"] = False
+        res["issues"].append(f"duration {res['facts']['duration']:.1f}s (want {expected:.1f}s)")
+    write_json_atomic(os.path.join(out, REPORT), {
+        "tool": lv.TOOL, "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": os.path.basename(rec),
+        "files": 1, "failed": 0 if res["ok"] else 1,
+        "results": [{"id": lv.CLIP_ID, "layout": lv.LAYOUT, "file": lv.FILE, "geometry": "canvas", "captions": "off", **res}]})
+    if not res["ok"]:
+        return {"status": "failed", "reason": f"the long video failed its check: {'; '.join(res['issues'])[:160]}"}
+    published = 0
+    if getattr(a, "publish", None):
+        sub = argparse.Namespace(**{**vars(a), "out": out})
+        published = len(_publish(sub, out, run_name=os.path.basename(a.out), rec_start=rec))
+    return {"status": "made", "reason": f"{p['seconds'] / 60:.1f} minutes from {len(p['segments'])} moment(s)",
+            "seconds": expected, "segments": len(p["segments"]), "dropped": p["dropped"], "published": published}
 
 
 KIND_TYPE = {"M": "montage", "W": "match-reel", "I": "impact-play", "L": "live-clip"}  # clip id prefix -> reel type (CL1)
@@ -1452,6 +1546,8 @@ def cmd_run(a):
             rc = rc or cmd_montage(a)
         except ClipError as e:
             eprint(f"montage: not made: {e}")
+    if getattr(a, "long_video", False):  # D406: last; its outcome never changes the exit code (see DIR/long/long.json)
+        _long_video(a)
     return rc
 
 
@@ -1524,8 +1620,11 @@ def build_parser():
     s = sub.add_parser("run"); common(s); cand_args(s); render_args(s); s.add_argument("--no-decode", action="store_true")
     detect_args(s); s.add_argument("--detect", action="store_true"); publish_arg(s)
     s.add_argument("--montage", action="store_true", help="also make kill montages (needs the V recording)")
+
     s.add_argument("--montage-config")
+    s.add_argument("--long-video", action="store_true", help="also make the long highlights video of --recording (D406)")
     s.set_defaults(fn=cmd_run)
+
     s = sub.add_parser("montage"); common(s)
     s.add_argument("--hits"); s.add_argument("--montage-config")
     s.add_argument("--whisper-bin"); s.add_argument("--whisper-model")  # ED2 captions (flag reel-captions)
@@ -1564,8 +1663,11 @@ def build_parser():
     s.add_argument("--v-recording", type=os.path.abspath,
                    help="V canvas recording for --montage (default: the '-v-' sibling of --recording)")
     s.add_argument("--montage-config")
+
     s.add_argument("--whisper-bin"); s.add_argument("--whisper-model")  # ED2 captions (flag reel-captions)
+    s.add_argument("--long-video", action="store_true", help="also make the long highlights video of --recording (D406)")
     s.set_defaults(fn=cmd_live_review)
+
     return p
 
 

@@ -63,7 +63,7 @@ Dialog {
         return iso && !isNaN(t.getTime()) ? Qt.formatDateTime(t, fmt) : "";
     }
     function kindName(k) {
-        return ({ montage: "Montage", "won-reel": "Won-round reel", "impact-play": "Impact play", clip: "Clip", short: "Clip" })[k] || (k ? k : "-");
+        return ({ montage: "Montage", "won-reel": "Won-round reel", "impact-play": "Impact play", "long-highlights": "Long highlights", clip: "Clip", short: "Clip" })[k] || (k ? k : "-");
     }
     // A number, or "-" when YouTube has not given it yet (sorts below every number).
     function num(x, decimals) { return typeof x === "number" ? String(decimals ? Number(x.toFixed(decimals)) : Math.trunc(x)) : "-" }

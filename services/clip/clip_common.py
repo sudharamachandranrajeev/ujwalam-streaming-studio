@@ -279,7 +279,7 @@ def match_gate_settings(data_dir):
 PROGRESS_PREFIX = "ujwalam-progress "
 # publish and montage write one line when they start and none while they work (unmeasured: the studio's stall warning
 # does not count their silence; services/studio-ui/record-clips.mjs STAGE_TEXT, 2026-11-10).
-PROGRESS_STAGES = ("detect", "candidates", "render", "validate", "review", "gate", "publish", "montage")
+PROGRESS_STAGES = ("detect", "candidates", "render", "validate", "review", "gate", "publish", "montage", "long")  # long: D406
 
 
 def progress_line(stage, done, total, note=""):

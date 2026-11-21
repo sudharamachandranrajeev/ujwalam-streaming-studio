@@ -6,7 +6,8 @@ Clips folder (Settings > Clips folder):
   <clips>/<YYYY-MM-DD>/<game>_<kind>_<YYYYMMDD-HHMMSS>_<label>_<nn>_<canvas>.mp4
     YYYY-MM-DD       local date of the recording (or stream) the clip came from
     game             game id of the detector pass (e.g. codm); "game" when unknown
-    kind             short | montage | won-reel | impact-play (D326: the streamer's impact play, MVP animation to results page)
+    kind             short | montage | won-reel | impact-play (D326: the streamer's impact play, MVP animation to results page) |
+                     long-highlights (D406: the session's long highlights video, h)
     YYYYMMDD-HHMMSS  local wall time of the clip's first moment (short: its start; montage, won-reel, impact-play: its earliest piece)
     label            (CL1, D350: a reel split by the length setting ends in -part-N-of-M, e.g. kills-12-part-2-of-3)
                      short: the best medal, e.g. triple-kill; montage: kills-12; won-reel: victory-kills-7 / defeat-kills-11 (match-kills-N if no result); impact-play: victory / defeat (match if no result)
@@ -28,9 +29,9 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-KINDS = ("short", "montage", "won-reel", "impact-play")
+KINDS = ("short", "montage", "won-reel", "impact-play", "long-highlights")
 _SLUG = re.compile(r"[^a-z0-9]+")
-NAME_RE = re.compile(r"^(?P<game>[a-z0-9-]+)_(?P<kind>short|montage|won-reel|impact-play)_(?P<stamp>\d{8}-\d{6})_(?P<label>[a-z0-9-]+)_"
+NAME_RE = re.compile(r"^(?P<game>[a-z0-9-]+)_(?P<kind>short|montage|won-reel|impact-play|long-highlights)_(?P<stamp>\d{8}-\d{6})_(?P<label>[a-z0-9-]+)_"
                      r"(?P<nn>\d{2,3})_(?P<canvas>v|h|v-[a-z0-9-]+)\.mp4$")
 
 
@@ -75,6 +76,8 @@ def _label_for(kind, labels=None, kills=None, det_weights=None):
     if kind == "won-reel":  # match reel (D315: wins and qualifying defeats); the result is in the clip's labels
         res = next((str(x).lower() for x in (labels or []) if str(x).upper() in ("VICTORY", "DEFEAT")), "match")
         return f"{res}-kills-{int(kills or 0)}"
+    if kind == "long-highlights":  # D406: the session's long video; the kills it shows
+        return f"kills-{int(kills or 0)}"
     if kind == "impact-play":  # D326: the match result only (the kind already says impact play)
         return next((str(x).lower() for x in (labels or []) if str(x).upper() in ("VICTORY", "DEFEAT")), "match")
     return slug(best_label(labels, det_weights) or "highlight")
