@@ -128,8 +128,8 @@ describe('QML studio window (headless probe)', { skip }, () => {
     } finally { srv.close(); }
     const ids = JSON.parse(readFileSync(path.join(UI, '..', 'data', 'flags.json'), 'utf8')).flags.map((f) => f.id);
     assert.deepEqual(p.state.flags.map((f) => f.id), ids);
-    const ON = ['preview-edit', 'reel-thumbnail', 'outputs-panel', 'transitions', 'scene-builder', 'download-manager', 'delete-processed-recordings'];
-    assert.deepEqual(p.state.flags.filter((f) => f.on !== ON.includes(f.id)).map((f) => f.id), [], 'all off but preview-edit (D330), reel-thumbnail (D368), outputs-panel (D389), transitions (D391), scene-builder (D390), download-manager (D403) and delete-processed-recordings (D405)');
+    const ON = ['preview-edit', 'reel-thumbnail', 'outputs-panel', 'transitions', 'scene-builder', 'download-manager', 'delete-processed-recordings', 'long-highlights-video'];
+    assert.deepEqual(p.state.flags.filter((f) => f.on !== ON.includes(f.id)).map((f) => f.id), [], 'all off but preview-edit (D330), reel-thumbnail (D368), outputs-panel (D389), transitions (D391), scene-builder (D390), download-manager (D403), delete-processed-recordings (D405) and long-highlights-video (D406)');
     for (const n of ['botsPanel', 'lookAdvanced', 'alertBar', 'reviewBtn'])
       assert.notEqual(node(p, n)?.visible, true, `${n} hidden with its flag off`);
     assert.equal(node(p, 'transitionsPanel')?.visible, true, 'Transitions box shown: its flag is on by default (D391)');

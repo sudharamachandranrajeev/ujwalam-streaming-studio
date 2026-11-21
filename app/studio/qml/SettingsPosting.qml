@@ -16,7 +16,8 @@ Column {
 
     readonly property var kindList: [
         { id: "short", text: "Short clips" }, { id: "montage", text: "Montages" },
-        { id: "won-reel", text: "Won-round reels" }, { id: "impact-play", text: "Impact plays" }
+        { id: "won-reel", text: "Won-round reels" }, { id: "impact-play", text: "Impact plays" },
+        { id: "long-highlights", text: "Long highlights videos" }
     ]
 
     // ---- state ----

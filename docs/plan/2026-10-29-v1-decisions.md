@@ -2312,3 +2312,45 @@ delete recordings once clipped and reviewed; keep the ones still to be labelled)
   Auto-post card edits them, and "What gets posted" edits the user's own rules in place (unknown rules and keys kept).
   Auto-post never fails silently: the card and the task bar say why nothing uploads.
 - Evidence: `docs/evidence/2026-11-19-autopost-backlog-cleanup.md`.
+
+## D406 — Long highlights video from each recorded session (decided, 2026-11-21)
+
+Decided: the user chose this in an interview on 2026-11-20: a long highlights compilation from each session's H (16:9)
+recording, the best moments (kills, streaks, wins) in time order, overlapping moments merged once, short transitions,
+about 8-20 minutes; auto-posted as a normal YouTube video (not a Short), scheduled like the rest; the recording cleanup
+waits until it is made; user-requested, so it ships ON.
+
+- Flag `long-highlights-video` (clips page), ON by default (user-requested). Off: no long video, recordings do not wait.
+- Data `data/clip/long-video.json` (status proposed): minSec 480, maxSec 1200, padSec 2, scores (per kill 1, streak bonus
+  3 x medal score, won match 5), H frame 1920x1080, default cross fade 250 ms, 12 pieces per render batch.
+- Moments: every kill group of the recording (clip_montage.groups over the detector hits, end screens dropped, never
+  across a match boundary) as one window, plus each won match's result screen. Windows padded, then merged where they
+  touch, so no footage is used twice. Over maxSec: the lowest-scored segment goes first. Under minSec: no video, with the
+  reason in minutes.
+- Render (`services/clip/long_video.py`, `clipper.py --long-video`, last step of the full run and of the review run with
+  an H recording; never needs V): clip_montage.render_argv per batch of 12 pieces on NVENC (CPU retry as the reels),
+  scaled into the H frame, cross fade (reel_transition when its flag is on, the user's Cut stays a cut; else the data
+  default). Batches are joined with the concat demuxer, `-c copy`: the audio is encoded once. No flash effect is added.
+  It runs inside the clip job, so the same gates hold: one job at a time, hidden, below normal, never while live or
+  recording (a stream that starts stops the job). Status in `<run>/long/long.json` (made | skipped | off | failed).
+- Published as `<game>_long-highlights_<stamp>_kills-N_01_h.mp4`, uploads.json kind `long-highlights`; posting packages it
+  as youtube-video (horizontal), with its own template text; RULE_KINDS, the "What gets posted" editor and the rules
+  template list it.
+- Cleanup: the job record carries `longNotMade` (null = made or none to make); a string keeps the recording with reason
+  `long-video-not-made`. A recording with no clip job (backfill) waits, while the flag is on, for
+  `runs/<session>/long/long.json` made/skipped/off; no record is written meanwhile, so each pass checks again.
+- Evidence: `docs/evidence/2026-11-21-long-highlights-video.md`. A real render on a real recording is UNVERIFIED.
+
+Codex review (2026-11-21), all five fixed on the same branch:
+- The long video is now its own clip job (`clipper.py long`, type `long`, task `long-<session>`), queued after the clip
+  job in the same run folder. It never starts while a recording or a stream runs, and its whole process tree is killed
+  when either starts (it runs again after). The other clip stages keep their old gate (live only), so clips are still
+  made beside a plain local recording.
+- Cleanup with the flag on needs proof from `runs/<session>/long/long.json` (made or skipped) for every record, old
+  ones included; a missing or null `longNotMade`, `off` or `failed` keeps the recording. Backfill the same.
+- The length plan counts the real joins: cross fades inside each 12-piece batch only (batch files are joined end to end
+  with a short audio fade, no cross fade), so the video never exceeds maxSec as rendered.
+- countClips counts `long/published.json`, so a long video alone reaches auto-post.
+- Parts live in a per-attempt folder removed in finally; folders left by a kill are removed at the next start.
+
+- Re-review: the plan keeps 2 s under maxSec and a probed file over maxSec is failed and removed; abandoned attempt folders are cleared at the start of every long step; long.json names its recording and, with the flag on, the current one supersedes a stale longNotMade.

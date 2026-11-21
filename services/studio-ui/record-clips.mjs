@@ -156,6 +156,20 @@ export function reelsNotMade(job, out, { readJson = (f) => JSON.parse(readFileSy
   return 'the reel step did not finish; see the log';
 }
 
+/** D406: why the long highlights video of a finished job was not made, or null when it was made, or the clipper
+ *  decided there is none to make (too short, no moments, switched off), or the job has no H recording (nothing to
+ *  make it from and nothing to delete). The clipper writes <out>/long/long.json; none = it stopped before that step. */
+export const LONG_STATUS = path.join('long', 'long.json');
+export function longNotMade(job, out, { readJson = (f) => JSON.parse(readFileSync(f, 'utf8')), exists = existsSync } = {}) {
+  if (job?.type !== 'long') return null;
+  if (typeof job.h !== 'string' || !job.h || !exists(job.h)) return null;
+  let s = null;
+  try { s = readJson(path.join(out, LONG_STATUS)); } catch { s = null; }
+  if (!s || typeof s !== 'object') return 'the long video step did not finish; see the log';
+  if (s.status === 'made' || s.status === 'skipped' || s.status === 'off') return null;
+  return String(s.reason ?? s.status ?? 'unknown').slice(0, 120) || 'failed';
+}
+
 /** Python and argv for one job, or { spec: null, reason }. job: { type: 'full'|'review', h?, v?, since?, until?, name }.
  *  out = the run folder in app data (workRoot); outRoot = the clips folder that gets the finished videos only. */
 export function clipRunSpec({ clipRoot, dataDir, job, outRoot = clipsFolder(dataDir), workRoot = path.join(dataDir, 'clips', 'runs'), saves = undefined, exists = existsSync, project = null }) {
@@ -169,6 +183,14 @@ export function clipRunSpec({ clipRoot, dataDir, job, outRoot = clipsFolder(data
     return { spec: { exe: t.py, argv: ['-I', tune, '--data-dir', dataDir, 'propose', '--report', path.join(out, TRAIN_REPORT)], out, folder: null }, reason: null };
   }
   const argv = ['-I', t.script, '--data-dir', dataDir];
+  const projOf = () => (typeof project === 'string' && project && exists(project) ? ['--project', project] : []);
+  if (job.type === 'long') {
+    // D406: the long highlights video of the H recording, its own job after the clip job, in the same run folder (the
+    // clip job's detector hits are reused). H only; the clipper checks the flag itself and writes <out>/long/long.json.
+    if (typeof job.h !== 'string' || !job.h || !exists(job.h)) return { spec: null, reason: 'the stream recording is missing' };
+    argv.push('long', '--threads', '4', '--encoder', 'h264_nvenc', '--recording', job.h, ...projOf(), '--publish', outRoot, '--out', out);
+    return { spec: { exe: t.py, argv, out, folder: outRoot }, reason: null };
+  }
   // The recording is the H canvas, not clean game footage: the project's game layer tells the detectors where the game
   // is (D235). Without it they scan the full frame and the end-screen boxes (top 3, mode) fall in the wrong place.
   const proj = typeof project === 'string' && project && exists(project) ? ['--project', project] : [];
@@ -213,7 +235,8 @@ export function trainNote(code, out, { readJson = (f) => JSON.parse(readFileSync
 }
 
 export function countClips(out) {
-  const pubs = [path.join(out, 'published.json'), path.join(out, 'montage', 'published.json')].filter((p) => existsSync(p));
+  // D406 (Codex P2): the long highlights video counts too, so a run that made only that still reaches auto-post.
+  const pubs = [path.join(out, 'published.json'), path.join(out, 'montage', 'published.json'), path.join(out, 'long', 'published.json')].filter((p) => existsSync(p));
   if (pubs.length) {
     return pubs.reduce((n, p) => { try { const j = JSON.parse(readFileSync(p, 'utf8')); return n + (Array.isArray(j.files) ? j.files.length : 0); } catch { return n; } }, 0);
   }
@@ -223,22 +246,24 @@ export function countClips(out) {
   } catch { return 0; }
 }
 
-export const PROGRESS_STAGES = Object.freeze(['detect', 'candidates', 'render', 'validate', 'review', 'gate', 'publish', 'montage', 'train']);
+export const PROGRESS_STAGES = Object.freeze(['detect', 'candidates', 'render', 'validate', 'review', 'gate', 'publish', 'montage', 'long', 'train']);
 const PROGRESS_RE = /^ujwalam-progress\s+(\{.*\})\s*$/;
 const STAGE_TITLE = { detect: 'Finding the best moments in', candidates: 'Choosing the best moments in', render: 'Editing clips from', validate: 'Checking the clips from', review: 'Reviewing the moments in', gate: 'Checking the match results of',
-  publish: 'Saving the clips from', montage: 'Making the kill montage from', train: 'Checking the game pack against' };
+  publish: 'Saving the clips from', montage: 'Making the kill montage from', long: 'Making the long highlights video from', train: 'Checking the game pack against' };
 // Task panel (2026-11-10): each stage in plain words, what its done/total counts (null = only a percent shown), and
 // whether it reports progress while it works. publish and montage write one line when they start and none after
 // (clipper.py), so their silence is not counted by the stall warning (measured: false; tasks.mjs stallOf).
 const STAGE_TEXT = { detect: ['Reading the game screen', 'frame'], candidates: ['Choosing the best moments', null], gate: ['Sorting clips by match', 'match'],
   render: ['Making clip videos', 'clip'], validate: ['Checking the clip files', 'clip'], review: ['Making clip videos from live saves', 'clip'],
   publish: ['Copying the finished clips to your clips folder', null, false], montage: ['Making the kill montage', null, false],
+  long: ['Making the long highlights video', null, false],
   train: ['Testing a game pack update on held-out streams', null, false] };
 /** The stages a job goes through, in order (clipper.py cmd_run: detect, candidates, gate, render, validate, publish,
  *  then the montage when the V recording exists; live-review: detect and gate over the stream's own recording when
  *  there is one, then review and publish, then the montage when the V recording exists too, D322 proposed). */
 export function jobStages(job) {
   if (job?.type === 'train') return ['train'];
+  if (job?.type === 'long') return ['long']; // D406: its own job (detect only when the clip job left no hits)
   if (job?.type === 'review') {
     const h = typeof job.h === 'string' && job.h;
     if (!h) return ['review', 'publish'];
@@ -281,7 +306,9 @@ export const CAPTIONS_SKIPPED = 'Captions skipped: download the speech model in 
 
 export function createRecordClips({ clipRoot, dataDir, project = null, log, spawnFn = spawn, now = Date.now, postChain = null, killTreeFn = killChildTree, liveClipper = null, trainFlag = () => false, resumeHoldMs = 0, captionsModel = speechModelUsable,
   // D403: the recordings folder in use (string or () => string) and the flag check for Delete clipped recordings.
-  recordingsFolder = null, cleanupFlag = () => false, cleanupImpl = runRecordingCleanup }) {
+  recordingsFolder = null, cleanupFlag = () => false, cleanupImpl = runRecordingCleanup,
+  // D406: the flag long-highlights-video (a recording with no clip job waits for its long video while it is on).
+  longFlag = () => false }) {
   const stateDir = path.join(dataDir, 'clips');
   const statusFile = path.join(stateDir, 'status.json');
   const answerFile = path.join(stateDir, 'answer.json');
@@ -290,7 +317,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   const createdAt = now();
   const queue = []; let asks = [];
   let prev = null; let child = null; let current = null; let last = null; let stopped = false;
-  let halted = false; let lastStatus = null; let progress = null; let liveNow = false; let recStart = null; let recSawLive = false; let liveStart = null; let liveHadRecording = false; let workerOn = null;
+  let halted = false; let lastStatus = null; let progress = null; let liveNow = false; let recNow = false; let recStart = null; let recSawLive = false; let liveStart = null; let liveHadRecording = false; let workerOn = null;
   // Live clipper view (LC1): liveClipper() -> { state, reason, restarts, maxRestarts, flagOn } from the launcher.
   let checkingModel = false;
   let watchSince = null; let watching = false; let watchEnded = false; let savesNow = 0;
@@ -307,7 +334,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   } catch { /* no status yet */ }
 
   // Task bar (tasks.mjs): one task file per clip job, rewritten with every status write (that also keeps it fresh).
-  const taskId = (j) => `clip-${String(j.name ?? 'run').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 70)}`;
+  const taskId = (j) => `${j.type === 'long' ? 'long' : 'clip'}-${String(j.name ?? 'run').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 70)}`;
   const taskFor = (j, p) => {
     const nm = j.type === 'train' ? 'your answers from the streams' : j.name ?? 'the stream';
     const base = { id: taskId(j), kind: 'clips', startedAt: j.taskStart ?? now(), updatedAt: now() };
@@ -318,8 +345,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       return { ...base, title: `${STAGE_TITLE[st]} ${nm}`, state: 'running', stage: st, done: p?.done ?? null, total: p?.total ?? null, note: p?.note ?? null,
         ...(p?.note ? {} : { note: j.captionsOk === false ? CAPTIONS_SKIPPED : null }), stages: jobStages(j), ...words, activeAt: j.activeAt ?? null, progressAt: j.progressAt ?? null };
     }
-    return { ...base, title: j.type === 'train' ? 'Game pack check' : `Clips from ${nm}`, state: 'waiting', stage: null, done: null, total: null,
-      note: j === current ? 'Paused while the stream runs' : liveNow ? 'Waiting until the stream ends' : 'Waiting for its turn' };
+    return { ...base, title: j.type === 'train' ? 'Game pack check' : j.type === 'long' ? `Long highlights video from ${nm}` : `Clips from ${nm}`, state: 'waiting', stage: null, done: null, total: null,
+      note: j === current ? (liveNow ? 'Paused while the stream runs' : 'Paused while recording') : liveNow ? 'Waiting until the stream ends'
+        : j.type === 'long' && recNow ? 'Waiting until the recording ends' : 'Waiting for its turn' };
   };
   const writeTasks = () => {
     if (halted) return; // stopped by the user: the task files say so; the jobs run again at the next start
@@ -331,7 +359,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     if (t) writeTaskFile(dataDir, t);
     watchEnded = false;
   };
-  const finishTask = (j, ok, note) => writeTaskFile(dataDir, { id: taskId(j), kind: 'clips', title: j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
+  const finishTask = (j, ok, note) => writeTaskFile(dataDir, { id: taskId(j), kind: 'clips', title: j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : j.type === 'long' ? (ok ? `Long highlights video done for ${j.name}` : `Long highlights video from ${j.name} not made`) : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
   const trainOn = () => { try { return trainFlag() === true; } catch { return false; } };
 
   const write = () => {
@@ -363,13 +391,14 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     // Start-up time (2026-11-19): a job carried over from the last session waits resumeHoldMs after this start, so its
     // ffmpeg and Python do not compete with the studio opening. A job of this session starts at once, also when held
     // jobs are ahead of it in the queue (Codex: no head-of-line block); the held ones keep their order after the hold.
-    const held = (j) => j.resumed === true && now() - createdAt < resumeHoldMs;
+    // D406 (Codex P1): the long highlights video never starts while a recording runs (live never reaches start()).
+    const held = (j) => (j.resumed === true && now() - createdAt < resumeHoldMs) || (j.type === 'long' && (recNow || liveNow));
     const at = queue.findIndex((j) => !held(j));
     if (at < 0) return;
     const job = queue[at];
     if (at > 0) { queue.splice(at, 1); queue.unshift(job); }
     // The speech model check (captions): a failure skips only the captions step, the job still runs.
-    if (job.type !== 'train' && job.captionsOk === undefined) {
+    if (job.type !== 'train' && job.type !== 'long' && job.captionsOk === undefined) {
       const settle = (ok) => { job.captionsOk = ok === true; if (!job.captionsOk) log(`clips: ${CAPTIONS_SKIPPED}`); };
       // Codex round 4 (P3): while a check runs, a poll does not start another one (each call hashes the model).
       if (checkingModel) return;
@@ -422,13 +451,22 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     child.once('exit', (code) => {
       if (stopped) return; // Ujwalam closing: the status keeps this job, so the next start runs it again
       const done = current; child = null; current = null;
-      if (done.pausedForLive) { delete done.pausedForLive; log(`clips: ${done.name} paused for the stream; it continues after`); write(); return; }
+      if (done.pausedForLive) { delete done.pausedForLive; log(`clips: ${done.name} paused for the ${liveNow ? 'stream' : 'recording'}; it continues after`); write(); return; } // the next status tick starts what may run
       queue.shift(); progress = null;
       if (done.type === 'train') {
         const note = trainNote(code, spec.out);
         log(`clips: game pack check ${code === 0 ? 'done' : `ended (exit ${code})`}: ${note}`);
         finishTask(done, code === 0, note);
         write(); start(); return;
+      }
+      if (done.type === 'long') {
+        // D406: no job record (the recording cleanup reads <out>/long/long.json itself); posted like any finished video.
+        const long = longNotMade(done, spec.out);
+        if (long) log(`clips: long highlights video not made from ${done.name}: ${long}`);
+        else log(`clips: long highlights video of ${done.name} done`);
+        finishTask(done, !long, long ? `Not made: ${long}` : 'Saved to your clips folder');
+        if (!long && countClips(spec.out) > 0 && postChain) void Promise.resolve(postChain.afterRun(spec.out, lastStatus)).catch(() => {});
+        write(); start(); cleanupSoon('the long highlights video finished'); return;
       }
       const n = code === 0 ? countClips(spec.out) : 0;
       const reels = code === 0 ? reelsNotMade(done, spec.out) : null;
@@ -441,6 +479,10 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       finishTask(done, code === 0, code === 0 ? `${capNote}${n} clip${n === 1 ? '' : 's'} made${reels ? `. Reels not made: ${reels}` : ''}` : `${capNote}Something went wrong; see the log`);
       // D300: package + auto-approve + private upload (flags posting + auto-post; each step fails closed while live).
       if (code === 0 && n > 0 && postChain) void Promise.resolve(postChain.afterRun(spec.out, lastStatus)).catch(() => {});
+      // D406: the long highlights video of the H recording, its own job (off air, no recording running: Codex P1).
+      if (code === 0 && typeof done.h === 'string' && done.h && existsSync(done.h) && longOnSafe() && !queue.some((q) => q.type === 'long' && q.h === done.h)) {
+        add({ type: 'long', kind: done.kind, h: done.h, v: done.v ?? undefined, name: done.name }, `clips from ${done.name} done; making its long highlights video next`);
+      }
       // LL4 (D342): after a stream's clip job, the game pack check runs last (flag learning-train, off by default).
       if (done.kind === 'live' && trainOn() && !queue.some((q) => q.type === 'train')) add({ type: 'train', kind: 'train', name: `pack-check-${stamp(now())}` }, 'stream clips done; checking the game pack against the labels (runs last)');
       write();
@@ -454,13 +496,15 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   const CLEANUP_EVERY_MS = 15 * 60 * 1000;
   let cleaning = false; let lastCleanAt = null;
   const flagOnSafe = () => { try { return cleanupFlag() === true; } catch { return false; } };
+  // Fail closed: an unreadable long-video flag counts as on (the recording waits; it is never deleted early).
+  const longOnSafe = () => { try { return longFlag() !== false; } catch { return true; } };
   const cleanupSoon = (why) => {
     if (cleaning || stopped || halted || child || liveNow || !lastStatus) return;
     if (!flagOnSafe()) return;
     cleaning = true; lastCleanAt = now();
     setImmediate(() => {
       const folder = typeof recordingsFolder === 'function' ? recordingsFolder() : recordingsFolder;
-      Promise.resolve(cleanupImpl({ dataDir, folder, flagOn: flagOnSafe(), status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] }, nowMs: now(), log, writeTask: writeTaskFile, clipperBusy: watching,
+      Promise.resolve(cleanupImpl({ dataDir, folder, flagOn: flagOnSafe(), status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] }, nowMs: now(), log, writeTask: writeTaskFile, clipperBusy: watching, longOn: longOnSafe(),
         // Codex round 1: read again right before each file's delete (a stream, recording or clip job that starts stops the batch).
         recheck: () => ({ status: lastStatus, state: { running: current, queued: [...queue], asks: [...asks] } }) }))
         .then((r) => { if (r?.deleted?.length) log(`clips: recording cleanup after ${why}: ${r.deleted.length} file(s) deleted`); })
@@ -503,7 +547,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     feed(status) {
       const t = now(); const s = readSettings(dataDir);
       const live = isLive(status); const rec = isRecording(status);
-      liveNow = live;
+      liveNow = live; recNow = rec;
       if (rec && recStart === null) { recStart = t; recSawLive = false; }
       if (rec && live) recSawLive = true;
       if (live && liveStart === null) { liveStart = t; liveHadRecording = false; }
@@ -539,6 +583,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       readAnswer(s);
       readStop();
       if (live && child && current && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); } // the whole tree: ffmpeg must not encode while live
+      // D406 (Codex P1): the long highlights video also stops (whole tree) when a recording starts; it runs again after.
+      // Only that job: the other clip stages keep running beside a plain local recording, as before.
+      if (rec && child && current && current.type === 'long' && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); }
       if (!live) start();
       if (!live && !rec && (lastCleanAt === null || now() - lastCleanAt >= CLEANUP_EVERY_MS)) cleanupSoon(lastCleanAt === null ? 'start-up' : 'an idle check');
       if (postChain) void Promise.resolve(postChain.tick(status)).catch(() => {}); // retries of queued uploads; the chain itself refuses while a stream is live

@@ -287,6 +287,7 @@ Column {
             : r === "job-pending" ? "kept: a clip job for it is waiting or running"
             : r === "job-failed" ? "kept: its last clip job did not finish"
             : r === "reels-not-made" ? "kept: its reels were not made"
+            : r === "long-video-not-made" ? "kept: its long highlights video was not made yet"
             : "kept (" + r + ")";
     }
     function loadRecs() {

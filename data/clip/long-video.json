@@ -1,0 +1,16 @@
+{
+  "$comment": "Long highlights video (D406, user 2026-11-20 interview): one horizontal (16:9) video per recorded session from its H recording, the session's best moments (kill groups, streaks, won matches) in time order, overlapping windows merged once (no footage twice), a short transition between moments, about 8-20 minutes. Too long: the lowest-scored moments are dropped first. Too short for minSec: no video, with the reason in plain words. Read by services/clip/long_video.py. Behind the flag long-highlights-video (on by default, user-requested).",
+  "version": "1.0.0",
+  "status": "proposed",
+  "approved": "user 2026-11-20 chose the content, the 8-20 minute length, time order, merging and posting as a normal YouTube video; padSec, the scores and batchPieces are the agent's proposal",
+  "checked": "2026-11-21",
+  "flag": "long-highlights-video",
+  "minSec": 480,
+  "maxSec": 1200,
+  "padSec": 2.0,
+  "frame": { "width": 1920, "height": 1080 },
+  "score": { "perKill": 1.0, "streakBonus": 3.0, "win": 5.0 },
+  "winResults": ["VICTORY"],
+  "defaultTransition": { "kind": "fade", "xfade": "fade", "ms": 250 },
+  "batchPieces": 12
+}

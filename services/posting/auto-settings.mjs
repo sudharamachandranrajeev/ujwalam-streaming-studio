@@ -25,7 +25,7 @@ export { DEFAULT_QUOTA, loadQuota };
 export const CARD_RULES = Object.freeze([{ id: 'auto-shorts', target: 'youtube-shorts' }, { id: 'auto-videos', target: 'youtube-video' }]);
 /** The schedule settings the card shows and saves (D375, D403); the seed is never on the card (made once, kept). */
 export const CARD_SCHEDULE_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'customTimes', 'skipDates']);
-export const KIND_LABELS = Object.freeze({ short: 'Short clips', montage: 'Montages', 'won-reel': 'Won-round reels', 'impact-play': 'Impact plays' });
+export const KIND_LABELS = Object.freeze({ short: 'Short clips', montage: 'Montages', 'won-reel': 'Won-round reels', 'impact-play': 'Impact plays', 'long-highlights': 'Long highlights videos' });
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
 

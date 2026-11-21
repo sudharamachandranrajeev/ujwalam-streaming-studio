@@ -22,7 +22,7 @@ export const AUTO_LOG_NAME = 'auto-log.json';
 export const UPLOAD_TARGET = 'youtube-shorts';
 /** Targets the auto chain may upload (private YouTube). youtube-video is for finished videos that are not Shorts (D301). */
 export const UPLOAD_TARGETS = Object.freeze(['youtube-shorts', 'youtube-video']);
-export const RULE_KINDS = Object.freeze(['short', 'montage', 'won-reel', 'impact-play']);
+export const RULE_KINDS = Object.freeze(['short', 'montage', 'won-reel', 'impact-play', 'long-highlights']); // D406: the long highlights video
 /** Highest allowed uploads per day (a rule's or the global cap): YouTube's own videos.insert limit per project is
  *  100 a day (developers.google.com/youtube/v3/determine_quota_cost, fetched 2026-11-13); the quota fit is lower (quota.json). */
 export const MAX_PER_DAY = 100;

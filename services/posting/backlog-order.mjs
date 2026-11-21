@@ -5,14 +5,14 @@
 //     every pass and a new clip slots in without moving the others);
 //   - never two clips of the same kind back to back when another kind is waiting. The kind is the name part between the
 //     game id and the time stamp (clip_names.py: <game>_<kind>_<stamp>_<label>_<nn>_<canvas>.mp4): short, montage,
-//     won-reel, impact-play;
+//     won-reel, impact-play, long-highlights (D406);
 //   - the parts of a split reel (label ends in -part-N-of-M) stay together, in part order, so they go out on
 //     consecutive slots.
 // Pure. Posts are store.list() views (id, kind, sourceName).
 import { hash32 } from './schedule.mjs';
 
 /** clip_names.py NAME_RE: game, kind, stamp, label, nn, canvas. */
-const NAME = /^([a-z0-9-]+)_(short|montage|won-reel|impact-play)_(\d{8}-\d{6})_([a-z0-9-]+)_(\d{2,3})_(v|h|v-[a-z0-9-]+)\.mp4$/;
+const NAME = /^([a-z0-9-]+)_(short|montage|won-reel|impact-play|long-highlights)_(\d{8}-\d{6})_([a-z0-9-]+)_(\d{2,3})_(v|h|v-[a-z0-9-]+)\.mp4$/;
 const PART = /^(.*)-part-(\d+)-of-(\d+)$/;
 
 /** { kind, group, part } of a post: kind from its file name (else the post's own kind); group and part for a split reel. */

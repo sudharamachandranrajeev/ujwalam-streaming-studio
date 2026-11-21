@@ -92,7 +92,7 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(ap.dirty, false);
     assert.equal(s.settings.dirty, false);
     // D405: random-daily is the shipped placement; the card also carries the random-daily and custom-times fields.
-    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play'], minScore: 3, maxPerDay: 6, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000,
+    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 3, maxPerDay: 6, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000,
       minGapMinutes: 90, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, skipDates: [] });
     assert.match(ap.fit, /About 6 uploads a day fit/);
     assert.match(ap.flags, /Auto post and Scheduled posting are on/);
@@ -113,7 +113,7 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
   });
 
   test('edits make the dialog dirty; no kind at all blocks Save with a plain note and keeps Settings open', async () => {
-    const r = await probe({ actions: [...open, ...WAIT, 'ap-gap:6', 'ap-perday:9', 'ap-kind:short:off', 'ap-kind:montage:off', 'ap-kind:won-reel:off', 'ap-kind:impact-play:off', ...WAIT, 'settings-save'] });
+    const r = await probe({ actions: [...open, ...WAIT, 'ap-gap:6', 'ap-perday:9', 'ap-kind:short:off', 'ap-kind:montage:off', 'ap-kind:won-reel:off', 'ap-kind:impact-play:off', 'ap-kind:long-highlights:off', ...WAIT, 'settings-save'] }); // D406: five kinds
     const d = done(r.p);
     for (const a of ['ap-gap:6', 'ap-perday:9', 'ap-kind:short:off', 'ap-kind:impact-play:off']) assert.equal(d[a], true, a);
     assert.equal(d['settings-save'], false, 'Save is refused');
@@ -142,7 +142,7 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(sched.placement, 'after-last');
     assert.equal(sched.maxAheadDays, 60);
     const rules = JSON.parse(readFileSync(userRulesFile(r.dataDir), 'utf8'));
-    assert.deepEqual(rules.rules[0].kinds, ['short', 'montage', 'won-reel']);
+    assert.deepEqual(rules.rules[0].kinds, ['short', 'montage', 'won-reel', 'long-highlights']);
     assert.equal(rules.maxUploadsPerDay, 6);
     assert.equal(r.s.flagsInSettings, false, 'Settings closed');
     assert.match(r.s.note, /Settings saved\.|Auto-post settings saved; the next upload pass uses them\./);
@@ -157,7 +157,7 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(d['ap-placement:nope'], false);
     // D405: the card also carries the random-daily and custom-times fields (defaults here, untouched by these actions).
     const empty = { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] };
-    assert.deepEqual(r.ap.card, { autoUpload: false, kinds: ['short', 'montage', 'won-reel', 'impact-play'], minScore: 50, maxPerDay: 2, intervalHours: 48, maxAheadDays: 5, placement: 'after-last', quotaUnitsPerDay: 20000,
+    assert.deepEqual(r.ap.card, { autoUpload: false, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 50, maxPerDay: 2, intervalHours: 48, maxAheadDays: 5, placement: 'after-last', quotaUnitsPerDay: 20000,
       minGapMinutes: 90, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: empty, skipDates: [] });
     assert.equal(r.ap.dirty, true);
     assert.equal(node(r.p, 'autopostUpload').checked, false);
