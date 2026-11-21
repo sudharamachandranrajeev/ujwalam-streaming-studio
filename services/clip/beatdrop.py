@@ -88,7 +88,9 @@ class _Planner:
         self.on_queue = (self.kills if "kill" in game["onBeatKinds"] else []) + \
             (shots if "gunshot" in game["onBeatKinds"] else [])
         self.offs = sorted((m for m in ms if m["kind"] in game["offBeatKinds"]), key=lambda m: (-m["strength"], m["frame"]))
-        self.calms = sorted(st(m) for m in ms if m["kind"] in game["calmKinds"])
+        self.calm_k = sorted((st(m), m["kind"]) for m in ms if m["kind"] in game["calmKinds"])
+        self.calms = [t for t, _ in self.calm_k]
+        self.rng = None  # BD7 another-take: a seeded random.Random that shuffles the calm starts
         self.margin = margin
         self.tg = targets(style, cfg)
         self.smap = smap
@@ -136,15 +138,20 @@ class _Planner:
         if f1 <= f0:
             return None
         sp_min = float(self.cfg["speed"]["min"])
-        starts = [max(0.0, c - 0.2) for c in self.calms] + [k * 0.5 for k in range(int(self.rec_len / 0.5) + 1)]
+        starts = [(max(0.0, c - 0.2), k) for c, k in self.calm_k] +             [(k * 0.5, None) for k in range(int(self.rec_len / 0.5) + 1)]
+        if self.rng is not None:
+            self.rng.shuffle(starts)
         for reuse in (False, True):
             s = speed
             while s >= sp_min - 1e-9:
                 ln = (f1 - f0) / self.fps * s
-                for a in starts:
+                for a, kind in starts:
                     b = a + ln
                     if b <= self.rec_len - 1.0 / self.rfps and self._no_kill(a, b) and (reuse or self._free(a, b)):
-                        return self._add(part, f0, f1, a, s, gain=self.cfg["audio"]["calmGain"], keep=[])
+                        p = self._add(part, f0, f1, a, s, gain=self.cfg["audio"]["calmGain"], keep=[])
+                        if kind:
+                            p["near"] = kind  # BD7: the calm moment this shot starts at (the plain-word summary)
+                        return p
                 s = round(s - 0.125, 4)
         raise ClipError("beatdrop: the recording has no calm stretch (no kill or gunshot) long enough for the cold open")
 
@@ -398,6 +405,240 @@ def plan(moments_doc, smap, cfg=None, game=None, style=None, max_sec=None, rec_s
     return _Planner(moments_doc, smap, cfg, game, style, max_sec, rec_seconds, luma).build()
 
 
+# ---------------------------------------------------------------- BD7 retakes and summary (D418)
+
+RETAKES = ("another-take", "slower-intro", "more-third-person", "swap")
+_ANCHOR_FX = ("shot-shake", "impact-flash", "rgb-split", "ragdoll-slowmo")
+
+
+def _state(pl, moments_doc, cfg, game, luma=None, rec_seconds=None):
+    """A planner that knows the saved plan's timeline: no song map needed (a retake never moves a cut or a beat)."""
+    P = _Planner(moments_doc, {}, cfg, game, None, pl["total"], rec_seconds, luma)
+    P.song0 = float(pl["songStart"])
+    P.by_key = {(m["kind"], m["frame"]): m for m in moments_doc["moments"]}
+    return P
+
+
+def _occupy(P, pieces, skip=()):
+    """The used source spans and taken moments of every piece except the indexes in skip."""
+    P.used = [(p["src"]["start"], p["src"]["end"]) for i, p in enumerate(pieces) if i not in skip]
+    P.taken = set()
+    for i, p in enumerate(pieces):
+        a = p.get("anchor")
+        if i not in skip and a and (a["kind"], a["frame"]) in P.by_key:
+            P.taken.add(id(P.by_key[(a["kind"], a["frame"])]))
+
+
+def _queue_of(P, p):
+    if p["part"] == "drop":
+        return P.kills or P.on_queue
+    return P.on_queue if p["anchor"]["onBeat"] else P.offs
+
+
+def _redo(P, p, queue, speed=None):
+    """A new piece on exactly p's frames: anchored from queue (same anchor frame, beat or off-beat) or calm."""
+    P.pieces = []
+    f0, f1 = p["outStart"], p["outStart"] + p["outFrames"]
+    if p.get("anchor") and queue is not None:
+        a = p["anchor"]
+        return P.anchored(p["part"], queue, f0, a["outFrame"], f1, a["onBeat"])
+    return P.calm(p["part"], f0, f1, speed if speed is not None else p["speed"])
+
+
+def _drop_fx(effects, p, fps):
+    """Without p's anchor: the effects on its beat (shake, flash, split, ragdoll) and its scope push go."""
+    a = p.get("anchor")
+    if not a:
+        return effects
+    end_t = round((p["outStart"] + p["outFrames"]) / fps, 4)
+    return [e for e in effects if not ((e["fn"] in _ANCHOR_FX and abs(e["at"] - a["outT"]) < 1e-6) or
+                                       (e["fn"] == "scope-zoom-transition" and abs(e["at"] - end_t) < 1e-6))]
+
+
+def _carry_ramp(old, new, effects):
+    """The ragdoll slow motion stays only on a kill at speed 1 (it starts at the kill frame: same output frame)."""
+    if not old.get("ramp"):
+        return effects
+    if new.get("anchor") and new["anchor"]["kind"] == "kill" and new["speed"] == 1.0:
+        new["ramp"] = dict(old["ramp"])
+        return effects
+    t = old["anchor"]["outT"]
+    return [e for e in effects if not (e["fn"] == "ragdoll-slowmo" and abs(e["at"] - t) < 1e-6)]
+
+
+def retake(pl, op, moments_doc, cfg=None, game=None, piece=None, luma=None, rec_seconds=None):
+    """BD7 (D418): a new plan from a saved plan that changes only what op names. Cuts, beats, song start, slots and
+    every piece op does not name stay as they are; the retake is appended to plan["retakes"] (with its seed, step or
+    pieces) so base plan + retakes reproduce the result. Numbers from cfg["retakes"].
+      another-take       every piece but the drop re-chosen with a seeded shuffle (same frames, same beats); the
+                         drop keeps the strongest kill that fits (the first-drop rule)
+      slower-intro       cold-open pieces slowed by slowerIntro.speedStep, never below speed.min (same frames, same
+                         source start: a shorter span inside the old one)
+      more-third-person  up to moreThirdPerson.convert body pieces of moreThirdPerson.kinds (never a kill, never the
+                         drop) become calm shots, near a calm moment (third person, scope) first
+      swap               piece N (1-based) gets the next candidate moment in its queue (anchored) or the next calm
+                         stretch; every other piece identical
+    Flash spacing runs again on the new timeline (cut edges re-probed when luma is given; else the saved cuts)."""
+    import copy  # noqa: PLC0415
+    import random  # noqa: PLC0415
+    cfg = cfg or load_config()
+    game = game or load_game(moments_doc.get("game") or "codm")
+    rc = cfg["retakes"]
+    if op not in RETAKES:
+        raise ClipError(f"beatdrop: unknown retake {op} (use {', '.join(RETAKES)})")
+    out = copy.deepcopy(pl)
+    pieces, effects = out["pieces"], [e for e in out["effects"] if e["fn"] != "cut-soften"]
+    hist = out.setdefault("retakes", [])
+    if len(hist) >= int(rc["max"]):
+        raise ClipError(f"beatdrop: this plan already has {len(hist)} retakes (limit {int(rc['max'])})")
+    P = _state(out, moments_doc, cfg, game, luma, rec_seconds)
+    rec = {"op": op}
+    changed = []
+    if op == "swap":
+        if not isinstance(piece, int) or isinstance(piece, bool) or not 1 <= piece <= len(pieces):
+            raise ClipError(f"beatdrop: swap needs a piece number 1..{len(pieces)}")
+        i = piece - 1
+        old = pieces[i]
+        _occupy(P, pieces, skip={i})
+        if old.get("anchor"):
+            cur = P.by_key.get((old["anchor"]["kind"], old["anchor"]["frame"]))
+            q = list(_queue_of(P, old))
+            k = next((j for j, m in enumerate(q) if m is cur), None)
+            q = q[k + 1:] + q[:k] if k is not None else q
+            new = _redo(P, old, q)
+        else:
+            P.used.append((old["src"]["start"], old["src"]["end"]))  # the next calm stretch, not this one
+            new = _redo(P, old, None)
+        if new is None or new["src"] == old["src"]:
+            raise ClipError(f"beatdrop: piece {piece} has no other candidate that fits its frames")
+        effects = _carry_ramp(old, new, effects)
+        pieces[i] = new
+        rec["piece"] = piece
+        changed = [i]
+    elif op == "slower-intro":
+        step, sp_min = float(rc["slowerIntro"]["speedStep"]), float(cfg["speed"]["min"])
+        for i, p in enumerate(pieces):
+            if p["part"] != "cold-open":
+                continue
+            s = round(max(sp_min, p["speed"] - step), 4)
+            if s < p["speed"]:
+                p["speed"] = s
+                p["src"]["end"] = round(p["src"]["start"] + p["outFrames"] / P.fps * s, 4)
+                changed.append(i)
+        if not changed:
+            raise ClipError(f"beatdrop: the cold open is already at the slowest safe speed ({sp_min:g}x)")
+        rec["speedStep"] = step
+    elif op == "more-third-person":
+        mt = rc["moreThirdPerson"]
+        cands = [i for i, p in enumerate(pieces) if p["part"] == "body" and p.get("anchor")
+                 and p["anchor"]["kind"] in mt["kinds"] and p["anchor"]["kind"] != "kill"]
+        cands.sort(key=lambda i: (pieces[i]["anchor"]["onBeat"], pieces[i]["anchor"]["strength"], i))
+        for i in cands:
+            if len(changed) >= int(mt["convert"]):
+                break
+            _occupy(P, pieces, skip={i})
+            old = pieces[i]
+            P.pieces = []
+            try:
+                new = P.calm("body", old["outStart"], old["outStart"] + old["outFrames"], float(mt["speed"]))
+            except ClipError:
+                continue
+            effects = _drop_fx(effects, old, P.fps)
+            pieces[i] = new
+            changed.append(i)
+        if not changed:
+            raise ClipError("beatdrop: no piece can become a calm third-person shot (only kills or the drop are left)")
+        changed.sort()
+        rec["pieces"] = [i + 1 for i in changed]
+    else:  # another-take
+        at = rc["anotherTake"]
+        seed = 1 + sum(1 for r in hist if r["op"] == "another-take")
+        rng = random.Random(f"{at['seedPrefix']}|{seed}")
+        win = float(at["window"])
+
+        def shuffled(q):
+            keyed = [(r + rng.uniform(0, win), r, m) for r, m in enumerate(q)]
+            return [m for _, _, m in sorted(keyed, key=lambda x: (x[0], x[1]))]
+        di = next(i for i, p in enumerate(pieces) if p["part"] == "drop")
+        _occupy(P, pieces, skip=set(range(len(pieces))) - {di})
+        P.rng = rng
+        qs = {}
+        for i, old in enumerate(pieces):
+            if i == di:
+                continue
+            if old.get("anchor"):
+                base = _queue_of(P, old)
+                if id(base) not in qs:
+                    qs[id(base)] = shuffled(base)
+                new = _redo(P, old, qs[id(base)])
+                if new is None:
+                    raise ClipError(f"beatdrop: another take found no moment for piece {i + 1}")
+                P.taken.add(id(P.by_key[(new["anchor"]["kind"], new["anchor"]["frame"])]))
+            else:
+                new = _redo(P, old, None)
+            P.used.append((new["src"]["start"], new["src"]["end"]))
+            effects = _carry_ramp(old, new, effects)
+            pieces[i] = new
+            changed.append(i)
+        rec["seed"] = seed
+    P.pieces = pieces
+    fl = cfg["flash"]
+    cuts = P.cut_jumps() if luma is not None else [{k: c[k] for k in ("at", "from", "to")} for c in out.get("cuts") or []]
+    out["effects"] = bfx.space_flashes(effects, int(fl["maxPerSec"]), float(fl["minGapSec"]), cuts=cuts,
+                                       soften_frames=int(fl["softenFrames"]))
+    out["cuts"] = cuts
+    out["stats"] = stats(pieces, P.fps)
+    hist.append(rec)
+    out["log"] = (out.get("log") or []) + [f"retake {op}: piece(s) {', '.join(str(i + 1) for i in changed)} changed"]
+    out["log"] = out["log"][-50:]
+    return out
+
+
+def _mmss(t):
+    t = int(round(float(t)))
+    return f"{t // 60}:{t % 60:02d}"
+
+
+def _n(k, word, plural=None):
+    return f"{k} {word if k == 1 else (plural or word + 's')}"
+
+
+def summary(pl):
+    """BD7 (D418): the plan in plain words for the studio card -> a list of short strings."""
+    ps = pl["pieces"]
+    out = []
+    drop = next((p for p in ps if p["part"] == "drop"), None)
+    if drop and drop.get("anchor"):
+        what = drop["anchor"]["kind"]
+        if pl["song"].get("firstDrop") is not None:
+            out.append(f"{what} on the first drop at {_mmss(pl['song']['dropAt'])}")
+        else:
+            out.append(f"{what} on the drop at {_mmss(pl['song']['dropAt'])} (the song's first drop came too early)")
+    anchors = [p["anchor"] for p in ps if p.get("anchor")]
+    kb = sum(1 for a in anchors if a["kind"] == "kill" and a["onBeat"])
+    if kb:
+        out.append(_n(kb, "kill") + " on beats")
+    ob = sum(1 for a in anchors if not a["onBeat"])
+    if ob:
+        out.append(_n(ob, "move") + " between beats (flicks, slides, jumps)")
+    tp = sum(1 for p in ps if p.get("near") == "third-person")
+    if tp:
+        out.append(_n(tp, "third-person shot"))
+    co = [p for p in ps if p["part"] == "cold-open"]
+    if co:
+        out.append(f"slow intro: {_n(len(co), 'shot')} at {min(p['speed'] for p in co):g}x")
+    sm = sum(1 for p in ps if p.get("ramp"))
+    if sm:
+        out.append(_n(sm, "slow-motion kill"))
+    out.append(f"{_n(len(ps), 'shot')}, {_mmss(pl['total'])} long")
+    words = {"another-take": "another take", "slower-intro": "slower intro", "more-third-person": "more third person",
+             "swap": "piece swapped"}
+    for r in pl.get("retakes") or []:
+        extra = f" ({r['piece']})" if r["op"] == "swap" else (f" ({r['seed']})" if r["op"] == "another-take" else "")
+        out.append("retake: " + words[r["op"]] + extra)
+    return out
+
+
 LUMA_CACHE = "beatdrop-luma.json"
 PROBE_FILE = "beatdrop-probe.rgb"
 
@@ -512,10 +753,11 @@ def render_pieces(pl):
 
 
 def render_argv(pl, ffmpeg, src, frame, encoder_args, audio_args, music_wav, out_name, lut=None, audio_tracks=1,
-                threads=4, fx=True, titles=None):
+                threads=4, fx=True, titles=None, layout=None):
     """The one ffmpeg run of a plan: clip_montage.render_argv with beat-locked pieces, the bed (no sidechain: the game
     is ducked per piece), the BD4 effects graph and the style's LUT (bloom-grade, lut3d once). One audio encode.
-    titles: beatdrop_titles.prepare() dict (BD5), burned by libass after the effects (render_argv title=)."""
+    titles: beatdrop_titles.prepare() dict (BD5), burned by libass after the effects (render_argv title=).
+    layout (BD7): the V cut's per-piece framing (clip_montage.render_argv layout=); frame is then the V frame."""
     import clip_montage as mont  # noqa: PLC0415
     graph = bfx.graph(pl["effects"], frame, pl["fps"]) if fx else None
     bloom = next((e for e in pl["effects"] if e["fn"] == "bloom-grade"), None)
@@ -523,7 +765,7 @@ def render_argv(pl, ffmpeg, src, frame, encoder_args, audio_args, music_wav, out
     music = {"file": music_wav, "duck": None} if music_wav else None
     return mont.render_argv(ffmpeg, src, render_pieces(pl), frame, encoder_args, audio_args, 8, out_name,
                             threads=threads, audio_tracks=audio_tracks, max_sec=pl["total"], music=music, fx=graph,
-                            lut=use_lut, title=titles)
+                            lut=use_lut, title=titles, layout=layout)
 
 
 def graph_from_file(argv, wd):

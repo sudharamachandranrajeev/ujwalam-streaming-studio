@@ -39,5 +39,19 @@
   },
   "rgbSplitEvery": 4,
   "ragdollEvery": 3,
-  "musicSeedAvoidLast": 3
+  "musicSeedAvoidLast": 3,
+  "retakes": {
+    "$comment": "BD7 (D418): one-click retakes on a saved plan (beatdrop.retake). Each changes only what it names: cuts, beats, song, slots and other pieces stay. max: retakes kept per plan (the plan records each with its seed, step or pieces, so the result is reproducible). anotherTake: every piece but the drop re-chosen; a moment's rank in its queue moves by up to `window` places (seeded by seedPrefix and the take number). slowerIntro: cold-open speed down by speedStep, never below speed.min. moreThirdPerson: up to `convert` body pieces of `kinds` (never a kill, never the drop) become calm shots at `speed`. Proposed numbers, synthetic fixtures only.",
+    "max": 20,
+    "anotherTake": { "window": 4, "seedPrefix": "beatdrop-take" },
+    "slowerIntro": { "speedStep": 0.125 },
+    "moreThirdPerson": { "convert": 2, "kinds": ["flick", "slide", "jump", "gunshot"], "speed": 0.75 }
+  },
+  "vertical": {
+    "$comment": "BD7 (D418): the V (9:16) render cut from the same plan beside the H one (same pieces, timing, music, effects, titles). Framing reuses the clip layouts (data/clip/layouts.json, clip_render.layout_graph): `layout` when the session's V canvas recording exists (the vertical stream design, as V clips are cut), else `fallback` on the H recording (blurred fill: the whole H picture fitted, nothing cut off). Titles are screen space in V (the H pin track is in H pixels); credits wrap per frame. On a flash fail only the V file is dropped; the H file stands.",
+    "on": true,
+    "frame": { "width": 1080, "height": 1920 },
+    "layout": "stream-v",
+    "fallback": "blurred-fill"
+  }
 }

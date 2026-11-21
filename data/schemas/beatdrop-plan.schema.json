@@ -68,6 +68,7 @@
               "strength": { "type": "number", "minimum": 0, "maximum": 1 }
             }
           },
+          "near": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
           "game": { "type": "object", "additionalProperties": false, "required": ["gain", "keep"],
             "properties": { "gain": { "type": "number", "minimum": 0, "maximum": 1 },
               "keep": { "type": "array", "maxItems": 64, "items": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number", "minimum": 0 } } } } },
@@ -98,6 +99,14 @@
       "items": { "type": "object", "additionalProperties": false, "required": ["at", "from", "to", "softened"],
         "properties": { "at": { "type": "number", "minimum": 0 }, "from": { "type": "number", "minimum": 0, "maximum": 1 },
           "to": { "type": "number", "minimum": 0, "maximum": 1 }, "softened": { "type": "boolean" } } }
+    },
+    "retakes": {
+      "type": "array", "maxItems": 20,
+      "items": { "type": "object", "additionalProperties": false, "required": ["op"],
+        "properties": { "op": { "enum": ["another-take", "slower-intro", "more-third-person", "swap"] },
+          "seed": { "type": "integer", "minimum": 1 }, "piece": { "type": "integer", "minimum": 1 },
+          "speedStep": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+          "pieces": { "type": "array", "maxItems": 2000, "items": { "type": "integer", "minimum": 1 } } } }
     },
     "log": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 300 } },
     "stats": {
