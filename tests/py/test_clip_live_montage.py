@@ -137,7 +137,12 @@ class LiveMontageEndToEnd(unittest.TestCase):
         return rc, buf.getvalue()
 
     def published(self):
-        return sorted(n for _r, _d, fs in os.walk(self.clips) for n in fs)
+        """Published videos only; each one must carry its D414 music sidecar (<video>.music.json)."""
+        files = sorted(n for _r, _d, fs in os.walk(self.clips) for n in fs)
+        videos = [n for n in files if n.endswith(".mp4")]
+        for v in videos:
+            self.assertIn(v + ".music.json", files, "every published video has its music sidecar (D414)")
+        return videos
 
     def test_live_review_makes_and_publishes_the_montage(self):
         rc, log = self.live_review("--v-recording", self.vrec)
