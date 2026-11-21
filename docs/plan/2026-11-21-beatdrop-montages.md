@@ -1,6 +1,6 @@
 # BeatDrop montages, long-video teaching overlays and countdown reels (plan, 2026-11-21)
 
-Status: PROPOSED, waiting for the user's yes. User request 2026-11-21 with seven reference videos in the user's local
+Status: APPROVED 2026-11-21 (D413; answers to section 6 recorded there). User request 2026-11-21 with seven reference videos in the user's local
 `_data` folder (`video reference`, outside the repo, never copied, committed or uploaded). Builds on the reel styles
 library (RS1-RS4, D412), the clip look (FX1-FX4, D411), the long highlights video and the CODM game pack.
 
