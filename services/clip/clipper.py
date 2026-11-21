@@ -464,10 +464,11 @@ def cmd_validate(a):
         for f in c["files"]:
             exp = float(f["outSec"]) if f.get("outSec") is not None else float(c["end"]) - float(c["start"])
             p = os.path.join(a.out, "clips", c["id"], f["file"])
-            res = val.validate_file(ffmpeg, ffprobe, p, exp, frame, targets, decode=not getattr(a, "no_decode", False),
-                                    source_tracks=f.get("sourceAudioTracks"))
+            # BD7c: a file with its own frame (BeatDrop H and V from one plan) is checked against that frame
+            res = val.validate_file(ffmpeg, ffprobe, p, exp, f.get("frame") or frame, targets,
+                                    decode=not getattr(a, "no_decode", False), source_tracks=f.get("sourceAudioTracks"))
             rows.append({"id": c["id"], "layout": f["layout"], "file": f["file"], "geometry": f["geometry"],
-                         "captions": c["captions"].get("status"), **res})
+                         "captions": (c.get("captions") or {}).get("status"), **res})  # BeatDrop clips have no captions
             bad += 0 if res["ok"] else 1
             progress_line("validate", sum(1 for r in rows if r.get("file")), total,
                           f"clip {c['id']} {'ok' if res['ok'] else 'failed'}")

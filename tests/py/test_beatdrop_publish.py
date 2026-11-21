@@ -66,6 +66,33 @@ class Publish(unittest.TestCase):
         self.assertTrue(all(u["music"]["source"] == "user-folder" for u in ups))  # posting never auto-posts these
 
 
+class Validate(unittest.TestCase):
+    def test_each_file_is_checked_against_its_own_frame_without_captions(self):
+        import argparse  # noqa: PLC0415
+        from unittest import mock  # noqa: PLC0415
+        import clipper  # noqa: PLC0415
+        doc = rdoc({"source": "made-here", "seed": 1})
+        doc["frame"] = {"width": 1920, "height": 1080}
+        doc["clips"][0]["files"][1]["frame"] = {"width": 1080, "height": 1920}
+        seen = []
+
+        def fake(_ff, _fp, path, exp, frame, *_a, **_k):
+            seen.append((os.path.basename(path), exp, frame))
+            return {"ok": True, "issues": [], "audio": {"tracks": 1, "loudness": []}}
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "render.json"), "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            with mock.patch.object(clipper, "_tools", return_value=("ffmpeg", "ffprobe")), \
+                    mock.patch.object(clipper.val, "validate_file", fake):
+                rc = clipper.cmd_validate(argparse.Namespace(out=tmp, targets=None, no_decode=True))
+            with open(os.path.join(tmp, "report.json"), encoding="utf-8") as fh:
+                rep = json.load(fh)
+        self.assertEqual(rc, 0)
+        self.assertEqual([s[2] for s in seen], [{"width": 1920, "height": 1080}, {"width": 1080, "height": 1920}])
+        self.assertEqual({s[1] for s in seen}, {42.5})
+        self.assertEqual([r["captions"] for r in rep["results"]], [None, None])
+
+
 class Tidy(unittest.TestCase):
     def test_beatdrop_sub_run_is_seen(self):
         with tempfile.TemporaryDirectory() as tmp:
