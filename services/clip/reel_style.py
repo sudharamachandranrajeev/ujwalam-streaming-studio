@@ -13,7 +13,8 @@ target. Every mapped value can be tuned afterwards (tune: shotSec, lutStrength, 
   style_problems(doc, cfg, analysed=True)    -> [] when the record is fine
   from_measured(measured, cfg)               -> the mapped parts + summary (plain words)
   effective(doc, cfg)                        -> mapped parts with the user's tuning laid over them
-  load_style / list_styles / chosen(data_dir, reel type)
+  load_style / list_styles / chosen(data_dir, reel type) / pick(data_dir, reel type, seed parts)
+  create / save_tune / card / preview, and a CLI for the studio (list, create, tune, preview)
   write_lut(path, colour, strength, ref, cfg) / clip_colour(src, pieces)
   pace(pieces, shot_sec, ...)  transitions_for(...)  zoom_for(...)  ramp_for(...)  plan(...)
 """
@@ -27,7 +28,13 @@ import os
 import random
 import re
 
-from clip_common import CLIP_DATA, SETTINGS_FILE, ClipError, flag_on, load_json
+import sys as _sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in _sys.path:  # run as a script with -I (the studio): the clip modules sit next to this file
+    _sys.path.insert(0, _HERE)
+
+from clip_common import CLIP_DATA, SETTINGS_FILE, ClipError, flag_on, load_json, write_json_atomic
 
 CONFIG_FILE = os.path.join(CLIP_DATA, "reel-styles.json")
 FLAG = "reel-styles"
@@ -393,7 +400,9 @@ def _rng(*parts):
 def pace(pieces, shot_sec, keep=(), gap_sec=0.5, min_sec=None):
     """Splits each piece longer than two shots into shots of shot_sec with a jump of gap_sec between them (footage in
     the gap is left out), so the reel cuts at the style's pace. A shot holding a kept moment (keep: source times) is
-    never cut through. -> new pieces (only ever shorter in total: the D350 maximum still holds)."""
+    never cut through; keep items are times, or (time, seconds to hold after it) for the moment a speed ramp needs.
+    -> new pieces (only ever shorter in total: the D350 maximum still holds)."""
+    keep = [(k, 0.5) if isinstance(k, (int, float)) else (float(k[0]), float(k[1])) for k in keep]
     min_sec = min_sec if min_sec is not None else max(0.4, 0.6 * shot_sec)
     out = []
     for p in pieces:
@@ -404,9 +413,9 @@ def pace(pieces, shot_sec, keep=(), gap_sec=0.5, min_sec=None):
         t = p["start"]
         while t < p["end"] - 1e-6:
             e = min(p["end"], t + shot_sec)
-            for k in keep:  # stretch a shot to hold its moment and a little after it
-                if t <= k < e + 0.25:
-                    e = min(p["end"], max(e, k + 0.5))
+            for k, hold in keep:  # stretch a shot to hold its moment (also one that would fall in the jump) and after it
+                if t <= k < e + gap_sec + 0.25:
+                    e = min(p["end"], max(e, k + hold))
             if p["end"] - e < min_sec:
                 e = p["end"]
             out.append(dict(p, start=round(t, 3), end=round(e, 3)))
@@ -475,6 +484,16 @@ def ramp_for(style_ramp, piece, moment, catch_up=2.0, audio="sync"):
             "catchUpEnd": round(end, 4), "audio": audio}
 
 
+def join_windows(pieces, xd):
+    """Reel (output) time windows (start, end) of each cross-faded join; [] for hard cuts."""
+    out, acc = [], 0.0
+    for p in pieces[:-1]:
+        acc += (p["end"] - p["start"]) - xd
+        if xd > 0:
+            out.append((round(acc, 3), round(acc + xd, 3)))
+    return out
+
+
 def reel_moments(pieces, xd, moments):
     """Source-time moments -> reel (output) times, for pieces joined with overlap xd."""
     out, acc = [], 0.0
@@ -484,3 +503,199 @@ def reel_moments(pieces, xd, moments):
                 out.append(acc + (m - p["start"]))
         acc += (p["end"] - p["start"]) - (xd if i < len(pieces) - 1 else 0.0)
     return out
+
+
+def pick(data_dir, reel_type, seed_parts=(), cfg=None):
+    """RS4: the style for one reel of this type: the one chosen for the type, or (when clips.reelStyles.pool ticks
+    styles to join the D411 mix and clips.look.randomise is on) a seeded pick from the chosen one plus the pool.
+    None = no style (the reel is made exactly as before)."""
+    cfg = cfg or load_config()
+    if not data_dir or reel_type not in cfg["reelTypes"] or not on(data_dir):
+        return None
+    try:
+        j = load_json(os.path.join(data_dir, SETTINGS_FILE))
+    except (OSError, ClipError):
+        return None
+    c = (j.get("clips") or {}) if isinstance(j, dict) else {}
+    rs = c.get("reelStyles") if isinstance(c.get("reelStyles"), dict) else {}
+    first = (rs.get("byType") or {}).get(reel_type) if isinstance(rs.get("byType"), dict) else None
+    pool = [x for x in (rs.get("pool") or []) if isinstance(x, str)] if isinstance(rs.get("pool"), list) else []
+    mix = (c.get("look") or {}).get("randomise") is True if isinstance(c.get("look"), dict) else False
+    ids = list(dict.fromkeys(([first] if first else []) + (pool if mix else [])))
+    docs = [d for d in (load_style(data_dir, i, cfg) for i in ids) if d]
+    if not docs:
+        return None
+    return docs[0] if len(docs) == 1 else _rng("reel-style", reel_type, *seed_parts).choice(docs)
+
+
+# ---------------------------------------------------------------- Settings > Clips > Reel styles (RS3)
+
+_VIDEO_EXT = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
+
+
+def _slug(name, taken):
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:32] or "style"
+    if not base[0].isalnum():
+        base = "s" + base
+    sid, n = base, 2
+    while sid in taken:
+        sid, n = f"{base}-{n}", n + 1
+    return sid
+
+
+def example_problems(paths, cfg=None):
+    """Example videos: absolute paths to existing video files, 1..maxExamples, no repeats. Only the path is kept."""
+    cfg = cfg or load_config()
+    if not isinstance(paths, list) or not 1 <= len(paths) <= int(cfg["maxExamples"]):
+        return [f"add 1 to {cfg['maxExamples']} example videos"]
+    out = []
+    for p in paths:
+        if not isinstance(p, str) or not p or len(p) > int(cfg["pathMaxChars"]) or re.search(r"[\x00-\x1f]", p):
+            out.append("an example path is not a file path")
+        elif not os.path.isabs(p):
+            out.append(f"{os.path.basename(p)}: give the full path")
+        elif not p.lower().endswith(_VIDEO_EXT):
+            out.append(f"{os.path.basename(p)}: not a video file ({', '.join(_VIDEO_EXT)})")
+        elif not os.path.isfile(p):
+            out.append(f"{os.path.basename(p)}: file not found")
+    if len({os.path.normcase(os.path.abspath(p)) for p in paths if isinstance(p, str)}) != len(paths):
+        out.append("the same example is added twice")
+    return out
+
+
+def create(data_dir, name, paths, cfg=None):
+    """A new style (not analysed yet) in <data>/clips/styles/<id>/style.json. -> the record."""
+    cfg = cfg or load_config()
+    name = " ".join(str(name or "").split())
+    if not 1 <= len(name) <= int(cfg["nameMaxChars"]):
+        raise ClipError(f"give the style a name of 1 to {cfg['nameMaxChars']} characters")
+    probs = example_problems(paths, cfg)
+    if probs:
+        raise ClipError("; ".join(probs))
+    root = styles_root(data_dir, cfg)
+    taken = set(os.listdir(root)) if os.path.isdir(root) else set()
+    doc = new_style(_slug(name, taken), name, [os.path.abspath(p) for p in paths], cfg)
+    os.makedirs(os.path.join(root, doc["id"]), exist_ok=True)
+    write_json_atomic(os.path.join(root, doc["id"], "style.json"), doc)
+    return doc
+
+
+def save_tune(data_dir, style_id, tune, cfg=None):
+    """Stores the user's tuning (sliders) on an analysed style. -> the record."""
+    cfg = cfg or load_config()
+    doc = load_style(data_dir, style_id, cfg)
+    if not doc:
+        raise ClipError("that style is not analysed yet (or is gone)")
+    probs = tune_problems(tune, cfg)
+    if probs:
+        raise ClipError("; ".join(probs))
+    doc = dict(doc, tune={k: v for k, v in tune.items() if v is not None})
+    write_json_atomic(os.path.join(styles_root(data_dir, cfg), style_id, "style.json"), doc)
+    return doc
+
+
+def card(doc, cfg=None):
+    """What the Settings card shows of a style: numbers and plain words only (never frames or text from the videos)."""
+    cfg = cfg or load_config()
+    analysed = doc.get("measured") is not None
+    eff = effective(doc, cfg) if analysed else {}
+    return {"id": doc["id"], "name": doc["name"], "analysed": analysed,
+            "examples": [{"name": os.path.basename(e["path"]), "path": e["path"], "seconds": e.get("seconds")} for e in doc["examples"]],
+            "summary": doc.get("summary") or "not analysed yet", "tune": doc.get("tune") or {},
+            "omitted": ((doc.get("measured") or {}).get("omitted")) or [],
+            "values": {"shotSec": (eff.get("cuts") or {}).get("shotSec"), "lutStrength": (eff.get("colour") or {}).get("strength"),
+                       "zoomScale": (doc.get("zooms") or {}).get("scale"), "rampFactor": (doc.get("ramps") or {}).get("factor"),
+                       "musicEnergy": (eff.get("music") or {}).get("energyLevel")} if analysed else {}}
+
+
+def _encoder(ffmpeg):
+    """A CPU H.264 encoder this ffmpeg has (libx264, else libopenh264). Never a GPU encoder: previews run next to the
+    studio."""
+    import subprocess  # noqa: PLC0415
+    r = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    if " libx264 " in r.stdout:
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+    if " libopenh264 " in r.stdout:
+        return ["-c:v", "libopenh264", "-b:v", "3000k"]
+    raise ClipError("this ffmpeg has no CPU H.264 encoder (libx264 or libopenh264)")
+
+
+def preview(data_dir, style_id, src, out, ffmpeg="ffmpeg", seconds=8.0, cfg=None):
+    """"Preview on my clip": the first seconds of one of the user's own clips with the style's colour (LUT fitted to
+    that clip) and zoom pulses, rendered on the CPU at 540 px wide. Cuts, transitions and music need a whole reel, so
+    the preview says so instead of guessing them. -> {out, shift, zoomTimes, note}."""
+    from clip_common import run_tool  # noqa: PLC0415
+    cfg = cfg or load_config()
+    doc = load_style(data_dir, style_id, cfg)
+    if not doc:
+        raise ClipError("that style is not analysed yet (or is gone)")
+    if not (isinstance(src, str) and os.path.isabs(src) and os.path.isfile(src) and src.lower().endswith(_VIDEO_EXT)):
+        raise ClipError("choose one of your clips (a video file) to preview on")
+    eff = effective(doc, cfg)
+    piece = {"start": 0.0, "end": float(seconds)}
+    filters, shift, ztimes = ["scale=540:-2,setsar=1,fps=30"], None, []
+    wd = os.path.dirname(os.path.abspath(out))
+    os.makedirs(wd, exist_ok=True)
+    if eff.get("colour"):
+        lut = os.path.join(wd, LUT_FILE)
+        shift = write_lut(lut, eff["colour"], eff["colour"]["strength"], clip_colour(src, [piece]), cfg)
+        filters.append(f"lut3d=file={os.path.basename(lut)}:interp=tetrahedral")
+    z = zoom_for(eff.get("zooms"), [t for t in (1.5, 4.0, 6.5) if t < seconds - 0.5])
+    if z:
+        import clip_montage as mont  # noqa: PLC0415
+        ztimes = z["times"]
+        filters.append(f"zoompan=z='{mont.zoom_expr(z)}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=540x960:fps=30")
+    argv = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-t", f"{seconds:.2f}", "-i", src, "-vf", ",".join(filters),
+            *_encoder(ffmpeg), "-pix_fmt", "yuv420p", "-threads", "2", "-c:a", "aac", "-b:a", "128k", out]
+    r = run_tool(argv, cwd=wd, timeout=300)
+    if r.returncode != 0 or not os.path.isfile(out):
+        tail = (r.stderr or "").strip().splitlines()
+        raise ClipError("the preview did not render" + (": " + tail[-1][:200] if tail else ""))
+    return {"out": out, "shift": shift, "zoomTimes": ztimes,
+            "note": "colour and zoom pulses shown; pace, transitions and music show on a whole reel"}
+
+
+def main(argv=None):
+    """CLI for the studio (services/studio-ui/reel-styles.mjs). Prints one JSON line; exit 2 with the reason on stderr."""
+    import argparse  # noqa: PLC0415
+    import json  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+    from clip_common import eprint, lower_own_priority, on_air  # noqa: PLC0415
+    ap = argparse.ArgumentParser(description="Reel styles (RS3)")
+    ap.add_argument("op", choices=["list", "create", "tune", "preview"])
+    ap.add_argument("--data-dir", required=True)
+    ap.add_argument("--json", default="{}", help="the request body (create: name, paths; tune: id, tune; preview: id, src)")
+    ap.add_argument("--ffmpeg", default="ffmpeg")
+    a = ap.parse_args(argv)
+    lower_own_priority()
+    try:
+        b = json.loads(a.json)
+        if not isinstance(b, dict):
+            raise ClipError("the request must be an object")
+        cfg = load_config()
+        if a.op == "list":
+            out = {"styles": [card(d, cfg) for d in list_styles(a.data_dir, cfg)], "reelTypes": cfg["reelTypes"],
+                   "tune": cfg["tune"], "maxExamples": cfg["maxExamples"]}
+        elif a.op == "create":
+            out = {"style": card(create(a.data_dir, b.get("name"), b.get("paths"), cfg), cfg)}
+        elif a.op == "tune":
+            out = {"style": card(save_tune(a.data_dir, b.get("id"), b.get("tune"), cfg), cfg)}
+        else:
+            if on_air() is not False:
+                raise ClipError("previews are made off air only (the studio is live or recording, or that cannot be told)")
+            sid = b.get("id")
+            if not (isinstance(sid, str) and _ID.match(sid)):
+                raise ClipError("unknown style")
+            out = preview(a.data_dir, sid, b.get("src"), os.path.join(styles_root(a.data_dir, cfg), sid, "preview.mp4"),
+                          a.ffmpeg, cfg=cfg)
+        print(json.dumps(out))
+        return 0
+    except (ClipError, ValueError) as e:
+        eprint(f"reel styles: {e}")
+        return 2
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(main())

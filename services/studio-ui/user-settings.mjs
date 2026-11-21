@@ -284,6 +284,38 @@ export function lookInfo(dataDir) {
     durationSec: d.durationSec, defaults: d.defaults, look };
 }
 // ---- clip look end
+// ---- reel styles (RS3, D412) begin: clips.reelStyles checks and read; also marked "reel styles" in readSettings,
+// settingsProblems and writeSettings. { byType?: { reel|impact|montage: style id | null }, pool?: [style id] }: the
+// style per reel type, and the styles that join the clip look's mix (services/clip/reel_style.py pick()).
+export const REEL_STYLE_TYPES = Object.freeze(['reel', 'impact', 'montage']);
+const STYLE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const MAX_POOL = 16;
+/** Problems with a clips.reelStyles value; [] when fine. */
+export function reelStylesProblems(v) {
+  if (!plainObj(v)) return ['clips.reelStyles must be an object'];
+  const out = [];
+  for (const k of Object.keys(v)) if (!['byType', 'pool'].includes(k)) out.push(`unknown clips.reelStyles setting ${k}`);
+  if ('byType' in v) {
+    if (!plainObj(v.byType)) out.push('clips.reelStyles.byType must be an object');
+    else for (const [t, id] of Object.entries(v.byType)) {
+      if (!REEL_STYLE_TYPES.includes(t)) out.push(`clips.reelStyles.byType: unknown reel type ${t}`);
+      else if (id !== null && !(typeof id === 'string' && STYLE_ID.test(id))) out.push(`clips.reelStyles.byType.${t} must be empty or a style id`);
+    }
+  }
+  if ('pool' in v && (!Array.isArray(v.pool) || v.pool.length > MAX_POOL || v.pool.some((x) => typeof x !== 'string' || !STYLE_ID.test(x))
+    || new Set(v.pool).size !== v.pool.length)) out.push(`clips.reelStyles.pool must be up to ${MAX_POOL} different style ids`);
+  return out;
+}
+const readReelStyles = (v) => (v !== undefined && reelStylesProblems(v).length === 0 ? structuredClone(v) : null);
+/** The stored value after a patch: byType merges type by type; pool is replaced whole. */
+function mergeReelStyles(cur, patch) {
+  if (patch === undefined) return cur ?? null;
+  const out = structuredClone(cur ?? {});
+  if (patch.byType) out.byType = { ...(out.byType ?? {}), ...patch.byType };
+  if (patch.pool) out.pool = [...patch.pool];
+  return Object.keys(out).length ? out : null;
+}
+// ---- reel styles end
 // ---- match gate (D286 proposed) begin: clips.matchGate checks and read; also one line each in DEFAULTS,
 // readSettings, settingsProblems and writeSettings, marked "match gate"
 const okMinKills = (v) => v === null || (Number.isInteger(v) && v >= MIN_KILLS.min && v <= MIN_KILLS.max);
@@ -419,7 +451,8 @@ export function readSettings(dataDir) {
       ...(Object.keys(readReelLengths(c.reelLengths)).length ? { reelLengths: readReelLengths(c.reelLengths) } : {}), // reel length
       ...(Object.keys(readReelHooks(c.reelHooks)).length ? { reelHooks: readReelHooks(c.reelHooks) } : {}), // reel hook
       ...(readReelTransition(c.reelTransition) ? { reelTransition: readReelTransition(c.reelTransition) } : {}), // reel transition
-      ...(readLook(c.look) ? { look: readLook(c.look) } : {}) }, // clip look
+      ...(readLook(c.look) ? { look: readLook(c.look) } : {}), // clip look
+      ...(readReelStyles(c.reelStyles) ? { reelStyles: readReelStyles(c.reelStyles) } : {}) }, // reel styles
     folders: { recordings: dir(f.recordings), clips: dir(f.clips) },
     ...uiRead(j), // D290
   };
@@ -438,6 +471,7 @@ export function settingsProblems(patch, { forbidden = [] } = {}) {
     else if (k === 'reelHooks') out.push(...reelHookProblems(v)); // reel hook
     else if (k === 'reelTransition') out.push(...reelTransitionProblems(v)); // reel transition
     else if (k === 'look') out.push(...lookProblems(v)); // clip look
+    else if (k === 'reelStyles') out.push(...reelStylesProblems(v)); // reel styles
     else if (k === 'recordLive') { if (typeof v !== 'boolean') out.push('clips.recordLive must be true or false'); } // LC2
     else if (!['recording', 'live'].includes(k)) out.push(`unknown clip setting ${k}`);
     else if (!CLIP_MODES.includes(v)) out.push(`clips.${k} must be one of ${CLIP_MODES.join(', ')}`);
@@ -466,6 +500,8 @@ export function writeSettings(dataDir, patch) {
   if (rhs) next.clips.reelHooks = rhs; else delete next.clips.reelHooks;
   const lk = mergeLook(cur.clips.look, patch.clips?.look); // clip look: group by group
   if (lk) next.clips.look = lk; else delete next.clips.look;
+  const rst = mergeReelStyles(cur.clips.reelStyles, patch.clips?.reelStyles); // reel styles: type by type
+  if (rst) next.clips.reelStyles = rst; else delete next.clips.reelStyles;
   for (const k of ['recordings', 'clips']) if (typeof next.folders[k] === 'string') mkdirSync(next.folders[k], { recursive: true });
   mkdirSync(dataDir, { recursive: true });
   const f = path.join(dataDir, SETTINGS_FILE);

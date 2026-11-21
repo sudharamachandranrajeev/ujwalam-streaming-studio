@@ -405,6 +405,165 @@ Column {
         }
     }
 
+    // RS3 (D412) reel styles: example reels the user likes (path only, never copied) are analysed off air into numbers;
+    // the style per reel type and "join the mix" are in the dialog draft (Save); a style's sliders have their own
+    // Save / Discard (they change the style, not the settings file). Progress shows in the task area and here.
+    property var rsInfo: ({ flag: false, styles: [] })
+    property string rsNote: ""
+    property var rsTune: ({})  // style id -> the slider values not saved yet
+    property string rsPreview: ""
+    function rsLoad() {
+        Api.get("ui/api/reel-styles", (ok, b, err) => {
+            if (!ok) { rsNote = "Reel styles are not available: " + err; return }
+            rsInfo = b;
+            const j = b.job;
+            rsNote = b.problem ? "Could not read your styles: " + b.problem
+                : j && j.state === "running" ? (j.op === "analyse" ? "Analysing: " : "Previewing: ") + j.note
+                : j && j.state === "failed" ? j.note : rsNote;
+            if (j && j.state === "done" && j.previewFile) rsPreview = j.previewFile;
+            rsPoll.running = !!(j && j.state === "running");
+        });
+    }
+    function rsPost(body, then) {
+        Api.post("ui/api/reel-styles", body, (ok, b, err) => {
+            rsNote = ok ? "" : "Not done: " + err;
+            if (ok && then) then(b);
+            rsLoad();
+        });
+    }
+    function rsValue(st, k) { const t = rsTune[st.id]; return t && k in t ? t[k] : (k in st.tune ? st.tune[k] : st.values[k]) }
+    function rsSet(id, k, v) { const all = Object.assign({}, rsTune), t = Object.assign({}, all[id] || {}); t[k] = v; all[id] = t; rsTune = all }
+    function rsDrop(id) { const all = Object.assign({}, rsTune); delete all[id]; rsTune = all }
+    function rsByType(t) { return ((cp.d.reelStyles || {}).byType || {})[t] || "" }
+    Timer { id: rsPoll; interval: 2000; repeat: true; onTriggered: cp.rsLoad() }
+
+    UCard {
+        title: "REEL STYLES"
+        visible: cp.rsInfo.flag === true
+        Quiet {
+            text: "Add a few reels whose look you like. Ujwalam measures them (pace, joins, zooms, slow motion, where text sits, " +
+                  "colour and music energy) and rebuilds that look on your clips with its own effects. The videos stay where they are: " +
+                  "only their path is kept. Analysing and previews run after the stream, never while you're live."
+        }
+        Quiet { objectName: "reelStylesNote"; visible: text !== ""; text: cp.rsNote; color: Theme.c.text }
+        Repeater {
+            model: [{ t: "reel", title: "Reels" }, { t: "impact", title: "Impact plays" }, { t: "montage", title: "Kill montages" }]
+            delegate: Row {
+                required property var modelData
+                spacing: Theme.sp.s
+                Words { width: 140; text: modelData.title + " use"; anchors.verticalCenter: parent.verticalCenter }
+                UCombo {
+                    objectName: "reelStyleFor_" + modelData.t
+                    width: 260
+                    label: modelData.title + " style"
+                    model: [{ value: "", text: "No style (as now)" }].concat((cp.rsInfo.styles || []).filter(s => s.analysed).map(s => ({ value: s.id, text: s.name })))
+                    currentIndex: Math.max(0, model.findIndex(m => m.value === cp.rsByType(modelData.t)))
+                    onChose: (v) => cp.box.setReelStyle(modelData.t, v)
+                }
+            }
+        }
+        Repeater {
+            model: cp.rsInfo.styles || []
+            delegate: Column {
+                id: sty
+                required property var modelData
+                width: parent.width
+                spacing: Theme.sp.xs
+                Words { text: sty.modelData.name; font.weight: Font.DemiBold }
+                Quiet { text: sty.modelData.examples.length + " example" + (sty.modelData.examples.length === 1 ? "" : "s") + ": " + sty.modelData.examples.map(e => e.name).join(", ") }
+                Quiet { objectName: "reelStyleSummary_" + sty.modelData.id; text: sty.modelData.analysed ? "Measured: " + sty.modelData.summary : "Not analysed yet." }
+                Quiet {
+                    visible: sty.modelData.omitted.length > 0
+                    text: "Left out: " + sty.modelData.omitted.map(o => o.part + " (" + o.reason + ")").join("; ")
+                }
+                Row {
+                    spacing: Theme.sp.s
+                    UButton {
+                        objectName: "reelStyleAnalyse_" + sty.modelData.id
+                        text: sty.modelData.analysed ? "Analyse again" : "Analyse"
+                        onClicked: cp.rsPost({ op: "analyse", id: sty.modelData.id })
+                    }
+                    USwitch {
+                        objectName: "reelStylePool_" + sty.modelData.id
+                        visible: sty.modelData.analysed
+                        text: "Join the mix"
+                        hint: "With \"Mix the ticked styles\" on, clips also pick this style now and then."
+                        checked: ((cp.d.reelStyles || {}).pool || []).includes(sty.modelData.id)
+                        onToggled: cp.box.poolReelStyle(sty.modelData.id, checked)
+                    }
+                }
+                Repeater {
+                    model: sty.modelData.analysed ? [
+                        { k: "shotSec", text: "Seconds per shot", fmt: v => v.toFixed(1) + " s" },
+                        { k: "lutStrength", text: "Colour strength", fmt: v => Math.round(v * 100) + " %" },
+                        { k: "zoomScale", text: "Zoom pulse size (left = off)", fmt: v => v <= 1.0 ? "off" : "+" + Math.round((v - 1) * 100) + " %" },
+                        { k: "rampFactor", text: "Slow motion speed (right = off)", fmt: v => v >= 1.0 ? "off" : Math.round(v * 100) + " %" },
+                        { k: "musicEnergy", text: "Music energy", fmt: v => Math.round(v * 100) + " %" }
+                    ].filter(x => typeof cp.rsValue(sty.modelData, x.k) === "number") : []
+                    delegate: Row {
+                        required property var modelData
+                        readonly property var range: (cp.rsInfo.tune || {})[modelData.k] || { min: 0, max: 1 }
+                        spacing: Theme.sp.s
+                        Words { width: 220; text: modelData.text; anchors.verticalCenter: parent.verticalCenter }
+                        USlider {
+                            objectName: "reelStyleTune_" + sty.modelData.id + "_" + modelData.k
+                            width: 200
+                            from: range.min
+                            to: range.max
+                            value: cp.rsValue(sty.modelData, modelData.k)
+                            onCommitted: (v) => cp.rsSet(sty.modelData.id, modelData.k, Math.round(v * 100) / 100)
+                        }
+                        Words { width: 70; text: modelData.fmt(cp.rsValue(sty.modelData, modelData.k)); anchors.verticalCenter: parent.verticalCenter }
+                    }
+                }
+                Row {
+                    visible: !!cp.rsTune[sty.modelData.id]
+                    spacing: Theme.sp.s
+                    UButton {
+                        objectName: "reelStyleSave_" + sty.modelData.id
+                        text: "Save"
+                        onClicked: cp.rsPost({ op: "tune", id: sty.modelData.id, tune: Object.assign({}, sty.modelData.tune, cp.rsTune[sty.modelData.id]) }, () => cp.rsDrop(sty.modelData.id))
+                    }
+                    UButton { objectName: "reelStyleDiscard_" + sty.modelData.id; text: "Discard"; onClicked: cp.rsDrop(sty.modelData.id) }
+                }
+                Row {
+                    visible: sty.modelData.analysed
+                    spacing: Theme.sp.s
+                    UField {
+                        id: pvSrc
+                        objectName: "reelStylePreviewSrc_" + sty.modelData.id
+                        width: Math.min(sty.width - 200, 420)
+                        label: "One of your clips"
+                        placeholderText: "Full path of one of your clips, like D:\\Clips\\reel.mp4"
+                    }
+                    UButton {
+                        objectName: "reelStylePreview_" + sty.modelData.id
+                        text: "Preview on my clip"
+                        enabled: pvSrc.text.trim() !== ""
+                        onClicked: cp.rsPost({ op: "preview", id: sty.modelData.id, src: pvSrc.text.trim() })
+                    }
+                }
+            }
+        }
+        Words { text: "Add a style"; font.weight: Font.DemiBold }
+        UField { id: rsName; objectName: "reelStyleName"; width: Math.min(parent.width, 360); label: "Style name"; placeholderText: "Like Fast and warm" }
+        UField {
+            id: rsPaths
+            objectName: "reelStylePaths"
+            width: Math.min(parent.width, 520)
+            label: "Example videos"
+            placeholderText: "Full paths, separated by ;  like D:\\Examples\\a.mp4; D:\\Examples\\b.mp4"
+        }
+        UButton {
+            objectName: "reelStyleAdd"
+            text: "Add style"
+            enabled: rsName.text.trim() !== "" && rsPaths.text.trim() !== ""
+            onClicked: cp.rsPost({ op: "create", name: rsName.text.trim(), paths: rsPaths.text.split(";").map(p => p.trim()).filter(p => p !== "") },
+                                 () => { rsName.text = ""; rsPaths.text = "" })
+        }
+        Quiet { visible: cp.rsPreview !== ""; text: "Preview saved: " + cp.rsPreview + " (colour and zoom pulses; pace, joins and music show on a whole reel)." }
+    }
+
     // D403 Recordings Ujwalam made clips from: whether each is deleted once clipped, and Keep for labelling (one click,
     // saved at once; ui/api/recordings/keep). A kept recording is never deleted by Delete clipped recordings.
     property var recs: []
@@ -434,7 +593,7 @@ Column {
             loadRecs();
         });
     }
-    Component.onCompleted: loadRecs()
+    Component.onCompleted: { loadRecs(); rsLoad() }
 
     UCard {
         title: "RECORDINGS"

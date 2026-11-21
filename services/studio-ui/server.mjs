@@ -59,6 +59,7 @@ import { listStingerPresets, stingerTransition } from '../project/stinger-preset
 import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
+import { createReelStyles } from './reel-styles.mjs';
 import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
 import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
@@ -480,6 +481,8 @@ export function createStudioServer(opts) {
     const config = loadReadinessConfig(opts.readinessConfigFile);
     const bc = loadBotConfig(opts.profileFile ? { profilePath: opts.profileFile } : {});
     const clipRoot = opts.clipRoot ?? (process.env.UJWALAM_CLIP_ROOT || REPO_ROOT);
+  // RS3 (D412) Settings > Clips > Reel styles: analysis and preview run hidden, off air, one at a time
+  const reelStyles = typeof opts.dataDir === 'string' ? createReelStyles({ dataDir: opts.dataDir, clipRoot, tasks, isLive: () => live === true, flagOn: () => !!flags && flags.isOn('reel-styles') }) : null;
     readinessRunner = createReadiness({
       host, core, config, now, dataDir: typeof opts.dataDir === 'string' ? opts.dataDir : null,
       flagOn: (id) => !!flags && flags.isOn(id),
@@ -1555,6 +1558,7 @@ export function createStudioServer(opts) {
       if (!readinessOn()) return json(res, 404, { error: 'readiness-off' });
       try { return json(res, 200, publicReadiness(await readiness().run({ maxAgeMs: 0 }))); } catch { return json(res, 500, { error: 'readiness-failed' }); }
     }
+    if (req.method === 'GET' && route === '/ui/api/reel-styles') return reelStyles ? json(res, 200, await reelStyles.info()) : json(res, 404, { error: 'no-data-dir' }); // RS3
     if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir) } : { settings: null });
     if (req.method === 'GET' && route === '/ui/api/edits') return json(res, 200, history.state());
     if (req.method === 'GET' && route === '/ui/api/project/structure') return structureChoices(res);
@@ -1765,6 +1769,7 @@ export function createStudioServer(opts) {
       return json(res, 200, { ok: true, method: e.method, scene: e.scene, layer: e.layer, edits: history.state(), ...(saved ? { saved: 'pending' } : {}) });
     }
     if (route === '/ui/api/settings') return settingsRoute(res, body);
+    if (route === '/ui/api/reel-styles') { if (!reelStyles) return json(res, 404, { error: 'no-data-dir' }); const r = await reelStyles.run(body); return json(res, r.status, r.body); } // RS3
     if (route === '/ui/api/clips/answer') return clipAnswer(res, body);
     if (route === '/ui/api/tasks/stop') return stopTasks(res);
     if (route === '/ui/api/updates/apply') {

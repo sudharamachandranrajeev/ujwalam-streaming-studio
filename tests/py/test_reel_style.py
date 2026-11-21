@@ -209,6 +209,55 @@ class JobTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(rs.styles_root(self.data), ".analyse.lock")))
         self.assertEqual(rs.load_style(self.data, "fast-cuts")["name"], "Fast cuts")
 
+    def _analysed(self, sid, **over):
+        with open(FIXTURE, encoding="utf-8") as f:
+            doc = dict(json.load(f), id=sid, name=sid.title(), **over)
+        d = os.path.join(rs.styles_root(self.data), sid)
+        os.makedirs(d, exist_ok=True)
+        cc.write_json_atomic(os.path.join(d, "style.json"), doc)
+        return doc
+
+    def test_pick_follows_the_settings_and_the_flag(self):
+        """RS4: the style chosen for the type; the pool joins only while the clip look mixes; flag off = no style."""
+        self.assertIsNone(rs.pick(self.data, "reel"))  # no settings: reels are made as before
+        for sid in ("warm", "cool", "calm"):
+            self._analysed(sid)
+        settings = {"clips": {"reelStyles": {"byType": {"reel": "warm"}, "pool": ["cool", "calm"]}, "look": {"randomise": False}}}
+        cc.write_json_atomic(os.path.join(self.data, cc.SETTINGS_FILE), settings)
+        self.assertEqual(rs.pick(self.data, "reel", ("a",))["id"], "warm")
+        self.assertIsNone(rs.pick(self.data, "montage"))
+        self.assertIsNone(rs.pick(self.data, "story"))
+        settings["clips"]["look"]["randomise"] = True
+        cc.write_json_atomic(os.path.join(self.data, cc.SETTINGS_FILE), settings)
+        got = {rs.pick(self.data, "reel", (f"clip-{i}",))["id"] for i in range(30)}
+        self.assertEqual(got, {"warm", "cool", "calm"})
+        self.assertEqual(rs.pick(self.data, "reel", ("same",))["id"], rs.pick(self.data, "reel", ("same",))["id"])  # seeded
+        self.assertEqual(rs.pick(self.data, "montage", ("x",))["id"] in {"cool", "calm"}, True)  # the pool alone
+        cc.write_json_atomic(os.path.join(self.data, cc.LOCAL_FLAGS), {"flags": {"reel-styles": False}})
+        self.assertIsNone(rs.pick(self.data, "reel", ("a",)))
+
+    def test_create_and_tune(self):
+        ex = os.path.join(self.tmp, "Liked Reel.MP4")
+        with open(ex, "wb") as f:
+            f.write(b"x")
+        doc = rs.create(self.data, " My  style ", [ex])
+        self.assertEqual((doc["id"], doc["name"]), ("my-style", "My style"))
+        self.assertEqual(sorted(os.listdir(os.path.join(rs.styles_root(self.data), "my-style"))), ["style.json"])
+        self.assertEqual(rs.create(self.data, "My style", [ex])["id"], "my-style-2")
+        for paths, msg in (([], "add 1 to"), (["rel.mp4"], "full path"), ([ex, ex], "twice"),
+                           ([os.path.join(self.tmp, "a.txt")], "not a video"), ([os.path.join(self.tmp, "no.mp4")], "not found")):
+            with self.assertRaisesRegex(cc.ClipError, msg):
+                rs.create(self.data, "x", paths)
+        with self.assertRaisesRegex(cc.ClipError, "not analysed"):
+            rs.save_tune(self.data, "my-style", {"shotSec": 1.0})
+        self._analysed("warm")
+        with self.assertRaisesRegex(cc.ClipError, "shotSec must be"):
+            rs.save_tune(self.data, "warm", {"shotSec": 99})
+        self.assertEqual(rs.save_tune(self.data, "warm", {"shotSec": 0.8, "zoomScale": None})["tune"], {"shotSec": 0.8})
+        c = rs.card(rs.load_style(self.data, "warm"))
+        self.assertEqual(c["values"]["shotSec"], 0.8)
+        self.assertNotIn("measured", c)  # the card carries numbers and words only
+
 
 @unittest.skipUnless(np is not None and HAVE_FFMPEG, "numpy/OpenCV/PyAV or ffmpeg missing")
 class RenderTests(unittest.TestCase):
@@ -298,6 +347,25 @@ class RenderTests(unittest.TestCase):
         self.assertIn("LUT_3D_SIZE 17", txt)
         self.assertEqual(len([ln for ln in txt.splitlines() if re.match(r"^[0-9.]+ [0-9.]+ [0-9.]+$", ln)]), 17 ** 3)
 
+    def test_preview_on_my_clip(self):
+        """RS3 "Preview on my clip": the style's colour and zoom pulses on the user's clip, CPU, 540 px wide."""
+        data = os.path.join(self.tmp, "data")
+        with open(FIXTURE, encoding="utf-8") as f:
+            doc = dict(json.load(f), id="warm")
+        d = os.path.join(rs.styles_root(data), "warm")
+        os.makedirs(d, exist_ok=True)
+        cc.write_json_atomic(os.path.join(d, "style.json"), doc)
+        out = os.path.join(d, "preview.mp4")
+        r = rs.preview(data, "warm", os.path.abspath(self.src), out, seconds=6.0)
+        j = self.probe(out)
+        v = next(s for s in j["streams"] if s["codec_type"] == "video")
+        self.assertEqual(int(v["width"]), 540)
+        self.assertAlmostEqual(float(v["duration"]), 6.0, delta=0.1)
+        self.assertEqual(len([s for s in j["streams"] if s["codec_type"] == "audio"]), 1)
+        self.assertEqual(r["zoomTimes"], [1.5, 4.0] if doc["zooms"] else [])
+        self.assertIsNotNone(r["shift"])
+        with self.assertRaisesRegex(cc.ClipError, "choose one of your clips"):
+            rs.preview(data, "warm", "relative.mp4", out)
 
 if __name__ == "__main__":
     unittest.main()

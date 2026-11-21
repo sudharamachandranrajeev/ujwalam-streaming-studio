@@ -34,6 +34,12 @@ import sys
 import time
 import warnings
 
+import sys as _sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in _sys.path:  # run as a script with -I (the studio): the clip modules sit next to this file
+    _sys.path.insert(0, _HERE)
+
 from clip_common import CLIP_DATA, ClipError, eprint, load_json, lower_own_priority, on_air, write_json_atomic
 
 CONFIG_FILE = os.path.join(CLIP_DATA, "reel-styles.json")
