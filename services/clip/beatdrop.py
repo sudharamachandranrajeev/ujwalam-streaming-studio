@@ -594,6 +594,9 @@ def retake(pl, op, moments_doc, cfg=None, game=None, piece=None, luma=None, rec_
     return out
 
 
+retake_plan = retake  # make()'s `retake` argument shadows the function name there
+
+
 def _mmss(t):
     t = int(round(float(t)))
     return f"{t // 60}:{t % 60:02d}"
@@ -827,7 +830,7 @@ NOT_STARTED = "not started"  # a child could not be started safely (no process j
 
 def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame=None, style=None,
          seed_parts=(), live=on_air, audio_tracks=1, max_sec=None, lock_dir=None, cfg=None, measure=None, poll_sec=2.0,
-         render_json=None, write_render=None, profile=None):
+         render_json=None, write_render=None, profile=None, vertical=None, retake=None):
     """One BeatDrop montage, off air only, one heavy job at a time: the song (NCS library pick or the made-here bed),
     its song map, the plan (wd/beatdrop-plan.json; cut edges probed for brightness), the bed, the style's LUT and the
     one ffmpeg run (wd/beatdrop-<id>.mp4.part), then the flash check of the rendered file; only a file that passes
@@ -849,12 +852,18 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
     same render.
     A child that cannot be started safely (run_tool NO_JOB_RC): status "not started", handled like on air (no
     render.json write, no sweep, the previous record and video kept; the job runs again later).
+    BD7 (D418): vertical (vertical_source()) also cuts the V (9:16) file from the same plan in a second ffmpeg run
+    (same pieces, timing, bed, LUT, effects; screen-space titles laid out for the V frame; framed with the clip
+    layouts), its own new name, its own flash check: above the limit only the V file is dropped (res["v"]["reason"]).
+    Both stay .part until both are measured. retake {"op", "piece"?, "plan" (the saved plan), "music" (its record)}:
+    the same song again (no new pick, no song map) and retake() on the saved plan instead of a new plan.
     -> {"status" ("done" | "failed" | "stopped: on air" | "not started"), "reason", "plan", "music" (the record for render.json),
-        "returncode", "stderr", "file", "argv", "flash"}."""
+        "returncode", "stderr", "file", "argv", "flash", "summary", "v" ({"file", "flash", "reason", "layout"} or None)}."""
     from clip_common import HeavyJobLock  # noqa: PLC0415
     cfg = cfg or load_config()
     res = {"status": STOPPED_ON_AIR, "reason": "a stream or recording is on (or that cannot be told)", "plan": None,
-           "music": None, "returncode": None, "stderr": "", "file": None, "argv": None, "flash": None}
+           "music": None, "returncode": None, "stderr": "", "file": None, "argv": None, "flash": None,
+           "summary": None, "v": None}
 
     def on():  # unknown counts as on air
         return live is None or live() is not False
@@ -870,33 +879,80 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
                 # could not start a child; this run's own part file is kept
                 _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame,
                              style, seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec,
-                             started=lambda own: sweep_videos(wd, render_json, keep=own), profile=profile)
+                             started=lambda own: sweep_videos(wd, render_json, keep=own), profile=profile,
+                             vertical=vertical, retake=retake)
             except Exception as e:  # noqa: BLE001 - only the on-air stops are handled, the rest re-raised
                 from style_analyse import GuardStop  # noqa: PLC0415 - the song map's own live guard
                 if not isinstance(e, (OnAir, GuardStop, NotStarted)):
                     raise
-                for f in (res.get("part"), os.path.join(wd, PROBE_FILE)):
+                for f in (res.get("part"), res.get("vpart"), os.path.join(wd, PROBE_FILE)):
                     if f:
                         _drop(f)
                 if isinstance(e, NotStarted):
-                    res.update(status=NOT_STARTED, reason=str(e), file=None)
+                    res.update(status=NOT_STARTED, reason=str(e), file=None, v=None)
                 else:
                     res.update(status=STOPPED_ON_AIR, reason="a stream or recording started (or that cannot be told)",
-                               file=None)
+                               file=None, v=None)
             finally:  # BD5: the titles' ASS (it holds the profile names), fonts and tracking file go on every path
                 import beatdrop_titles as bt  # noqa: PLC0415
                 bt.cleanup(wd)
             res.pop("part", None)
+            res.pop("vpart", None)
             if res["status"] not in (STOPPED_ON_AIR, NOT_STARTED) and write_render is not None:
                 write_render(res)
                 sweep_videos(wd, render_json)
             return res
     finally:
         res.pop("part", None)
+        res.pop("vpart", None)
+
+
+def vertical_source(cfg, layouts, h_path, h_info, v_path=None, v_info=None, frame=None):
+    """BD7 (D418): where and how the V file is cut, from cfg["vertical"] and the clip layouts (layouts.json doc): the
+    `layout` (the V canvas recording, as V clips are cut) when v_path is given and readable, else the `fallback` on the
+    H recording. -> {"src", "layout", "iw", "ih", "frame", "audio_tracks"} or None when vertical.on is false."""
+    vc = cfg.get("vertical") or {}
+    if not vc.get("on"):
+        return None
+    by_id = {x["id"]: x for x in layouts["layouts"]}
+    use_v = bool(v_path and v_info and by_id.get(vc["layout"], {}).get("input") == "v")
+    lid = vc["layout"] if use_v else vc["fallback"]
+    if lid not in by_id:
+        raise ClipError(f"beatdrop: the V layout {lid} is not in the clip layouts")
+    info = v_info if use_v else h_info
+    return {"src": v_path if use_v else h_path, "layout": by_id[lid], "iw": int(info["width"]),
+            "ih": int(info["height"]), "frame": dict(frame or vc["frame"]),
+            "audio_tracks": 1 if info.get("has_audio") else 0}
+
+
+def retake_song(data_dir, record, wd, max_sec, cfg, seed_parts, live=on_air):
+    """BD7: the saved plan's song again: the same NCS track (by id, fixed) or the same seeded made-here bed."""
+    if record and record.get("trackId"):
+        s = settings_of(data_dir) or {}
+        if not s.get("folder"):
+            raise ClipError("beatdrop: retake needs the montage music folder (Settings > Clips > Montage music)")
+        song, rec = pick_music(data_dir, dict(s, on=True, mode="fixed", fixedTrack=record["trackId"]), seed_parts,
+                               live=live)
+        if song is None:
+            raise ClipError("beatdrop: the saved plan's song is no longer in the montage music folder")
+        return song, rec
+    path, rec = made_here_song(wd, float(max_sec or cfg["maxSec"]) + 8.0, seed_parts)
+    return {"path": path, "root": wd}, rec
+
+
+def _v_plan(pl):
+    """The V copy of the plan for the titles: the same slots, the title in screen space (the pin track is in H
+    pixels); credits and hero lay out for the frame they are drawn in (beatdrop_titles)."""
+    import copy  # noqa: PLC0415
+    v = copy.deepcopy(pl)
+    for ln in ((v["slots"].get("title") or {}).get("content") or {}).get("lines") or []:
+        ln.pop("segments", None)
+    return v
 
 
 def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame, style,
-                 seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec, started=None, profile=None):
+                 seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec, started=None, profile=None,
+                 vertical=None, retake=None):
     import hashlib  # noqa: PLC0415
     import json  # noqa: PLC0415
     import time  # noqa: PLC0415
@@ -907,17 +963,24 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
     def check():
         if on():
             raise OnAir("on air")
-    song, record = pick_music(data_dir, settings_of(data_dir), seed_parts, live=live)
-    res["music"] = record
-    if song is None:
-        path, record = made_here_song(wd, float(max_sec or cfg["maxSec"]) + 8.0, seed_parts)
-        song = {"path": path, "root": wd}
+    if retake:  # BD7: the same song, the saved plan changed only where the retake names
+        song, record = retake_song(data_dir, retake.get("music"), wd, max_sec, cfg, seed_parts, live=live)
         res["music"] = record
-    check()
-    smap = smod.song_map(song["path"], song["root"], live=live)
+    else:
+        song, record = pick_music(data_dir, settings_of(data_dir), seed_parts, live=live)
+        res["music"] = record
+        if song is None:
+            path, record = made_here_song(wd, float(max_sec or cfg["maxSec"]) + 8.0, seed_parts)
+            song = {"path": path, "root": wd}
+            res["music"] = record
     check()
     probe = LumaProbe(ffmpeg, recording, wd, int(fl["lumaFps"]), stop=on)
-    pl = plan(moments_doc, smap, cfg, style=style, max_sec=max_sec, luma=probe)
+    if retake:
+        pl = retake_plan(retake["plan"], retake["op"], moments_doc, cfg, piece=retake.get("piece"), luma=probe)
+    else:
+        smap = smod.song_map(song["path"], song["root"], live=live)
+        check()
+        pl = plan(moments_doc, smap, cfg, style=style, max_sec=max_sec, luma=probe)
     probe.save()
     check()
     tcfg = cfg.get("titles") or {}
@@ -932,12 +995,18 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
         bt.pin(pl, recording, ffmpeg, wd, frame, cfg, stop=on)
         check()
     res["plan"] = pl
+    res["summary"] = summary(pl)
     # a new name per render (plan, music record and the time): render.json points at it once it is written
     pid = hashlib.sha1(json.dumps([pl, res["music"], time.time_ns()], sort_keys=True, default=str)
                        .encode("utf-8")).hexdigest()[:12]
     name = f"beatdrop-{pid}.mp4"
     part = os.path.join(wd, name + ".part")
     res["part"] = part
+    vname = vpart = rv = None
+    if vertical:  # BD7: the V file's own new name (the same 12-hex shape, so the sweeps know it)
+        vname = f"beatdrop-{hashlib.sha1((pid + '|v').encode('utf-8')).hexdigest()[:12]}.mp4"
+        vpart = os.path.join(wd, vname + ".part")
+        res["vpart"] = vpart
     write_json_atomic(os.path.join(wd, PLAN), pl)
     wav = lut = r = None
     try:  # Codex BD5 review: the music bed, LUT, graph and title files go on any error before or during the render
@@ -955,6 +1024,18 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
             res["argv"] = argv
             r = run_tool(argv, cwd=wd, watch=name + ".part", stall_sec=300, stop=on, poll_sec=poll_sec)
             res["returncode"], res["stderr"] = r.returncode, (r.stderr or "")[-400:]
+        if vertical and r is not None and r.returncode == 0 and os.path.isfile(part) and not on():
+            # BD7: the V cut of the same plan: same bed, LUT and effects; titles laid out for the V frame
+            if titles_on:
+                bt.cleanup(wd)
+            vt = bt.prepare(wd, _v_plan(pl), vertical["frame"], cfg, game) if titles_on else None
+            if not on():
+                argv = render_argv(pl, ffmpeg, vertical["src"], vertical["frame"], encoder_args, audio_args, wav,
+                                   vname + ".part", lut=lut, audio_tracks=vertical["audio_tracks"], titles=vt,
+                                   layout=None if vertical["layout"]["kind"] == "canvas" else vertical)
+                argv = graph_from_file(argv, wd)
+                res["vargv"] = argv
+                rv = run_tool(argv, cwd=wd, watch=vname + ".part", stall_sec=300, stop=on, poll_sec=poll_sec)
     finally:
         for f in (wav, lut, GRAPH):
             if f:
@@ -968,11 +1049,19 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
         raise OnAir("on air during the render")
     _not_started(r)
     if started is not None:
-        started({name, name + ".part"})
+        started({name, name + ".part"} | ({vname, vname + ".part"} if vname else set()))
     if r.returncode != 0 or not os.path.isfile(part):
         _drop(part)
         res.update(status="failed", reason=f"ffmpeg exited {r.returncode}")
         return res
+    if vertical:
+        if rv is None or rv.returncode == STOPPED_RC:
+            raise OnAir("on air during the V render")
+        _not_started(rv)
+        res["v"] = {"file": None, "flash": None, "reason": None, "layout": vertical["layout"]["id"]}
+        if rv.returncode != 0 or not os.path.isfile(vpart):
+            _drop(vpart)
+            res["v"]["reason"] = f"V render: ffmpeg exited {rv.returncode}: " + (rv.stderr or "")[-300:]
     try:
         check()
         m = (measure or (lambda f, stop: measure_flash(f, fl["sample"], pl["fps"], stop=stop)))(part, on)
@@ -991,9 +1080,32 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
                       f"(limit {float(fl['maxPerSec']):g}): not published")
     if reason:
         _drop(part)
+        if vpart:
+            _drop(vpart)
+            res["v"] = None
         res.update(status="failed", reason=reason)
         return res
+    if vertical and res["v"]["reason"] is None:  # BD7: the V file measured on its own; only it is dropped on a fail
+        try:
+            check()
+            mv = (measure or (lambda f, stop: measure_flash(f, fl["sample"], pl["fps"], stop=stop)))(vpart, on)
+            check()
+        except (OnAir, NotStarted):
+            raise
+        except ClipError as e:
+            res["v"]["reason"] = f"V flash not measured ({e}): not published"
+        else:
+            res["v"]["flash"] = {"peakFlashesPerSecond": mv.get("peakFlashesPerSecond"), "limit": mv.get("limit"),
+                                 "pass": bool(mv.get("pass"))}
+            if not mv.get("pass") or float(mv.get("peakFlashesPerSecond") or 0) > float(fl["maxPerSec"]):
+                res["v"]["reason"] = (f"flash limit: the V file measures {mv.get('peakFlashesPerSecond')} flashes/s "
+                                      f"(limit {float(fl['maxPerSec']):g}): not published")
+        if res["v"]["reason"]:
+            _drop(vpart)
     os.replace(part, os.path.join(wd, name))
+    if vertical and res["v"]["reason"] is None:
+        os.replace(vpart, os.path.join(wd, vname))
+        res["v"]["file"] = vname
     res.update(status="done", reason=None, file=name)
     return res
 

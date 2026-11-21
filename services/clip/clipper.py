@@ -1940,7 +1940,12 @@ def cmd_beatdrop(a):
     """BD3/BD4 (D415): one BeatDrop montage of --recording (H canvas) from its BD1 moments (--moments, default
     DIR/moments.json) and a song (Settings > Clips > Montage music: the NCS library pick; else the made-here bed) ->
     DIR/beatdrop/clips/B1/beatdrop-<id>.mp4 (a new name per render) + beatdrop-plan.json + DIR/beatdrop/render.json (musicRecords 1, the clip's music
-    record). Its own kind beside the kill montages (flag beatdrop): the other reels are not touched."""
+    record). Its own kind beside the kill montages (flag beatdrop): the other reels are not touched.
+    BD7 (D418): the V (9:16) file is cut from the same plan beside the H one (render.json files beatdrop-h and
+    beatdrop-v; framing from the clip layouts: the V canvas recording (--v-recording or the '-v-' sibling) when there is
+    one, else the blurred fill of the H recording) and render.json carries the plan's plain-word summary.
+    --retake <op> [--piece N] re-plans from the saved plan (DIR/beatdrop/clips/B1/beatdrop-plan.json) and the same
+    song (render.json's music record): only what the retake names changes; the plan records it."""
     import beatdrop as bd  # noqa: PLC0415
     data_dir = resolve_data_dir(a.data_dir)
     cfg = bd.load_config()
@@ -1970,6 +1975,34 @@ def cmd_beatdrop(a):
     if a.width and a.height:
         frame = {"width": int(a.width), "height": int(a.height)}
     render_path = os.path.join(out, RENDER)
+    retake = None
+    if a.retake:  # BD7: the saved plan and its song record
+        try:
+            saved = load_json(os.path.join(wd, bd.PLAN))
+            prev = load_json(render_path)
+        except (ClipError, OSError, ValueError) as e:
+            raise ClipError(f"retake needs a finished BeatDrop montage first (no saved plan or render.json: {e})")
+        row0 = next((c for c in prev.get("clips") or [] if c.get("id") == "B1"), None)
+        if not row0 or not row0.get("files"):
+            raise ClipError("retake needs a finished BeatDrop montage first (render.json has no video)")
+        retake = {"op": a.retake, "piece": a.piece, "plan": saved, "music": row0.get("music")}
+    elif a.piece is not None:
+        raise ClipError("--piece goes with --retake swap")
+    vframe = None
+    if a.width and a.height:  # a smaller test frame: the V frame is the same size turned upright
+        vframe = {"width": max(2, int(a.width) * 9 // 16 // 2 * 2), "height": int(a.width) // 2 * 2}
+    vrec = v_recording(a.recording, a.v_recording)
+    vinfo = None
+    if vrec:
+        try:
+            vinfo = media_info(ffprobe, vrec)
+        except bd.NotStarted as e:
+            eprint(f"beatdrop B1: {bd.NOT_STARTED} ({e})")
+            return EXIT_NOT_STARTED
+        except ClipError as e:  # an unreadable V recording: the fallback framing of the H recording
+            eprint(f"beatdrop B1: the V recording cannot be read ({e}): V framed from the H recording")
+            vrec = None
+    vertical = bd.vertical_source(cfg, load_config("layouts", a.layouts_file), a.recording, info, vrec, vinfo, vframe)
 
     def write_render(res):  # called by make() inside the heavy-job lock, before the old video is swept
         pl = res["plan"]
@@ -1983,7 +2016,14 @@ def cmd_beatdrop(a):
                "flash": res["flash"],
                "errors": [] if res["file"] else [{"layout": "beatdrop-h", "error": (res["reason"] or "")[:300],
                                                   "stderr": (res["stderr"] or "")[-300:]}],
-               "fileStamp": _file_stamp(done) if res["file"] else None}
+               "fileStamp": _file_stamp(done) if res["file"] else None,
+               "summary": res.get("summary") or [], "retakes": pl.get("retakes") or []}
+        v = res.get("v")
+        if res["file"] and v and v.get("file"):  # BD7: the V cut of the same plan
+            row["files"].append({"layout": "beatdrop-v", "file": v["file"], "geometry": v["layout"],
+                                 "flash": v["flash"], "fileStamp": _file_stamp(os.path.join(wd, v["file"]))})
+        elif res["file"] and v:
+            row["errors"].append({"layout": "beatdrop-v", "error": (v.get("reason") or "")[:300]})
         write_json_atomic(render_path, {
             "tool": "clipper.beatdrop", "toolVersion": TOOL_VERSION, "createdAt": _now(),
             "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
@@ -1993,7 +2033,8 @@ def cmd_beatdrop(a):
 
     res = bd.make(a.recording, mdoc, wd, data_dir, ffmpeg, rnd.ENCODERS[encoder], rnd.AUDIO, frame=frame, style=style,
                   seed_parts=(os.path.basename(a.recording), "beatdrop"), audio_tracks=1 if info["has_audio"] else 0,
-                  max_sec=a.max_sec, render_json=render_path, write_render=write_render, profile=a.profile)
+                  max_sec=a.max_sec, render_json=render_path, write_render=write_render, profile=a.profile,
+                  vertical=vertical, retake=retake)
     if res["status"] == bd.STOPPED_ON_AIR:  # nothing written to render.json: the job runs again once off air
         eprint(f"beatdrop B1: {bd.STOPPED_ON_AIR} ({res['reason']})")
         return EXIT_ON_AIR
@@ -2006,6 +2047,11 @@ def cmd_beatdrop(a):
         return 1
     print(f"beatdrop B1: {pl['total']:.1f} s, {pl['stats']['pieces']} piece(s), {pl['stats']['kills']} kill(s), "
           f"kill drop at {pl['song']['dropAt']:.2f} s, flash {res['flash']['peakFlashesPerSecond']}/s, music {res['music'].get('source') if res['music'] else 'none'}")
+    v = res.get("v")
+    if v:
+        print(f"beatdrop B1 V: {v['file'] or 'not published: ' + (v['reason'] or '')} (layout {v['layout']})")
+    for line in res.get("summary") or []:
+        print(f"beatdrop B1: {line}")
     progress_line("montage", 1, 1, "BeatDrop montage done")
     return 0
 
@@ -2103,6 +2149,11 @@ def build_parser():
     s.add_argument("--width", type=int); s.add_argument("--height", type=int)
     s.add_argument("--profile", type=os.path.abspath,
                    help="profile JSON for the BD5 title brand and player name (default data/profile.local.json)")
+    s.add_argument("--v-recording", type=os.path.abspath,
+                   help="V canvas recording for the V cut (default: the '-v-' sibling of --recording)")
+    s.add_argument("--retake", choices=["another-take", "slower-intro", "more-third-person", "swap"],
+                   help="BD7: change the saved plan only where named and render again")
+    s.add_argument("--piece", type=int, help="the piece number for --retake swap (1-based)")
     s.set_defaults(fn=cmd_beatdrop)
     s = sub.add_parser("recaption", help="render one reel again with its edited transcript (ED2, flag reel-captions)")
     common(s, recording=False)

@@ -204,7 +204,6 @@ class VerticalGraphTests(unittest.TestCase):
 
     def test_layout_chain_per_piece_and_old_calls_unchanged(self):
         import beatdrop  # noqa: PLC0415
-        import clip_render as rnd  # noqa: PLC0415
         pl = beatdrop.plan(tb.moments_doc(), tb.smap_fixture(), max_sec=60)
         with open(os.path.join(REPO, "data", "clip", "layouts.json"), encoding="utf-8") as f:
             lay = next(x for x in json.load(f)["layouts"] if x["id"] == "blurred-fill")
@@ -223,6 +222,134 @@ class VerticalGraphTests(unittest.TestCase):
         hg = h[h.index("-filter_complex") + 1]
         self.assertNotIn("[bgb_p0]", hg)
         self.assertEqual(hg.count("gblur"), g.count("gblur") - n, "the H graph is the old one")
+
+
+def _ffprobe(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                        "stream=codec_type,width,height:format=duration", "-of", "json", path],
+                       capture_output=True, text=True, creationflags=tb.NOWIN)
+    return json.loads(r.stdout)
+
+
+@unittest.skipUnless(tb.np is not None and tb.HAVE_TOOLS, "needs numpy/PyAV, ffmpeg, ffprobe and node")
+class RenderedRetakeTests(unittest.TestCase):
+    """clipper.py beatdrop on the synthetic recording: H + V from one plan (V canvas sibling), then --retake swap
+    (the given V recording does not exist: the blurred-fill fallback of the H recording)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="ujw-bd7-")
+        cls.data = os.path.join(cls.tmp, "data")
+        music = os.path.join(cls.tmp, "music")
+        os.makedirs(cls.data)
+        os.makedirs(music)
+        tb.write_click_track(os.path.join(music, "Test Artist - Click Drop [NCS Release].wav"))
+        cls.rec = os.path.join(cls.tmp, "s-h-1.mkv")
+        tb.write_recording(cls.rec)
+        shutil.copyfile(cls.rec, os.path.join(cls.tmp, "s-v-1.mkv"))  # the V canvas sibling (canvas layout path)
+        cls.out = os.path.join(cls.tmp, "run")
+        os.makedirs(cls.out)
+        with open(os.path.join(cls.out, "moments.json"), "w", encoding="utf-8") as f:
+            json.dump(tb.moments_doc(), f)
+        with open(os.path.join(cls.data, "settings.json"), "w", encoding="utf-8") as f:
+            json.dump({"clips": {"montageMusic": {"on": True, "folder": music, "mode": "random", "avoidLast": 3}}}, f)
+        with open(os.path.join(cls.data, "flags.local.json"), "w", encoding="utf-8") as f:
+            json.dump({"flags": {"clip-pipeline": True, "reel-styles": False}}, f)
+        cls.profile = os.path.join(cls.tmp, "profile.json")
+        with open(cls.profile, "w", encoding="utf-8") as f:
+            json.dump({"streamer": {"brand": "Test Brand", "name": "Test Streamer"},
+                       "games": {"codm": {"ign": "TestPlayer"}}}, f)
+        cls.wd = os.path.join(cls.out, "beatdrop", "clips", "B1")
+        cls.p1 = cls._run()
+        cls.doc1, cls.plan1 = cls._read()
+        cls.swap_piece = 1
+        if cls.plan1:
+            cls.swap_piece = 1 + next(i for i, p in enumerate(cls.plan1["pieces"]) if p["part"] == "body"
+                                      and p["anchor"] and p["anchor"]["kind"] == "kill")
+        cls.p2 = cls._run("--retake", "swap", "--piece", str(cls.swap_piece),
+                          "--v-recording", os.path.join(cls.tmp, "none-v.mkv"))
+        cls.doc2, cls.plan2 = cls._read()
+
+    @classmethod
+    def _run(cls, *extra):
+        env = dict(os.environ, UJWALAM_DATA_ROOT=cls.data, UJWALAM_HEADLESS="1")
+        return subprocess.run([sys.executable, "-I", os.path.join(CLIP, "clipper.py"), "--data-dir", cls.data,
+                               "beatdrop", "--out", cls.out, "--recording", cls.rec, "--encoder", "libopenh264",
+                               "--width", str(tb.W), "--height", str(tb.H), "--max-sec", "60",
+                               "--profile", cls.profile, *extra],
+                              capture_output=True, text=True, timeout=1800, env=env, creationflags=tb.NOWIN)
+
+    @classmethod
+    def _read(cls):
+        try:
+            with open(os.path.join(cls.out, "beatdrop", "render.json"), encoding="utf-8") as f:
+                doc = json.load(f)
+            with open(os.path.join(cls.wd, "beatdrop-plan.json"), encoding="utf-8") as f:
+                return doc, json.load(f)
+        except (OSError, ValueError):
+            return None, None
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _files(self, doc):
+        return {f["layout"]: f for f in doc["clips"][0]["files"]}
+
+    def test_h_and_v_from_one_plan(self):
+        self.assertEqual(self.p1.returncode, 0, self.p1.stderr[-1500:])
+        fs = self._files(self.doc1)
+        self.assertEqual(set(fs), {"beatdrop-h", "beatdrop-v"}, self.doc1["clips"][0].get("errors"))
+        self.assertEqual(fs["beatdrop-v"]["geometry"], "stream-v", "the V canvas recording, framed as V clips are")
+        total = self.plan1["total"]
+        for lay, (w, h) in (("beatdrop-h", (tb.W, tb.H)), ("beatdrop-v", (tb.W * 9 // 16 // 2 * 2, tb.W))):
+            info = _ffprobe(os.path.join(self.wd, fs[lay]["file"]))
+            kinds = [s["codec_type"] for s in info["streams"]]
+            self.assertEqual(kinds.count("audio"), 1, lay)
+            v = next(s for s in info["streams"] if s["codec_type"] == "video")
+            self.assertEqual((v["width"], v["height"]), (w, h), lay)
+            self.assertAlmostEqual(float(info["format"]["duration"]), total, delta=0.1, msg=lay)
+        vf = tb.flash_measure(os.path.join(self.wd, fs["beatdrop-v"]["file"]))
+        print(f"BD7 V: flash peak {vf['peakFlashesPerSecond']}/s over {vf['frames']} frames; summary "
+              f"{self.doc1['clips'][0]['summary']}")
+        self.assertTrue(vf["pass"])
+        self.assertTrue(fs["beatdrop-v"]["flash"]["pass"])
+        self.assertTrue(self.doc1["clips"][0]["summary"][0].startswith("kill on the first drop at"))
+
+    def test_v_is_9_16(self):
+        fs = self._files(self.doc1)
+        info = _ffprobe(os.path.join(self.wd, fs["beatdrop-v"]["file"]))
+        v = next(s for s in info["streams"] if s["codec_type"] == "video")
+        self.assertAlmostEqual(v["width"] / v["height"], 9 / 16, delta=0.01)
+
+    def test_retake_swap_changes_only_that_piece_and_renders_both(self):
+        self.assertEqual(self.p2.returncode, 0, self.p2.stderr[-1500:])
+        i = self.swap_piece - 1
+        self.assertEqual(self.plan2["retakes"], [{"op": "swap", "piece": self.swap_piece}])
+        for k, (a, b) in enumerate(zip(self.plan1["pieces"], self.plan2["pieces"])):
+            if k == i:
+                self.assertNotEqual(a["anchor"]["frame"], b["anchor"]["frame"])
+                self.assertEqual(a["anchor"]["outFrame"], b["anchor"]["outFrame"])
+            else:
+                self.assertEqual(_dump(a), _dump(b), f"piece {k + 1}")
+        for s in ("title", "hero", "credits"):
+            for k in ("start", "end"):
+                self.assertEqual(self.plan1["slots"][s][k], self.plan2["slots"][s][k])
+        self.assertEqual(self.doc1["clips"][0]["music"], self.doc2["clips"][0]["music"], "the same song")
+        fs1, fs2 = self._files(self.doc1), self._files(self.doc2)
+        self.assertEqual(set(fs2), {"beatdrop-h", "beatdrop-v"}, self.doc2["clips"][0].get("errors"))
+        self.assertEqual(fs2["beatdrop-v"]["geometry"], "blurred-fill", "no V recording: the H recording, fitted")
+        for lay in fs2:
+            self.assertNotEqual(fs1[lay]["file"], fs2[lay]["file"], "a new name per render")
+            self.assertFalse(os.path.exists(os.path.join(self.wd, fs1[lay]["file"])), "the old file is swept")
+        self.assertIn(f"retake: piece swapped ({self.swap_piece})", self.doc2["clips"][0]["summary"])
+        left = sorted(f for f in os.listdir(self.wd) if f.endswith((".part", ".wav", ".ass", ".cube", ".txt")))
+        self.assertEqual(left, [], "temp files cleaned up")
+
+    def test_piece_without_retake_is_refused(self):
+        p = self._run("--piece", "2")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--piece goes with --retake swap", p.stderr)
 
 
 if __name__ == "__main__":
