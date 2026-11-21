@@ -61,3 +61,13 @@ Every item has a test. All runs were one file at a time on the CPU (libopenh264)
 Re-run after the fixes (one file at a time): test_reel_transition_sets 14, test_music_library 15, test_clip_look 15, test_reel_captions 14 (2 skipped: fontTools not in the venv, as before), test_reel_music 12, test_reel_transition 9, test_reel_title 15, test_clip_montage 35, test_clip_live_montage 6, test_long_video 23, all pass. Node: flags 10, studio-ui-flags-feedback 16, learning-mix 26, user-settings-reel-transition 3, user-settings-clip-look 4, all pass.
 
 Mix level note: the limiter acts only on peaks above -4 dBFS, so a reel's game sound keeps its level (test_reel_music ducking check: within 1 dB of the plain reel).
+
+## Codex verify fixes (2026-11-21)
+| Finding | Fix | Test (result) |
+|---|---|---|
+| Drop past the loop end gave a short or empty bed | `take()` maps a start past the loop end into the loop | test_music_library SafetyTests.test_short_track_loops_without_silence (late drop: 40 s bed, no gap) |
+| Rows written only after all jobs; resume guessed decisions | row saved atomically after each reel; a file without its row is rendered again | test_clip_pipeline test_montage_writes_a_posting_run_folder + check_interrupted_run (pass) |
+
+`test_clip_pipeline` also now expects the reel end to be shortened by the cross fade, because `reel-transitions` is ON by default.
+Re-run (one file at a time): test_music_library 15, test_clip_pipeline 37, test_clip_look 15, test_clip_montage 35, test_clip_live_montage 6, test_clip_e2e 7, all pass.
+Accepted residuals: the check-then-open race in the user's own music folder; a crafted cache-key collision (same-size edit in the middle of the file plus a restored mtime_ns). Both are in D411.

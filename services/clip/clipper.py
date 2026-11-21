@@ -1465,12 +1465,33 @@ def cmd_montage(a):
             old_rows = load_json(os.path.join(out, RENDER)).get("clips") or []
         except (OSError, ClipError, ValueError):
             old_rows = []
+    def _write_render(clips):  # render.json with the rows given; failed is read when it is called
+        write_json_atomic(os.path.join(out, RENDER), {
+            "tool": "clipper.montage", "toolVersion": TOOL_VERSION, "createdAt": _now(),
+            "recording": os.path.basename(a.recording), "vRecording": os.path.basename(vrec), "encoder": encoder,
+            "vRecordingPath": vrec, "audioFadeMs": int(cfg["audioFadeMs"]),  # ED2: clipper.py recaption renders from these
+            "reelHook": {"version": ex["hcfg"]["version"], "flag": rh.FLAG, "types": ex["hooks"]},
+            "reelCaptions": {"version": ex["ccfg"]["version"], "flag": rcap.FLAG, "on": ex["cap_on"]},
+            "reelTransition": {"flag": rt.FLAG, "use": ex["transition"]},
+            "reelMusic": {"flag": rmu.FLAG, "on": bool(ex["music"]), "version": (ex["music"] or {}).get("version"),
+                          "generator": (ex["music"] or {}).get("generator")},
+            "reelTitle": {"flag": rti.FLAG, "on": bool(ex["title"]), "version": (ex["title"] or {}).get("version")},
+            "reelThumbnail": {"flag": rth.FLAG, "on": bool(ex["thumb"]),
+                              "version": (ex["thumb"] or {}).get("version")},
+            "learningMix": {"flag": lmix.FLAG, "on": bool(mix), "changedAt": (mix or {}).get("changedAt"),
+                            "lengthBand": cfg.get("learningBand")},
+            "frame": frame, "montageVersion": cfg.get("version"), "montageStatus": cfg.get("status"),
+            "game": _game(a), "failed": failed, "reelLength": lim, "clips": clips,
+            "matchReels": {"file": MATCH_REELS, "matches": len(matches),
+                           "qualified": sum(1 for m in matches if m["reel"]["qualifies"]), "reels": len(reels),
+                           "impactPlayReels": len(impacts)},
+        })
+
     for cid, m in jobs:
         wd = os.path.join(out, "clips", cid)
         os.makedirs(wd, exist_ok=True)
         typ = KIND_TYPE[cid[:1]]
-        pk_kept = False
-        done = os.path.join(wd, "montage-v.mp4")
+        done =os.path.join(wd, "montage-v.mp4")
         kept = _resume_row(a, wd, cid, old_rows)
         if kept is not None:
             rows.append(kept)
@@ -1492,17 +1513,13 @@ def cmd_montage(a):
                                     int(cfg["audioFadeMs"]), "montage-v.mp4.part",
                                     audio_tracks=max(1, vinfo["audio_tracks"]), max_sec=lim[typ]["maxSec"], captions=ass,
                                     fontsdir=fdir, transition=tr, thumbnail=thumb, title=ttl, music=mus)
-        if getattr(a, "resume", False) and os.path.isfile(done) and os.path.getsize(done) > 0:
-            # a finished file with no stored row (an older run): used as it is, but its picks are not remembered
-            print(f"montage {cid}: kept from the earlier run (--resume)")
-            pk_kept = True
-            r = subprocess.CompletedProcess([], 0, "", "")
-            try:  # a stopped render's leftover must never replace the finished reel below
-                os.remove(os.path.join(wd, "montage-v.mp4.part"))
-            except OSError:
-                pass
-        else:
-            r, _ = _render_job(mk, encoder, wd, "montage-v.mp4.part", f"montage {cid}")
+        if os.path.isfile(done):
+            # Codex verify (D411): a finished file with no stored row (the run stopped between the file and its row)
+            # is never kept with guessed decisions: it is rendered again with this run's decisions
+            if getattr(a, "resume", False):
+                print(f"montage {cid}: a reel file without its row: rendered again (--resume)")
+            os.remove(done)
+        r, _ = _render_job(mk, encoder, wd, "montage-v.mp4.part", f"montage {cid}")
         _drop_fonts(wd)
         rti.cleanup(wd)
         rmu.cleanup(wd)
@@ -1546,27 +1563,11 @@ def cmd_montage(a):
                      **({"story": m["story"]} if m.get("story") else {}),
                      **({"learning": exr["learning"]} if exr.get("learning") else {}),
                      "files": files, "errors": errors})
-        _look_remember(exr, pk if files and not pk_kept else None, track=(mplan or {}).get("track", {}).get("id"))
-    write_json_atomic(os.path.join(out, RENDER), {
-        "tool": "clipper.montage", "toolVersion": TOOL_VERSION, "createdAt": _now(),
-        "recording": os.path.basename(a.recording), "vRecording": os.path.basename(vrec), "encoder": encoder,
-        "vRecordingPath": vrec, "audioFadeMs": int(cfg["audioFadeMs"]),  # ED2: clipper.py recaption renders from these
-        "reelHook": {"version": ex["hcfg"]["version"], "flag": rh.FLAG, "types": ex["hooks"]},
-        "reelCaptions": {"version": ex["ccfg"]["version"], "flag": rcap.FLAG, "on": ex["cap_on"]},
-        "reelTransition": {"flag": rt.FLAG, "use": ex["transition"]},
-        "reelMusic": {"flag": rmu.FLAG, "on": bool(ex["music"]), "version": (ex["music"] or {}).get("version"),
-                      "generator": (ex["music"] or {}).get("generator")},
-        "reelTitle": {"flag": rti.FLAG, "on": bool(ex["title"]), "version": (ex["title"] or {}).get("version")},
-        "reelThumbnail": {"flag": rth.FLAG, "on": bool(ex["thumb"]),
-                          "version": (ex["thumb"] or {}).get("version")},
-        "learningMix": {"flag": lmix.FLAG, "on": bool(mix), "changedAt": (mix or {}).get("changedAt"),
-                        "lengthBand": cfg.get("learningBand")},
-        "frame": frame, "montageVersion": cfg.get("version"), "montageStatus": cfg.get("status"),
-        "game": _game(a), "failed": failed, "reelLength": lim, "clips": rows,
-        "matchReels": {"file": MATCH_REELS, "matches": len(matches),
-                       "qualified": sum(1 for m in matches if m["reel"]["qualifies"]), "reels": len(reels),
-                       "impactPlayReels": len(impacts)},
-    })
+        _look_remember(exr, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
+        # Codex verify (D411): each reel's row is saved (temp + rename) as soon as the reel is done, with the stored rows
+        # of the reels not reached yet, so a stopped run never leaves a finished reel without its decisions
+        _write_render(rows + [x for x in old_rows if x.get("id") not in {y["id"] for y in rows}])
+    _write_render(rows)
     # candidates.json in the montage folder makes it a clip run folder for posting (services/posting packageRun):
     # times are on the montage's own timeline (0 .. seconds); anchor = the first kill (cover frame); the source
     # recording times are in `pieces`

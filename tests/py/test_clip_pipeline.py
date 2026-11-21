@@ -484,7 +484,9 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((p[1]["start"], p[1]["kills"]), (8.5, 0))
         self.assertAlmostEqual(p[1]["end"], 12.0, delta=0.05, msg="the VICTORY hold stops at the recording end")
         self.assertEqual((c[0]["start"], c[0]["anchor"]), (0.0, 3.0))
-        self.assertAlmostEqual(c[0]["end"], 10.0, delta=0.05)
+        w01 = next(r for r in cc.load_json(os.path.join(out, clipper.RENDER))["clips"] if r["id"] == "W01")
+        xd = float((w01.get("transition") or {}).get("joinSec") or 0.0)  # reel-transitions is on by default (D411)
+        self.assertAlmostEqual(c[0]["end"], 10.0 - xd, delta=0.05, msg="each cross-faded join shortens the reel")
         rep = cc.load_json(os.path.join(out, clipper.REPORT))
         self.assertEqual([(r["id"], r["layout"], r["ok"]) for r in rep["results"]], [("W01", "montage-v", True)])
         why = cc.load_json(os.path.join(out, clipper.MATCH_REELS))
@@ -498,6 +500,46 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(why["impactPlay"], {"flag": "impact-play-reels", "on": False, "reels": []})
         rdoc = cc.load_json(os.path.join(out, clipper.RENDER))
         self.assertEqual((rdoc["matchReels"]["reels"], rdoc["matchReels"]["impactPlayReels"]), (1, 0))
+        self.check_interrupted_run(base, d, out, vrec)
+
+    def check_interrupted_run(self, base, d, out, vrec):
+        """Codex verify (D411): each reel's row is saved as soon as the reel is done; on --resume a reel file without
+        its row is rendered again (never kept with guessed decisions), and one with its row is kept as it is."""
+        argv = base + ["montage", "--recording", self.rec, "--out", d, "--record-start", "2026-11-03T07:00:00Z",
+                       "--encoder", "libopenh264", "--resume"]
+        rpath = os.path.join(out, clipper.RENDER)
+        mp4 = os.path.join(out, "clips", "W01", "montage-v.mp4")
+        os.remove(rpath)
+        real = clipper.write_json_atomic
+
+        def stop_after_the_reels(path, obj):  # the run is stopped after the reel loop (before candidates.json)
+            if path.endswith(clipper.CANDIDATES):
+                raise KeyboardInterrupt
+            return real(path, obj)
+
+        shutil.copyfile(self.rec, vrec)
+        try:
+            os.remove(mp4)  # a fresh render of W01
+            clipper.write_json_atomic = stop_after_the_reels
+            with self.assertRaises(KeyboardInterrupt):
+                clipper.main(argv)
+            clipper.write_json_atomic = real
+            row = next(c for c in cc.load_json(rpath)["clips"] if c["id"] == "W01")
+            self.assertTrue(row["files"], "the row was saved when the reel finished, before the run stopped")
+            # resume with the row: kept as it is
+            self.assertEqual(clipper.main(argv), 0)
+            self.assertTrue(next(c for c in cc.load_json(rpath)["clips"] if c["id"] == "W01").get("resumed"))
+            # a reel file without its row (stopped between the file and its row): rendered again
+            os.remove(rpath)
+            before = os.path.getmtime(mp4)
+            self.assertEqual(clipper.main(argv), 0)
+            row = next(c for c in cc.load_json(rpath)["clips"] if c["id"] == "W01")
+            self.assertFalse(row.get("resumed"), "no row: never kept with guessed decisions")
+            self.assertTrue(row["files"])
+            self.assertGreaterEqual(os.path.getmtime(mp4), before)
+        finally:
+            clipper.write_json_atomic = real
+            os.remove(vrec)
 
     def test_caption_burn_in(self):
         """Burns a fixture ASS through the libass subtitles filter and validates the file."""

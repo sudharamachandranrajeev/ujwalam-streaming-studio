@@ -2575,3 +2575,9 @@ Evidence: `docs/evidence/2026-11-21-clip-look-fx1-fx4.md`.
 - Switches: each part of the look obeys its own switch: music = `reel-music`, transitions = `reel-transitions`, name = `clip-look`. So that the music and transitions the user asked for are not lost, `reel-music` and `reel-transitions` are now ON by default (as `clip-look` already was).
 - `--resume`: a kept reel keeps its stored row (look, music, transitions). Only newly rendered reels change the pick history.
 - Analysis memory: FFT in batches of 256 frames, autocorrelation only over the BPM lags, mono decode, a 20 s loudness guide. A 240 s track peaks at 119 MB (traced).
+
+**Codex verify addendum (2026-11-21):** six items were verified fixed. Two more were fixed, each with a test:
+- A drop segment that starts past the loop end now starts at the same place inside the loop, so the bed is always full length. Test: a drop late in a short looped track has no gap.
+- Each reel's row is saved to render.json (temp + rename) as soon as the reel is done, together with the stored rows of reels not reached yet. On `--resume`, a reel file without its row is rendered again with this run's decisions; it is never kept with guessed ones. Test: a montage run stopped after its reel loop keeps the row; resuming keeps it; with the row removed, the reel is rendered again.
+
+Accepted residuals (not fixed): (a) a check-then-open race in the user's own music folder needs a local process actively swapping links, and such a process already runs with the user's rights; (b) a cache-key collision needs a same-size edit in the middle of the file plus a deliberately restored `mtime_ns`.

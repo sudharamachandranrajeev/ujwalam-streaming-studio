@@ -494,8 +494,10 @@ def take(x, f, ln, loop=None):
     lb = min(lb, len(x) - xf)
     if lb - la <= 2 * xf:
         raise ClipError("music: the track is too short to loop")
+    if f >= lb:  # Codex verify: a segment that starts past the loop end starts at the same place inside the loop
+        f = la + (f - la) % (lb - la)
     fade = np.linspace(0.0, 1.0, xf)[:, None]
-    end = lb + xf if f < lb else len(x)
+    end = lb + xf
     y = x[f:end].copy()
     while len(y) < ln + xf:
         c = x[la:lb + xf]

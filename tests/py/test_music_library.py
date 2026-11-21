@@ -282,6 +282,15 @@ class SafetyTests(unittest.TestCase):
             win = x[s0: len(x) - SR, 0][: (len(x) - SR - s0) // (SR // 4) * (SR // 4)].reshape(-1, SR // 4)
             rms = np.sqrt((win ** 2).mean(axis=1))
             self.assertGreater(rms.min(), 0.25 * np.median(rms), f"{mode}: no gap or dip at a loop seam")
+        # Codex verify: a drop late in the short track starts past the loop end; the bed is still full length, no gap
+        late = dict(tr, drop=11.9)
+        rec = self.ml.plan(late, "drop", ps, 0.0, 0.1, None, -16, self.cfg)
+        self.assertGreater(rec["segments"][0]["from"], rec["loop"]["b"], "the case under test")
+        x = self.ml.render(rec, late, self.cfg)
+        self.assertEqual(len(x), 40 * SR)
+        win = x[SR: 39 * SR, 0].reshape(-1, SR // 4)
+        rms = np.sqrt((win ** 2).mean(axis=1))
+        self.assertGreater(rms.min(), 0.25 * np.median(rms), "late drop: no gap anywhere")
         long_t = dict(tr, id="long", duration=120.0)
         got, _ = self.ml.match([tr, long_t], {"energy": tr["energyLevel"], "moods": [tr["mood"]]}, 40, ["x"], (), self.cfg,
                                prefer_long=True)
