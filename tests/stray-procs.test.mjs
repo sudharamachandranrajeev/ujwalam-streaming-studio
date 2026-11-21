@@ -29,6 +29,19 @@ test('findStrays: picks mock and soak scripts, skips self, its parents and unrel
   assert.equal(strayReport([]), 'stray-mocks: none running');
 });
 
+test('findStrays under: only the descendants of one run count, not another test file\'s mock running at the same time', () => {
+  const procs = [
+    { pid: 5, parentPid: 2, startedAt: '2026-10-28T10:00:02.000Z', cmd: 'node C:\\r\\tools\\soak\\replay.mjs --run-id me' },
+    { pid: 7, parentPid: 5, startedAt: '2026-10-28T10:00:03.000Z', cmd: 'node C:\\r\\tools\\soak\\core-child.mjs' }, // ours
+    { pid: 8, parentPid: 7, startedAt: '2026-10-28T10:00:04.000Z', cmd: 'node tools/mock/mock-streamerbot.mjs' }, // ours, grandchild
+    { pid: 9, parentPid: 40, startedAt: '2026-10-28T10:00:05.000Z', cmd: 'node tools/mock/mock-streamerbot.mjs' }, // a parallel file's
+    { pid: 40, parentPid: 1, startedAt: '2026-10-28T10:00:00.000Z', cmd: 'node --test tests/other.test.mjs' },
+  ];
+  const now = Date.parse('2026-10-28T10:01:00.000Z');
+  assert.deepEqual(findStrays(procs, { self: 5, now, under: 5 }).map((x) => x.pid), [7, 8]);
+  assert.deepEqual(findStrays(procs, { self: 5, now }).map((x) => x.pid), [7, 8, 9], 'without under: machine-wide, as the CI step wants');
+});
+
 test('findStrays: also finds the idempotency kill-test child and listen-CLI children started by tests, by label only', () => {
   const procs = [
     { pid: 10, parentPid: 0, startedAt: '2026-10-28T09:00:00.000Z', cmd: 'node C:/r/tools/idem-crash-child.mjs D:/private/d kill after-start' },

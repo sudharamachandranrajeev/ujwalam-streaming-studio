@@ -570,7 +570,7 @@ export async function main(argv) {
   result.system = ctx.system ?? { status: 'NOT RECORDED' };
   result.harnessStalls = ctx.harnessStalls;
   // Nothing this run started may still be running (mock server, core child). pid, script and age only.
-  result.strayProcesses = scanStrays();
+  result.strayProcesses = scanStrays({ under: process.pid });
   result.info = info;
   if (!args['no-purge']) result.purge = purgeProof({ dataDir: paths.dataDir, runDir, messages: msgs });
   writeFileSync(path.join(runDir, 'result.json'), JSON.stringify(result, null, 2));
