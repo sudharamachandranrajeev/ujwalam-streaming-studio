@@ -19,6 +19,8 @@ import { createStudioServer } from '../services/studio-ui/server.mjs';
 import { postId } from '../services/posting/index.mjs';
 import { QUEUE_NAME, createUploadQueue } from '../services/posting/auto-chain.mjs';
 import { EXE, qtDir } from '../app/studio/tools/build.mjs';
+import { DB_NAME, openStore } from '../services/analytics/index.mjs';
+import { userScheduleFile } from '../services/posting/schedule.mjs';
 
 const UI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
 const PACKAGED = process.env.UJWALAM_STUDIO_TEST_EXE ? path.resolve(process.env.UJWALAM_STUDIO_TEST_EXE) : null;
@@ -65,11 +67,22 @@ describe('QML studio: Posts window (headless probe)', { skip }, () => {
     writeFileSync(ledgerFile, JSON.stringify({ version: 1, entries: { [`${SHA}:youtube-shorts`]: { sha256: SHA, target: 'youtube-shorts', status: 'draft', dir, clipId: 'c01', createdAt: stamp, updatedAt: stamp } } }));
     return dir;
   }
-  async function probe({ actions, flagOn = true, signedIn = false, queued = null, ms = Math.max(7000, 3000 + actions.length * 700) }) {
+  async function probe({ actions, flagOn = true, signedIn = false, queued = null, growth = null, ms = Math.max(7000, 3000 + actions.length * 700) }) {
     const dataDir = tmp('ujw-qmlposts-');
     const dir = makePackage(dataDir);
     const flags = createFlags({ dataDir });
     if (flagOn) flags.set('posting', true);
+    if (growth) { // PT4: the growth flag and stored AN1 numbers (fixture), UTC schedule
+      flags.set('growth', true);
+      writeFileSync(userScheduleFile(dataDir), JSON.stringify({ placement: 'random-daily', postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 60, timeZone: 'UTC' }));
+      const st = openStore(path.join(dataDir, DB_NAME));
+      for (const v of growth) {
+        st.upsertVideo({ videoId: v.id, kind: 'short', postId: v.id, uploadedAt: v.at });
+        st.setState(v.id, 'public', v.at);
+        st.addSnapshot({ videoId: v.id, fetchedAt: new Date(Date.parse(v.at) + 25 * 3600_000).toISOString(), ageHours: 25, data: { privacy: 'public', views: v.views }, analytics: { views: v.views, averageViewPercentage: 80, subscribersGained: 1 } });
+      }
+      st.close();
+    }
     if (queued) { const q = createUploadQueue(path.join(dataDir, 'posting', QUEUE_NAME)); q.add(ID); q.patch(ID, queued); }
     const opened = [];
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
@@ -138,5 +151,32 @@ describe('QML studio: Posts window (headless probe)', { skip }, () => {
     r = await probe({ actions: ['posts-open', 'posts-approve', 'posts-pick:3'] });
     assert.deepEqual(done(r.p), [true, false, false]);
     assert.equal(r.s.formShown, false);
+  });
+  // ---- PT4 (D410): growth suggestion in the Posts window ----
+  const fixture = (n, hour, views, from) => Array.from({ length: n }, (_, i) => ({ id: `v${hour}x${from + i}`, at: new Date(Date.UTC(2026, 9, 1 + from + i, hour)).toISOString(), views }));
+  const GROWTH = [...fixture(12, 19, 134, 0), ...fixture(12, 10, 100, 0)];
+
+  test('PT4: the suggestion shows with its numbers; nothing changes until Apply; Apply then Undo put the schedule back', async () => {
+    let r = await probe({ growth: GROWTH, actions: ['posts-open'] });
+    assert.equal(r.s.growthStatus, 'open');
+    assert.equal(r.s.growthText, 'Move 2 of your daily posts to 18:00-21:00: +34 % 24 h views on 12 posts.');
+    assert.match(r.s.growthNumbers, /^12 posts at 18:00-21:00 averaged 134 views in 24 h; 12 posts at other times averaged 100\./);
+    assert.equal(JSON.parse(readFileSync(userScheduleFile(r.dataDir), 'utf8')).placement, 'random-daily', 'not applied without the click');
+    r = await probe({ growth: GROWTH, actions: ['posts-open', 'posts-preview', 'posts-growth-apply', 'posts-preview'] });
+    assert.deepEqual(done(r.p), [true, true, true, true]);
+    assert.equal(r.s.growthStatus, 'applied');
+    assert.match(r.s.growthInfo, /^Applied: /);
+    assert.equal(JSON.parse(readFileSync(userScheduleFile(r.dataDir), 'utf8')).placement, 'custom');
+  });
+
+  test('PT4: Dismiss changes nothing; growth flag off shows no suggestion', async () => {
+    let r = await probe({ growth: GROWTH, actions: ['posts-open', 'posts-preview', 'posts-growth-dismiss', 'posts-preview'] });
+    assert.deepEqual(done(r.p), [true, true, true, true]);
+    assert.equal(r.s.growthStatus, '');
+    assert.match(r.s.growthInfo, /^Dismissed\. Nothing changed\./);
+    assert.equal(JSON.parse(readFileSync(userScheduleFile(r.dataDir), 'utf8')).placement, 'random-daily');
+    r = await probe({ actions: ['posts-open', 'posts-growth-apply'] });
+    assert.deepEqual(done(r.p), [true, false]);
+    assert.equal(r.s.growthText, '');
   });
 });

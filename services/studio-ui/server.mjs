@@ -38,9 +38,10 @@ import { QUEUE_NAME, clearStuckLock, createUploadQueue, requestRunNow, stuckLock
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
 import { previewRules } from '../posting/preview.mjs';
 import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
-import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, scheduleNextFree, schedulePreview } from '../posting/auto-settings.mjs';
+import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, scheduleConfigFor, scheduleNextFree, schedulePreview } from '../posting/auto-settings.mjs';
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
 import { applyTextPrefs, readPrefs, savePrefs } from '../posting/post-prefs.mjs';
+import { analyseTiming, applySuggestion, dismissSuggestion, loadTimingConfig, readRecord as readGrowthRecord, refreshSuggestion, undoSuggestion } from '../analytics/timing.mjs';
 import { SCHEDULE_FLAG } from '../posting/schedule.mjs';
 import { UploadError, checkPostStatus } from '../posting/youtube.mjs';
 import { GROWTH_FLAG, DB_NAME as GROWTH_DB, collect as growthCollect, openStore as openGrowthStore, view as growthView } from '../analytics/index.mjs';
@@ -342,6 +343,9 @@ export function gateStarts(host, getAuthority) {
   };
   return new Proxy(host, { get(t, k) { if (k === 'call') return call; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } });
 }
+
+/** PT4: the suggestion record without the saved schedule text (that stays in the data folder for Undo). */
+const publicRecord = (r) => { const { before, appliedText, ...rest } = r; return rest; };
 
 export function createStudioServer(opts) {
   const limits = { ...LIMITS, ...(opts.limits ?? {}) };
@@ -1628,6 +1632,24 @@ export function createStudioServer(opts) {
         return json(res, 200, { ...readAutoPostSettings(opts.dataDir), flags: { autoPost: on(AUTO_FLAG), schedule: on(SCHEDULE_FLAG), deleteUploaded: on(DELETE_FLAG) } });
       } catch { return json(res, 500, { error: 'settings-unreadable' }); }
     }
+    if (req.method === 'GET' && route === '/ui/api/posts/growth-suggestion') {
+      // PT4 (D410): one growth-led schedule suggestion from the stored AN1 numbers (flag growth, read only towards YouTube;
+      // nothing is fetched here). Only the suggestion record is written; the schedule changes only on Apply.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      if (!growthOn()) return json(res, 200, { enabled: false, why: 'growth-off', record: null });
+      let prefsOn = true; try { prefsOn = readPrefs(opts.dataDir).prefs.growthSuggestions !== false; } catch { prefsOn = true; }
+      if (!prefsOn) return json(res, 200, { enabled: false, why: 'suggestions-off', record: readGrowthRecord(opts.dataDir)?.status === 'applied' ? readGrowthRecord(opts.dataDir) : null });
+      let store;
+      try {
+        const cfg = loadTimingConfig();
+        const sched = scheduleConfigFor(opts.dataDir);
+        store = openGrowthStore(path.join(opts.dataDir, GROWTH_DB));
+        const videos = growthView(store, now()).videos;
+        const analysis = analyseTiming({ videos, cfg, schedule: sched, tz: sched.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
+        const record = refreshSuggestion({ dataDir: opts.dataDir, analysis, cfg, now: now() });
+        return json(res, 200, { enabled: true, count: analysis.count, minPosts: analysis.minPosts, reason: analysis.reason, byBand: analysis.byBand, record: record ? publicRecord(record) : null });
+      } catch { return json(res, 500, { error: 'suggestion-unavailable' }); } finally { try { store?.close(); } catch { /* closed */ } }
+    }
     if (req.method === 'GET' && route === '/ui/api/posts/prefs') {      // PT5 (D410) Settings > Posting & growth: post text, kind shares, growth suggestions. Read only.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
       try { return json(res, 200, readPrefs(opts.dataDir)); } catch { return json(res, 500, { error: 'settings-unreadable' }); }
@@ -1954,6 +1976,16 @@ export function createStudioServer(opts) {
       let r;
       try { r = saveAutoPostSettings(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
       return r.ok ? json(res, 200, { ok: true, ...r.settings }) : json(res, 400, { error: 'invalid', problems: r.problems });
+    }
+    if (route === '/ui/api/posts/growth-suggestion/apply' || route === '/ui/api/posts/growth-suggestion/dismiss' || route === '/ui/api/posts/growth-suggestion/undo') {
+      // PT4 (D410): each acts on its own click (D332). Apply writes the user's schedule settings (60-minute floor checked),
+      // Undo puts them back exactly; both are logged. Dismiss only marks the record.
+      if (typeof opts.dataDir !== 'string' || typeof body.id !== 'string' || body.id.length > 40 || Object.keys(body).some((k) => k !== 'id')) return json(res, 400, { error: 'bad-params' });
+      if (!growthOn()) return json(res, 409, { error: 'growth-off' });
+      const fn = route.endsWith('/apply') ? applySuggestion : route.endsWith('/dismiss') ? dismissSuggestion : undoSuggestion;
+      let r;
+      try { r = fn(opts.dataDir, body.id, { now: now() }); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return r.ok ? json(res, 200, { ok: true, record: publicRecord(r.record) }) : json(res, r.code === 'unknown' ? 404 : 409, { error: r.code, text: r.text });
     }
     if (route === '/ui/api/posts/prefs') {      // PT5 (D410): one click saves the post text card (D332). Every value is checked; nothing is written on a problem.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });

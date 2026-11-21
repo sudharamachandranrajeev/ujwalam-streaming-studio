@@ -29,6 +29,10 @@ Dialog {
     property bool signedIn: false
     property bool busy: false
     property int gen: 0
+    // PT4 (D410): one growth-led schedule suggestion (ui/api/posts/growth-suggestion); Apply, Dismiss and Undo act on their
+    // own click (D332). Nothing changes the schedule without that click.
+    property var growth: null             // the record: { id, status, text, numbers, times, exploreTimes }
+    property string growthInfo: ""
 
     readonly property var post: { for (const p of posts) if (p.id === selected) return p; return null }
     readonly property string queueState: post && post.queueState ? String(post.queueState) : ""
@@ -61,6 +65,9 @@ Dialog {
                      + (m.autoUpload === true ? "approve and upload (private)" : "approve only") + ". " + (r.plan || []).length + " planned action(s)."
                      + (r.rulesFile ? "\nRules file: " + r.rulesFile : "");
         });
+        growth = null;
+        growthInfo = "";
+        loadGrowth();
         Api.get("ui/api/posts/youtube/status", (ok, r) => {
             if (g !== gen) return;
             signedIn = ok && r.signedIn === true;
@@ -68,6 +75,38 @@ Dialog {
         return true;
     }
     onClosed: gen++
+
+    function loadGrowth() {
+        const g = gen;
+        Api.get("ui/api/posts/growth-suggestion", (ok, r) => {
+            if (g !== gen || !ok) return;
+            growth = r.enabled === true || (r.record && r.record.status === "applied") ? r.record : null;
+            growthInfo = r.enabled !== true ? "" : growth ? "" : r.reason === "few-posts"
+                ? "Growth suggestions: " + (r.count || 0) + " of " + (r.minPosts || 8) + " posts have numbers yet; a suggestion comes once " + (r.minPosts || 8) + " do."
+                : "Growth suggestions: no clear better time in your numbers yet.";
+        });
+    }
+    function growthNumbers(rec) {
+        const n = rec && rec.numbers;
+        if (!n) return "";
+        let t = n.bandPosts + " posts at " + n.band + " averaged " + n.bandViews24h + " views in 24 h; " + n.otherPosts + " posts at other times averaged " + n.otherViews24h + ".";
+        if (typeof n.bandAvgViewedPct === "number") t += " Viewed " + n.bandAvgViewedPct + " % on average.";
+        t += " New times each day: " + (rec.times || []).join(", ") + ".";
+        if ((rec.exploreTimes || []).length) t += " Trying " + rec.exploreTimes.join(", ") + " to keep learning.";
+        return t;
+    }
+    function growthAct(what) {
+        if (!growth) return false;
+        const g = gen, id = growth.id;
+        Api.post("ui/api/posts/growth-suggestion/" + what, { id: id }, (ok, r, err) => {
+            if (g !== gen) return;
+            if (!ok) { growthInfo = "Not done: " + ((r && r.text) ? r.text : err); return }
+            growth = what === "apply" ? r.record : null;
+            growthInfo = what === "apply" ? "Applied: your posting times are now the ones above (Settings > Posting & growth shows them). Undo puts the old ones back."
+                : what === "undo" ? "Undone: your earlier posting times are back." : "Dismissed. Nothing changed.";
+        });
+        return true;
+    }
 
     // `said`: the outcome of the action that asked for the reload; it stays on the info line (render would replace it).
     // `release`: the upload or check keeps `busy` until the package's new status is read (else Upload is enabled again
@@ -229,13 +268,17 @@ Dialog {
                  formShown: post !== null, meta: metaText(post), limits: limitsText(post), title: titleField.text, desc: descText.text, tags: tagsField.text,
                  hashtags: hashField.text, ytShown: isYoutube, ytInfo: ytText(post), uploadEnabled: canUpload, checkEnabled: canCheck,
                  queueShown: queueState !== "", queueText: post ? queueText(post) : "", retryShown: retryShown, busy: busy,
-                 scheduleNextEnabled: canScheduleNext };
+                 scheduleNextEnabled: canScheduleNext,
+                 growthText: growth ? String(growth.text) : "", growthStatus: growth ? String(growth.status) : "", growthNumbers: growthNumbers(growth), growthInfo: growthInfo };
     }
     function probeAction(a) {
         if (a === "posts-open") return show();
         if (!opened) return false;
         if (a === "posts-close") { close(); return true }
         if (a === "posts-preview") return preview();
+        if (a === "posts-growth-apply") return growth !== null && growth.status === "open" && growthAct("apply");
+        if (a === "posts-growth-dismiss") return growth !== null && growth.status === "open" && growthAct("dismiss");
+        if (a === "posts-growth-undo") return growth !== null && growth.status === "applied" && growthAct("undo");
         if (a.startsWith("posts-pick:")) { const n = parseInt(a.slice(11), 10); return n >= 0 && n < posts.length && pick(posts[n].id) }
         if (post === null) return false;
         if (a.startsWith("posts-title:")) { titleField.text = decodeURIComponent(a.slice(12)); return true }
@@ -285,6 +328,21 @@ Dialog {
             spacing: 8
             Line { objectName: "postsInfo"; text: dlg.info; font.pixelSize: 14 }
             Line { objectName: "postsAuto"; text: dlg.autoInfo; color: Theme.c.muted }
+            Column {
+                objectName: "postsGrowth"
+                visible: dlg.growth !== null
+                width: parent.width
+                spacing: 6
+                Line { objectName: "postsGrowthText"; text: dlg.growth ? (dlg.growth.status === "applied" ? "Applied suggestion: " : "Suggestion: ") + dlg.growth.text : ""; font.weight: Font.DemiBold }
+                Line { objectName: "postsGrowthNumbers"; text: dlg.growthNumbers(dlg.growth); color: Theme.c.muted }
+                Row {
+                    spacing: 8
+                    UButton { objectName: "postsGrowthApply"; visible: dlg.growth !== null && dlg.growth.status === "open"; text: "Apply"; kind: "primary"; tip: "Sets these posting times. Undo puts the old ones back."; onClicked: dlg.growthAct("apply") }
+                    UButton { objectName: "postsGrowthDismiss"; visible: dlg.growth !== null && dlg.growth.status === "open"; text: "Dismiss"; tip: "Keeps your posting times as they are."; onClicked: dlg.growthAct("dismiss") }
+                    UButton { objectName: "postsGrowthUndo"; visible: dlg.growth !== null && dlg.growth.status === "applied"; text: "Undo"; tip: "Puts your earlier posting times back."; onClicked: dlg.growthAct("undo") }
+                }
+            }
+            Line { objectName: "postsGrowthInfo"; text: dlg.growthInfo; color: Theme.c.muted }
             UButton {
                 objectName: "postsPreview"
                 text: "Preview auto-post rules"
