@@ -28,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { resolveString } from '../project/scene-preset.mjs';
-import { cleanFacts, createTextHistory, creditMissing, draftText, musicCredit } from './post-text.mjs';
+import { cleanFacts, createTextHistory, creditMissing, draftText, musicCredit, musicOf } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -414,8 +414,11 @@ export async function packageUploads(opts) {
     if (!path.isAbsolute(file) || !isRealFile(file)) { skip('file-missing'); continue; }
     // D414: a montage's song. NCS library track = its credit goes in the description, no credit = not sent; a song
     // from anywhere else = render only, never posted (fail closed, plain-word reason)
-    const music = musicCredit(row.montageMusic);
-    if (music.use === 'refuse') { skipped.push({ file: path.basename(file), reason: music.renderOnly ? 'render-only' : 'music-credit-missing', detail: music.reason }); continue; }
+    // Codex BD review: from the render's own music record (row.music), so a folder-scanned montage is checked too; a
+    // montage whose music cannot be told is refused (music-unknown)
+    const mm = musicOf(row);
+    const music = musicCredit(mm);
+    if (music.use === 'refuse') { skipped.push({ file: path.basename(file), reason: music.renderOnly ? 'render-only' : music.unknown ? 'music-unknown' : 'music-credit-missing', detail: music.reason }); continue; }
     const tail = CANVAS_TAIL.exec(path.basename(file));
     const vertical = tail ? tail[2].toLowerCase().startsWith('v') : false;
     const seconds = Number(row.seconds);
@@ -470,7 +473,7 @@ export async function packageUploads(opts) {
         // PT1: the clip's facts (medal, kills, result, mode; only the known ones) and its game, for post text and redrafts
         ...(Object.keys(facts).length ? { facts } : {}), ...(game ? { game } : {}), textVersion: TEXT_VERSION,
         // D414: the montage's NCS track and the credit text the description must keep (checked again at approve and upload)
-        ...(music.use === 'credit' ? { montageMusic: { library: row.montageMusic.library, trackId: String(row.montageMusic.trackId ?? '').slice(0, 32) }, musicCredit: music.text } : {}),
+        ...(music.use === 'credit' ? { montageMusic: { library: mm.library, trackId: String(mm.trackId ?? '').slice(0, 32) }, musicCredit: music.text } : {}),
         // D375: when the clip was made (from its name; posting order is oldest first) and the clips-folder file it came
         // from (the file the flag post-delete-uploaded may remove after a confirmed upload). Local data only.
         ...(madeAtOf(path.basename(file)) ? { madeAt: madeAtOf(path.basename(file)) } : {}), file: path.resolve(file) },

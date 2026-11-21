@@ -11,5 +11,6 @@
   "lowBandHz": 150,
   "sections": { "lowPercentile": 20, "highPercentile": 90, "minBars": 2, "buildRiseDbPerBar": 0.5, "buildMinBars": 2, "buildMaxBars": 8 },
   "transients": { "percentile": 80, "max": 400 },
-  "maxAnalyseSec": 420
+  "maxAnalyseSec": 420,
+  "guard": { "checkEveryFrames": 200, "maxWallSec": 120, "maxMemMb": 1500, "maxFrames": 60000 }
 }

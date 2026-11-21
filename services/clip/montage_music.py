@@ -4,12 +4,16 @@
 - folder_problem(folder): the folder must be a real folder on this PC's own fixed drive, reached with no link (the
   reel-style example rule, reel_style.local_file_problem, for a folder);
 - scan(data_dir, folder): every track in the folder gets a credit record (artist, title, the NCS line, link) read from
-  its tags, else from an "Artist - Title [NCS Release]" file name; a record the user edited is kept as edited;
+  its tags, else from an "Artist - Title [NCS Release]" file name; a record the user edited is kept as edited. Codex BD
+  review: records are keyed by the track's identity (its size and the SHA-256 of its first MB), not its name, so a
+  credit never moves to another song of the same name; a file whose identity changed loses its edited credit and is
+  marked for review (incomplete: its montages are not posted). Off air only; tags are read with the demuxer named from
+  the extension and the file protocol only (style_analyse.safe_open_audio);
 - set_credit(data_dir, track_id, credit): the user's edit (checked: plain text, length limits);
 - pick(data_dir, folder, settings, seed_parts): random (seeded, none of the last avoidLast) or the fixed track;
-- montage_row(track): what a montage's clip row carries for posting: {"library": "ncs", "trackId", "credit"} (the
-  description gets the credit; no credit = never sent), or {"library": None} for a track from anywhere else (render
-  only, never auto-posted);
+- music_record(track): the render's music record for a library song: {"source": "ncs", "trackId", "credit"} (the
+  description gets the credit; no credit = never sent); a song from anywhere else is {"source": "user-folder"} (render
+  only, never auto-posted), see services/posting/post-text.mjs musicOf;
 - credit_text(credit): the description lines (same template as services/posting/post-text.mjs musicCredit).
 
 CLI (the studio, services/studio-ui/montage-music.mjs): montage_music.py list|credit --data-dir D [--json BODY]
@@ -30,8 +34,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from clip_common import CLIP_DATA, ClipError, eprint, load_json, write_json_atomic  # noqa: E402
+from clip_common import CLIP_DATA, ClipError, eprint, load_json, on_air, write_json_atomic  # noqa: E402
 import music_library as ml  # noqa: E402
+import style_analyse as sa  # noqa: E402
 
 CONFIG_FILE = os.path.join(CLIP_DATA, "montage-music.json")
 ID = re.compile(r"^[0-9a-f]{16}$")
@@ -73,8 +78,17 @@ def folder_problem(folder, drive_type=None):
     return None
 
 
-def _id(name):
-    return hashlib.sha256(name.lower().encode("utf-8")).hexdigest()[:16]  # by file name: survives a copy to a new disk
+IDENTITY_BYTES = 1 << 20
+
+
+def _id(path):
+    """The track's identity: size + SHA-256 of the first MB (bounded read). Survives a copy to a new disk or folder;
+    another song under the same name gets another id."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        h.update(fh.read(IDENTITY_BYTES))
+    return hashlib.sha256(f"{size}:{h.hexdigest()}".encode()).hexdigest()[:16]
 
 
 def _clean(v, n):
@@ -124,13 +138,13 @@ def from_name(stem, cfg):
 def read_tags(path):
     import av  # noqa: PLC0415
     try:
-        with av.open(path) as c:
+        with sa.safe_open_audio(path) as c:
             md = {str(k).lower(): str(v) for k, v in (c.metadata or {}).items()}
             for s in c.streams:
                 for k, v in (s.metadata or {}).items():
                     md.setdefault(str(k).lower(), str(v))
             return md
-    except (av.error.FFmpegError, OSError, UnicodeError):
+    except (av.error.FFmpegError, OSError, UnicodeError, ClipError):
         return {}
 
 
@@ -165,10 +179,13 @@ def list_files(folder, cfg):
     return out
 
 
-def scan(data_dir, folder, cfg=None, tags=None):
-    """-> the credits document, updated for the folder's tracks (and saved). Edited records are never overwritten."""
+def scan(data_dir, folder, cfg=None, tags=None, live=on_air):
+    """-> the credits document, updated for the folder's tracks (and saved). Edited records are never overwritten while
+    the file is the same; off air only (unknown counts as on air)."""
     cfg = cfg or load_config()
     tags = tags or read_tags
+    if live is None or live() is not False:
+        raise ClipError("the music folder is looked at off air only (after the stream)")
     bad = folder_problem(folder)
     if bad:
         raise ClipError(f"montage music folder: {bad}")
@@ -176,11 +193,20 @@ def scan(data_dir, folder, cfg=None, tags=None):
     old = doc["tracks"]
     mx = cfg["credit"]["maxChars"]
     new = {}
+    by_name = {str(r.get("file", "")).lower(): tid for tid, r in old.items() if isinstance(r, dict)}
     for p in list_files(folder, cfg):
         name = os.path.basename(p)
-        tid = _id(name)
+        try:
+            tid = _id(p)
+        except OSError:
+            continue
         if tid in old and old[tid].get("edited"):
-            new[tid] = dict(old[tid], file=name)
+            new[tid] = {k: v for k, v in dict(old[tid], file=name).items() if k != "missing"}
+            continue
+        was = by_name.get(name.lower())
+        if was and was != tid and old[was].get("edited"):  # same name, other bytes: the typed credit is not reused
+            new[tid] = {"file": name, "artist": "", "title": "", "line": cfg["credit"]["line"], "link": "",
+                        "source": "changed", "edited": False, "review": True}
             continue
         md = tags(p)
         artist, title = _clean(md.get("artist", ""), mx["artist"]), _clean(md.get("title", ""), mx["title"])
@@ -192,8 +218,9 @@ def scan(data_dir, folder, cfg=None, tags=None):
             source = "none"
         new[tid] = {"file": name, "artist": artist, "title": title, "line": cfg["credit"]["line"], "link": "",
                     "source": source, "edited": False}
+    changed = {old_id for old_id in (by_name.get(r["file"].lower()) for r in new.values() if r.get("review")) if old_id}
     for tid, r in old.items():  # an edited record of a file that left the folder is kept (the user typed it)
-        if tid not in new and r.get("edited"):
+        if tid not in new and r.get("edited") and tid not in changed:
             new[tid] = dict(r, missing=True)
     doc = {"version": 1, "folder": os.path.abspath(folder), "tracks": new}
     _save(_credits_path(data_dir, cfg), doc)
@@ -212,6 +239,7 @@ def set_credit(data_dir, track_id, credit, cfg=None):
         raise ClipError("unknown track (look at the folder again)")
     r = doc["tracks"][track_id]
     r.update({k: credit.get(k, "").strip() for k in ("artist", "title", "line", "link")}, source="edited", edited=True)
+    r.pop("review", None)
     _save(_credits_path(data_dir, cfg), doc)
     return r
 
@@ -222,18 +250,19 @@ def view(doc, cfg=None):
     for tid, r in sorted(doc["tracks"].items(), key=lambda kv: kv[1].get("file", "")):
         rows.append({"id": tid, "file": r.get("file", ""), "artist": r.get("artist", ""), "title": r.get("title", ""),
                      "line": r.get("line", ""), "link": r.get("link", ""), "source": r.get("source", ""),
-                     "edited": bool(r.get("edited")), "missing": bool(r.get("missing")), "complete": complete(r, cfg)})
+                     "edited": bool(r.get("edited")), "missing": bool(r.get("missing")), "review": bool(r.get("review")),
+                     "complete": complete(r, cfg)})
     return rows
 
 
-def pick(data_dir, folder, settings, seed_parts, cfg=None):
+def pick(data_dir, folder, settings, seed_parts, cfg=None, live=on_air):
     """The montage's track: {"id", "path", "credit"} or None (switch off, no folder, no usable track). Random: seeded,
     none of the last avoidLast picks while another is free; fixed: that track only. History is saved."""
     cfg = cfg or load_config()
     s = dict(cfg["defaults"], **(settings or {}))
     if not s.get("on") or not s.get("folder"):
         return None
-    doc = scan(data_dir, folder, cfg)
+    doc = scan(data_dir, folder, cfg, live=live)
     tracks = {tid: r for tid, r in doc["tracks"].items() if not r.get("missing")}
     if not tracks:
         return None
@@ -259,13 +288,13 @@ def pick(data_dir, folder, settings, seed_parts, cfg=None):
             "credit": {k: r.get(k, "") for k in ("artist", "title", "line", "link")}}
 
 
-def montage_row(track, cfg=None):
-    """What the montage's clip row carries for posting (services/posting/index.mjs)."""
+def music_record(track, cfg=None):
+    """Codex BD review: the music record a render writes into its render.json clip entry ("music") for a song from the
+    NCS library (track = pick()): source "ncs", the track id (its identity) and the credit (None when incomplete: the
+    post is then never sent). clip_publish carries it into the upload row and the sidecar the clips-folder scan reads."""
     cfg = cfg or load_config()
-    if not track:
-        return {"library": None}
     c = track.get("credit")
-    return {"library": cfg["library"], "trackId": track["id"], "credit": c if complete(c, cfg) else None}
+    return {"source": cfg["library"], "trackId": track["id"], "credit": c if complete(c, cfg) else None}
 
 
 def main(argv=None):
@@ -287,6 +316,10 @@ def main(argv=None):
             bad = folder_problem(folder)
             if bad:
                 print(json.dumps({"tracks": [], "folderProblem": bad, "folder": folder}))
+                return 0
+            if on_air() is not False:  # on air (or unknown): the saved credits, the folder is not read
+                print(json.dumps({"tracks": view(load_credits(a.data_dir, cfg), cfg), "folderProblem": None, "folder": folder,
+                                  "problem": "the folder is looked at again after the stream (off air only)"}))
                 return 0
             print(json.dumps({"tracks": view(scan(a.data_dir, folder, cfg), cfg), "folderProblem": None, "folder": folder}))
             return 0

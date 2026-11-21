@@ -11,7 +11,8 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createPostStore, loadLimits, packageUploads } from '../services/posting/index.mjs';
-import { creditMissing, musicCredit } from '../services/posting/post-text.mjs';
+import { creditMissing, musicCredit, musicOf } from '../services/posting/post-text.mjs';
+import { MUSIC_SIDECAR, scanClipsFolder } from '../services/posting/clips-source.mjs';
 import { uploadVideo } from '../services/posting/youtube.mjs';
 import { createMontageMusic, montageMusicOpProblems } from '../services/studio-ui/montage-music.mjs';
 import { pythonIn } from '../services/studio-ui/record-clips.mjs';
@@ -53,8 +54,8 @@ describe('studio route', () => {
   });
   test('lists the saved folder with credits from the file names; an edit is saved and kept', { skip: PY ? false : 'no project Python' }, async () => {
     const data = mk(); const music = mk();
-    writeFileSync(path.join(music, 'Alpha Artist - First Song [NCS Release].mp3'), 'x');
-    writeFileSync(path.join(music, 'untitled.mp3'), 'x');
+    writeFileSync(path.join(music, 'Alpha Artist - First Song [NCS Release].mp3'), 'song one');
+    writeFileSync(path.join(music, 'untitled.mp3'), 'song two');
     const mm = createMontageMusic({ dataDir: data, clipRoot: ROOT, python: PY });
     assert.deepEqual((await mm.info()).tracks, [], 'no folder saved: nothing listed');
     writeSettings(data, { clips: { montageMusic: { folder: music } } });
@@ -109,7 +110,7 @@ describe('posting', () => {
       { name: 'codm_montage_20261121-100000_kills-5_01_v.mp4', montageMusic: { library: 'ncs', trackId: 'a'.repeat(16), credit: CREDIT } },
       { name: 'codm_montage_20261121-100500_kills-6_02_v.mp4', montageMusic: { library: 'ncs', trackId: 'b'.repeat(16), credit: null } },
       { name: 'codm_montage_20261121-101000_kills-7_03_v.mp4', montageMusic: { library: null } },
-      { name: 'codm_montage_20261121-101500_kills-8_04_v.mp4' },
+      { name: 'codm_montage_20261121-101500_kills-8_04_v.mp4', music: { source: 'generated' } },
     ]);
     const r = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: {}, ffmpeg: process.execPath });
     assert.equal(r.packaged.length, 2, JSON.stringify(r.skipped));
@@ -137,5 +138,49 @@ describe('posting', () => {
     await assert.rejects(uploadVideo({ post: gone, sha256: post.source.sha256, videoPath: 'x', accessToken: 't', ledger: { get: () => null },
       limits: loadLimits(), publishAt: '2026-12-01T10:00:00Z', outputsStatus: async () => ({ sinks: [] }), fetchImpl: () => { throw new Error('network used'); } }),
     (err) => err.code === 'music-credit-missing');
+  });
+
+  test('Codex BD review: provenance from the render record; a montage with unknown music is refused, made-here music posts', async () => {
+    assert.equal(musicOf({ kind: 'montage' }), 'unknown', 'no record');
+    assert.equal(musicOf({ kind: 'montage', music: { source: 'mystery' } }), 'unknown');
+    assert.equal(musicOf({ kind: 'montage', music: { source: 'generated' } }), undefined);
+    assert.equal(musicOf({ kind: 'montage', music: { source: 'none' } }), undefined);
+    assert.deepEqual(musicOf({ kind: 'won-reel', music: { source: 'user-folder', track: 't' } }), { library: null });
+    assert.deepEqual(musicOf({ kind: 'montage', music: { source: 'ncs', trackId: 'a', credit: CREDIT } }), { library: 'ncs', trackId: 'a', credit: CREDIT });
+    assert.equal(musicOf({ kind: 'short' }), undefined, 'a short without a record posts as before');
+    const e = setup([
+      { name: 'codm_montage_20261121-110000_kills-5_01_v.mp4' },
+      { name: 'codm_montage_20261121-110500_kills-6_02_v.mp4', music: { source: 'user-folder', track: 'x' } },
+      { name: 'codm_montage_20261121-111000_kills-7_03_v.mp4', music: { source: 'ncs', trackId: 'c'.repeat(16), credit: CREDIT } },
+      { name: 'codm_won-reel_20261121-111500_victory-kills-4_04_v.mp4', kind: 'won-reel', music: { source: 'generated' } },
+    ]);
+    const r = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: {}, ffmpeg: process.execPath });
+    const why = (key) => r.skipped.find((s) => s.file.includes(key));
+    assert.equal(why('110000').reason, 'music-unknown');
+    assert.match(why('110000').detail, /not known/);
+    assert.equal(why('110500').reason, 'render-only');
+    assert.equal(r.packaged.length, 2, JSON.stringify(r.skipped));
+    const credited = r.packaged.map((p) => JSON.parse(readFileSync(path.join(p.dir, 'post.json'), 'utf8'))).find((p) => p.source.musicCredit);
+    assert.ok(credited.description.endsWith(TEXT));
+  });
+
+  test('Codex BD review: a folder-scanned montage reads the sidecar the publish step wrote; none = not posted', async () => {
+    const dataDir = mk(); const clips = mk();
+    const day = path.join(clips, '2026-11-21'); mkdirSync(day);
+    const put = (name, music) => {
+      const f = path.join(day, name); writeFileSync(f, Buffer.from(name.repeat(8)));
+      if (music) writeFileSync(`${f}${MUSIC_SIDECAR}`, JSON.stringify({ version: 1, music }));
+      return f;
+    };
+    put('codm_montage_20261121-120000_kills-5_01_v.mp4', { source: 'generated' });
+    put('codm_montage_20261121-120500_kills-6_02_v.mp4', null);
+    put('codm_montage_20261121-121000_kills-7_03_v.mp4', { source: 'user-folder', track: 'x' });
+    const s = scanClipsFolder({ dataDir, folder: clips, probeSeconds: () => 40 });
+    assert.equal(s.rows.length, 3);
+    assert.deepEqual(s.rows[0].music, { source: 'generated' });
+    assert.equal(s.rows[1].music, undefined);
+    const r = await packageUploads({ dataDir, ledgerFile: path.join(dataDir, 'posting', 'ledger.json'), rows: s.rows, profile: {}, ffmpeg: process.execPath });
+    assert.equal(r.packaged.length, 1, JSON.stringify(r.skipped));
+    assert.deepEqual(r.skipped.map((x) => x.reason).sort(), ['music-unknown', 'render-only']);
   });
 });

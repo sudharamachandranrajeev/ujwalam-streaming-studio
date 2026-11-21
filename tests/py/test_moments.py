@@ -188,6 +188,37 @@ class MomentTests(unittest.TestCase):
         with self.assertRaises(self.mo.sa.GuardStop):
             self.mo.frame_pass(self.rec, self.cfg, g)
 
+    def test_one_heavy_job_lock_whatever_the_output_folder(self):
+        """Codex BD review: the moment finder and the song map take the one heavy clip job lock (clip_common.HeavyJobLock,
+        also the detector pass's), so two jobs never run at once, even with outputs in different folders."""
+        import clip_common as cc  # noqa: PLC0415
+        import detector_pass as dp  # noqa: PLC0415
+        import song_map  # noqa: PLC0415
+        self.assertIs(dp.HeavyJobLock, cc.HeavyJobLock)
+        td = tempfile.mkdtemp(prefix="ujw-heavy-")
+        old = tempfile.tempdir
+        tempfile.tempdir = td  # the lock lives in the temp folder: a private one for this test
+        try:
+            with cc.HeavyJobLock(job="detector-pass"):
+                a = os.path.join(td, "a", "m.json")
+                b = os.path.join(td, "b", "s.json")
+                import contextlib  # noqa: PLC0415
+                import io  # noqa: PLC0415
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(self.mo.main(["--recording", self.rec, "--out", a]), 2)
+                    self.assertEqual(song_map.main(["--track", self.rec, "--root", os.path.dirname(self.rec), "--out", b]), 2)
+                self.assertEqual(err.getvalue().count("another heavy clip job is running"), 2, err.getvalue())
+                self.assertFalse(os.path.exists(a) or os.path.exists(b))
+            with open(os.path.join(td, cc.LOCK_NAME), "w", encoding="utf-8") as f:
+                f.write('{"pid": %d, "job": "moments"}' % os.getpid())
+            with self.assertRaises(cc.ClipError):
+                with cc.HeavyJobLock():
+                    pass
+        finally:
+            tempfile.tempdir = old
+            shutil.rmtree(td, ignore_errors=True)
+
     def test_config_rules(self):
         c = self.cfg
         self.assertEqual(c["status"], "unverified")

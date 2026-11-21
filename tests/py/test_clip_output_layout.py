@@ -146,6 +146,37 @@ class PublishTests(unittest.TestCase):
         up = read_json(os.path.join(self.data, "clips", "uploads.json"))["files"]
         self.assertEqual([r.get("thumbnail") for r in up], [True, None], "RP6: posting takes the cover from frame 0")
 
+    def test_music_provenance_goes_to_the_row_and_the_sidecar(self):
+        """Codex BD review (D414): each clip's music record from render.json reaches uploads.json and <video>.music.json;
+        an older entry without the record writes neither (posting then refuses a montage)."""
+        self.assertIsNone(pub.music_provenance({"id": "x"}))
+        self.assertEqual(pub.music_provenance({"music": None}), {"source": "none"})
+        self.assertEqual(pub.music_provenance({"music": {"seed": 1, "total": 9}}), {"source": "generated"})
+        self.assertEqual(pub.music_provenance({"music": {"source": "made-here", "was": "t"}}), {"source": "generated"})
+        self.assertEqual(pub.music_provenance({"music": {"source": "folder", "track": "t1"}}), {"source": "user-folder", "track": "t1"})
+        self.assertEqual(pub.music_provenance({"music": {"source": "ncs", "trackId": "a", "credit": None}}),
+                         {"source": "ncs", "trackId": "a", "credit": None})
+        self.assertIsNone(pub.music_provenance({"music": {"track": "t", "source": "other"}}))
+        recs = {"M01": {"source": "folder", "track": "t1"}, "M02": {"seed": 3, "total": 9.0}, "M03": None}
+        clips = [{"id": c, "start": 0.0, "end": 9.0, "pieces": [{"start": 100.0 * (i + 1), "end": 100.0 * (i + 1) + 9, "kills": 2}],
+                  **({"music": m} if c != "M03" else {}), "files": [{"layout": "montage-v", "file": "montage-v.mp4"}]}
+                 for i, (c, m) in enumerate(recs.items())]
+        mont = os.path.join(self.work, "montage")
+        write(os.path.join(mont, "render.json"), json.dumps({"tool": "clipper.montage", "recording": "practice-h-20261108-185525.mkv", "clips": clips}))
+        write(os.path.join(mont, "report.json"), json.dumps({"results": [{"id": c, "file": "montage-v.mp4", "ok": True} for c in recs]}))
+        for c in recs:
+            write(os.path.join(mont, "clips", c, "montage-v.mp4"))
+        rows = pub.publish(mont, self.clips, self.data, "codm", LAYOUTS, WEIGHTS)
+        self.assertEqual([r.get("music") for r in rows], [{"source": "user-folder", "track": "t1"}, {"source": "generated"}, None])
+        up = read_json(os.path.join(self.data, "clips", "uploads.json"))["files"]
+        self.assertEqual([r.get("music") for r in up], [r.get("music") for r in rows])
+        for r in rows:
+            side = r["file"] + pub.MUSIC_SIDECAR
+            if r.get("music"):
+                self.assertEqual(read_json(side), {"version": 1, "music": r["music"]})
+            else:
+                self.assertFalse(os.path.exists(side))
+
     def test_live_clip_uses_its_wall_time(self):
         ts = WHEN.timestamp()
         rdoc = {"tool": "clipper", "recording": "live-saves", "clips": [

@@ -5,8 +5,8 @@
 //   GET  /ui/api/montage-music  -> { tracks: [{ id, file, artist, title, line, link, source, edited, missing, complete }],
 //                                    folder, folderProblem }
 //   POST /ui/api/montage-music  { op: 'credit', id, credit: { artist, title, line, link } } -> { ok, complete }
-// The folder comes from the saved settings (clips.montageMusic.folder), never from the request. Reading tags is light
-// (no decode), so it is allowed while live.
+// The folder comes from the saved settings (clips.montageMusic.folder), never from the request. The folder is read off
+// air only (Codex BD review); while live (or unknown) the saved credits are listed with a plain note.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { pythonIn } from './record-clips.mjs';

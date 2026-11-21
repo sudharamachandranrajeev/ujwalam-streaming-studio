@@ -17,7 +17,7 @@ finds and times to the frame the moments a beat-locked montage cuts on:
 Each moment: {kind, t, frame, strength (0..1), source, status: "unverified"}. Every game number (zones, thresholds,
 colours) is data in data/games/<game>/moments.json (schema data/schemas/moments.schema.json), never in this file.
 Off air only, guarded decode (style_analyse.Guard: on-air check, frame, wall-clock and memory caps), BelowNormal, one
-job at a time (a lock file next to the output), CPU only. Detector weights are not used (AGENTS.md: weights are
+job at a time (clip_common.HeavyJobLock, shared with every heavy clip job), CPU only. Detector weights are not used (AGENTS.md: weights are
 approved by the user); strength is a plain measure of how clear the signal was. Accuracy on real footage UNVERIFIED.
 
   load_config(game="codm", path=None)
@@ -38,7 +38,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from clip_common import REPO_ROOT as REPO, ClipError, eprint, load_json, lower_own_priority, on_air, write_json_atomic  # noqa: E402
+from clip_common import REPO_ROOT as REPO, ClipError, HeavyJobLock, eprint, load_json, lower_own_priority, on_air, write_json_atomic  # noqa: E402
 import style_analyse as sa  # noqa: E402
 
 KINDS = ("gunshot", "hit", "kill", "killcam", "scope-in", "scope-out", "flick", "jump", "slide", "third-person")
@@ -403,14 +403,6 @@ def probe_seconds(path):
     return sec
 
 
-class _Lock(sa._Lock):  # noqa: SLF001 - same one-job-at-a-time rule as the style analyser
-    def __enter__(self):
-        try:
-            return super().__enter__()
-        except ClipError:
-            raise ClipError("another moment search is running; try again when it finishes") from None
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description="BD1 moment finder (off air only)")
     ap.add_argument("--recording", required=True)
@@ -421,8 +413,7 @@ def main(argv=None):
     lower_own_priority()
     try:
         cfg = load_config(a.game)
-        lock = os.path.join(os.path.dirname(os.path.abspath(a.out or a.recording)), ".moments.lock")
-        with _Lock(lock):
+        with HeavyJobLock(job="moments"):  # Codex review: one heavy clip job at a time, whatever the output folder
             r = find_moments(a.recording, cfg, a.hits)
         if a.out:
             write_json_atomic(a.out, r)

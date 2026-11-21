@@ -29,6 +29,14 @@ export function ffprobeSeconds(file) {
   return r.status === 0 && Number.isFinite(v) && v > 0 ? Number(v.toFixed(3)) : null;
 }
 
+/** clip_publish.py write_music_sidecar: <video>.music.json { version, music } -> the music record, or null. */
+export const MUSIC_SIDECAR = '.music.json';
+export function musicSidecar(file) {
+  const p = `${file}${MUSIC_SIDECAR}`;
+  if (!realFile(p)) return null;
+  try { const j = JSON.parse(readFileSync(p, 'utf8')); return isPlain(j?.music) ? j.music : null; } catch { return null; }
+}
+
 export function scanClipsFolder({ dataDir, folder = clipsFolder(dataDir), probeSeconds = ffprobeSeconds } = {}) {
   let known = [];
   try { const j = JSON.parse(readFileSync(path.join(dataDir, 'clips', 'uploads.json'), 'utf8')); if (Array.isArray(j?.files)) known = j.files.filter((r) => isPlain(r) && typeof r.file === 'string'); } catch { /* none yet */ }
@@ -45,8 +53,11 @@ export function scanClipsFolder({ dataDir, folder = clipsFolder(dataDir), probeS
       if (!m) { if (name.toLowerCase().endsWith('.mp4')) unknown++; continue; }
       if (!realFile(file)) continue;
       const row = byPath.get(norm(file)) ?? byName.get(name.toLowerCase());
-      if (row) { rows.push({ ...row, file }); continue; }
-      rows.push({ file, kind: m[2], label: m[4], seconds: probeSeconds(file), run: FOLDER_RUN, posted: [] });
+      if (row) { const mu = row.music === undefined ? musicSidecar(file) : null; rows.push({ ...row, file, ...(mu ? { music: mu } : {}) }); continue; }
+      // D414 (Codex BD review): the music record the publish step wrote next to the video; none = unknown (a montage
+      // with unknown music is not posted, services/posting/post-text.mjs musicOf)
+      const music = musicSidecar(file);
+      rows.push({ file, kind: m[2], label: m[4], seconds: probeSeconds(file), run: FOLDER_RUN, posted: [], ...(music ? { music } : {}) });
     }
   }
   return { folder, rows, unknown };

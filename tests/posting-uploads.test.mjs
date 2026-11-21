@@ -26,7 +26,7 @@ function setup(rows) {
     const file = path.join(clips, r.name);
     if (r.write !== false) writeFileSync(file, Buffer.from(`${r.name}-${i}`.repeat(8)));
     const { name, write, ...rest } = r;
-    return { file, label: 'x', run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-08T09:00:00.000Z', ...rest };
+    return { file, label: 'x', run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-08T09:00:00.000Z', ...(rest.kind === 'montage' ? { music: { source: 'generated' } } : {}), ...rest }; // D414: a current render's record (made-here music)
   });
   mkdirSync(path.join(dataDir, 'clips'), { recursive: true });
   writeFileSync(path.join(dataDir, 'clips', 'uploads.json'), JSON.stringify({ version: 1, files: out }));

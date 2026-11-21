@@ -56,3 +56,20 @@ Done when: BD1 within 2 frames (PASS, worst 1 frame); BD2 beat grid within 20 ms
 - Detector weights from the clip pack are not used by BD1 yet (kills come from detector hits as listed).
 - Content ID claims on NCS tracks: possible, not tested.
 - The Montage music card was checked through the headless probe only, not by the user in the running studio.
+
+## Codex review fixes (2026-11-21)
+
+| Finding | Fix | Test (result) |
+|---|---|---|
+| P1 a folder-scanned montage had no music record and could post an uncredited or non-NCS song | The render's own record decides: `clip_publish.music_provenance` reads each render.json clip entry's `music` (none, made here, the D411 music folder, NCS) into the uploads.json row and a `<video>.music.json` sidecar; `clips-source.mjs` reads the sidecar when there is no row; `post-text.mjs musicOf` maps it. A montage with no record or an unknown one is not posted (`music-unknown`, plain reason); a music-folder song is render only; made-here music and no music post as before. `montage_music.music_record` is the record BD3 writes for an NCS song. | test_clip_output_layout.py 17/17 (new provenance + sidecar case); montage-music.test.mjs 8/8 (unknown refused, generated posts, user folder render only, folder scan with and without a sidecar). posting-e2e 61/61 and posting-uploads 12/12 with their montage fixtures marked as made-here music. |
+| P1 song map CLI ran without a guard | `song_map` builds a `style_analyse.Guard` from `data/clip/song-map.json` `guard` (on air every 200 sound frames, 120 s, 1500 MB, 60000 frames) used through the decode and forced between every analysis step; GuardStop is not caught | test_song_map.py 9/9 (frame cap, going on air after the decode, wall clock) |
+| P2 song map root optional, open unconstrained | `--root` required; `track_problem`: local fixed drive, no links (`reel_style.local_file_problem`), inside the folder, extension-named demuxer + `protocol_whitelist=file` (`style_analyse.audio_open_kw`: mp3, m4a/mp4 = mov, flac, wav, ogg/opus, aac; anything else refused) | test_song_map.py (track rules: missing folder, network path, removable drive, playlist file) |
+| P2 tag reads used format detection | `read_tags` uses `style_analyse.safe_open_audio`; `scan`/`pick` refuse on air (unknown counts as on air); the studio list shows the saved credits with a plain note while live | test_montage_music.py 10/10 (playlist and text files give no tags; scan and pick refuse on air) |
+| P2 credits keyed by file name | Records keyed by identity: size + SHA-256 of the first MB (bounded read). Same bytes elsewhere keep the credit; other bytes under the same name drop the typed credit and are marked for review (incomplete, so the gate blocks) | test_montage_music.py (credit follows the track, not the name) |
+| P2 lock beside each output | One shared heavy-job lock: `HeavyJobLock` moved from detector_pass.py to clip_common.py (detector_pass re-exports it) and used by moments.py and song_map.py | test_moments.py 9/9 (both refuse while the lock is held, different output folders); test_clip_detector_pass.py 37/37 |
+
+Also merged `claude/alpha0-d1` (6d703ed, fonts + manifest). `tests/package-alpha.test.mjs` "repo file set" passes: the new data files are under the shipped globs (`data/clip/*.json`, `data/games/<id>/*.json`); the schemas are read only by tests. Two Install-Ujwalam.ps1 cases of that file fail only because the test runner sets `UJWALAM_DATA_ROOT` (the installer then puts data there instead of `<install>\data`); not caused by this branch.
+
+Other tests re-run after the fixes: analytics 12, learning-mix 26 (node) and 9 (python), posting-auto-d375 51, posting-backlog-order 5, posting-preview 12, posting-pt5-settings 11, posting-schedule 28, studio-ui-growth 7. All passed.
+
+Still UNVERIFIED: older montages without a music record are now held back (`music-unknown`) until re-rendered; won-reel and impact-play clips without a record still post as before (only montages fail closed); the Montage music card does not yet show the "file changed, check the credit" note (it shows the credit as incomplete).

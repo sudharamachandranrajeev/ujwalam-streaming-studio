@@ -103,6 +103,7 @@ export function creditProblem(c, cfg = montageCfg()) {
  */
 export function musicCredit(mm, cfg = montageCfg()) {
   if (mm === undefined || mm === null) return { use: 'none' };
+  if (mm === 'unknown') return { use: 'refuse', reason: "not posted: where this montage's music came from is not known (made before music records were kept); it stays in your clips folder", renderOnly: false, unknown: true };
   if (!isPlain(mm) || !cfg) return { use: 'refuse', reason: 'the montage music record cannot be read', renderOnly: false };
   if (mm.library !== cfg.library) return { use: 'refuse', reason: 'render only, not auto-posted: the montage song is not from your NCS library', renderOnly: true };
   const bad = creditProblem(mm.credit, cfg);
@@ -110,6 +111,24 @@ export function musicCredit(mm, cfg = montageCfg()) {
   const c = { artist: mm.credit.artist.trim(), title: mm.credit.title.trim(), line: (mm.credit.line ?? '').trim(), link: (mm.credit.link ?? '').trim() };
   const text = cfg.credit.template.map((s) => s.replace(/\{(artist|title|line|link)\}/g, (_m, k) => c[k])).filter((s) => s.trim()).join('\n');
   return { use: 'credit', text };
+}
+/**
+ * Codex BD review: a clip row's music, from the render's own record (row.music: clip_publish.py music_provenance, in
+ * uploads.json or the <video>.music.json sidecar a clips-folder scan reads), as musicCredit's input. Made-here music
+ * and no music -> undefined (postable); the NCS library -> { library: 'ncs', trackId, credit }; the D411 music folder
+ * -> { library: null } (render only); a montage whose music is missing or of an unknown kind -> 'unknown' (refused).
+ * Other kinds without a record are postable as before (their music, when any, is the made-here bed or none).
+ */
+export function musicOf(row) {
+  if (!isPlain(row)) return 'unknown';
+  if (row.montageMusic !== undefined) return row.montageMusic;
+  const m = row.music;
+  if (m === undefined || m === null) return row.kind === 'montage' ? 'unknown' : undefined;
+  if (!isPlain(m)) return 'unknown';
+  if (m.source === 'generated' || m.source === 'none') return undefined;
+  if (m.source === 'ncs') return { library: 'ncs', trackId: m.trackId, credit: m.credit ?? null };
+  if (m.source === 'user-folder') return { library: null };
+  return 'unknown';
 }
 /** Fail closed before approve and upload: a post with a montage track must still carry its credit text. null = fine. */
 export function creditMissing(post) {

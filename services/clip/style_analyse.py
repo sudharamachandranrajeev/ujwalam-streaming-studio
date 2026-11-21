@@ -165,6 +165,34 @@ def safe_open(path):
     return c
 
 
+# Codex BD review: songs (BD2 song map, the montage-music tag read) are opened the same way: the demuxer named from the
+# extension, the file protocol only, mov drefs off. Anything else is refused.
+_AUDIO_DEMUX = {".mp3": "mp3", ".m4a": "mov", ".mp4": "mov", ".flac": "flac", ".wav": "wav", ".ogg": "ogg", ".opus": "ogg", ".aac": "aac"}
+
+
+def audio_open_kw(path):
+    fmt = _AUDIO_DEMUX.get(os.path.splitext(str(path))[1].lower())
+    if fmt is None:
+        raise ClipError(f"{os.path.basename(str(path))}: only mp3, m4a, mp4, flac, wav, ogg, opus and aac songs are read")
+    opts = {"protocol_whitelist": "file"}
+    if fmt == "mov":
+        opts["enable_drefs"] = "0"
+    return {"format": fmt, "options": opts}
+
+
+def safe_open_audio(path):
+    import av  # noqa: PLC0415
+    kw = audio_open_kw(path)
+    try:
+        c = av.open(path, **kw)
+    except av.error.FFmpegError as e:
+        raise ClipError(f"{os.path.basename(path)}: not a song this PC can read") from e
+    if c.format.name not in (kw["format"], _DEMUX_NAMES.get(kw["format"])):  # the named demuxer, nothing else
+        c.close()
+        raise ClipError(f"{os.path.basename(path)}: not an {kw['format']} file")
+    return c
+
+
 def probe_example(path, cfg):
     """Length and size from the container before anything is decoded; over the limits = refused. -> seconds."""
     import av  # noqa: PLC0415

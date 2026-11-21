@@ -78,7 +78,7 @@ class SongMapTests(unittest.TestCase):
         for k, spec in TRACKS.items():
             p = os.path.join(cls.tmp, f"{k}.wav")
             cls.truth[k] = make_track(p, spec["bpm"], spec["phase"], spec["gains"], spec["bass"])
-            cls.res[k] = song_map.song_map(p, live=lambda: False)
+            cls.res[k] = song_map.song_map(p, cls.tmp, live=lambda: False)
 
     @classmethod
     def tearDownClass(cls):
@@ -136,17 +136,52 @@ class SongMapTests(unittest.TestCase):
     def test_refused_on_air(self):
         p = os.path.join(self.tmp, "a.wav")
         with self.assertRaises(self.sm.ClipError):
-            self.sm.song_map(p, live=lambda: True)
+            self.sm.song_map(p, self.tmp, live=lambda: True)
         with self.assertRaises(self.sm.ClipError):
-            self.sm.song_map(p, live=lambda: None)
+            self.sm.song_map(p, self.tmp, live=lambda: None)
 
     def test_root_rule(self):
         other = tempfile.mkdtemp(prefix="ujw-songmap-root-")
         try:
             with self.assertRaises(self.sm.ClipError):
-                self.sm.song_map(os.path.join(self.tmp, "a.wav"), root=other, live=lambda: False)
+                self.sm.song_map(os.path.join(self.tmp, "a.wav"), other, live=lambda: False)
         finally:
             shutil.rmtree(other, ignore_errors=True)
+
+    def test_track_rules(self):
+        """Codex BD review: the folder is required; network paths, other drives, links and unknown extensions are refused."""
+        p = os.path.join(self.tmp, "a.wav")
+        self.assertIsNone(self.sm.track_problem(p, self.tmp))
+        self.assertIn("required", self.sm.track_problem(p, None))
+        self.assertIn("required", self.sm.track_problem(p, ""))
+        self.assertIn("network", self.sm.track_problem("\\\\server\\share\\a.wav", "\\\\server\\share"))
+        self.assertIn("fixed drive", self.sm.track_problem(p, self.tmp, drive_type=lambda r: 2))
+        txt = os.path.join(self.tmp, "list.m3u")
+        with open(txt, "w", encoding="utf-8") as fh:
+            fh.write("a.wav\n")
+        self.assertIn("only mp3", self.sm.track_problem(txt, self.tmp))
+        with self.assertRaises(self.sm.ClipError):
+            self.sm.song_map(txt, self.tmp, live=lambda: False)
+
+    def test_guard_runs_through_the_job_and_is_not_caught(self):
+        """The guard stops the decode (frame cap) and the analysis steps (on air after the decode); GuardStop comes out."""
+        import style_analyse as sa  # noqa: PLC0415
+        p = os.path.join(self.tmp, "b.wav")
+        cfg = self.sm.load_config()
+        small = dict(cfg, guard=dict(cfg["guard"], maxFrames=3))
+        with self.assertRaises(sa.GuardStop):
+            self.sm.song_map(p, self.tmp, cfg=small, live=lambda: False)
+        state = {"n": 0}
+
+        def live():  # off air for the start check, then on air: the first step after the decode stops it
+            state["n"] += 1
+            return state["n"] > 1
+        big = dict(cfg, guard=dict(cfg["guard"], checkEveryFrames=10 ** 9))
+        with self.assertRaises(sa.GuardStop):
+            self.sm.song_map(p, self.tmp, cfg=big, live=live)
+        slow = dict(cfg, guard=dict(cfg["guard"], maxWallSec=-1))
+        with self.assertRaises(sa.GuardStop):
+            self.sm.song_map(p, self.tmp, cfg=slow, live=lambda: False)
 
 
 if __name__ == "__main__":

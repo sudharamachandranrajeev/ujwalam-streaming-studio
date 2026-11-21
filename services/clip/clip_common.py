@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 # No console window on Windows (D191): every subprocess call passes **NO_WINDOW.
@@ -682,3 +683,70 @@ def media_info(ffprobe, path):
 
 def eprint(*a):
     print(*a, file=sys.stderr)
+
+
+LOCK_NAME = "ujwalam-clip-heavy.lock"
+
+
+# ---------------------------------------------------------------- one heavy job
+
+def _pid_alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+class HeavyJobLock:
+    """One heavy clip job at a time across processes (user limit 2026-10-27): the detector pass, the BD1 moment
+    finder, the BD2 song map and the montage-music scan share this one lock file. A stale lock (dead pid) is taken."""
+
+    def __init__(self, folder=None, job="detector-pass"):
+        self.job = job
+        self.path = os.path.join(folder or tempfile.gettempdir(), LOCK_NAME)
+        self.held = False
+
+    def __enter__(self):
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    with open(self.path, encoding="utf-8") as f:
+                        pid = json.load(f).get("pid")
+                except (OSError, ValueError, AttributeError):
+                    pid = None
+                if _pid_alive(pid):
+                    raise ClipError(f"another heavy clip job is running (pid {pid}); one at a time") from None
+                try:
+                    os.remove(self.path)
+                except OSError:
+                    pass
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"pid": os.getpid(), "job": self.job, "at": time.time()}, f)
+            self.held = True
+            return self
+        raise ClipError("could not take the heavy-job lock")
+
+    def __exit__(self, *exc):
+        if self.held:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+            self.held = False
+        return False

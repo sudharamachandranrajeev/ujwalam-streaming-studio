@@ -12,11 +12,17 @@
 - transients: the strongest onsets (a gunshot can land on them), with whether each is on a beat.
 
 Numbers only (schema data/schemas/song-map.schema.json); settings in data/clip/song-map.json. Off air only, guarded
-decode (style_analyse.Guard), CPU. Checked on synthetic tracks only; real tracks UNVERIFIED.
+decode, CPU, one heavy clip job at a time (clip_common.HeavyJobLock). Codex BD review: the track must be a plain file
+on this PC's own fixed drive inside the given music folder (reel_style.local_file_problem + the music library's
+folder rule); it is opened with the demuxer named from its extension and the file protocol only
+(style_analyse.audio_open_kw); the guard (style_analyse.Guard: on air every N sound frames, wall clock, memory, frame
+cap) runs through the decode and between every analysis step, and its stop is never caught. Checked on synthetic
+tracks only; real tracks UNVERIFIED.
 
   load_config(path=None)
-  song_map(path, cfg=None, root=None, live=on_air, guard=None) -> dict
-  CLI: song_map.py --track T [--root FOLDER] [--out map.json]
+  make_guard(cfg, live) -> style_analyse.Guard
+  song_map(path, root, cfg=None, live=on_air, guard=None) -> dict
+  CLI: song_map.py --track T --root FOLDER [--out map.json]
 """
 
 from __future__ import annotations
@@ -31,8 +37,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from clip_common import CLIP_DATA, ClipError, eprint, load_json, lower_own_priority, on_air, write_json_atomic  # noqa: E402
+from clip_common import CLIP_DATA, ClipError, HeavyJobLock, eprint, load_json, lower_own_priority, on_air, write_json_atomic  # noqa: E402
 import music_library as ml  # noqa: E402
+import style_analyse as sa  # noqa: E402
 
 CONFIG_FILE = os.path.join(CLIP_DATA, "song-map.json")
 SECTION_KINDS = ("intro", "build", "drop", "breakdown", "outro")
@@ -206,26 +213,56 @@ def sections(bar_db, bar_t, dur, cfg):
     return res
 
 
-def song_map(path, cfg=None, root=None, live=on_air, guard=None, open_kw=None):
+def make_guard(cfg, live):
+    g = cfg["guard"]
+    return sa.Guard({"guard": {"checkEveryFrames": g["checkEveryFrames"], "maxWallSecPerExample": g["maxWallSec"],
+                               "maxMemMb": g["maxMemMb"]}}, live, max_frames=int(g["maxFrames"]))
+
+
+def track_problem(path, root, drive_type=None):
+    """None when the track may be read; else why not, in plain words."""
+    import reel_style as rs  # noqa: PLC0415 - the drive and link rule lives there
+    if not isinstance(root, str) or not root:
+        return "the music folder is required"
+    p = rs.local_file_problem(path, drive_type)
+    if p:
+        return p
+    if not ml.inside(path, root):
+        return f"{os.path.basename(path)}: not a plain file inside the music folder (links are not followed)"
+    try:
+        sa.audio_open_kw(path)
+    except ClipError as e:
+        return str(e)
+    return None
+
+
+def song_map(path, root, cfg=None, live=on_air, guard=None, drive_type=None):
     np = _np()
     cfg = cfg or load_config()
-    if live is not None and live() is not False:
+    if live is None or live() is not False:
         raise ClipError("the studio is live or recording (or that cannot be told): songs are mapped off air only")
-    if root is not None:
-        ml._open_checked(path, root)  # noqa: SLF001 - same folder rule as the music library
+    bad = track_problem(path, root, drive_type)
+    if bad:
+        raise ClipError(bad)
+    guard = guard or make_guard(cfg, live)
+    step = lambda: guard.tick(force=True)  # noqa: E731 - between the analysis steps: time, memory, on air
     mcfg = ml.load_config()
     sr = ml.SR
-    mono = ml.decode(path, sr, 1, max_sec=float(cfg["maxAnalyseSec"]), open_kw=open_kw, guard=guard)[:, 0]
+    ml._open_checked(path, root)  # noqa: SLF001 - right before opening: still a plain file inside the folder
+    mono = ml.decode(path, sr, 1, max_sec=float(cfg["maxAnalyseSec"]), open_kw=sa.audio_open_kw(path), guard=guard)[:, 0]
+    step()
     dur = len(mono) / sr
     if dur < float(mcfg["minTrackSec"]):
         raise ClipError(f"{os.path.basename(path)}: shorter than {mcfg['minTrackSec']:g} s")
     env0, rate0, _c = ml._onsets(mono, sr)  # noqa: SLF001 - the library's tempo, then our own fit
     bpm0, off0 = ml.tempo(env0, rate0, mcfg)
+    step()
     fft, hop = int(cfg["fft"]), int(cfg["hop"])
     flux, low = envelope(mono, sr, fft, hop, cfg["lowBandHz"])
     pk = _peaks(flux)
     times = [refine(mono, sr, int(i), fft, hop, cfg) for i in pk]
     strength = [float(flux[i]) for i in pk]
+    step()
     # the grid is fitted to the low-band (kick) onsets: bright off-beat hits (hats) would pull it half a beat off
     lflux = np.concatenate([[0.0], np.maximum(0.0, np.diff(np.log1p(low / (float(np.median(low)) + 1e-12))))])
     lpk = _peaks(lflux)
@@ -234,6 +271,7 @@ def song_map(path, cfg=None, root=None, live=on_air, guard=None, open_kw=None):
     period, phase, rms, inl = fit_grid(ltimes, lw, bpm0, off0, cfg)
     if rms is None:  # no clear kick: fit to every onset
         period, phase, rms, inl = fit_grid(times, strength, bpm0, off0, cfg)
+    step()
     frame_t = (np.arange(len(low)) * hop + fft / 2.0) / sr
 
     def kick(ph):  # low-band energy right after each beat of a grid with this phase
@@ -265,6 +303,7 @@ def song_map(path, cfg=None, root=None, live=on_air, guard=None, open_kw=None):
         t1 = bar_t[i + 1] if i + 1 < len(bar_t) else min(dur, t0 + bpb * period)
         seg = mono[int(t0 * sr):int(t1 * sr)].astype(np.float64)
         bar_db.append(float(20 * math.log10(math.sqrt(float(np.mean(seg * seg)) + 1e-12))) if len(seg) else -120.0)
+    step()
     secs = sections(bar_db, bar_t, dur, cfg)
     drops = [s[1] for s in secs if s[0] == "drop"]
     tc = cfg["transients"]
@@ -285,12 +324,13 @@ def song_map(path, cfg=None, root=None, live=on_air, guard=None, open_kw=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="BD2 song map (off air only)")
     ap.add_argument("--track", required=True)
-    ap.add_argument("--root", help="the music folder the track must be inside (links are not followed)")
+    ap.add_argument("--root", required=True, help="the music folder the track must be inside (local fixed drive, no links)")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     lower_own_priority()
     try:
-        r = song_map(a.track, root=a.root)
+        with HeavyJobLock(job="song-map"):
+            r = song_map(a.track, a.root)
         if a.out:
             write_json_atomic(a.out, r)
             print(json.dumps({"ok": True, "bpm": r["bpm"], "drops": r["drops"], "out": a.out}))
