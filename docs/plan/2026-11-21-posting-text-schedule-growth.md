@@ -34,6 +34,9 @@ overtime."
   (`data/games/<id>/`), mode and map (OCR), kills, streak / medal names, multi-kill spacing, match result, round,
   clutch (last alive), weapon if detected, session date. Only facts with evidence are used; a missing fact drops the
   line that needs it, never a guess.
+- Reuse: `services/clip/reel_thumbnail.py facts(reel)` already returns the known {medal, killsText, result, mode}
+  for each reel (medal from the detectors, result and mode from matches.json); clip_publish carries them into
+  post.json `source.facts` instead of computing them a second time. The game id comes from the session's game profile.
 - Text pools as data: `data/games/<id>/posting.json` (per game: names of modes, medals, hashtags, tags) and
   `data/posting/templates.json` v2 (per kind: many title and description lines, each naming the facts it needs).
   Seeded pick, no-repeat-last-N over the last posts (settled "Pools" rule); title within YouTube's length limit from
