@@ -46,11 +46,20 @@ export const OFL_FONTS = Object.freeze({
   'data/fonts/Inter-Bold.ttf': '288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f',
   'data/fonts/Inter-Regular.ttf': '40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82',
   'data/fonts/Inter-SemiBold.ttf': '78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3',
+  // BeatDrop titles, HUD text and captions (D413 item 3, user yes 2026-11-21); google/fonts @ 06bfe0d6
+  'data/fonts/Anton-Regular.ttf': 'a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab',
+  'data/fonts/ChakraPetch-Bold.ttf': '65fbf76d95651697275e19db4d717c0e95a789ddd3476478b05292104db278a0',
+  'data/fonts/ChakraPetch-SemiBold.ttf': '45264de3204ddbd5fb3e14a2402acd5c630d16650ae5fc221d2c52da46a6734b',
+  'data/fonts/Rajdhani-Bold.ttf': '691470dd3286a14e9677940d0bf75796179841ba5215cbda1a2c8910a3226afd',
+  'data/fonts/Rajdhani-SemiBold.ttf': '94bbd25a18ca665999feb05a537de9fd2b860dcfb78bbe9ca00270825bf235da',
 });
 export const OFL_FONT_LICENCE_SHA = Object.freeze({
   'data/fonts/Barlow-OFL.txt': '186d750eb496a4c17a76385f82be6aea2ac1cf2de074a811d63786cf374ea73f',
   'data/fonts/Exo2-OFL.txt': 'cecc43de8bf5449d88fb03a6d33b0b569df304545d3b57760863e833a6434d45',
   'data/fonts/Inter-OFL.txt': '262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a',
+  'data/fonts/Anton-OFL.txt': 'eee1d24ff8f553eb732237c7dd9b945a78313ed49ad6de02872a47277741b44a',
+  'data/fonts/ChakraPetch-OFL.txt': '13831d02389d917d22fcfa6c79f98f8acbf61d230add0e73a4d4dc5f3bfb9e56',
+  'data/fonts/Rajdhani-OFL.txt': 'f62ef357d3a1c3d27edd35a6e1ba350e8a8d13499797964eeadefbf0b3b15d1f',
 });
 export const OFL_FONT_LICENCES = Object.freeze(Object.keys(OFL_FONT_LICENCE_SHA));
 export const REPO_FILES = Object.freeze([
@@ -75,6 +84,8 @@ export const REPO_FILES = Object.freeze([
   'data/profile.example.json', 'data/profile.schema.json',
   ...Object.keys(OFL_FONTS), ...OFL_FONT_LICENCES, // bundled theme fonts, the studio loads them from data/fonts (D344)
   'data/release/alpha.json',
+  // posting text style and growth timing (PT1/PT5, D409/D410): read at run time, missing from the package until now
+  'data/posting/text-style.json', 'data/posting/growth-timing.json',
   'tools/package/run-installed.mjs', 'tools/package/zip.mjs',
   'tools/package/settings-backup.mjs', // settings backup before an update, restore on rollback (Install-Ujwalam.ps1)
   // Qt shell exe path (services/studio-ui/launch.mjs imports EXE and qtDir)
