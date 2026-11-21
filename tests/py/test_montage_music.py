@@ -179,5 +179,107 @@ class MontageMusicTests(unittest.TestCase):
         self.assertEqual(mm.read_tags(os.path.join(self.folder, "untitled.mp3")), {})
 
 
+BAR = "｜"
+NCS_OK = f"Aero Chord feat. DDARK - Shootin Stars {BAR} Trap {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus"
+NCS_NOGENRE_PLAIN = "Cartoon, Jéja - C U Again ft. Mikk Mäe (Cartoon, Jéja, Futuristik VIP) | NCS - Copyright Free Music [NJNp6DnAAIo].opus"
+NCS_HOUSE = f"1aevne, baby.murcielaga - i just like you {BAR} Outsider House {BAR} NCS - Copyright Free Music [gvvMAxH3yV4].opus"
+
+
+class NcsFilenameTests(unittest.TestCase):
+    """D417: strict NCS file-name credit."""
+
+    def setUp(self):
+        self.cfg = mm.load_config()
+
+    def test_accept(self):
+        a = mm.parse_ncs_name(NCS_OK, self.cfg)
+        self.assertEqual(a, {"artist": "Aero Chord feat. DDARK", "title": "Shootin Stars", "genre": "Trap", "youtubeId": "PTF5xgT-pm8"})
+        b = mm.parse_ncs_name(NCS_NOGENRE_PLAIN, self.cfg)
+        self.assertEqual((b["artist"], b["title"], b["youtubeId"], "genre" in b),
+                         ("Cartoon, Jéja", "C U Again ft. Mikk Mäe (Cartoon, Jéja, Futuristik VIP)", "NJNp6DnAAIo", False))
+        c = mm.parse_ncs_name(NCS_HOUSE, self.cfg)
+        self.assertEqual((c["artist"], c["genre"]), ("1aevne, baby.murcielaga", "Outsider House"))
+        self.assertIsNotNone(mm.parse_ncs_name(NCS_OK.replace(BAR, "|"), self.cfg))
+
+    def test_reject_table(self):
+        ok = NCS_OK
+        rej = {
+            "no marker": f"A - B {BAR} Trap {BAR} Copyright Free Music [PTF5xgT-pm8].opus",
+            "marker wrong case": ok.replace("NCS - Copyright", "ncs - copyright"),
+            "no id": f"A - B {BAR} Trap {BAR} NCS - Copyright Free Music.opus",
+            "short id": ok.replace("PTF5xgT-pm8", "PTF5xgT-pm"),
+            "long id": ok.replace("PTF5xgT-pm8", "PTF5xgT-pm8x"),
+            "bad id char": ok.replace("PTF5xgT-pm8", "PTF5xgT-p!8"),
+            "junk after": ok.replace(".opus", " (1).opus"),
+            "junk before id": ok.replace("[PTF", "x [PTF"),
+            "extra bar": f"A - B {BAR} X {BAR} Trap {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus",
+            "no artist split": f"Just A Title {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus",
+            "bidi": ok.replace("Shootin", "Shoot‮in"),
+            "isolate": ok.replace("Shootin", "⁧Shootin"),
+            "zero width": ok.replace("Aero", "Ae​ro"),
+            "control": ok.replace("Shootin", "Shoot\nin"),
+            "brace": ok.replace("Shootin", "{Shootin}"),
+            "angle": ok.replace("Shootin", "<b>Shootin"),
+            "wrong ext": ok.replace(".opus", ".txt"),
+            "no ext": ok[:-5],
+            "plain own": "Alpha Artist - First Song [NCS Release].mp3",
+            "long name": "A" * 400 + f" - B {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus",
+            "long artist": "A" * 130 + f" - B {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus",
+            "long title": "A - " + "B" * 170 + f" {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus",
+            "long genre": f"A - B {BAR} " + "G" * 70 + f" {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus",
+            "not a string": None,
+        }
+        for why, name in rej.items():
+            self.assertIsNone(mm.parse_ncs_name(name, self.cfg), why)
+
+    def test_disabled_by_data(self):
+        cfg = dict(self.cfg, ncsFilename=dict(self.cfg["ncsFilename"], enabled=False))
+        self.assertIsNone(mm.parse_ncs_name(NCS_OK, cfg))
+
+    def test_credit_text_exact(self):
+        n = mm.parse_ncs_name(NCS_OK, self.cfg)
+        c = mm.ncs_credit(n, self.cfg)
+        self.assertEqual(mm.credit_text(c, self.cfg, "ncs-filename"),
+                         "Music: Aero Chord feat. DDARK - Shootin Stars [NCS Release]\nMusic provided by NoCopyrightSounds\n"
+                         "Watch: https://youtu.be/PTF5xgT-pm8")
+        # another origin keeps the old template
+        self.assertTrue(mm.credit_text(c, self.cfg).startswith("Song: "))
+
+    def test_scan_pick_record_and_sidecar_fields(self):
+        tmp = tempfile.mkdtemp(prefix="ujw-ncs-")
+        try:
+            folder = os.path.join(tmp, "m")
+            os.makedirs(folder)
+            for n in (NCS_OK, "My Own Song.mp3"):
+                with open(os.path.join(folder, n), "wb") as f:
+                    f.write(n.encode("utf-8"))
+            rows = {r["file"]: r for r in mm.view(mm.scan(os.path.join(tmp, "d"), folder, self.cfg, tags=lambda p: {}, live=OFF), self.cfg)}
+            self.assertEqual((rows[NCS_OK]["source"], rows[NCS_OK]["complete"]), ("ncs-filename", True))
+            self.assertEqual(rows[NCS_OK]["link"], "https://youtu.be/PTF5xgT-pm8")
+            self.assertEqual(rows["My Own Song.mp3"]["source"], "none")
+            tr = mm.pick(os.path.join(tmp, "d"), folder, {"mode": "fixed", "fixedTrack": rows[NCS_OK]["id"], "folder": folder},
+                         ["s"], self.cfg, live=OFF)
+            rec = mm.music_record(tr, self.cfg)
+            self.assertEqual(rec["source"], "ncs-filename")
+            self.assertEqual(rec["ncs"], {"artist": "Aero Chord feat. DDARK", "title": "Shootin Stars", "genre": "Trap", "youtubeId": "PTF5xgT-pm8"})
+            self.assertEqual(rec["credit"]["link"], "https://youtu.be/PTF5xgT-pm8")
+            # a tampered stored record cannot change the credit: it is re-read from the file name
+            tr2 = dict(tr, credit={"artist": "Evil", "title": "X", "line": "L", "link": "https://evil.example/"})
+            self.assertEqual(mm.music_record(tr2, self.cfg)["credit"]["artist"], "Aero Chord feat. DDARK")
+            # a record whose file name no longer parses has no credit (never sent)
+            self.assertIsNone(mm.music_record(dict(tr, file="renamed.opus"), self.cfg)["credit"])
+            # the publish step keeps the source and the parsed fields for the sidecar
+            import clip_publish as cp  # noqa: PLC0415
+            prov = cp.music_provenance({"music": rec})
+            self.assertEqual((prov["source"], prov["trackId"], prov["ncs"]["youtubeId"]), ("ncs-filename", tr["id"], "PTF5xgT-pm8"))
+            # an edited credit becomes a plain "ncs" record again
+            mm.set_credit(os.path.join(tmp, "d"), tr["id"], {"artist": "A", "title": "B", "line": "L", "link": ""}, self.cfg)
+            edited = mm.load_credits(os.path.join(tmp, "d"), self.cfg)["tracks"][tr["id"]]
+            self.assertNotIn("ncs", edited)
+            self.assertEqual(edited["source"], "edited")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

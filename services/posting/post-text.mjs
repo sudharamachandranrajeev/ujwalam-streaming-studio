@@ -87,7 +87,7 @@ let mmCfg = null;
 const montageCfg = () => (mmCfg ??= readJson(MONTAGE_MUSIC_FILE));
 const CREDIT_BAD = /[\u0000-\u001f\u007f<>{}]/;
 /** The plain-word reason a credit is not usable, or null. */
-export function creditProblem(c, cfg = montageCfg()) {
+export function creditProblem(c, cfg = montageCfg(), origin = null) {
   if (!cfg) return 'the montage music settings are missing';
   if (!isPlain(c)) return 'the song has no credit (artist and title)';
   const mx = cfg.credit.maxChars;
@@ -96,6 +96,7 @@ export function creditProblem(c, cfg = montageCfg()) {
     const v = c[k] ?? '';
     if (typeof v !== 'string' || v.length > n || CREDIT_BAD.test(v)) return `the song credit's ${k} is not plain text of at most ${n} characters`;
   }
+  if (origin && !(typeof c.link === 'string' && c.link.startsWith(cfg.ncsFilename.linkPrefix) && /^[A-Za-z0-9_-]{11}$/.test(c.link.slice(cfg.ncsFilename.linkPrefix.length)))) return "the NCS song credit's link is not a YouTube link";
   if (c.link && !/^https:\/\/[A-Za-z0-9.-]+(\/\S*)?$/.test(c.link)) return "the song credit's link must start with https://";
   return null;
 }
@@ -108,10 +109,11 @@ export function musicCredit(mm, cfg = montageCfg()) {
   if (mm === 'unknown') return { use: 'refuse', reason: "re-render to post: the song's source is not known", renderOnly: false, unknown: true };
   if (!isPlain(mm) || !cfg) return { use: 'refuse', reason: 'the montage music record cannot be read', renderOnly: false };
   if (mm.library !== cfg.library) return { use: 'refuse', reason: 'render only, not auto-posted: the montage song is not from your NCS library', renderOnly: true };
-  const bad = creditProblem(mm.credit, cfg);
+  const origin = cfg.ncsFilename && mm.origin === cfg.ncsFilename.source ? mm.origin : null;
+  const bad = creditProblem(mm.credit, cfg, origin);
   if (bad) return { use: 'refuse', reason: `not sent: ${bad}. Add it in Settings > Clips > Montage music.`, renderOnly: false };
   const c = { artist: mm.credit.artist.trim(), title: mm.credit.title.trim(), line: (mm.credit.line ?? '').trim(), link: (mm.credit.link ?? '').trim() };
-  const text = cfg.credit.template.map((s) => s.replace(/\{(artist|title|line|link)\}/g, (_m, k) => c[k])).filter((s) => s.trim()).join('\n');
+  const text = (origin ? cfg.ncsFilename.template : cfg.credit.template).map((s) => s.replace(/\{(artist|title|line|link)\}/g, (_m, k) => c[k])).filter((s) => s.trim()).join('\n');
   return { use: 'credit', text };
 }
 /**
@@ -129,6 +131,7 @@ export function musicOf(row, { legacyMadeHere = false } = {}) {
   if (!isPlain(m)) return 'unknown';
   if (m.source === 'generated' || m.source === 'none') return undefined;
   if (m.source === 'ncs') return { library: 'ncs', trackId: m.trackId, credit: m.credit ?? null };
+  if (m.source === 'ncs-filename') return { library: 'ncs', origin: 'ncs-filename', trackId: m.trackId, credit: m.credit ?? null };
   if (m.source === 'user-folder') return { library: null };
   return 'unknown';
 }
@@ -193,6 +196,7 @@ export function renderMusic(rdoc, clipId) {
   if (m === null) return { source: 'none' };
   if (!isPlain(m)) return { source: 'unknown' };
   if (m.source === 'ncs') return { source: 'ncs', trackId: m.trackId, credit: m.credit ?? null };
+  if (m.source === 'ncs-filename') return { source: 'ncs-filename', trackId: m.trackId, credit: m.credit ?? null, ncs: m.ncs ?? null };
   if (m.source === 'folder') return { source: 'user-folder', track: m.track };
   if (m.source === 'made-here' || (m.source === undefined && !('track' in m) && 'seed' in m)) return { source: 'generated' };
   return { source: 'unknown' };

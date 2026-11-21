@@ -43,6 +43,8 @@ import style_analyse as sa  # noqa: E402
 CONFIG_FILE = os.path.join(CLIP_DATA, "montage-music.json")
 ID = re.compile(r"^[0-9a-f]{16}$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f<>{}]")
+BIDI = re.compile("[؜​-‏‪-‮⁠-⁩﻿]")
+NCS_PART = "[^|｜]"
 NAME = re.compile(r"^(?P<artist>.+?)\s+-\s+(?P<title>.+?)\s*(?:\[(?P<tag>[^\]]*)\])?\s*$")
 
 
@@ -161,9 +163,11 @@ def complete(c, cfg=None):
     return isinstance(c, dict) and not credit_problems({k: c.get(k, "") for k in ("artist", "title", "line", "link")}, cfg)
 
 
-def credit_text(c, cfg=None):
+def credit_text(c, cfg=None, origin=None):
+    """The description lines. origin "ncs-filename" (D417) uses cfg ncsFilename.template, else credit.template."""
     cfg = cfg or load_config()
-    lines = [s.format(**{k: c.get(k, "") for k in ("artist", "title", "line", "link")}) for s in cfg["credit"]["template"]]
+    tpl = cfg["ncsFilename"]["template"] if origin == cfg["ncsFilename"]["source"] else cfg["credit"]["template"]
+    lines = [s.format(**{k: c.get(k, "") for k in ("artist", "title", "line", "link")}) for s in tpl]
     return "\n".join(s for s in lines if s.strip())
 
 
@@ -173,6 +177,41 @@ def from_name(stem, cfg):
         return None
     return {"artist": m.group("artist").strip(), "title": m.group("title").strip(),
             "ncsTagged": bool(m.group("tag") and cfg["credit"]["nameTag"].lower() in m.group("tag").lower())}
+
+
+def parse_ncs_name(name, cfg=None):
+    """D417: strict parse of an NCS yt-dlp file name -> {artist, title, genre?, youtubeId} or None (the song stays "your
+    own music": never auto-posted). The whole name must match '<Artist> - <Title> | [<Genre> | ]NCS - Copyright Free
+    Music [<11-char id>].<ext>' (bar U+FF5C or |). Untrusted text: control, bidi, zero-width, < > { } and over-long
+    parts reject the name (nothing is stripped, so the credit is always the file's own text)."""
+    cfg = cfg or load_config()
+    n = cfg.get("ncsFilename") or {}
+    if not n.get("enabled") or not isinstance(name, str) or len(name) > int(n["maxNameChars"]):
+        return None
+    if CONTROL.search(name) or BIDI.search(name):
+        return None
+    stem, ext = os.path.splitext(name)
+    if ext.lower() not in cfg["extensions"]:
+        return None
+    bar = "[|｜]"
+    pat = (f"(?P<artist>{NCS_PART}+?) - (?P<title>{NCS_PART}+?) {bar} (?:(?P<genre>[^|｜\\[\\]]+?) {bar} )?"
+           + re.escape(n["marker"]) + r" \[(?P<id>[A-Za-z0-9_-]{11})\]")
+    m = re.fullmatch(pat, stem)
+    if not m:
+        return None
+    mx = cfg["credit"]["maxChars"]
+    artist, title, genre = m.group("artist").strip(), m.group("title").strip(), (m.group("genre") or "").strip()
+    if not artist or not title or len(artist) > mx["artist"] or len(title) > mx["title"] or len(genre) > int(n["maxGenreChars"]):
+        return None
+    out = {"artist": artist, "title": title, "youtubeId": m.group("id")}
+    if genre:
+        out["genre"] = genre
+    return out
+
+
+def ncs_credit(ncs, cfg):
+    n = cfg["ncsFilename"]
+    return {"artist": ncs["artist"], "title": ncs["title"], "line": n["line"], "link": n["linkPrefix"] + ncs["youtubeId"]}
 
 
 def read_tags(path):
@@ -257,6 +296,10 @@ def scan(data_dir, folder, cfg=None, tags=None, live=on_air):
             new[tid] = {"file": name, "artist": "", "title": "", "line": cfg["credit"]["line"], "link": "",
                         "source": "changed", "edited": False, "review": True}
             continue
+        ncs = parse_ncs_name(name, cfg)
+        if ncs:  # D417: NCS's own file name: credited from the name (the name is the proof, not the tags)
+            new[tid] = dict(ncs_credit(ncs, cfg), file=name, source=cfg["ncsFilename"]["source"], edited=False, ncs=ncs)
+            continue
         md = tags(p)
         artist, title = _clean(md.get("artist", ""), mx["artist"]), _clean(md.get("title", ""), mx["title"])
         source = "tags"
@@ -290,6 +333,7 @@ def set_credit(data_dir, track_id, credit, cfg=None):
     r = doc["tracks"][track_id]
     r.update({k: credit.get(k, "").strip() for k in ("artist", "title", "line", "link")}, source="edited", edited=True)
     r.pop("review", None)
+    r.pop("ncs", None)
     _save(_credits_path(data_dir, cfg), doc)
     return r
 
@@ -334,7 +378,7 @@ def pick(data_dir, folder, settings, seed_parts, cfg=None, live=on_air):
         tid = free[int(rng.random() * len(free))]
     _save(hist_path, {"version": 1, "recent": (hist + [tid])[-50:]})
     r = tracks[tid]
-    return {"id": tid, "path": os.path.join(folder, r["file"]),
+    return {"id": tid, "path": os.path.join(folder, r["file"]), "file": r["file"], "origin": r.get("source"),
             "credit": {k: r.get(k, "") for k in ("artist", "title", "line", "link")}}
 
 
@@ -344,6 +388,11 @@ def music_record(track, cfg=None):
     post is then never sent). clip_publish carries it into the upload row and the sidecar the clips-folder scan reads."""
     cfg = cfg or load_config()
     c = track.get("credit")
+    if track.get("origin") == cfg["ncsFilename"]["source"]:  # D417: re-read from the file name, never the stored record
+        ncs = parse_ncs_name(track.get("file"), cfg)
+        c = ncs_credit(ncs, cfg) if ncs else None
+        return {"source": cfg["ncsFilename"]["source"], "trackId": track["id"],
+                "credit": c if complete(c, cfg) else None, "ncs": ncs}
     return {"source": cfg["library"], "trackId": track["id"], "credit": c if complete(c, cfg) else None}
 
 
