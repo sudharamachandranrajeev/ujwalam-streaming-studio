@@ -23,6 +23,7 @@ import { createReadStream, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { checkLimits, composeField, loadLimits } from './index.mjs';
 import { createLearningStore } from '../learning/store.mjs';
+import { creditMissing } from './post-text.mjs';
 
 const UPLOAD_INIT_URL = 'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status';
 const THUMBNAIL_URL = (videoId) => `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${encodeURIComponent(videoId)}`;
@@ -274,6 +275,8 @@ export async function uploadVideo(opts) {
   if (opts.post.source?.sha256 !== opts.sha256) throw new UploadError('video-changed', 'the video changed since it was approved');
   if (!checkLimits(opts.post, opts.limits).ok) throw new UploadError('over-limit', 'the post is over a platform limit');
   if ((opts.post.unresolved ?? []).length) throw new UploadError('unresolved-placeholders', 'unresolved template placeholders remain');
+  // D414: a montage with an NCS track is never sent without its credit in the description (fail closed)
+  if (creditMissing(opts.post)) throw new UploadError('music-credit-missing', 'the montage song credit is missing from the description; nothing was sent');
   const existing = opts.ledger.get(opts.sha256, opts.post.target);
   if (existing?.status === 'uploaded') throw new UploadError('already-uploaded', `already uploaded as ${existing.videoId}`);
 

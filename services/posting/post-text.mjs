@@ -74,6 +74,52 @@ export function createTextHistory(dataDir, keep = 20) {
   };
 }
 
+// ---- montage music credit (D413 item 2, D414) begin. A BeatDrop montage's clip row carries montageMusic:
+// { library: 'ncs', trackId, credit: { artist, title, line, link } | null } for a track from the user's NCS library, or
+// { library: null } for a track from anywhere else. NCS allows use with the artist and song credited in the description,
+// so a library track's post always gets the credit lines; without a complete credit it is never sent (fail closed), and
+// a montage with a track from elsewhere is rendered only, never auto-posted. Same template and limits as
+// services/clip/montage_music.py credit_text (data/clip/montage-music.json).
+const MONTAGE_MUSIC_FILE = path.join(REPO, 'data', 'clip', 'montage-music.json');
+let mmCfg = null;
+const montageCfg = () => (mmCfg ??= readJson(MONTAGE_MUSIC_FILE));
+const CREDIT_BAD = /[\u0000-\u001f\u007f<>{}]/;
+/** The plain-word reason a credit is not usable, or null. */
+export function creditProblem(c, cfg = montageCfg()) {
+  if (!cfg) return 'the montage music settings are missing';
+  if (!isPlain(c)) return 'the song has no credit (artist and title)';
+  const mx = cfg.credit.maxChars;
+  for (const k of ['artist', 'title']) if (typeof c[k] !== 'string' || !c[k].trim()) return `the song credit has no ${k}`;
+  for (const [k, n] of Object.entries(mx)) {
+    const v = c[k] ?? '';
+    if (typeof v !== 'string' || v.length > n || CREDIT_BAD.test(v)) return `the song credit's ${k} is not plain text of at most ${n} characters`;
+  }
+  if (c.link && !/^https:\/\/[A-Za-z0-9.-]+(\/\S*)?$/.test(c.link)) return "the song credit's link must start with https://";
+  return null;
+}
+/**
+ * What posting does with a clip row's montageMusic. -> { use: 'none' } (no montage track), { use: 'credit', text } (add
+ * the text to the description), or { use: 'refuse', reason, renderOnly } (not packaged: plain-word reason).
+ */
+export function musicCredit(mm, cfg = montageCfg()) {
+  if (mm === undefined || mm === null) return { use: 'none' };
+  if (!isPlain(mm) || !cfg) return { use: 'refuse', reason: 'the montage music record cannot be read', renderOnly: false };
+  if (mm.library !== cfg.library) return { use: 'refuse', reason: 'render only, not auto-posted: the montage song is not from your NCS library', renderOnly: true };
+  const bad = creditProblem(mm.credit, cfg);
+  if (bad) return { use: 'refuse', reason: `not sent: ${bad}. Add it in Settings > Clips > Montage music.`, renderOnly: false };
+  const c = { artist: mm.credit.artist.trim(), title: mm.credit.title.trim(), line: (mm.credit.line ?? '').trim(), link: (mm.credit.link ?? '').trim() };
+  const text = cfg.credit.template.map((s) => s.replace(/\{(artist|title|line|link)\}/g, (_m, k) => c[k])).filter((s) => s.trim()).join('\n');
+  return { use: 'credit', text };
+}
+/** Fail closed before approve and upload: a post with a montage track must still carry its credit text. null = fine. */
+export function creditMissing(post) {
+  const mc = post?.source?.musicCredit;
+  if (post?.source?.montageMusic === undefined && mc === undefined) return null;
+  if (typeof mc !== 'string' || !mc.trim()) return 'music-credit-missing';
+  return typeof post.description === 'string' && post.description.includes(mc) ? null : 'music-credit-missing';
+}
+// ---- montage music credit end
+
 /** Title and lead for one clip. maxTitle: the title limit in characters (null = none); the rendered length is checked
  *  by the caller's limits check too. -> { title: {line,text}|null, lead: {line,text}|null } */
 export function draftText({ templates, kind, game, facts, seed, recent = [], maxTitle = null, gamesDir }) {

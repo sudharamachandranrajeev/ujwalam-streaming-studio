@@ -84,7 +84,7 @@ export const SCAN_EVERY_MS = 15 * 60 * 1000;
 export const STATUS_EVERY_MS = 15 * 60 * 1000;
 /** At most this many status checks per pass (1 quota unit each). */
 export const STATUS_PER_PASS = 10;
-const PERMANENT = new Set(['not-approved', 'video-changed', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at', 'publish-at-required']);
+const PERMANENT = new Set(['not-approved', 'video-changed', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at', 'publish-at-required', 'music-credit-missing']);
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** PT3 (D408): the "Run auto-post now" request file (<dataDir>/posting/auto-run-now.json). The studio writes it (refused
@@ -431,6 +431,7 @@ const FAIL_TEXT = {
   'video-changed': 'The video file changed after it was approved',
   'video-missing': 'The video file is missing',
   'not-approved': 'The package is not approved',
+  'music-credit-missing': 'The montage song credit (artist and title) is missing from the description; add it in Settings > Clips > Montage music',
   'unknown-post': 'The package was not found',
   'went-public-early': 'Uploaded, but its planned public time had already passed, so YouTube may have made it public at once; check it in YouTube Studio',
 };

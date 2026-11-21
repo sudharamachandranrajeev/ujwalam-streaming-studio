@@ -28,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { resolveString } from '../project/scene-preset.mjs';
-import { cleanFacts, createTextHistory, draftText } from './post-text.mjs';
+import { cleanFacts, createTextHistory, creditMissing, draftText, musicCredit } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -412,6 +412,10 @@ export async function packageUploads(opts) {
     }
     if (Array.isArray(row.posted) && row.posted.some((p) => p?.platform === 'youtube')) { skip('already-posted'); continue; }
     if (!path.isAbsolute(file) || !isRealFile(file)) { skip('file-missing'); continue; }
+    // D414: a montage's song. NCS library track = its credit goes in the description, no credit = not sent; a song
+    // from anywhere else = render only, never posted (fail closed, plain-word reason)
+    const music = musicCredit(row.montageMusic);
+    if (music.use === 'refuse') { skipped.push({ file: path.basename(file), reason: music.renderOnly ? 'render-only' : 'music-credit-missing', detail: music.reason }); continue; }
     const tail = CANVAS_TAIL.exec(path.basename(file));
     const vertical = tail ? tail[2].toLowerCase().startsWith('v') : false;
     const seconds = Number(row.seconds);
@@ -451,6 +455,7 @@ export async function packageUploads(opts) {
     };
     // PT5 (D410): the user's tone, emoji, own hashtags and footer (Settings > Posting & growth); the defaults change nothing
     Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: row.kind, seed: sha, titleMax, fits: limitsFit(post, limits) }));
+    if (music.use === 'credit') post.description = post.description ? `${post.description}\n\n${music.text}` : music.text; // D414: last, after the prefs
     const at = uploadCoverAt(row, seconds);
     const coverOk = await extractCover(ffmpeg, dst, at, path.join(dir, 'cover.jpg'));
     const stamp = now().toISOString();
@@ -464,6 +469,8 @@ export async function packageUploads(opts) {
         ...(cleanChoices(row.choices) ? { choices: cleanChoices(row.choices) } : {}), // RP5: the reel's edit choices
         // PT1: the clip's facts (medal, kills, result, mode; only the known ones) and its game, for post text and redrafts
         ...(Object.keys(facts).length ? { facts } : {}), ...(game ? { game } : {}), textVersion: TEXT_VERSION,
+        // D414: the montage's NCS track and the credit text the description must keep (checked again at approve and upload)
+        ...(music.use === 'credit' ? { montageMusic: { library: row.montageMusic.library, trackId: String(row.montageMusic.trackId ?? '').slice(0, 32) }, musicCredit: music.text } : {}),
         // D375: when the clip was made (from its name; posting order is oldest first) and the clips-folder file it came
         // from (the file the flag post-delete-uploaded may remove after a confirmed upload). Local data only.
         ...(madeAtOf(path.basename(file)) ? { madeAt: madeAtOf(path.basename(file)) } : {}), file: path.resolve(file) },
@@ -661,6 +668,7 @@ export function createPostStore(opts) {
         if (!p.title) return 'empty-title';
         if (!checkLimits(p, limits()).ok) return 'over-limit';
         if (unresolvedKeys(p.title, p.description, ...p.tags, ...p.hashtags).length) return 'unresolved-placeholders';
+        if (creditMissing(p)) return 'music-credit-missing'; // D414: a montage song's credit was removed from the description
         const vf = path.join(e.dir, p.video?.file ?? '');
         if (!SAFE_NAME.test(String(p.video?.file)) || !isRealFile(vf) || await sha256File(vf) !== e.sha256) return 'video-changed';
       }

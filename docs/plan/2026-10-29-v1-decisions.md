@@ -2607,3 +2607,12 @@ The user approved `docs/plan/2026-11-21-beatdrop-montages.md` (BD1-BD7, LV1, RR1
 3. **Fonts: yes** to downloading two or three open-licence (OFL) display fonts. Each font is named with its licence before it is used, and recorded in `docs/licence-headers.md`.
 4. **Match Replay check:** the user opens a replay when asked and answers with one word (see the plan, section 6.4). BD6 waits for that word.
 5. **Order: yes.** BD1-BD3 and BD4 first, then BD5, BD7, LV1 and RR1, and BD6 after the replay answer.
+
+## D414 — BeatDrop BD1 moment finder, BD2 song map and the NCS montage music library as built (decided, 2026-11-21)
+
+Built on branch `claude/beatdrop-bd1` (not merged, not pushed). Evidence: `docs/evidence/2026-11-21-beatdrop-bd1-bd2.md`.
+
+1. **BD1** `services/clip/moments.py`: gunshots (1-6 kHz spectral flux confirmed by a muzzle flash within 2 frames), hits and kills (kill time = first hit-marker frame), scope in/out, flicks, slides/jumps, third person. Game numbers are data in `data/games/codm/moments.json` with a schema. Off air only, guarded decode, BelowNormal, one job at a time, CPU. Synthetic fixture: every moment exact except third person (1 frame late).
+2. **BD2** `services/clip/song_map.py`: beat grid, downbeats, sections, drops, transients as JSON numbers. Synthetic tracks: worst beat error 1.6 ms (limit 20 ms), drops within 1 ms.
+3. **Montage music** (D413 item 2): Settings > Clips "Montage music", ON by default: a local folder, random (seeded, no repeat of the last 3 by default) or a fixed track, editable per-track credits under the data root. Posting adds the credit to the description; a library track without a complete credit is never packaged, approved or uploaded (fail closed, plain reason); a song from elsewhere is render only.
+4. UNVERIFIED: real-footage and real-track accuracy, Content ID behaviour on NCS tracks, detector weights not yet used, the card not yet seen by the user in the running studio.
