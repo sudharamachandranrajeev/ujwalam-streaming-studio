@@ -2494,5 +2494,11 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
     and the lock token as seen. The clear (in the mutex) re-verifies that same set, deletes the lock only if its content
     still matches, then deletes each dead claim last. Every crash point of the dead-lock replacement is therefore either
     sendable or offers Clear.
+  - Eighth Codex review: the lock and the claim are created whole or not at all. The content goes to a unique temp file
+    in the same folder (`<name>.<pid>.<rand>.tmp`), is fsynced, then hard-linked to the target (atomic and exclusive;
+    EEXIST = lost); the temp is removed. The lock logic ignores `*.tmp`, and the chain removes such temp files older
+    than 10 min when it starts. Files from older builds or other torn writes: an empty or unparseable claim or lock
+    older than 60 s (`TORN_DEAD_MS`) counts as dead-owned, so the general stuck rule offers Clear (a torn lock with no
+    claim included). Younger than 60 s counts as alive (wait).
   - Known item: the studio has no single-instance guard. A second studio's chain refuses through the lock
     (`sender-elsewhere`); it is not stopped from starting.

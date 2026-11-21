@@ -50,7 +50,7 @@
 // channel read in that hold and the 60-min check. The studio's Upload button and `cli.mjs youtube upload` only queue.
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
@@ -171,23 +171,52 @@ const claimsOf = (f) => { try { const base = path.basename(f); return readdirSyn
  * before). Never removed automatically: the notice offers one click, "Clear stuck posting lock" (D332).
  * -> null | { id, lockFile, claimFile, lockRaw (null = absent), claimRaw }.
  */
+/** Eighth Codex review: an empty or unparseable file (a torn write from an older build) is dead-owned once it is older
+ *  than this (no writer takes that long between create and write); younger counts as alive (wait). */
+export const TORN_DEAD_MS = 60 * 1000;
+const tornState = (file, nowMs = Date.now()) => { try { return nowMs - statSync(file).mtimeMs > TORN_DEAD_MS ? 'dead' : 'alive'; } catch { return 'alive'; } };
 export function stuckLock(dataDir, { procStart = osProcStart } = {}) {
   const f = path.resolve(dataDir, 'posting', LOCK_NAME);
   const lockRaw = readRaw(f); const lock = lockRaw === null ? null : parseOr(lockRaw);
-  // Seventh Codex review: general rule, no token matching. Stuck = at least one claim, EVERY claim's claimant dead, and
-  // the lock absent or held by a dead owner (old or new token: a crash at any point of the dead-lock replacement).
+  const lockOk = lock && typeof lock === 'object' && typeof lock.token === 'string' && Number.isInteger(lock.pid);
+  // Seventh Codex review: general rule, no token matching. Stuck = EVERY claim's claimant dead, and the lock absent or
+  // held by a dead owner (old or new token: a crash at any point of the dead-lock replacement). Eighth: a torn claim or
+  // lock older than TORN_DEAD_MS counts as dead-owned; with no claim, a torn old lock alone is also stuck (acquire
+  // refuses it and never removes it on its own).
   const claimFiles = claimsOf(f).sort();
-  if (!claimFiles.length) return null;
+  const lockTorn = lockRaw !== null && !lockOk;
+  if (!claimFiles.length && !lockTorn) return null;
   const claims = [];
   for (const claimFile of claimFiles) {
-    const claimRaw = readRaw(claimFile);
-    if (ownerState(parseClaim(claimRaw), procStart) !== 'dead') return null;
+    const claimRaw = readRaw(claimFile); const claim = parseClaim(claimRaw);
+    const st = claim ? ownerState(claim, procStart) : tornState(claimFile);
+    if (st !== 'dead') return null;
     claims.push({ file: claimFile, raw: claimRaw });
   }
-  if (lockRaw !== null && (!lock || typeof lock.token !== 'string' || ownerState(lock, procStart) !== 'dead')) return null;
+  if (lockRaw !== null && (lockTorn ? tornState(f) : ownerState(lock, procStart)) !== 'dead') return null;
   // The id names every file as seen: a click made on an older view is refused as 'changed'.
-  const id = `${claimFiles.map((c) => path.basename(c)).join(',')}:${lockRaw === null ? 'no-lock' : lock.token}`;
+  const id = `${claimFiles.map((c) => path.basename(c)).join(',')}:${lockRaw === null ? 'no-lock' : lockTorn ? 'torn' : lock.token}`;
   return { id, lockFile: f, claims, lockRaw };
+}
+/** Eighth Codex review: create `target` with its full content or not at all. The content goes to a unique temp file in
+ *  the same folder, fsynced, then hard-linked to the target (atomic and exclusive: EEXIST = lost); the temp is removed. */
+function createWhole(target, body) {
+  const tmp = `${target}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+  const fd = openSync(tmp, 'wx');
+  try { writeSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); }
+  try { linkSync(tmp, target); } finally { try { rmSync(tmp, { force: true }); } catch { /* removed as stale on a later start */ } }
+}
+/** On start: temp files of the lock and its claims older than 10 min (a crash between write and link) are removed. */
+export function removeStaleLockTemps(dataDir, nowMs = Date.now()) {
+  const dir = path.resolve(dataDir, 'posting');
+  let names = []; try { names = readdirSync(dir); } catch { return 0; }
+  let n = 0;
+  for (const name of names) {
+    if (!name.startsWith(`${LOCK_NAME}.`) || !name.endsWith('.tmp')) continue;
+    const p = path.join(dir, name);
+    try { if (nowMs - statSync(p).mtimeMs > 10 * 60 * 1000) { rmSync(p); n++; } } catch { /* gone or in use */ }
+  }
+  return n;
 }
 /**
  * The click: in the in-process mutex (never during this process's pass), re-verifies the same stuck lock (id) with dead
@@ -233,7 +262,7 @@ function createLock(f, body) {
   // Sixth Codex review: while ANY claim for this lock exists (another process is replacing a dead lock, or a crash left
   // one), refuse, even when the lock file is absent.
   if (claimsOf(f).length) throw refuse(f);
-  try { writeFileSync(f, body, { flag: 'wx' }); return true; } catch (e) { if (e?.code !== 'EEXIST') throw refuse(f); }
+  try { createWhole(f, body); return true; } catch (e) { if (e?.code !== 'EEXIST') throw refuse(f); }
   const raw = readRaw(f);
   const cur = raw === null ? null : parseOr(raw);
   // Provably not held: its process has ended, or it is this process's own leftover (this process holds the mutex).
@@ -241,11 +270,11 @@ function createLock(f, body) {
   if (!dead) throw refuse(f);
   const claim = claimFileOf(f, cur.token);
   // Fifth Codex review: the claim names its claimant (pid + process start time), so a crash-left claim can be proven dead.
-  try { writeFileSync(claim, JSON.stringify({ pid: process.pid, start: MY_START }), { flag: 'wx' }); } catch { throw refuse(f); } // another process judges the same lock
+  try { createWhole(claim, JSON.stringify({ pid: process.pid, start: MY_START })); } catch { throw refuse(f); } // another process judges the same lock
   try {
     if (readRaw(f) !== raw) throw refuse(f); // changed since it was judged
     rmSync(f);
-    try { writeFileSync(f, body, { flag: 'wx' }); } catch { throw refuse(f); } // a create in between won: refuse
+    try { createWhole(f, body); } catch { throw refuse(f); } // a create in between won: refuse
     return true;
   } finally { try { rmSync(claim, { force: true }); } catch { /* a leftover claim names a lock that no longer exists */ } }
 }
@@ -465,6 +494,7 @@ export function createPostChain(opts) {
   const autoLogFile = path.join(dataDir, 'posting', AUTO_LOG_NAME);
   const queue = createUploadQueue(path.join(dataDir, 'posting', QUEUE_NAME), nowMs);
   const flags = opts.flags ?? createFlags({ dataDir });
+  try { removeStaleLockTemps(dataDir); } catch { /* best effort; temp files are ignored by the lock anyway */ }
   let latest = null; let busy = false; let lastTick = 0; let recovered = false; let halted = false; let lastScan = -Infinity;
   const readProfile = () => { const pf = opts.profileFile ?? path.join(REPO, 'data', 'profile.local.json'); return existsSync(pf) ? (readJson(pf) ?? {}) : {}; };
   const flagsOn = () => flags.isOn(POSTING_FLAG) && flags.isOn(AUTO_FLAG);

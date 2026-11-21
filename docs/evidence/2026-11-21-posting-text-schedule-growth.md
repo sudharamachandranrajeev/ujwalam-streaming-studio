@@ -140,7 +140,18 @@ studio-qml-posting 12, studio-ui-posting-auto 8.
 Runs (one file at a time, same rules, all exit 0): posting-e2e 60, posting-auto-chain 15, posting-pt3-actions 9,
 studio-qml-posting 12.
 
+## Eighth Codex review (2026-11-21)
+
+| Item | Fix | Test |
+|---|---|---|
+| A crash between create and write left an empty or partial claim or lock with no Clear | Whole-file create: temp file, fsync, `linkSync` to the target (atomic, exclusive), temp removed; stale `*.tmp` (more than 10 min old) removed when the chain starts. An empty or unparseable claim or lock older than 60 s counts as dead-owned, so the stuck rule offers Clear; younger counts as alive. | posting-e2e D409-8: a young empty claim is refused with no Clear and left untouched; once older, Clear is offered; with an old partial lock beside it, one click clears both and the next acquire sends; a young partial lock is not offered. The crash-point walk now also covers: first lock created but not written, first lock partly written, claim created but not written, new lock created but not written with the claim present, and a leftover temp file with no target (removed as stale, harmless). Each state is either sendable or offers Clear, and leaves nothing behind. |
+
+Runs (one file at a time, same rules, all exit 0): posting-e2e 61, posting-auto-chain 15, posting-pt3-actions 9.
+
 ## UNVERIFIED
+
+- Eighth review: `linkSync` (hard links) needs NTFS or another file system with hard links; on FAT/exFAT or some
+  network folders the create fails and every pass refuses (fail closed). Only tested on the local NTFS temp folder.
 
 - Sixth review: compare-before-delete is not atomic across processes (the mutex is per process). For a live lock to be
   removed, between one studio's compare and its delete (a few microseconds), the other studio would have to remove the

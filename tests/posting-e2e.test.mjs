@@ -4,7 +4,7 @@
 // The only seams used: fetchImpl (rewrites the googleapis host to the local server) and a fake token provider (auth).
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -1142,8 +1142,8 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
   });
 
   test('D409-7: every crash point of the dead-lock replacement is either sendable or offers Clear (never stuck without an action)', async () => {
-    const { LOCK_NAME, stuckLock, clearStuckLock, withScheduleLock } = await import('../services/posting/auto-chain.mjs');
-    const OLD = JSON.stringify({ pid: 2 ** 30, start: 1, token: 'old', at: 1 });   // the old holder, dead
+    const { LOCK_NAME, stuckLock, clearStuckLock, withScheduleLock, removeStaleLockTemps } = await import('../services/posting/auto-chain.mjs');
+    const OLD =JSON.stringify({ pid: 2 ** 30, start: 1, token: 'old', at: 1 });   // the old holder, dead
     const NEW = JSON.stringify({ pid: 2 ** 30 - 2, start: 3, token: 'new', at: 2 }); // the crashed replacer's new lock
     const CLAIM = JSON.stringify({ pid: 2 ** 30 - 2, start: 3 });                    // the crashed replacer's claim
     const states = {
@@ -1152,12 +1152,26 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
       'after old-lock remove': { lock: null, claim: CLAIM },
       'after new-lock create (before claim remove)': { lock: NEW, claim: CLAIM },
       'after claim remove': { lock: NEW, claim: null },
+      // Eighth review: "created, not written" (older builds' torn writes), aged past TORN_DEAD_MS.
+      'first lock created, not written': { lock: '', claim: null, aged: true },
+      'first lock partly written': { lock: '{"pid":12', claim: null, aged: true },
+      'claim created, not written': { lock: OLD, claim: '', aged: true },
+      'new lock created, not written (claim present)': { lock: '', claim: CLAIM, aged: true },
+      'leftover temp file, no target': { lock: null, claim: null, tmp: true },
     };
+    const old = new Date(Date.now() - 5 * 60e3);
     for (const [name, st] of Object.entries(states)) {
       const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
       const f = path.join(d, 'posting', LOCK_NAME);
-      if (st.lock) writeFileSync(f, st.lock);
-      if (st.claim) writeFileSync(`${f}.old.claim`, st.claim);
+      if (st.lock !== null) writeFileSync(f, st.lock);
+      if (st.claim !== null) writeFileSync(`${f}.old.claim`, st.claim);
+      if (st.aged) for (const p of [f, `${f}.old.claim`]) if (existsSync(p)) utimesSync(p, old, old);
+      if (st.tmp) {
+        const tmp = `${f}.123.abcd.tmp`; writeFileSync(tmp, 'x');
+        utimesSync(tmp, old, old); assert.equal(removeStaleLockTemps(d), 0, 'a 5-min-old temp is kept (it may still be linked)');
+        const older = new Date(Date.now() - 15 * 60e3); utimesSync(tmp, older, older);
+        assert.equal(removeStaleLockTemps(d), 1, name);
+      }
       let sent = false;
       try { await withScheduleLock(d, async () => { sent = true; }); } catch (e) { assert.equal(e.code, 'sender-elsewhere', name); }
       if (!sent) {
@@ -1169,6 +1183,31 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
       assert.ok(sent, `${name}: sendable (after Clear when offered)`);
       assert.deepEqual(readdirSync(path.join(d, 'posting')), [], `${name}: nothing left behind`);
     }
+  });
+
+  test('D409-8: torn files: an empty claim and a partial lock (older than 60 s) offer Clear; a young empty claim does not yet', async () => {
+    const { LOCK_NAME, stuckLock, clearStuckLock, withScheduleLock } = await import('../services/posting/auto-chain.mjs');
+    const old = new Date(Date.now() - 5 * 60e3);
+    const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
+    const f = path.join(d, 'posting', LOCK_NAME);
+    // A young empty claim (a writer may still be between create and write): refused, no Clear yet, untouched.
+    writeFileSync(`${f}.x.claim`, '');
+    await assert.rejects(withScheduleLock(d, async () => 'x'), { code: 'sender-elsewhere' });
+    assert.equal(stuckLock(d), null, 'younger than 60 s: alive');
+    assert.ok(existsSync(`${f}.x.claim`));
+    // Older: Clear offered.
+    utimesSync(`${f}.x.claim`, old, old);
+    assert.equal(stuckLock(d)?.id, 'schedule.lock.x.claim:no-lock');
+    // A partial JSON lock next to it, also old: Clear covers both.
+    writeFileSync(f, '{"pid": 4'); utimesSync(f, old, old);
+    const s = stuckLock(d);
+    assert.equal(s?.id, 'schedule.lock.x.claim:torn');
+    assert.deepEqual(await clearStuckLock(d, s.id), { cleared: true });
+    assert.equal(await withScheduleLock(d, async () => 'sent'), 'sent');
+    // A young partial lock alone: refused, not offered.
+    writeFileSync(f, '{"pid": 4');
+    await assert.rejects(withScheduleLock(d, async () => 'x'), { code: 'sender-elsewhere' });
+    assert.equal(stuckLock(d), null);
   });
 
   test('D409-7: crash after the new lock, before the old claim was removed: Clear offered, click, next pass sends', async () => {
