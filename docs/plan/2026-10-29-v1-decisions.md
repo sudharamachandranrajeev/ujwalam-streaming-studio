@@ -2375,3 +2375,26 @@ Codex review (2026-11-21), all five fixed on the same branch:
   limit is the user's setting, posts a day up to 24 (the most a 1 h gap allows); growth-led timing changes apply only
   after the user's click.
 - Order: posting PT first (the user's live complaint), then clip look FX.
+
+## D409 — Posting PT2, PT3 and PT1 as built (decided, 2026-11-21)
+
+As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. Evidence:
+`docs/evidence/2026-11-21-posting-text-schedule-growth.md`.
+
+- PT2: `HARD_GAP_MINUTES = 60` in `services/posting/schedule.mjs` is the default and the floor in every placement. A
+  saved gap below 60 reads as 60, and the card refuses it. A window may end at 24:00. A day stops one gap before the next
+  day's window starts. `slotClash` checks the slot again right before each upload session. The channel is read again
+  when the last read is older than `recheckMaxAgeMinutes` (10). A clash gives the clip a new slot. Posts a day go up to
+  24 everywhere, and older 25..100 values read as 24.
+- Quota: by default each upload counts against the separate upload allowance (`model: upload-bucket`, 100 a day, about
+  50 units per cover). A quotaExceeded answer switches to the unit sum for that Pacific day and the next one
+  (`posting/quota-model.json`). The clip waits without using up a try, and the task area says so in plain words. The
+  upload allowance figure is UNVERIFIED against Google.
+- PT3: the "Run auto-post now" request file starts a pass on the chain's next tick. It is refused while a stream is live or
+  starting. The Posts window gains two actions. "Schedule next free slot" approves the clip and queues it at the
+  planner's next free time. "Post now (public)" is the only path that sends `public`. It is refused within 60 min of any
+  other post, while live, and for a clip that is in the queue.
+- PT1: the post text comes from the clip facts (`reel_thumbnail.py facts()`, kept in `source.facts`). The lines live in
+  `templates.json textPools` and `data/games/<id>/posting.json`. A line that needs a missing fact is never used. No line
+  repeats within the last 20. Drafts the user has not edited are redrafted once (`source.textVersion` 2).
+- PT5 (the post text card in Settings) and PT4 (growth suggestions) are not built yet. They come next.
