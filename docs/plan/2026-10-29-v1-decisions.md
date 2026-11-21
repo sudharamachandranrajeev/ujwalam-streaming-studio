@@ -2340,3 +2340,15 @@ waits until it is made; user-requested, so it ships ON.
   `long-video-not-made`. A recording with no clip job (backfill) waits, while the flag is on, for
   `runs/<session>/long/long.json` made/skipped/off; no record is written meanwhile, so each pass checks again.
 - Evidence: `docs/evidence/2026-11-21-long-highlights-video.md`. A real render on a real recording is UNVERIFIED.
+
+Codex review (2026-11-21), all five fixed on the same branch:
+- The long video is now its own clip job (`clipper.py long`, type `long`, task `long-<session>`), queued after the clip
+  job in the same run folder. It never starts while a recording or a stream runs, and its whole process tree is killed
+  when either starts (it runs again after). The other clip stages keep their old gate (live only), so clips are still
+  made beside a plain local recording.
+- Cleanup with the flag on needs proof from `runs/<session>/long/long.json` (made or skipped) for every record, old
+  ones included; a missing or null `longNotMade`, `off` or `failed` keeps the recording. Backfill the same.
+- The length plan counts the real joins: cross fades inside each 12-piece batch only (batch files are joined end to end
+  with a short audio fade, no cross fade), so the video never exceeds maxSec as rendered.
+- countClips counts `long/published.json`, so a long video alone reaches auto-post.
+- Parts live in a per-attempt folder removed in finally; folders left by a kill are removed at the next start.

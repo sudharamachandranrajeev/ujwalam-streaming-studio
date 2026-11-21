@@ -48,3 +48,17 @@ What the tests cover:
 - The concat-copy join of AAC parts on real files (small gaps at joins possible).
 - YouTube's 15-minute limit for unverified accounts (videos up to 20 minutes would fail there).
 - The cleanup reason text in SettingsClips.qml (not covered by a probe test).
+
+## Codex review fixes (2026-11-21)
+
+| Finding | Fix | Test |
+|---|---|---|
+| P1 old records without `longNotMade` deleted | with the flag on, long.json made/skipped is required for every record | recording-cleanup.test.mjs "Codex D406 P1" |
+| P1 long stage ran while recording | own `long` job: held while recording or live, tree killed when either starts | record-clips.test.mjs "its own job after the clip job" |
+| P2 batch joins counted as cross fades | video_seconds/fit count joins per batch | test_long_video.py test_batch_joins_have_no_crossfade... |
+| P2 long video alone never posted | countClips counts long/published.json | record-clips.test.mjs "a long video alone reaches auto-post" |
+| P2 part files left after an exception or kill | per-attempt folder, removed in finally and at the next start | test_long_video.py test_an_exception_or_an_earlier_kill... |
+
+Results after the fixes: test_long_video.py 20 OK; test_clip*.py 231 OK (37 skipped); record-clips 32 pass;
+recording-cleanup 27 pass; studio-ui-flags-feedback 16 pass; live-updates 27 pass.
+Still unverified: batch boundaries (every 12 segments) have a short audio fade-out/in, not a cross fade.

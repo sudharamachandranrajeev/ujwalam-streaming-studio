@@ -1616,7 +1616,7 @@ export function createStudioServer(opts) {
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
       try {
         const keepList = readKeepList(opts.dataDir);
-        const sessions = cleanupPlan({ dataDir: opts.dataDir, keepList: { all: false, names: new Set() } })
+        const sessions = cleanupPlan({ dataDir: opts.dataDir, keepList: { all: false, names: new Set() }, longOn: !!flags && flags.isOn('long-highlights-video') })
           .map((s) => ({ name: s.name, hasV: !!s.v, reason: s.reason, keep: keepList.all || keepList.names.has(s.name.toLowerCase()) }));
         return json(res, 200, { sessions, keepUnreadable: keepList.all, flag: !!flags && flags.isOn(CLEANUP_FLAG) });
       } catch { return json(res, 500, { error: 'recordings-unreadable' }); }

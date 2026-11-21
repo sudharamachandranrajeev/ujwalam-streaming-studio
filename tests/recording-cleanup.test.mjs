@@ -86,6 +86,28 @@ describe('recording cleanup (D403)', () => {
     assert.ok(existsSync(x.h) && existsSync(y.h));
   });
 
+  test('Codex D406 P1: with the long video on, a record without longNotMade (made before D406) is no proof: long.json must say made or too short', async () => {
+    const x = fixture(); x.job(); // an old record: no longNotMade field
+    let r = await x.run({ longOn: true });
+    assert.deepEqual(r.kept.map((k) => k.reason), ['long-video-not-made']); assert.equal(r.deleted.length, 0);
+    const dir = path.join(x.dataDir, 'clips', 'runs', '2026-11-18 20-00-00 H', 'long'); mkdirSync(dir, { recursive: true });
+    for (const status of ['off', 'failed']) {
+      writeFileSync(path.join(dir, 'long.json'), JSON.stringify({ status }));
+      r = await x.run({ longOn: true }); assert.deepEqual(r.kept.map((k) => k.reason), ['long-video-not-made'], status);
+    }
+    assert.equal(cleanupPlan({ dataDir: x.dataDir, longOn: true })[0].reason, 'long-video-not-made', 'the Settings list says so too');
+    writeFileSync(path.join(dir, 'long.json'), JSON.stringify({ status: 'skipped' }));
+    r = await x.run({ longOn: true }); assert.equal(r.deleted.length, 2, 'too short counts as done');
+    // made, on another session; and with the flag off the old record still counts (D403)
+    const y = fixture(); y.job({ longNotMade: null });
+    assert.deepEqual((await y.run({ longOn: true })).kept.map((k) => k.reason), ['long-video-not-made'], 'null is no proof either');
+    const yd = path.join(y.dataDir, 'clips', 'runs', '2026-11-18 20-00-00 H', 'long'); mkdirSync(yd, { recursive: true });
+    writeFileSync(path.join(yd, 'long.json'), JSON.stringify({ status: 'made' }));
+    assert.equal((await y.run({ longOn: true })).deleted.length, 2);
+    const z = fixture(); z.job();
+    assert.equal((await z.run({ longOn: false })).deleted.length, 2);
+  });
+
   test('D406: the recording waits for its long highlights video; a failed one keeps it; once made it goes', async () => {
     const x = fixture();
     x.job({ longNotMade: 'the long video step did not finish; see the log' });

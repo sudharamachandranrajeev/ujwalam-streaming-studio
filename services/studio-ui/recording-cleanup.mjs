@@ -133,7 +133,7 @@ const stateMark = (state = {}) => JSON.stringify([state.running ? [key(state.run
  * now has the identity those entries recorded; V qualifies only when the same entries all list that V file with the
  * identity it has now.
  */
-export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(dataDir), keepList = readKeepList(dataDir), deleted = readDeletedRecordings(dataDir), idOf = fileIdentity }) {
+export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(dataDir), keepList = readKeepList(dataDir), deleted = readDeletedRecordings(dataDir), idOf = fileIdentity, longOn = false }) {
   const sessions = new Map();
   for (const r of records.filter(validJobRecord)) {
     const h = key(r.h);
@@ -160,6 +160,9 @@ export function cleanupPlan({ dataDir, state = {}, records = readJobRecords(data
     let reason = null;
     if (used.some((r) => r.result !== 'done' || r.code !== 0)) reason = 'job-failed';
     else if (used.some((r) => typeof r.longNotMade === 'string' && r.longNotMade)) reason = 'long-video-not-made'; // D406
+    // Codex D406 P1: with the long video on, a missing or null longNotMade is no proof (records from before D406 lack it):
+    // the session's long.json must say made or too short.
+    else if (longOn && !used.some((r) => longVideoDone(dataDir, r.name).done)) reason = 'long-video-not-made';
     else if (!vReason && used.some((r) => typeof r.reelsNotMade === 'string' && r.reelsNotMade)) reason = 'reels-not-made';
     else if (pending.has(h) || (vPath && pending.has(key(vPath)))) reason = 'job-pending';
     else if (keepList.all || keepList.names.has(name.toLowerCase())) reason = 'kept-for-labelling';
@@ -204,7 +207,7 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
     if (keep.all || keep.names.has(name.toLowerCase())) return 'kept-for-labelling';
     return null;
   };
-  for (const s of cleanupPlan({ dataDir, state })) {
+  for (const s of cleanupPlan({ dataDir, state, longOn })) {
     if (s.reason) { res.kept.push({ file: s.h, reason: s.reason }); continue; }
     if (s.vReason && s.vReason !== 'no-v') res.kept.push({ file: `${s.name} (V)`, reason: s.vReason });
     for (const [file, expectId] of [[s.h, s.hId], [s.v, s.vId]].filter(([f]) => typeof f === 'string' && f)) {
@@ -325,9 +328,12 @@ export function backfillVerdict({ dataDir, file, mtimeMs, clipsDirOf = clipsFold
 /** D406: has the long highlights video of a session been made (or did the clipper decide there is none: too short, no
  *  moments, switched off)? Reads <data>/clips/runs/<session>/long/long.json. -> { done, why }. */
 export function longVideoDone(dataDir, session) {
+  // Codex D406 P1: only made or skipped (too short, no moments) is proof; 'off' was written while the flag was off.
+  if (typeof session !== 'string' || !session || path.basename(session) !== session || session === '..') return { done: false, why: 'no long video yet' };
   const j = readJson(path.join(clipsDir(dataDir), 'runs', session, 'long', 'long.json'));
   if (!j) return { done: false, why: 'no long video yet' };
-  if (j.status === 'made' || j.status === 'skipped' || j.status === 'off') return { done: true, why: j.status };
+  if (j.status === 'made' || j.status === 'skipped') return { done: true, why: j.status };
+  if (j.status === 'off') return { done: false, why: 'made while the long video was switched off' };
   return { done: false, why: 'the long video failed' };
 }
 
@@ -392,7 +398,7 @@ export function dryRun({ dataDir, folder, clipsDirOf = clipsFolder, nowMs = Date
   const records = [...readJobRecords(dataDir), ...bf.records];
   const rows = [];
   const sizeOf = (f) => { try { return statSync(f).size; } catch { return null; } };
-  for (const s of cleanupPlan({ dataDir, records })) {
+  for (const s of cleanupPlan({ dataDir, records, longOn })) {
     for (const file of [s.h, s.v].filter(Boolean)) {
       if (!existsSync(file)) continue;
       const where = s.reason ? null : checkInFolder(file, folder);

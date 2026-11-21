@@ -22,6 +22,8 @@ Status (DIR/long/long.json): {"status": made|skipped|off|failed, "reason", ...}.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 
 import clip_montage as mont
 from clip_common import CLIP_DATA, flag_on, load_json
@@ -94,25 +96,31 @@ def merge(moms, pad, duration):
     return [dict(g, start=round(g["start"], 3), end=round(g["end"], 3)) for g in segs]
 
 
-def video_seconds(segs, tr):
-    """Length of the joined video: the segments minus each cross-faded join."""
+def video_seconds(segs, tr, batch_pieces=None):
+    """Length of the joined video. Inside a render batch each join is cross-faded (it shortens the video); the batch
+    files are joined end to end with no cross fade (Codex D406 P2), so only the joins inside a batch are taken off.
+    batch_pieces None = one batch (all joins cross-faded)."""
     if not segs:
         return 0.0
-    xd = mont.crossfade_sec(segs, tr)
-    return sum(g["end"] - g["start"] for g in segs) - xd * (len(segs) - 1)
+    n = len(segs) if batch_pieces is None else max(1, int(batch_pieces))
+    total = 0.0
+    for i in range(0, len(segs), n):
+        chunk = segs[i:i + n]
+        xd = mont.crossfade_sec(chunk, tr)
+        total += sum(g["end"] - g["start"] for g in chunk) - xd * (len(chunk) - 1)
+    return total
 
 
-def fit(segs, max_sec, tr):
-    """Drops the lowest-scored segment first (ties: shorter, then later) until the video fits max_sec.
-    -> (kept segments in time order, dropped segments)."""
-    keep = list(segs)
+def fit(segs, max_sec, tr, batch_pieces=None):
+    """Drops the lowest-scored segment first (ties: shorter, then later) until the video, as it is rendered (batches of
+    batch_pieces), fits max_sec. -> (kept segments in time order, dropped segments)."""
+    keep = sorted(segs, key=lambda g: g["start"])
     dropped = []
-    while keep and video_seconds(keep, tr) > float(max_sec):
+    while keep and video_seconds(keep, tr, batch_pieces) > float(max_sec):
         worst = min(keep, key=lambda g: (g["score"], g["end"] - g["start"], -g["start"]))
         keep.remove(worst)
         dropped.append(worst)
-    return sorted(keep, key=lambda g: g["start"]), dropped
-
+    return keep, dropped
 
 def _minutes(sec):
     m = sec / 60.0
@@ -125,14 +133,15 @@ def plan(hits, ranking, mcfg, duration, matches, cfg, tr):
     if not moms:
         return {"status": "skipped", "reason": "no kills or wins were found in the recording", "moments": 0}
     segs = merge(moms, float(cfg["padSec"]), duration)
-    total = video_seconds(segs, tr)
+    bp = cfg.get("batchPieces")
+    total = video_seconds(segs, tr, bp)
     lo, hi = float(cfg["minSec"]), float(cfg["maxSec"])
     if total < lo:
         return {"status": "skipped", "moments": len(moms), "seconds": round(total, 3),
                 "reason": f"the session had only about {_minutes(total)} of highlights; a long video needs at least "
                           f"{_minutes(lo)}"}
-    keep, dropped = fit(segs, hi, tr)
-    secs = video_seconds(keep, tr)
+    keep, dropped = fit(segs, hi, tr, bp)
+    secs = video_seconds(keep, tr, bp)
     if secs < lo:  # cannot happen with segments shorter than the band, but never ship below the minimum
         return {"status": "skipped", "moments": len(moms), "seconds": round(secs, 3),
                 "reason": f"the best moments fit only about {_minutes(secs)}; a long video needs at least {_minutes(lo)}"}
@@ -151,43 +160,51 @@ def concat_argv(ffmpeg, list_name, out_name):
             "-c", "copy", "-movflags", "+faststart", "-f", "mp4", out_name]
 
 
+ATTEMPT_PREFIX = "attempt-"
+
+
+def clear_attempts(wd):
+    """Removes the work folders of earlier attempts (a kill at stream start, a crash) so no part file is left behind."""
+    try:
+        names = os.listdir(wd)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(wd, n)
+        if n.startswith(ATTEMPT_PREFIX) and os.path.isdir(p):
+            shutil.rmtree(p, ignore_errors=True)
+
+
 def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, batch_pieces, render_job, run_tool, encoders, audio):
     """Renders the segments into wd/long-h.mp4. render_job(mk_argv, encoder, wd, part, what) -> (CompletedProcess,
-    encoder) (clipper._render_job: stall watch, CPU retry). -> (ok, expected seconds, error or None)."""
-    parts, expected = [], 0.0
-    for i, chunk in enumerate(batches(segs, batch_pieces)):
-        name = f"part-{i:03d}.mp4"
-        pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
+    encoder) (clipper._render_job: stall watch, CPU retry). The parts and their list live in a per-attempt folder that
+    is removed in finally (and by the next start, after a kill). -> (ok, expected seconds, error or None)."""
+    clear_attempts(wd)
+    adir = tempfile.mkdtemp(prefix=ATTEMPT_PREFIX, dir=wd)
+    try:
+        parts, expected = [], 0.0
+        for i, chunk in enumerate(batches(segs, batch_pieces)):
+            name = f"part-{i:03d}.mp4"
+            pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
 
-        def mk(enc, pieces=pieces, name=name):
-            return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], audio, fade_ms, name + ".part",
-                                    audio_tracks=audio_tracks, transition=tr)
-        r, encoder = render_job(mk, encoder, wd, name + ".part", f"long video part {i + 1}")
+            def mk(enc, pieces=pieces, name=name):
+                return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], audio, fade_ms, name + ".part",
+                                        audio_tracks=audio_tracks, transition=tr)
+            r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
+            if r.returncode != 0:
+                return False, 0.0, f"part {i + 1} did not render: {r.stderr.strip()[-200:]}"
+            os.replace(os.path.join(adir, name + ".part"), os.path.join(adir, name))
+            parts.append(name)
+            expected += video_seconds(pieces, tr)
+        with open(os.path.join(adir, "parts.txt"), "w", encoding="utf-8") as f:
+            f.write("".join(f"file '{p}'\n" for p in parts))
+        r = run_tool(concat_argv(ffmpeg, "parts.txt", FILE + ".part"), cwd=adir, timeout=1800)
         if r.returncode != 0:
-            _remove(wd, [name + ".part"] + parts)
-            return False, 0.0, f"part {i + 1} did not render: {r.stderr.strip()[-200:]}"
-        os.replace(os.path.join(wd, name + ".part"), os.path.join(wd, name))
-        parts.append(name)
-        expected += video_seconds(pieces, tr)
-    lst = os.path.join(wd, "parts.txt")
-    with open(lst, "w", encoding="utf-8") as f:
-        f.write("".join(f"file '{p}'\n" for p in parts))
-    r = run_tool(concat_argv(ffmpeg, "parts.txt", FILE + ".part"), cwd=wd, timeout=1800)
-    _remove(wd, parts + ["parts.txt"])
-    if r.returncode != 0:
-        _remove(wd, [FILE + ".part"])
-        return False, 0.0, f"the parts did not join: {r.stderr.strip()[-200:]}"
-    os.replace(os.path.join(wd, FILE + ".part"), os.path.join(wd, FILE))
-    return True, round(expected, 3), None
-
-
-def _remove(wd, names):
-    for n in names:
-        try:
-            os.remove(os.path.join(wd, n))
-        except OSError:
-            pass
-
+            return False, 0.0, f"the parts did not join: {r.stderr.strip()[-200:]}"
+        os.replace(os.path.join(adir, FILE + ".part"), os.path.join(wd, FILE))
+        return True, round(expected, 3), None
+    finally:
+        shutil.rmtree(adir, ignore_errors=True)
 
 def duration_ok(actual, expected):
     """Each batch can round a piece by a frame and the copy join by a few audio frames: 2 s or 0.5 %, the larger."""

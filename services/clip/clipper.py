@@ -944,6 +944,13 @@ def _long_video(a):
     return status
 
 
+def cmd_long(a):
+    """D406: the long highlights video alone, as its own job after the clip job (record-clips runs it off air and with no
+    recording running; Codex D406 P1). The outcome is in DIR/long/long.json; the exit code is 0 unless it failed."""
+    status = _long_video(a)
+    return 0 if status.get("status") in ("made", "skipped", "off") else 1
+
+
 def _long_video_steps(a, lv, out):
     data_dir = resolve_data_dir(a.data_dir)
     if not lv.on(data_dir):
@@ -1624,6 +1631,10 @@ def build_parser():
     s.add_argument("--montage-config")
     s.add_argument("--long-video", action="store_true", help="also make the long highlights video of --recording (D406)")
     s.set_defaults(fn=cmd_run)
+    s = sub.add_parser("long", help="the long highlights video of --recording only (D406; its own job in the studio)")
+    common(s); cand_args(s); render_args(s); detect_args(s); publish_arg(s)
+    s.add_argument("--no-decode", action="store_true"); s.add_argument("--montage-config")
+    s.set_defaults(fn=cmd_long)
 
     s = sub.add_parser("montage"); common(s)
     s.add_argument("--hits"); s.add_argument("--montage-config")

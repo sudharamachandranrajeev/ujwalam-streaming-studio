@@ -104,6 +104,17 @@ class Fit(unittest.TestCase):
         segs = [dict(m(i * 100, i * 100 + 10, 1), kinds=["kills"], moments=1) for i in range(4)]
         self.assertAlmostEqual(lv.video_seconds(segs, FADE), 40 - 3 * 0.25)
 
+    def test_batch_joins_have_no_crossfade_so_the_cap_holds_as_rendered(self):
+        # Codex D406 P2: 13 pieces in batches of 12 have 11 cross-faded joins, not 12; the plan must count that
+        segs = [dict(m(i * 1000, i * 1000 + 1203 / 13, 1), kinds=["kills"], moments=1) for i in range(13)]
+        self.assertAlmostEqual(lv.video_seconds(segs, FADE, 12), sum(g["end"] - g["start"] for g in segs) - 11 * 0.25)
+        self.assertGreater(lv.video_seconds(segs, FADE, 12), lv.video_seconds(segs, FADE))
+        keep, dropped = lv.fit(segs, 1200, FADE, 12)
+        self.assertLessEqual(lv.video_seconds(keep, FADE, 12), 1200)
+        self.assertEqual(len(dropped), 1, "the one-batch count would have kept all 13 and rendered past the cap")
+        self.assertAlmostEqual(lv.video_seconds(segs, FADE), 1200)  # the old count: fits exactly ...
+        self.assertAlmostEqual(lv.video_seconds(segs, FADE, 12), 1200.25)  # ... but renders 0.25 s past the cap
+
 
 class Plan(unittest.TestCase):
     def _cfg(self, **kw):
@@ -175,6 +186,19 @@ class Render(unittest.TestCase):
                                    80, None, 12, render_job, None, {"e": []}, [])
             self.assertFalse(ok)
             self.assertIn("did not render", err)
+            self.assertEqual(os.listdir(wd), [])
+
+    def test_an_exception_or_an_earlier_kill_leaves_no_part_files(self):
+        # Codex D406 P2: parts live in a per-attempt folder removed in finally; a folder left by a kill goes next start
+        def render_job(mk, enc, wd, part, what):
+            open(os.path.join(wd, part), "wb").close()
+            raise RuntimeError("killed")
+        with tempfile.TemporaryDirectory() as wd:
+            os.makedirs(os.path.join(wd, lv.ATTEMPT_PREFIX + "old"))
+            open(os.path.join(wd, lv.ATTEMPT_PREFIX + "old", "part-000.mp4"), "wb").close()
+            with self.assertRaises(RuntimeError):
+                lv.render("ffmpeg", "x.mkv", [{"start": 0, "end": 10, "kills": 1}], CFG["frame"], "e", wd, 1,
+                          80, None, 12, render_job, None, {"e": []}, [])
             self.assertEqual(os.listdir(wd), [])
 
     def test_duration_tolerance(self):
