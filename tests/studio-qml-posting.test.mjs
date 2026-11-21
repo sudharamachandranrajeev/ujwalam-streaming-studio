@@ -21,6 +21,7 @@ import { createProject, saveProject } from '../services/project/index.mjs';
 import { QUEUE_NAME, createUploadQueue } from '../services/posting/auto-chain.mjs';
 import { userRulesFile } from '../services/posting/auto-post.mjs';
 import { userScheduleFile } from '../services/posting/schedule.mjs';
+import { prefsFile } from '../services/posting/post-prefs.mjs';
 import { EXE, qtDir } from '../app/studio/tools/build.mjs';
 
 const UI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
@@ -226,5 +227,40 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.deepEqual([k.s.settings.unsavedOpen, k.s.settings.dirty], [true, true]);
     const sv = await probe({ actions: [...open, ...WAIT, 'ap-gap:6', ...WAIT, 'settings-cancel', 'settings-unsaved:save'], ms: 12000 });
     assert.equal(JSON.parse(readFileSync(userScheduleFile(sv.dataDir), 'utf8')).intervalHours, 6, 'Save changes writes it');
+  });
+  // ---- PT5 (D410): post text and growth ----
+  test('PT5: the post text and growth card shows the defaults, the quota model in plain words and growth suggestions on', async () => {
+    const { ap } = await probe({ actions: [...open, ...WAIT] });
+    assert.equal(ap.prefsLoaded, true);
+    assert.deepEqual(ap.prefs, { text: { tone: 'hype', emoji: false, hashtags: [], footer: '' }, kindShare: { short: 20, montage: 20, 'won-reel': 20, 'impact-play': 20, 'long-highlights': 20 }, growthSuggestions: true });
+    assert.equal(ap.shareSum, 100);
+    assert.equal(ap.prefsDirty, false);
+    assert.match(ap.quotaModel, /^Quota model in use: YouTube's upload allowance\. It is the default/);
+  });
+
+  test('PT5: edits make it dirty; shares off 100 % block Save with a plain note; a good edit saves to the data folder', async () => {
+    const bad = await probe({ actions: [...open, ...WAIT, 'ap-share:short:50', ...WAIT, 'settings-save'] });
+    assert.equal(done(bad.p)['settings-save'], false, 'Save refused');
+    assert.match(bad.ap.problem, /add up to 130 %/);
+    assert.equal(exists(prefsFile(bad.dataDir)), false);
+    const tags = encodeURIComponent('#mobile clutch');
+    const footer = encodeURIComponent('Live most nights');
+    const r = await probe({ actions: [...open, ...WAIT, 'ap-tone:clean', 'ap-emoji:on', `ap-tags:${tags}`, `ap-footer:${footer}`, 'ap-share:short:40', 'ap-share:montage:0', 'ap-growth:off', ...WAIT, 'settings-save'], ms: 14000 });
+    const d = done(r.p);
+    for (const a of ['ap-tone:clean', 'ap-emoji:on', 'ap-share:short:40', 'ap-growth:off', 'settings-save']) assert.equal(d[a], true, a);
+    const saved = JSON.parse(readFileSync(prefsFile(r.dataDir), 'utf8'));
+    assert.deepEqual(saved.text, { tone: 'clean', emoji: true, hashtags: ['#mobile', '#clutch'], footer: 'Live most nights' });
+    assert.deepEqual(saved.kindShare, { short: 40, montage: 0, 'won-reel': 20, 'impact-play': 20, 'long-highlights': 20 });
+    assert.equal(saved.growthSuggestions, false);
+    assert.equal(exists(userScheduleFile(r.dataDir)), false, 'the schedule card did not change, so it is not written');
+  });
+
+  test('PT5: Preview reads only and says so when there are no clips; Discard writes nothing', async () => {
+    const r = await probe({ actions: [...open, ...WAIT, 'ap-preview', ...WAIT, ...WAIT] });
+    assert.match(r.ap.previewInfo, /No clips yet/);
+    assert.equal(exists(prefsFile(r.dataDir)), false);
+    const k = await probe({ actions: [...open, ...WAIT, 'ap-growth:off', ...WAIT, 'settings-cancel', 'settings-unsaved:discard'], ms: 12000 });
+    assert.equal(k.s.flagsInSettings, false);
+    assert.equal(exists(prefsFile(k.dataDir)), false, 'nothing written');
   });
 });

@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { resolveString } from '../project/scene-preset.mjs';
 import { cleanFacts, createTextHistory, draftText } from './post-text.mjs';
+import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const POSTING_FLAG = 'posting';
@@ -315,6 +316,8 @@ export async function packageRun(opts) {
         hashtags: tpl.hashtags.map((t) => renderText(t, ctx, missing)),
         target,
       };
+      // PT5 (D410): the user's tone, emoji, own hashtags and footer; the defaults change nothing
+      Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: 'short', seed: sha, titleMax: limits.targets?.[target]?.fields?.title?.max ?? null }));
       const dur = Number(row.facts?.duration);
       const peak = Number.isFinite(Number(c.anchor)) && Number.isFinite(Number(c.start)) ? Number(c.anchor) - Number(c.start) : 0;
       const at = Math.min(Math.max(peak, 0), Number.isFinite(dur) && dur > 0.4 ? dur - 0.2 : Math.max(peak, 0));
@@ -443,6 +446,8 @@ export async function packageUploads(opts) {
       hashtags: tpl.hashtags.map((t) => renderText(t, ctx, missing)),
       target,
     };
+    // PT5 (D410): the user's tone, emoji, own hashtags and footer (Settings > Posting & growth); the defaults change nothing
+    Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: row.kind, seed: sha, titleMax }));
     const at = uploadCoverAt(row, seconds);
     const coverOk = await extractCover(ffmpeg, dst, at, path.join(dir, 'cover.jpg'));
     const stamp = now().toISOString();

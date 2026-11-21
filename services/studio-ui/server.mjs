@@ -32,7 +32,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOTS, BOT_LABELS, GRACEFUL_MS, createBots } from '../bots/index.mjs';
 import { createFlags } from '../flags/index.mjs';
-import { LEDGER_NAME, POSTING_FLAG, createPostStore } from '../posting/index.mjs';
+import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadLimits } from '../posting/index.mjs';
 import { createYoutubeAuth } from '../posting/oauth.mjs';
 import { QUEUE_NAME, clearStuckLock, createUploadQueue, requestRunNow, stuckLock, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
@@ -40,6 +40,7 @@ import { previewRules } from '../posting/preview.mjs';
 import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
 import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, scheduleNextFree, schedulePreview } from '../posting/auto-settings.mjs';
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
+import { applyTextPrefs, readPrefs, savePrefs } from '../posting/post-prefs.mjs';
 import { SCHEDULE_FLAG } from '../posting/schedule.mjs';
 import { UploadError, checkPostStatus } from '../posting/youtube.mjs';
 import { GROWTH_FLAG, DB_NAME as GROWTH_DB, collect as growthCollect, openStore as openGrowthStore, view as growthView } from '../analytics/index.mjs';
@@ -1627,6 +1628,10 @@ export function createStudioServer(opts) {
         return json(res, 200, { ...readAutoPostSettings(opts.dataDir), flags: { autoPost: on(AUTO_FLAG), schedule: on(SCHEDULE_FLAG), deleteUploaded: on(DELETE_FLAG) } });
       } catch { return json(res, 500, { error: 'settings-unreadable' }); }
     }
+    if (req.method === 'GET' && route === '/ui/api/posts/prefs') {      // PT5 (D410) Settings > Posting & growth: post text, kind shares, growth suggestions. Read only.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      try { return json(res, 200, readPrefs(opts.dataDir)); } catch { return json(res, 500, { error: 'settings-unreadable' }); }
+    }
     if (req.method === 'GET' && route === '/ui/api/posts/auto/rules') {      // user 2026-11-20 "What gets posted": the rules in use, unchanged, plus what stops uploads (never silent). Read only.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
       const on = (id) => !!flags && flags.isOn(id);
@@ -1949,6 +1954,26 @@ export function createStudioServer(opts) {
       let r;
       try { r = saveAutoPostSettings(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
       return r.ok ? json(res, 200, { ok: true, ...r.settings }) : json(res, 400, { error: 'invalid', problems: r.problems });
+    }
+    if (route === '/ui/api/posts/prefs') {      // PT5 (D410): one click saves the post text card (D332). Every value is checked; nothing is written on a problem.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      if (Object.keys(body).some((k) => k !== 'prefs')) return json(res, 400, { error: 'bad-params' });
+      let r;
+      try { r = savePrefs(opts.dataDir, body); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return r.ok ? json(res, 200, r) : json(res, 400, { error: 'invalid', problems: r.problems });
+    }
+    if (route === '/ui/api/posts/prefs/preview') {
+      // PT5 (D410): the post text choices (not saved yet) applied to the newest clips' text. Read only: nothing is written.
+      if (Object.keys(body).some((k) => k !== 'text') || body.text === null || typeof body.text !== 'object' || Array.isArray(body.text)) return json(res, 400, { error: 'bad-params' });
+      const t = body.text;
+      const text = { tone: t.tone === 'clean' ? 'clean' : 'hype', emoji: t.emoji === true,
+        hashtags: Array.isArray(t.hashtags) ? t.hashtags.filter((h) => typeof h === 'string' && /^#[\p{L}\p{N}_]{1,39}$/u.test(h)).slice(0, 10) : [],
+        footer: typeof t.footer === 'string' ? t.footer.slice(0, 500) : '' };
+      try {
+        let lim = null; try { lim = loadLimits(); } catch { lim = null; }
+        const newest = posting.list().filter((p) => typeof p.title === 'string').sort((a, b) => String(b.madeAt ?? '').localeCompare(String(a.madeAt ?? ''))).slice(0, 3);
+        return json(res, 200, { items: newest.map((p) => ({ id: p.id, kind: p.kind, ...applyTextPrefs(p, text, { kind: p.kind, seed: p.id, titleMax: lim?.targets?.[p.target]?.fields?.title?.max ?? null }) })) });
+      } catch { return json(res, 500, { error: 'preview-unavailable' }); }
     }
     if (route === '/ui/api/posts/auto/rules') {      // user 2026-11-20: one click saves "What gets posted" (D332). Only the listed fields change; unknown rules and keys stay.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });

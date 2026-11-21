@@ -69,6 +69,7 @@ import { ensureScheduleSeed } from './schedule-seed.mjs';
 import { backlogOrder, clipFacts } from './backlog-order.mjs';
 import { createQuotaBudget, exhaustedUntil, loadQuota, quotaFallback, recordQuotaExceeded } from './quota-budget.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
+import { userKindShares } from './post-prefs.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -973,6 +974,9 @@ export function createPostChain(opts) {
     // RP5 (D373): the learned kind order only while the flag self-learning is on and a learned mix is in use
     let kindShares = null;
     if (flags.isOn(MIX_FLAG)) { try { kindShares = appliedKindShares(dataDir); } catch { kindShares = null; } }
+    // PT5 (D410): without a learned mix in use, the user's own kind shares (Settings > Posting & growth) set the order; even
+    // shares (the default) keep the order exactly as before. Only the order changes, never the count or the gap.
+    if (!kindShares) { try { kindShares = userKindShares(dataDir); } catch { kindShares = null; } }
     // D403: with the random-daily placement the backlog goes out shuffled (seeded), kinds mixed, split reels in part order.
     const order = backlogOrderFn(store);
     const r = await runAuto({ store, rules, outputsStatus, logFile: autoLogFile, now: () => new Date(nowMs()), kindShares, unscoredFloor: rankerMinScore(), order });

@@ -4,6 +4,8 @@
 // (private until its publish time). It loads ui/api/posts/auto/settings and .../schedule when Settings opens (flag posting
 // on); Save sends ui/api/posts/auto/settings only when the card changed (the server checks every value again). Moving or
 // removing a queued clip acts on its own click (ui/api/posts/auto/queue/move|remove, D332). Not live-gated, like the widget.
+// PT5 (D410): the POST TEXT AND GROWTH card (tone, emoji, own hashtags, footer with a preview on the newest clips, the
+// share of each kind, growth suggestions) loads ui/api/posts/prefs and saves it with the same Save / Discard.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -44,12 +46,24 @@ Column {
     property string skipText: ""
     property string skipProblem: ""
     property string rulesProblem: ""      // Codex round 3: a rules file that cannot be read; only Reset replaces it
+    // PT5 (D410): post text and growth (ui/api/posts/prefs)
+    readonly property var prefsDefault: ({ text: { tone: "hype", emoji: false, hashtags: [], footer: "" }, kindShare: ({ short: 20, montage: 20, "won-reel": 20, "impact-play": 20, "long-highlights": 20 }), growthSuggestions: true })
+    property var prefs: JSON.parse(JSON.stringify(prefsDefault))
+    property string prefsOrig: ""
+    property bool prefsLoaded: false
+    property string prefsError: ""
+    property string tagsText: ""
+    property string tagsProblem: ""
+    property var previewItems: []         // [{kind, title, description, hashtags}]
+    property string previewInfo: ""
     readonly property var weekDays: [{ id: "mon", text: "Mon" }, { id: "tue", text: "Tue" }, { id: "wed", text: "Wed" }, { id: "thu", text: "Thu" }, { id: "fri", text: "Fri" }, { id: "sat", text: "Sat" }, { id: "sun", text: "Sun" }]
 
     readonly property bool active: box.ready && box.flagOn("posting")
     readonly property bool cardDirty: loaded && JSON.stringify(card) !== orig
     readonly property bool rulesDirty: loaded && rulesOwn && JSON.stringify(rulesEdit) !== rulesOrig
-    readonly property bool dirty: cardDirty || rulesDirty
+    readonly property bool prefsDirty: prefsLoaded && JSON.stringify(prefs) !== prefsOrig
+    readonly property bool dirty: cardDirty || rulesDirty || prefsDirty
+    readonly property int shareSum: kindList.reduce((n, k) => n + (prefs.kindShare[k.id] || 0), 0)
     // The card's own rule controls (kinds, upload, score, per day) changed: only then may Save write the rules file.
     function ruleKeys(o) { return JSON.stringify({ a: o.autoUpload, k: o.kinds, s: o.minScore, m: o.maxPerDay }) }
     readonly property bool ruleKeysDirty: loaded && orig !== "" && ruleKeys(card) !== ruleKeys(JSON.parse(orig))
@@ -59,6 +73,8 @@ Column {
         : rulesOwn && rulesEdit.rules.some(r => r.kinds.length === 0) ? "Each rule needs at least one kind of clip."
         : customOn && weekDays.every(d => (card.customTimes[d.id] || []).length === 0) ? "Add at least one posting time to the week."
         : skipProblem !== "" ? skipProblem
+        : tagsProblem !== "" ? tagsProblem
+        : prefsLoaded && shareSum !== 100 ? "The shares of each kind add up to " + shareSum + " %; make them add up to 100 %."
         : card.postsPerDayMin > card.postsPerDayMax ? "The fewest posts a day must not be more than the most."
         : minutesOf(card.windowEnd, 0) <= minutesOf(card.windowStart, 0) ? "The posting window must end after it starts." : ""
     readonly property bool blocksSave: dirty && problem !== ""
@@ -75,6 +91,15 @@ Column {
         if (n === 0) return model + "No upload fits in a quota of " + q.toLocaleString(Qt.locale("en_US"), "f", 0) + " units a day (one upload needs "
             + (per + reserve).toLocaleString(Qt.locale("en_US"), "f", 0) + "): nothing uploads until the quota is raised.";
         return model + "About " + n + " uploads a day fit in the quota." + (card.maxPerDay > n ? " More than that a day stop at the quota and wait for the next day." : "");
+    }
+
+    // PT5: the quota model in use and why, in plain words
+    readonly property string quotaModel: {
+        const m = quota.fallback === true ? "the old unit count, for today" : quota.model === "unit-sum" ? "the old unit count" : quota.model === "upload-bucket" ? "YouTube's upload allowance" : "";
+        if (m === "") return "";
+        const why = quota.fallback === true ? "YouTube said the upload quota was used up, so this lasts until the next Pacific midnight."
+            : quota.model === "unit-sum" ? "Your quota settings ask for it." : "It is the default: Google gives uploads their own allowance of 100 a day.";
+        return "Quota model in use: " + m + ". " + why;
     }
 
     onActiveChanged: { if (!active) reset(); else if (!started) load() }
@@ -113,6 +138,14 @@ Column {
         rulesProblem = "";
         notices = [];
         skipText = "";
+        prefs = JSON.parse(JSON.stringify(prefsDefault));
+        prefsOrig = "";
+        prefsLoaded = false;
+        prefsError = "";
+        tagsText = "";
+        tagsProblem = "";
+        previewItems = [];
+        previewInfo = "";
     }
 
     function load() {
@@ -124,6 +157,56 @@ Column {
             render(b);
             loadTimes(false);
             loadRules(b.custom === true);
+        });
+        Api.get("ui/api/posts/prefs", (ok, b, err) => {
+            if (g !== gen) return;
+            if (!ok) { prefsError = "Post text settings are not available: " + err; return }
+            renderPrefs(b);
+        });
+    }
+
+    // ---- PT5 (D410) post text and growth ----
+    function renderPrefs(b) {
+        const p = b.prefs || prefsDefault, t = p.text || ({});
+        const ks = ({});
+        for (const k of kindList) ks[k.id] = clamp(p.kindShare ? p.kindShare[k.id] : 0, 0, 100, 0);
+        prefs = { text: { tone: t.tone === "clean" ? "clean" : "hype", emoji: t.emoji === true, hashtags: Array.isArray(t.hashtags) ? t.hashtags.map(String) : [], footer: String(t.footer || "") },
+            kindShare: ks, growthSuggestions: p.growthSuggestions !== false };
+        prefsError = b.error ? "Your post text settings could not be read (" + String(b.error) + "); the defaults are shown, and Save writes them again." : "";
+        tagsText = prefs.text.hashtags.join(" ");
+        tagsProblem = "";
+        prefsOrig = JSON.stringify(prefs);
+        prefsLoaded = true;
+    }
+    function setPref(f) {
+        if (!prefsLoaded) return false;
+        const p = JSON.parse(JSON.stringify(prefs));
+        if (f(p) === false) return false;
+        prefs = p;
+        return true;
+    }
+    function setTone(v) { return (v === "hype" || v === "clean") && setPref(p => { p.text.tone = v }) }
+    function setTags(text) {
+        tagsText = text;
+        const parts = String(text).split(/[\s,]+/).filter(x => x !== "").map(x => x.startsWith("#") ? x : "#" + x);
+        const bad = parts.find(x => !/^#[A-Za-z0-9_\u00C0-\uFFFF]{1,39}$/.test(x));
+        tagsProblem = bad !== undefined ? "Own hashtags: " + bad + " is not a hashtag (letters, numbers or _ after the #)."
+            : parts.length > 10 ? "Own hashtags: at most 10." : "";
+        if (tagsProblem !== "") return false;
+        return setPref(p => { p.text.hashtags = parts.filter((x, i) => parts.findIndex(y => y.toLowerCase() === x.toLowerCase()) === i) });
+    }
+    function setShare(kind, n) {
+        if (!kindList.some(k => k.id === kind)) return false;
+        return setPref(p => { p.kindShare[kind] = clamp(Math.round(n), 0, 100, 0) });
+    }
+    function loadPreview() {
+        const g = gen;
+        previewInfo = "Loading...";
+        Api.post("ui/api/posts/prefs/preview", { text: JSON.parse(JSON.stringify(prefs.text)) }, (ok, b, err) => {
+            if (g !== gen) return;
+            if (!ok) { previewItems = []; previewInfo = "No preview: " + err; return }
+            previewItems = Array.isArray(b.items) ? b.items : [];
+            previewInfo = previewItems.length ? "Your newest clips with these choices (not saved yet):" : "No clips yet: the preview shows once the first clip has a post.";
         });
     }
 
@@ -327,6 +410,15 @@ Column {
                 if (ok) { if (g === gen) rulesOrig = sent; return store.say("What gets posted saved; the next upload pass uses it.") }
                 const why = problemsText(b && b.problems);
                 store.say("What gets posted not saved: " + (why !== "" ? why : err));
+            });
+        }
+        if (prefsDirty) {
+            const pb = JSON.parse(JSON.stringify(prefs));
+            const psent = JSON.stringify(prefs);
+            Api.post("ui/api/posts/prefs", { prefs: pb }, (ok, b, err) => {
+                if (ok) { if (g === gen) prefsOrig = psent; return store.say("Post text and growth settings saved; new posts use them.") }
+                const why = problemsText(b && b.problems);
+                store.say("Post text and growth settings not saved: " + (why !== "" ? why : err));
             });
         }
         if (!cardDirty) return;
@@ -804,6 +896,7 @@ Column {
             }
         }
         Quiet { objectName: "autopostFit"; text: ap.fit }
+        Quiet { objectName: "autopostQuotaModel"; text: ap.quotaModel }
         Text {
             objectName: "autopostProblem"
             visible: ap.problem !== ""
@@ -814,6 +907,122 @@ Column {
             font.family: Theme.family
             font.pixelSize: Theme.ty.small
         }
+    }
+
+    // PT5 (D410): post text and growth, saved with the same Save / Discard as the card above
+    UCard {
+        title: "POST TEXT AND GROWTH"
+        Quiet { text: "How new posts are worded, which kinds of clip go up most, and whether Ujwalam may suggest better posting times. New posts use these; posts already made keep their text." }
+        Text {
+            objectName: "autopostPrefsError"
+            visible: ap.prefsError !== ""
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: ap.prefsError
+            color: Theme.c.danger
+            font.family: Theme.family
+            font.pixelSize: Theme.ty.small
+        }
+        Flow {
+            width: parent.width
+            spacing: Theme.sp.l
+            Field {
+                label: "Tone:"
+                width: 330
+                PickBox {
+                    objectName: "autopostTone"
+                    width: parent.width
+                    label: "Tone"
+                    model: [{ value: "hype", text: "Hype (as the lines are written)" }, { value: "clean", text: "Clean (no ! and no emoji)" }]
+                    want: ap.prefs.text.tone === "clean" ? 1 : 0
+                    onChose: (v) => ap.setTone(v)
+                }
+            }
+            Field {
+                label: "Emoji in titles:"
+                KindToggle {
+                    objectName: "autopostEmoji"
+                    text: ap.prefs.text.emoji ? "Emoji on" : "Emoji off"
+                    want: ap.prefs.text.emoji
+                    enabled: ap.prefs.text.tone === "hype"
+                    onToggled: ap.setPref(p => { p.text.emoji = checked })
+                }
+                Quiet { text: ap.prefs.text.tone === "hype" ? "One emoji at the end of the title, when it still fits." : "Clean tone never adds an emoji." }
+            }
+        }
+        Words { text: "Your own hashtags:" }
+        UField {
+            objectName: "autopostTags"
+            width: Math.min(parent.width, 420)
+            label: "Your own hashtags"
+            placeholderText: "#gaming #clutch"
+            text: ap.tagsText
+            onTextEdited: ap.setTags(text)
+        }
+        Quiet { text: "Added to every new post after the usual ones, up to 10." }
+        Words { text: "Description footer:" }
+        UField {
+            objectName: "autopostFooter"
+            width: parent.width
+            label: "Description footer"
+            placeholderText: "Live most nights. New clips every day."
+            text: ap.prefs.text.footer
+            onTextEdited: ap.setPref(p => { p.text.footer = text.slice(0, 500) })
+        }
+        Quiet { text: "A last line under every new description (plain text, up to 500 characters)." }
+        UButton {
+            objectName: "autopostPreview"
+            text: "Preview on my newest clips"
+            tip: "Shows your newest clips' text with these choices. Nothing is saved or posted."
+            onClicked: ap.loadPreview()
+        }
+        Quiet { objectName: "autopostPreviewInfo"; visible: ap.previewInfo !== ""; text: ap.previewInfo }
+        Repeater {
+            model: ap.previewItems
+            delegate: Quiet {
+                required property var modelData
+                required property int index
+                objectName: "autopostPreview:" + index
+                color: Theme.c.text
+                text: String(modelData.title) + "\n" + String(modelData.description) + "\n" + (modelData.hashtags || []).join(" ")
+            }
+        }
+        Words { text: "Share of each kind:" }
+        Quiet { text: "Of every 100 posts, about this many are of each kind. Only the order changes: the number a day and the gap stay as set above." }
+        Flow {
+            width: parent.width
+            spacing: Theme.sp.l
+            Repeater {
+                model: ap.kindList
+                delegate: Field {
+                    id: sf
+                    required property var modelData
+                    label: modelData.text + ":"
+                    width: 200
+                    SpinBox2 {
+                        objectName: "autopostShare_" + sf.modelData.id
+                        label: sf.modelData.text
+                        suffix: " %"
+                        from: 0
+                        to: 100
+                        stepSize: 5
+                        want: ap.prefs.kindShare[sf.modelData.id] || 0
+                        onValueModified: ap.setShare(sf.modelData.id, value)
+                    }
+                }
+            }
+        }
+        Quiet { objectName: "autopostShareSum"; text: "Together: " + ap.shareSum + " %" + (ap.shareSum === 100 ? "." : " (must be 100 %).") }
+        USwitch {
+            id: growSw
+            objectName: "autopostGrowth"
+            width: parent.width
+            text: ap.prefs.growthSuggestions ? "Growth suggestions on" : "Growth suggestions off"
+            checked: ap.prefs.growthSuggestions
+            onToggled: ap.setPref(p => { p.growthSuggestions = checked })
+            Binding { target: growSw; property: "checked"; value: ap.prefs.growthSuggestions }
+        }
+        Quiet { text: "With Growth data on and at least 8 posts with numbers, the Posts window may suggest moving some posts to better times, with the numbers behind it. Nothing changes until you click Apply, and Undo puts it back." }
     }
 
     UCard {
@@ -897,7 +1106,9 @@ Column {
     function probe() {
         return { loaded: loaded, card: JSON.parse(JSON.stringify(card)), dirty: dirty, fit: fit, flags: flagsText, problem: problem,
             rulesOwn: rulesOwn, rulesProblem: rulesProblem, rules: JSON.parse(JSON.stringify(rulesEdit)), notices: notices.slice(), customNext: customNext.slice(),
-            timesInfo: timesInfo, times: times.map(t => t.text), message: message, stuckLockId: stuckLockId };
+            timesInfo: timesInfo, times: times.map(t => t.text), message: message, stuckLockId: stuckLockId,
+            prefsLoaded: prefsLoaded, prefs: JSON.parse(JSON.stringify(prefs)), prefsDirty: prefsDirty, prefsError: prefsError, shareSum: shareSum, quotaModel: quotaModel,
+            previewInfo: previewInfo, preview: previewItems.map(i => String(i.title)) };
     }
 
     // ap-upload:<on|off> | ap-kind:<id>:<on|off> | ap-score:<n> | ap-perday:<n> | ap-gap:<h> | ap-days:<n> | ap-placement:<id>
@@ -941,6 +1152,14 @@ Column {
         if (a === "ap-move" && p.length >= 3) { move(arg, p.slice(2).join(":")); return true } // the time has colons: the rest of the action
         if (a === "ap-remove" && arg) { remove(arg); return true }
         if (a === "ap-run") { runNow(); return true }
+        // PT5: ap-tone:<hype|clean> | ap-emoji:<on|off> | ap-tags:<tags, space-separated, URI-encoded> | ap-footer:<URI-encoded text> | ap-share:<kind>:<n> | ap-growth:<on|off> | ap-preview
+        if (a === "ap-tone") return setTone(arg);
+        if (a === "ap-emoji") return setPref(q => { q.text.emoji = on(arg) });
+        if (a === "ap-tags") return setTags(decodeURIComponent(p.slice(1).join(":")));
+        if (a === "ap-footer") return setPref(q => { q.text.footer = decodeURIComponent(p.slice(1).join(":")).slice(0, 500) });
+        if (a === "ap-share" && p.length === 3) return setShare(arg, parseInt(p[2], 10));
+        if (a === "ap-growth") return setPref(q => { q.growthSuggestions = on(arg) });
+        if (a === "ap-preview") { loadPreview(); return true }
         return false;
     }
 }
