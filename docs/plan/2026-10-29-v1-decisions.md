@@ -2549,3 +2549,37 @@ fail-closed channel reads, the single sender, the lock and publishAt on every up
 - The proposal stores a fingerprint of the schedule file it was made from. Apply refuses in plain words when the file changed since, and asks for a fresh suggestion.
 - Own hashtags: #Shorts is refused. Footer: control characters refused (same rule as the post editor). Each emoji, footer and own hashtag is added only if the composed text still passes data/posting/limits.json (`limitsFit`); otherwise it is left out.
 - The Apply text says what it replaces: "Replaces your random 3-6 a day with fixed times ... (Undo keeps your old schedule)."
+
+## D411 — Clip look FX1-FX4 as built (decided, 2026-11-21)
+
+User 2026-11-20: start/end music and transitions felt "unpleasant, low quality and dated"; the name card sat in the centre and blurred the gameplay; wanted more options while making clips and randomising from ticks in Settings. Built on branch claude/clip-look (not merged):
+
+- **FX1 clip look** (`services/clip/clip_look.py`, `data/clip/look.json`, flag `clip-look`, ON): each reel gets one seeded pick of music mode, transition set and name style from the user's ticks in `settings.json` clips.look. Lock = always that style; randomise off = first tick; no ticks = that part off; no repeat of the last pick per group while another tick is free (history in `<data>/clips/look-history.json`).
+- **FX2 name styles** (`services/clip/reel_title.py`, `data/clip/title.json` v2): lower third, corner tag, kinetic text reveal, drawn by libass (ASS `subtitles` filter), no blur or darkening. Entrances 233-250 ms, exits 217-267 ms (measured). The RP4 centre card is retired: an old record restyles to kinetic.
+- **FX3 transition sets** (`services/clip/reel_transition.py` plan_set/beat_sync, `services/clip/reel_sfx.py`, `data/clip/transitions.json`): Punchy, Cinematic and Clean, with a kind per join (never the same twice in a row). Join sounds are made on this PC with numpy. Flash joins are at least 1 s apart, so the measured rate stays at or below 1.5 flashes/s (the limit is 3/s). Beat sync only moves a join earlier, by at most 0.25 s.
+- **FX4 music library** (`services/clip/music_library.py`, `data/clip/music-library.json`): tracks come from the user's music folder, analysed off air with PyAV and numpy (tempo, beats, energy, drop, LUFS and a guessed mood that the user can change). Tracks are matched to the reel's energy and mood, seeded, and none of the last 3 repeats. Modes: intro-outro, drop (the track's drop lands on the strongest moment) and full-bed, at -16 LUFS by default (range -24 to -10). With no fitting track, the made-here bed (`reel_music`) is used. The game sound ducks the music, and audio is still encoded once.
+- **Settings > Clips > Clip look** (QML) holds ticks per group, the mixing switch, "Always use" locks, the music folder and level, the join sounds and beat sync, and the name size and duration, all saved with Save/Discard. `user-settings.mjs` lookProblems mirrors the Python rules; both run `tests/fixtures/clip-look-cases.json`.
+- **Per-clip choice** in "Make clips?": music, transitions and name can be set for that recording only ("As in Settings" by default). The choice is not saved. Path: answer.json, then job.look, then `UJWALAM_CLIP_LOOK`.
+- Long video is unchanged: it keeps the cross fade or cut.
+- Not started (each needs the user's yes): FX5 free music pack download and FX6 ACE-Step generation.
+- Unverified: the look on real footage, NVENC renders (tests used the CPU encoder), the mood guess on real tracks, and HUD avoidance for corner and lower-third placement. Also: the logo is not drawn yet, and "theme" colour uses the fixed accent from title.json.
+Evidence: `docs/evidence/2026-11-21-clip-look-fx1-fx4.md`.
+
+**Codex review addendum (2026-11-21), all fixed with a test each:**
+
+- Music folder: links, junctions and other reparse points are not followed. Each file's resolved path is checked against the resolved folder right before it is opened (analyse and render). The cache key is now path + size + `st_mtime_ns` + a hash of the first and last 64 KiB.
+- Mix: game, music and join sounds go into one final limiter at -4 dBFS, run 4x oversampled (attack 20 ms, release 400 ms), in the one audio encode. The game keeps its level. Coincident full-scale peaks measured -2.5 dBTP after AAC.
+- Timeline: flash spacing is checked again after beat sync trims (`respace`). Captions are made on the cross-faded timeline (`reel_captions.retime`), so reels with captions keep their transitions, join sounds and beat sync (live review and montage).
+- Short tracks: drop and full-bed prefer a track as long as the reel. Otherwise the track loops on whole bars with a crossfade on the beat. No silence.
+- Recaption keeps the folder track's plan. If the track is gone, the made-here bed is used and render.json says so (`fallback`, `was`).
+- Switches: each part of the look obeys its own switch: music = `reel-music`, transitions = `reel-transitions`, name = `clip-look`. So that the music and transitions the user asked for are not lost, `reel-music` and `reel-transitions` are now ON by default (as `clip-look` already was).
+- `--resume`: a kept reel keeps its stored row (look, music, transitions). Only newly rendered reels change the pick history.
+- Analysis memory: FFT in batches of 256 frames, autocorrelation only over the BPM lags, mono decode, a 20 s loudness guide. A 240 s track peaks at 119 MB (traced).
+
+**Codex verify addendum (2026-11-21):** six items were verified fixed. Two more were fixed, each with a test:
+- A drop segment that starts past the loop end now starts at the same place inside the loop, so the bed is always full length. Test: a drop late in a short looped track has no gap.
+- Each reel's row is saved to render.json (temp + rename) as soon as the reel is done, together with the stored rows of reels not reached yet. On `--resume`, a reel file without its row is rendered again with this run's decisions; it is never kept with guessed ones. Test: a montage run stopped after its reel loop keeps the row; resuming keeps it; with the row removed, the reel is rendered again.
+
+Accepted residuals (not fixed): (a) a check-then-open race in the user's own music folder needs a local process actively swapping links, and such a process already runs with the user's rights; (b) a cache-key collision needs a same-size edit in the middle of the file plus a deliberately restored `mtime_ns`.
+
+**Codex verify 2 (2026-11-21):** resume trusts a row only when it belongs to the reel file next to it. Each row stores `fileStamp` (the file's size and mtime in ns), and `--resume` keeps a reel only when the stamp matches the file. Before a reel renders, render.json is saved with that reel's old row removed. So an old row can never be paired with a newer file: not after a stop between the rename and the row, not when a fresh run renders over an earlier one, and not with an older row that has no stamp.

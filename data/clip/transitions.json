@@ -10,5 +10,18 @@
     { "id": "cut", "label": "Cut", "xfade": null, "about": "Hard cut with a short audio fade (as before)." },
     { "id": "fade", "label": "Cross fade", "xfade": "fade", "ms": { "min": 150, "max": 500, "default": 250 },
       "about": "The next piece fades in over the last moment of the one before; the sound crossfades. Each join makes the reel this much shorter." }
+  ],
+  "setsComment": "FX3 (D411): transition sets of the clip look (data/clip/look.json, Settings > Clips > Clip look). Each join of a reel draws one ffmpeg xfade kind from its set (seeded, weighted, never the same kind twice in a row). Joins marked flash change the whole picture's brightness (fade through white or black); two of them are never closer than minFlashGapSec, so a reel stays far under 3 flashes per second. Sound effects are made on this PC (reel_sfx.py), peak at sfxDb under full scale, and are not ducked. beatSync moves a join up to maxBeatShiftSec earlier onto the music's beat (a piece's tail is trimmed, never its kill).",
+  "minFlashGapSec": 1.0,
+  "maxBeatShiftSec": 0.25,
+  "sets": [
+    { "id": "punchy", "label": "Punchy gaming", "ms": { "min": 160, "max": 300, "default": 220 }, "sfx": ["whoosh", "impact"], "sfxDb": -14,
+      "joins": [ { "xfade": "zoomin", "weight": 2 }, { "xfade": "slideleft", "weight": 1 }, { "xfade": "slideright", "weight": 1 },
+                 { "xfade": "pixelize", "weight": 1 }, { "xfade": "fadewhite", "weight": 1, "flash": true } ] },
+    { "id": "cinematic", "label": "Cinematic", "ms": { "min": 350, "max": 600, "default": 480 }, "sfx": ["riser", "boom"], "sfxDb": -16,
+      "joins": [ { "xfade": "fadeblack", "weight": 2, "flash": true }, { "xfade": "smoothleft", "weight": 1 }, { "xfade": "circleopen", "weight": 1 },
+                 { "xfade": "fade", "weight": 1 } ] },
+    { "id": "clean", "label": "Clean / minimal", "ms": { "min": 180, "max": 300, "default": 220 }, "sfx": ["soft-whoosh"], "sfxDb": -24,
+      "joins": [ { "xfade": "fade", "weight": 2 }, { "xfade": "dissolve", "weight": 1 }, { "xfade": "smoothup", "weight": 1 } ] }
   ]
 }

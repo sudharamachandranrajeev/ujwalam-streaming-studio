@@ -1,21 +1,21 @@
 {
-  "$comment": "RP4 title card (D362, user 2026-11-11: 'streamer title fade over a blurred background'). A short title (the streamer brand from data/profile.local.json, never committed) fades in and out over a blurred, darkened copy of the reel behind it. Read by services/clip/reel_title.py. Placed right after the teaser (part 1 of a montage; the payoff-first hook of a reel), else at the very start of the reel. Behind the flag reel-title (off by default). No music yet (RP3 adds the bed that fades out as the title ends). Entrance under 600 ms, exit under 400 ms (overlay rule).",
-  "version": "1.0.0",
+  "$comment": "Name display of a reel (FX2, D411; replaces the RP4 centre card over a blurred copy, which the user did not pick on 2026-11-20: 'extremely basic, and it's at the center bluring all gameplay behind'). Three styles drawn as an ASS subtitle file by libass in the reel's own render: lower-third, corner-tag, kinetic. The game picture is never blurred or darkened; the text has an outline and a hard shadow only. The text is the streamer brand from data/profile.local.json (never committed). Read by services/clip/reel_title.py. The style, position, colour, size and length come from the clip look (data/clip/look.json, Settings > Clips). Entrances under 600 ms, exits under 400 ms (overlay rule).",
+  "version": "2.0.0",
   "status": "proposed",
-  "approved": "user 2026-11-11 chose the feature; durations, blur, darkness, size and position are the agent's proposal (plan RP4)",
-  "checked": "2026-11-12",
-  "flag": "reel-title",
+  "approved": "user 2026-11-20 chose the three styles and no blur; timings, sizes and colours are the agent's proposal (plan FX2)",
+  "checked": "2026-11-21",
+  "flag": "clip-look",
   "fontFile": "Exo2-Bold.ttf",
-  "durationSec": { "value": 1.6, "min": 1.2, "max": 1.8 },
-  "fadeInMs": 450,
-  "fadeOutMs": 350,
-  "blur": { "sigma": 18, "steps": 2 },
-  "darken": 0.55,
-  "sizeOfHeight": 0.07,
-  "colour": "#FFFFFF",
-  "borderOfSize": 0.08,
+  "fontFamily": "Exo 2",
+  "themeAccent": "#FF3B5C",
+  "textColour": "#FFFFFF",
   "maxChars": 24,
   "glyphWidthOfSize": 0.62,
   "minReelSec": 4.0,
-  "why": "1.6 s sits inside the 1.2-1.8 s the user named; the entrance and exit are under the overlay limits (600/400 ms). The blurred layer is a Gaussian blur (ffmpeg gblur, in the LGPL builds; boxblur is not) of the reel itself, darkened to 55 % so a white title reads on any scene. The title is centred in the safe width and the middle of the frame. A reel shorter than minReelSec gets no title."
+  "styles": {
+    "lower-third": { "sizeOfHeight": 0.045, "barInMs": 250, "typeStartMs": 150, "typeMaxMs": 300, "exitMs": 300, "outlineOfSize": 0.06, "shadowOfSize": 0.06 },
+    "corner-tag": { "sizeOfHeight": 0.032, "popMs": 220, "fadeInMs": 120, "exitMs": 250, "dimAfterMs": 2000, "dimToAlpha": 77, "outlineOfSize": 0.04, "shadowOfSize": 0.05 },
+    "kinetic": { "sizeOfHeight": 0.075, "letterMs": 110, "lettersMaxMs": 450, "exitMs": 300, "outlineOfSize": 0.07, "shadowOfSize": 0.08 }
+  },
+  "why": "Lower third: an accent bar slides in from the left in 250 ms and the name types on over it within 450 ms, then fades out in 300 ms. Corner tag: a small rounded badge pops in with a slight overshoot (220 ms), stays the whole clip and dims to 70 % after 2 s, fades out in 250 ms. Kinetic: big letters pop in one by one in the upper third (scale-punch or slice-in), the last letter is in by 560 ms, fades out in 300 ms. Text is cut at maxChars and shrunk to fit the safe width."
 }

@@ -1,0 +1,27 @@
+{
+  "$comment": "FX4 music library (D411, plan docs/plan/2026-11-21-clip-music-name-transitions.md 3.4; user 2026-11-20 chose 'find, generate and pick musics based on game clips'). Tracks come from the user's own music folder (Settings > Clips > Clip look > Music); nothing is downloaded. Each track is analysed once, off air, with PyAV + numpy (shipped Python runtime): tempo and beat grid (onset envelope + autocorrelation), energy curve, the drop (largest sustained energy rise), integrated loudness (BS.1770, scene_music.measure_lufs), brightness, and a mood guessed from them (the user may change it). Each reel's target (energy from its kills and streaks, moods from its kind) picks a track: seeded, weighted by score, never one of the last historyN tracks while another fits. Read by services/clip/music_library.py. All numbers are the agent's proposal; the mood guess is UNVERIFIED against real tracks.",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-21",
+  "library": "music/library.json",
+  "extensions": [".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus"],
+  "maxFiles": 2000,
+  "maxNewPerRun": 40,
+  "minTrackSec": 8.0,
+  "maxAnalyseSec": 240,
+  "analysisSampleRate": 48000,
+  "bpm": { "min": 70, "max": 180, "prefer": 120 },
+  "moods": ["phonk", "trap", "edm", "cinematic", "lo-fi", "chill"],
+  "targets": {
+    "streak": ["phonk", "edm", "trap"],
+    "montage": ["trap", "edm", "phonk"],
+    "live-clip": ["trap", "edm", "phonk"],
+    "match-reel": ["edm", "trap", "cinematic"],
+    "impact-play": ["cinematic", "trap", "edm"],
+    "calm": ["lo-fi", "chill", "cinematic"]
+  },
+  "score": { "mood": 0.5, "energy": 0.35, "length": 0.15, "threshold": 0.45, "moodRank": [1.0, 0.85, 0.7], "otherMood": 0.2, "sharpness": 4 },
+  "bed": { "introMinSec": 2.0, "introFadeOutSec": 0.4, "outroSec": 4.0, "outroFadeInSec": 0.15, "endFadeSec": 1.2, "startFadeSec": 0.05,
+           "dropLeadFadeSec": 0.3, "peakCeilingDb": -1.0 },
+  "licence": "your own music: you said you may use it (the folder you picked)"
+}

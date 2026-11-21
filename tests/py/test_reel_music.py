@@ -44,9 +44,9 @@ def rms_db(samples):
 
 
 class DataTests(unittest.TestCase):
-    def test_flag_is_off_by_default(self):
+    def test_flag_is_on_by_default(self):  # D411: the user asked for reel music; it also gates the clip look's music
         flags = {f["id"]: f for f in cc.load_json(cc.FLAGS_FILE)["flags"]}
-        self.assertIs(flags[rm.FLAG]["default"], False)
+        self.assertIs(flags[rm.FLAG]["default"], True)
         self.assertEqual(CFG["flag"], rm.FLAG)
 
     def test_bad_config_is_refused(self):
@@ -132,14 +132,15 @@ class ArgvTests(unittest.TestCase):
         self.assertIn("[2:a]aresample=48000[mbed]", g)
         self.assertIn("[amus0]asplit=2[mgame][mkey]", g)
         self.assertIn("sidechaincompress=threshold=0.05:ratio=6", g)
-        self.assertIn("amix=inputs=2:duration=first:normalize=0[aout0]", g)
+        self.assertIn("amix=inputs=2:duration=first:normalize=0,aresample=192000,alimiter=", g)
+        self.assertIn(",aresample=48000[aout0]", g)  # D411: one final true-peak limiter
         self.assertIn("[aout1]", g)
         self.assertNotIn("[amus1]", g)
 
     def test_with_the_start_frame_the_input_index_moves(self):
         _, g = self.graph(thumbnail="t.png")
         self.assertIn("[3:a]aresample=48000[mbed]", g)
-        self.assertIn("normalize=0[ab0]", g)
+        self.assertIn(",aresample=48000[ab0]", g)
 
     def test_picture_only_has_no_music(self):
         a, g = self.graph(audio_tracks=0)

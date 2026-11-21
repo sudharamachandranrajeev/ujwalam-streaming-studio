@@ -276,6 +276,135 @@ Column {
         }
     }
 
+    // FX1-FX4 (D411) the clip look: per reel, one music mode, one transition set and one name style, picked from the
+    // ticks below (seeded, never the same as the last reel while another tick is free). Saved with Save, like the rest.
+    UCard {
+        title: "CLIP LOOK"
+        visible: !!cp.d.look
+        Quiet {
+            text: "Each clip gets its music, its transitions and the way your name shows from the styles you tick here. " +
+                  "Untick every style of a part to switch that part off. \"Always use\" picks one style for every clip. " +
+                  "When you're asked \"Make clips?\" you can still choose a style for that one recording."
+        }
+        USwitch {
+            objectName: "lookRandomise"
+            width: parent.width
+            text: "Mix the ticked styles from clip to clip"
+            hint: "Off: every clip uses the first ticked style of each part."
+            checked: !!cp.d.look && cp.d.look.randomise === true
+            onToggled: cp.box.setLook("", "randomise", checked)
+        }
+        Repeater {
+            model: [{ g: "music", title: "Music" }, { g: "transitions", title: "Transitions" }, { g: "name", title: "Your name on screen" }]
+            delegate: Column {
+                id: lg
+                required property var modelData
+                readonly property var grp: cp.box.lookGroup(modelData.g)
+                readonly property var val: cp.d.look ? cp.d.look[modelData.g] : ({})
+                readonly property var ticked: (val || {})[grp.ticks] || []
+                width: parent.width
+                spacing: Theme.sp.xs
+                Words { text: lg.modelData.title; font.weight: Font.DemiBold }
+                Repeater {
+                    model: lg.grp.options
+                    delegate: USwitch {
+                        id: opt
+                        required property var modelData
+                        objectName: "lookTick_" + lg.modelData.g + "_" + modelData.id
+                        width: parent.width
+                        text: modelData.label
+                        hint: modelData.about
+                        checked: lg.ticked.includes(modelData.id)
+                        onToggled: cp.box.tickLook(lg.modelData.g, modelData.id, checked)
+                    }
+                }
+                Row {
+                    spacing: Theme.sp.s
+                    Words { text: "Always use"; anchors.verticalCenter: parent.verticalCenter }
+                    UCombo {
+                        objectName: "lookLock_" + lg.modelData.g
+                        width: 260
+                        label: lg.modelData.title + " always use"
+                        enabled: lg.ticked.length > 0
+                        model: [{ value: "", text: "Any ticked style" }].concat(lg.grp.options.filter(o => lg.ticked.includes(o.id)).map(o => ({ value: o.id, text: o.label })))
+                        currentIndex: Math.max(0, model.findIndex(m => m.value === ((lg.val || {}).lock || "")))
+                        onChose: (v) => cp.box.setLook(lg.modelData.g, "lock", v === "" ? null : v)
+                    }
+                }
+            }
+        }
+        Words { text: "Music settings"; font.weight: Font.DemiBold }
+        Words { text: "My music folder (tracks are picked to fit each clip; nothing is downloaded)" }
+        UField {
+            objectName: "lookMusicFolder"
+            width: Math.min(parent.width, 520)
+            label: "My music folder"
+            placeholderText: "Like D:\\Music\\Clips (empty: music made on this PC)"
+            text: cp.d.look ? cp.d.look.music.folder : ""
+            onTextEdited: cp.box.setLook("music", "folder", text)
+        }
+        Row {
+            spacing: Theme.sp.s
+            Words { text: "Music level"; anchors.verticalCenter: parent.verticalCenter }
+            USpin {
+                objectName: "lookMusicLevel"
+                label: "Music level"
+                from: ((cp.box.info.look || {}).levelDb || {}).min || -24
+                to: ((cp.box.info.look || {}).levelDb || {}).max || -10
+                suffix: " dB"
+                value: cp.d.look ? cp.d.look.music.levelDb : -16
+                onValueModified: cp.box.setLook("music", "levelDb", value)
+            }
+        }
+        Words { text: "Transition settings"; font.weight: Font.DemiBold }
+        USwitch {
+            objectName: "lookSfx"
+            width: parent.width
+            text: "Sound on each join"
+            hint: "A whoosh, hit or riser made on this PC, quieter than the game."
+            checked: !!cp.d.look && cp.d.look.transitions.sfx === true
+            onToggled: cp.box.setLook("transitions", "sfx", checked)
+        }
+        USwitch {
+            objectName: "lookBeatSync"
+            width: parent.width
+            text: "Put joins on the beat"
+            hint: "Moves a join up to a quarter second earlier so it lands on a beat of the music. Clips with captions keep their joins."
+            checked: !!cp.d.look && cp.d.look.transitions.beatSync === true
+            onToggled: cp.box.setLook("transitions", "beatSync", checked)
+        }
+        Words { text: "Name settings"; font.weight: Font.DemiBold }
+        Row {
+            spacing: Theme.sp.s
+            Words { text: "Size"; anchors.verticalCenter: parent.verticalCenter }
+            USpin {
+                objectName: "lookNameSize"
+                label: "Name size"
+                from: ((cp.box.info.look || {}).sizePct || {}).min || 60
+                to: ((cp.box.info.look || {}).sizePct || {}).max || 160
+                stepSize: 10
+                suffix: " %"
+                value: cp.d.look ? cp.d.look.name.sizePct : 100
+                onValueModified: cp.box.setLook("name", "sizePct", value)
+            }
+            Words { text: "Shown for"; anchors.verticalCenter: parent.verticalCenter }
+            USpin {
+                objectName: "lookNameSec"
+                label: "Name shown for"
+                from: ((cp.box.info.look || {}).durationSec || {}).min || 1
+                to: ((cp.box.info.look || {}).durationSec || {}).max || 4
+                suffix: " s"
+                value: cp.d.look ? Math.round(cp.d.look.name.durationSec) : 2
+                onValueModified: cp.box.setLook("name", "durationSec", value)
+            }
+        }
+        UButton {
+            objectName: "lookReset"
+            text: "Reset to defaults"
+            onClicked: { const d = Object.assign({}, cp.d); d.look = JSON.parse(JSON.stringify(cp.box.info.look.defaults)); cp.box.draft = d }
+        }
+    }
+
     // D403 Recordings Ujwalam made clips from: whether each is deleted once clipped, and Keep for labelling (one click,
     // saved at once; ui/api/recordings/keep). A kept recording is never deleted by Delete clipped recordings.
     property var recs: []

@@ -39,9 +39,9 @@ class DataTests(unittest.TestCase):
         self.assertIsNone(D["byId"]["cut"]["xfade"])
         self.assertEqual(D["byId"]["fade"]["ms"], {"min": 150, "max": 500, "default": 250})
 
-    def test_flag_is_off_by_default(self):
+    def test_flag_is_on_by_default(self):  # D411: the user asked for transitions; it also gates the clip look's joins
         flags = {f["id"]: f for f in cc.load_json(cc.FLAGS_FILE)["flags"]}
-        self.assertIs(flags[rt.FLAG]["default"], False)
+        self.assertIs(flags[rt.FLAG]["default"], True)
 
     def test_settings_checks(self):
         self.assertEqual(rt.transition_problems({"kind": "fade", "ms": 300}, D), [])
@@ -56,6 +56,7 @@ class DataTests(unittest.TestCase):
 
     def test_active_needs_the_flag_then_follows_the_setting(self):
         with tempfile.TemporaryDirectory() as d:
+            write(d, cc.LOCAL_FLAGS, {"flags": {rt.FLAG: False}})
             self.assertIsNone(rt.active(d, D), "flag off: hard cut")
             write(d, cc.LOCAL_FLAGS, {"flags": {rt.FLAG: True}})
             self.assertEqual(rt.active(d, D), FADE, "flag on, no setting: the default cross fade")

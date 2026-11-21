@@ -1,0 +1,156 @@
+[
+ [
+  {},
+  []
+ ],
+ [
+  {
+   "randomise": false
+  },
+  []
+ ],
+ [
+  {
+   "randomise": "yes"
+  },
+  [
+   "clips.look.randomise must be true or false"
+  ]
+ ],
+ [
+  {
+   "colour": 1
+  },
+  [
+   "unknown clips.look setting colour"
+  ]
+ ],
+ [
+  {
+   "music": {
+    "modes": [
+     "drop",
+     "drop"
+    ]
+   }
+  },
+  [
+   "clips.look.music.modes must be a list of intro-outro, drop, full-bed (each once)"
+  ]
+ ],
+ [
+  {
+   "music": {
+    "modes": []
+   }
+  },
+  []
+ ],
+ [
+  {
+   "music": {
+    "levelDb": -30
+   }
+  },
+  [
+   "clips.look.music.levelDb must be from -24 to -10"
+  ]
+ ],
+ [
+  {
+   "music": {
+    "sources": [
+     "folder",
+     "web"
+    ]
+   }
+  },
+  [
+   "clips.look.music.sources must be a list of folder, pack, ai (each once)"
+  ]
+ ],
+ [
+  {
+   "transitions": {
+    "styles": [
+     "retro"
+    ]
+   }
+  },
+  [
+   "clips.look.transitions.styles must be a list of punchy, cinematic, clean (each once)"
+  ]
+ ],
+ [
+  {
+   "transitions": {
+    "lock": "clean",
+    "sfx": false,
+    "beatSync": true
+   }
+  },
+  []
+ ],
+ [
+  {
+   "transitions": {
+    "lock": "retro"
+   }
+  },
+  [
+   "clips.look.transitions.lock must be empty or one of punchy, cinematic, clean"
+  ]
+ ],
+ [
+  {
+   "name": {
+    "colour": "#12345G"
+   }
+  },
+  [
+   "clips.look.name.colour must be theme or a colour like #FF3B5C"
+  ]
+ ],
+ [
+  {
+   "name": {
+    "position": "middle"
+   }
+  },
+  [
+   "clips.look.name.position must be one of auto, top-left, top-right, bottom-left, bottom-right, upper-third, lower-third"
+  ]
+ ],
+ [
+  {
+   "name": {
+    "sizePct": 100.5
+   }
+  },
+  [
+   "clips.look.name.sizePct must be from 60 to 160"
+  ]
+ ],
+ [
+  {
+   "name": {
+    "durationSec": 2.5,
+    "colour": "#FF3B5C",
+    "styles": [
+     "kinetic"
+    ]
+   }
+  },
+  []
+ ],
+ [
+  {
+   "name": {
+    "blur": true
+   }
+  },
+  [
+   "unknown clips.look.name setting blur"
+  ]
+ ]
+]

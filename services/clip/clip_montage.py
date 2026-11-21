@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import clip_rank as rank
 
+LIMIT_LINEAR = 0.631  # -4 dBFS true peak before AAC: the final limiter of a reel with music (D411, codec overshoot margin)
+
 
 def _specs(items):
     """Detector specs of montage.json: "M5" (every label of the detector) or "B2:ELIMINATED" (one label, any case)."""
@@ -424,10 +426,12 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     transition (RP1): {"xfade", "ms"} cross-fades each join (see crossfade_sec); None = hard cut.
     thumbnail (RP6): a bare PNG name in the working folder shown as the reel's first frame (one frame, 1/60 s); the
     sound starts one frame later.
-    title (RP4): reel_title.prepare() dict; for title.start..end the joined picture is replaced by a blurred, darkened
-    copy of itself carrying the title text, faded in and out (the sound is not touched).
-    music (RP3): reel_music.prepare() dict; its WAV (as long as the reel, level and fades applied) is mixed under audio
-    track 1 (the studio mix) with a sidechain duck keyed by that track; the other tracks are untouched."""
+    title (FX2, D411; replaces the RP4 card over blur): reel_title.prepare() dict {ass, fontsdir}; the name display
+    burned over the joined picture with libass (the picture itself is never blurred or darkened; sound untouched).
+    music (RP3/FX4): {"file"?, "duck"?, "sfx"?}; the bed WAV "file" (as long as the reel, level and fades applied) is
+    mixed under audio track 1 (the studio mix) with a sidechain duck keyed by that track; the FX3 join sound effects
+    WAV "sfx" is mixed into track 1 as it is; the other tracks are untouched. All in this one run: audio is encoded
+    once. transition (FX3) may carry "joins": one xfade kind per join (reel_transition.plan_set)."""
     ow, oh = int(frame["width"]), int(frame["height"])
     fd = fade_ms / 1000.0
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(threads), "-filter_threads", "2"]
@@ -463,7 +467,8 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
             acc += pieces[i - 1]["end"] - pieces[i - 1]["start"]
             vin = "[v0]" if i == 1 else f"[vx{i - 1}]"
             vout = vlast if i == n - 1 else f"[vx{i}]"
-            parts.append(f"{vin}[v{i}]xfade=transition={transition['xfade']}:duration={xd:.3f}:offset={acc - i * xd:.3f}{vout}")
+            kind = (transition.get("joins") or [])[i - 1] if transition.get("joins") else transition["xfade"]  # FX3
+            parts.append(f"{vin}[v{i}]xfade=transition={kind}:duration={xd:.3f}:offset={acc - i * xd:.3f}{vout}")
             for k in range(audio_tracks):
                 ain = f"[a0_{k}]" if i == 1 else f"[ax{i - 1}_{k}]"
                 aout = aj(k) if i == n - 1 else f"[ax{i}_{k}]"
@@ -472,19 +477,8 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         ins = "".join(f"[v{i}]" + "".join(f"[a{i}_{k}]" for k in range(audio_tracks)) for i in range(len(pieces)))
         outs = vlast + "".join(aj(k) for k in range(audio_tracks))
         parts.append(ins + f"concat=n={len(pieces)}:v=1:a={audio_tracks}{outs}")
-    if title:  # RP4: blurred, darkened copy of the reel with the title, faded in/out, over the reel for its window
-        s, e = float(title["start"]), float(title["end"])
-        fi, fo = title["fadeInMs"] / 1000.0, title["fadeOutMs"] / 1000.0
-        b = title["blur"]
-        parts.append("[vjoin]split=2[tmain][ttit]")
-        parts.append(f"[ttit]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS+{s:.3f}/TB,"
-                     f"gblur=sigma={float(b['sigma']):g}:steps={int(b['steps'])},"
-                     f"lutyuv=y=val*{title['darken']:g},"
-                     f"drawtext=fontfile={title['fontFile']}:textfile={title['textFile']}:expansion=none:"
-                     f"fontsize={title['size']}:fontcolor={title['colour']}:borderw={title['border']}:bordercolor=0x000000@0.85:"
-                     f"x={title['left']}+({title['safeWidth']}-text_w)/2:y=(h-text_h)/2,"
-                     f"format=yuva420p,fade=t=in:st={s:.3f}:d={fi:.3f}:alpha=1,fade=t=out:st={e - fo:.3f}:d={fo:.3f}:alpha=1[tov]")
-        parts.append(f"[tmain][tov]overlay=eof_action=pass:enable='between(t,{s:.3f},{e:.3f})'{vfinal}")
+    if title:  # FX2 (D411): the name display, an ASS file burned by libass over the joined picture (never blurred)
+        parts.append(f"[vjoin]subtitles={title['ass']}:fontsdir={title['fontsdir']}{vfinal}")
     if captions:
         parts.append(f"[vcat]subtitles={captions}" + (f":fontsdir={fontsdir}" if fontsdir else "")
                      + ("[vcap]" if thumbnail else "[vout]"))
@@ -497,15 +491,28 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         parts.append(f"[vth]{'[vcap]' if captions else '[vcat]'}concat=n=2:v=1:a=0[vout]")
         for k in range(audio_tracks):  # 800 samples at 48 kHz = one frame at 60 fps
             parts.append(f"[ab{k}]adelay=delays=800S:all=1[aout{k}]")
-    if music:  # RP3: the bed under the studio mix, ducked by it
+    if music:  # RP3/FX4: the bed under the studio mix, ducked by it; FX3: the join sound effects on top, not ducked
         mi = len(pieces) + (1 if thumbnail else 0)
-        dk = music["duck"]
-        argv += ["-i", music["file"]]
-        parts.append(f"[{mi}:a]aresample=48000[mbed]")
-        parts.append("[amus0]asplit=2[mgame][mkey]")
-        parts.append(f"[mbed][mkey]sidechaincompress=threshold={float(dk['threshold']):g}:ratio={float(dk['ratio']):g}:"
-                     f"attack={float(dk['attackMs']):g}:release={float(dk['releaseMs']):g}[mduck]")
-        parts.append(f"[mgame][mduck]amix=inputs=2:duration=first:normalize=0[{alast}0]")
+        mixin = ["[amus0]"]
+        if music.get("file"):
+            dk = music["duck"]
+            argv += ["-i", music["file"]]
+            parts.append(f"[{mi}:a]aresample=48000[mbed]")
+            parts.append("[amus0]asplit=2[mgame][mkey]")
+            parts.append(f"[mbed][mkey]sidechaincompress=threshold={float(dk['threshold']):g}:ratio={float(dk['ratio']):g}:"
+                         f"attack={float(dk['attackMs']):g}:release={float(dk['releaseMs']):g}[mduck]")
+            mixin = ["[mgame]", "[mduck]"]
+            mi += 1
+        if music.get("sfx"):
+            argv += ["-i", music["sfx"]]
+            parts.append(f"[{mi}:a]aresample=48000[msfx]")
+            mixin.append("[msfx]")
+        # Codex review: game + music + join sounds can peak together; summed as they are (the game keeps its level), then one limiter under
+        # -4 dBFS (AAC can add ~2 dB on harsh peaks; a slow release keeps the limiter from adding distortion), run 4x
+        # oversampled so it catches true (between-sample) peaks:
+        # the AAC encode stays under -1 dBTP. Still one audio encode.
+        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,aresample=192000,"
+                     f"alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1,aresample=48000[{alast}0]")
     maps = ["-map", "[vout]"] + [x for k in range(audio_tracks) for x in ("-map", f"[aout{k}]")]
     # CL1 (D350): nothing here adds time (no pad or hold; a crossfade only shortens: each join overlaps by xd); the fps
     # filter can round a piece by up to one frame, so the output is also cut at the type's maximum.

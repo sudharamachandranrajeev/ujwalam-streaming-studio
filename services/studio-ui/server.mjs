@@ -59,7 +59,7 @@ import { listStingerPresets, stingerTransition } from '../project/stinger-preset
 import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
-import { clipsFolder, guideOnly, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
+import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
 import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
 import { READINESS_FLAG, createReadiness, diskFreeBytes, lastCiPass, listProcessNames, loadReadinessConfig, logOverride, planTargets, readinessSummary } from './readiness.mjs';
@@ -913,11 +913,13 @@ export function createStudioServer(opts) {
   // The answer to "make clips from it?": the launcher picks it up (record-clips.mjs).
   function clipAnswer(res, body) {
     if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
-    const keys = ['id', 'make', 'remember'];
+    const keys = ['id', 'make', 'remember', 'look'];
     if (typeof body.id !== 'string' || body.id.length > 160 || typeof body.make !== 'boolean' || (body.remember !== undefined && typeof body.remember !== 'boolean') || Object.keys(body).some((k) => !keys.includes(k))) return json(res, 400, { error: 'bad-params' });
+    // FX (D411): the clip look for this recording only ({ music?, transitions?, name? }: an option id or off; nothing is saved)
+    if (body.look !== undefined && lookOverrideProblems(body.look).length) return json(res, 400, { error: 'bad-params', problems: lookOverrideProblems(body.look) });
     const dir = path.join(opts.dataDir, 'clips');
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, 'answer.json.tmp'), JSON.stringify({ id: body.id, make: body.make, remember: body.remember === true }));
+    writeFileSync(path.join(dir, 'answer.json.tmp'), JSON.stringify({ id: body.id, make: body.make, remember: body.remember === true, ...(body.look !== undefined ? { look: body.look } : {}) }));
     renameSync(path.join(dir, 'answer.json.tmp'), path.join(dir, 'answer.json'));
     return json(res, 200, { ok: true });
   }
@@ -1553,7 +1555,7 @@ export function createStudioServer(opts) {
       if (!readinessOn()) return json(res, 404, { error: 'readiness-off' });
       try { return json(res, 200, publicReadiness(await readiness().run({ maxAgeMs: 0 }))); } catch { return json(res, 500, { error: 'readiness-failed' }); }
     }
-    if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir) } : { settings: null });
+    if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir) } : { settings: null });
     if (req.method === 'GET' && route === '/ui/api/edits') return json(res, 200, history.state());
     if (req.method === 'GET' && route === '/ui/api/project/structure') return structureChoices(res);
     if (req.method === 'GET' && route === '/ui/api/project/transitions') return transitionChoices(res);

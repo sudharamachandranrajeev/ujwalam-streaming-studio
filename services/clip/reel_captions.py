@@ -220,6 +220,46 @@ def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=Non
     return doc, dict(info, shown=sum(1 for x in rows if x["show"] and not x.get("fontMissing")), segments=len(rows))
 
 
+def retime(doc, src_pieces, out_pieces, xd):
+    """Transcript times moved from the joined pieces it was made from (src_pieces, back to back) onto the reel's
+    output timeline (out_pieces, each join overlapping by xd): D411, so captions keep the chosen transitions. The two
+    lists hold the same pieces in the same order; a piece of out_pieces may end earlier (beat sync trims a tail): a
+    caption past that end is cut there, one left with no time is dropped. A transcript already on the output timeline
+    (timeline "output") is returned as it is. -> new transcript dict."""
+    if doc.get("timeline") == "output":
+        return doc
+    src = [(float(p["start"]), float(p["end"])) for p in src_pieces]
+    out = [(float(p["start"]), float(p["end"])) for p in out_pieces]
+    if len(src) != len(out):
+        raise ValueError("retime: the reel's pieces changed in number")
+
+    def where(t):
+        acc = 0.0
+        for i, (a, b) in enumerate(src):
+            if t <= acc + (b - a) + 1e-9 or i == len(src) - 1:
+                return i, a + max(0.0, t - acc)
+            acc += b - a
+        return len(src) - 1, src[-1][1]
+
+    starts, acc = [], 0.0
+    for i, (a, b) in enumerate(out):
+        starts.append(acc - i * xd)
+        acc += b - a
+
+    def to_out(i, rt):
+        a, b = out[i]
+        return starts[i] + min(max(rt, a), b) - a
+
+    rows = []
+    for s in doc.get("segments") or []:
+        i, ra = where(float(s["start"]))
+        j, rb = where(float(s["end"]))
+        a, b = round(to_out(i, ra), 3), round(to_out(j, rb), 3)  # over a join: it ends in the next piece
+        if b - a > 0.05:
+            rows.append(dict(s, start=a, end=b))
+    return dict(doc, segments=rows, timeline="output", joinSec=round(float(xd), 3))
+
+
 # ---------------------------------------------------------------- ASS
 
 def _ass_colour(hex_rgb, alpha=0):
