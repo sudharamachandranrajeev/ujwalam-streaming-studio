@@ -269,7 +269,7 @@ Dialog {
                  hashtags: hashField.text, ytShown: isYoutube, ytInfo: ytText(post), uploadEnabled: canUpload, checkEnabled: canCheck,
                  queueShown: queueState !== "", queueText: post ? queueText(post) : "", retryShown: retryShown, busy: busy,
                  scheduleNextEnabled: canScheduleNext,
-                 growthText: growth ? String(growth.text) : "", growthStatus: growth ? String(growth.status) : "", growthNumbers: growthNumbers(growth), growthInfo: growthInfo };
+                 growthText: growth ? String(growth.text) : "", growthStatus: growth ? String(growth.status) : "", growthNumbers: growthNumbers(growth), growthInfo: growthInfo, growthApplyText: growth && growth.applyText ? String(growth.applyText) : "" };
     }
     function probeAction(a) {
         if (a === "posts-open") return show();
@@ -335,9 +335,10 @@ Dialog {
                 spacing: 6
                 Line { objectName: "postsGrowthText"; text: dlg.growth ? (dlg.growth.status === "applied" ? "Applied suggestion: " : "Suggestion: ") + dlg.growth.text : ""; font.weight: Font.DemiBold }
                 Line { objectName: "postsGrowthNumbers"; text: dlg.growthNumbers(dlg.growth); color: Theme.c.muted }
+                Line { objectName: "postsGrowthApplyText"; text: dlg.growth && dlg.growth.status === "open" && dlg.growth.applyText ? "Apply: " + dlg.growth.applyText : "" }
                 Row {
                     spacing: 8
-                    UButton { objectName: "postsGrowthApply"; visible: dlg.growth !== null && dlg.growth.status === "open"; text: "Apply"; kind: "primary"; tip: "Sets these posting times. Undo puts the old ones back."; onClicked: dlg.growthAct("apply") }
+                    UButton { objectName: "postsGrowthApply"; visible: dlg.growth !== null && dlg.growth.status === "open"; text: "Apply"; kind: "primary"; tip: dlg.growth && dlg.growth.applyText ? dlg.growth.applyText : "Sets these posting times. Undo puts the old ones back."; onClicked: dlg.growthAct("apply") }
                     UButton { objectName: "postsGrowthDismiss"; visible: dlg.growth !== null && dlg.growth.status === "open"; text: "Dismiss"; tip: "Keeps your posting times as they are."; onClicked: dlg.growthAct("dismiss") }
                     UButton { objectName: "postsGrowthUndo"; visible: dlg.growth !== null && dlg.growth.status === "applied"; text: "Undo"; tip: "Puts your earlier posting times back."; onClicked: dlg.growthAct("undo") }
                 }

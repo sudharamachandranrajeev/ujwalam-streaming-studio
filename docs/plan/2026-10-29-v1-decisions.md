@@ -2540,3 +2540,12 @@ fail-closed channel reads, the single sender, the lock and publishAt on every up
 - UNVERIFIED: "24 h views" is the first stored fetch at least 24 h after the video went public, so it can be later than
   24 h. Viewer activity by hour is not read, because the report was not checked. The Analytics numbers arrive a day or
   two late.
+
+### D410 addendum — Codex review of PT5/PT4 fixed (2026-11-21)
+
+- Apply order: the record is saved first as `applying` (whole file as it was, the text to write, fsync and rename), then the schedule is replaced, then the record becomes `applied`. A stop in between is recovered on the next read: schedule unchanged means back to open; schedule written means applied with Undo offered.
+- Each weekday keeps its own post count (a day with 0 stays 0). A proposal is refused (`no-room`) unless every slot fits with the gap, across midnight and into the next weekday too.
+- Exploration (at most 1 in 5) is checked on the actual proposed times.
+- The proposal stores a fingerprint of the schedule file it was made from. Apply refuses in plain words when the file changed since, and asks for a fresh suggestion.
+- Own hashtags: #Shorts is refused. Footer: control characters refused (same rule as the post editor). Each emoji, footer and own hashtag is added only if the composed text still passes data/posting/limits.json (`limitsFit`); otherwise it is left out.
+- The Apply text says what it replaces: "Replaces your random 3-6 a day with fixed times ... (Undo keeps your old schedule)."

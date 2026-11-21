@@ -11,6 +11,7 @@ import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { applyTextPrefs, checkPrefs, defaultPrefs, evenShares, prefsFile, readPrefs, savePrefs, userKindShares } from '../services/posting/post-prefs.mjs';
 import { mixOrder } from '../services/posting/auto-post.mjs';
+import { limitsFit, loadLimits } from '../services/posting/index.mjs';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 
@@ -142,5 +143,34 @@ describe('post prefs routes (PT5)', () => {
     assert.throws(() => readFileSync(prefsFile(t.dataDir)));
     const off = await boot({ flags: {} });
     assert.equal((await off.get('/ui/api/posts/prefs')).status, 404);
+  });
+});
+
+describe('Codex review of PT5 (D410)', () => {
+  test('#Shorts is refused in own hashtags, and never appended even from an old file', () => {
+    const p = { ...defaultPrefs(), text: { ...defaultPrefs().text, hashtags: ['#gaming', '#SHORTS'] } };
+    assert.equal(checkPrefs(p).problems[0].key, 'hashtags');
+    assert.match(checkPrefs(p).problems[0].text, /#Shorts/);
+    const r = applyTextPrefs({ title: 'T', description: 'D', hashtags: ['#gaming'] }, { tone: 'hype', emoji: false, hashtags: ['#shorts', '#clutch'], footer: '' }, { style: STYLE });
+    assert.deepEqual(r.hashtags, ['#gaming', '#clutch']);
+  });
+
+  test('control characters in the footer are refused (the post editor rule), and stripped if they come from an old file', () => {
+    for (const bad of ['a\u0007b', 'tab\there', 'x\u007f']) {
+      assert.equal(checkPrefs({ ...defaultPrefs(), text: { ...defaultPrefs().text, footer: bad } }).problems[0].key, 'footer', JSON.stringify(bad));
+    }
+    const r = applyTextPrefs({ title: 'T', description: 'D', hashtags: [] }, { tone: 'hype', emoji: false, hashtags: [], footer: 'a\u0007b' }, { style: STYLE });
+    assert.equal(r.description, 'D\n\na b');
+  });
+
+  test('the composed text keeps the platform limits (data/posting/limits.json): a footer or hashtag that would pass them is left out', () => {
+    const limits = loadLimits();
+    const post = { title: 'T', description: 'x'.repeat(4990), tags: [], hashtags: ['#a'], target: 'youtube-video' };
+    const r = applyTextPrefs(post, { tone: 'hype', emoji: false, hashtags: ['#clutch'], footer: 'Live most nights, every night' }, { style: STYLE, fits: limitsFit(post, limits) });
+    assert.equal(r.description, post.description, 'the footer would pass 5000 bytes: left out');
+    assert.deepEqual(r.hashtags, ['#a'], 'the hashtag would pass 5000 bytes too: left out');
+    const small = { ...post, description: 'short' };
+    const ok = applyTextPrefs(small, { tone: 'hype', emoji: false, hashtags: ['#clutch'], footer: 'Live' }, { style: STYLE, fits: limitsFit(small, limits) });
+    assert.equal(ok.description, 'short\n\nLive'); assert.deepEqual(ok.hashtags, ['#a', '#clutch']);
   });
 });

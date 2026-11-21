@@ -32,7 +32,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOTS, BOT_LABELS, GRACEFUL_MS, createBots } from '../bots/index.mjs';
 import { createFlags } from '../flags/index.mjs';
-import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadLimits } from '../posting/index.mjs';
+import { LEDGER_NAME, POSTING_FLAG, createPostStore, limitsFit, loadLimits } from '../posting/index.mjs';
 import { createYoutubeAuth } from '../posting/oauth.mjs';
 import { QUEUE_NAME, clearStuckLock, createUploadQueue, requestRunNow, stuckLock, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
@@ -42,7 +42,7 @@ import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEd
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
 import { applyTextPrefs, readPrefs, savePrefs } from '../posting/post-prefs.mjs';
 import { analyseTiming, applySuggestion, dismissSuggestion, loadTimingConfig, readRecord as readGrowthRecord, refreshSuggestion, undoSuggestion } from '../analytics/timing.mjs';
-import { SCHEDULE_FLAG } from '../posting/schedule.mjs';
+import { SCHEDULE_FLAG, userScheduleFile } from '../posting/schedule.mjs';
 import { UploadError, checkPostStatus } from '../posting/youtube.mjs';
 import { GROWTH_FLAG, DB_NAME as GROWTH_DB, collect as growthCollect, openStore as openGrowthStore, view as growthView } from '../analytics/index.mjs';
 import { MIX_FLAG, step as mixStep, undo as mixUndo, view as mixView, weeklyReport as mixReport } from '../learning/mix.mjs';
@@ -1645,7 +1645,8 @@ export function createStudioServer(opts) {
         const sched = scheduleConfigFor(opts.dataDir);
         store = openGrowthStore(path.join(opts.dataDir, GROWTH_DB));
         const videos = growthView(store, now()).videos;
-        const analysis = analyseTiming({ videos, cfg, schedule: sched, tz: sched.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
+        let source = null; try { source = readFileSync(userScheduleFile(opts.dataDir), 'utf8'); } catch { source = null; }
+        const analysis = analyseTiming({ videos, cfg, schedule: sched, source, tz: sched.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone });
         const record = refreshSuggestion({ dataDir: opts.dataDir, analysis, cfg, now: now() });
         return json(res, 200, { enabled: true, count: analysis.count, minPosts: analysis.minPosts, reason: analysis.reason, byBand: analysis.byBand, record: record ? publicRecord(record) : null });
       } catch { return json(res, 500, { error: 'suggestion-unavailable' }); } finally { try { store?.close(); } catch { /* closed */ } }
@@ -2004,7 +2005,7 @@ export function createStudioServer(opts) {
       try {
         let lim = null; try { lim = loadLimits(); } catch { lim = null; }
         const newest = posting.list().filter((p) => typeof p.title === 'string').sort((a, b) => String(b.madeAt ?? '').localeCompare(String(a.madeAt ?? ''))).slice(0, 3);
-        return json(res, 200, { items: newest.map((p) => ({ id: p.id, kind: p.kind, ...applyTextPrefs(p, text, { kind: p.kind, seed: p.id, titleMax: lim?.targets?.[p.target]?.fields?.title?.max ?? null }) })) });
+        return json(res, 200, { items: newest.map((p) => ({ id: p.id, kind: p.kind, ...applyTextPrefs(p, text, { kind: p.kind, seed: p.id, titleMax: lim?.targets?.[p.target]?.fields?.title?.max ?? null, fits: lim ? limitsFit({ title: p.title, description: p.description, tags: p.tags ?? [], hashtags: p.hashtags ?? [], target: p.target }, lim) : () => true }) })) });
       } catch { return json(res, 500, { error: 'preview-unavailable' }); }
     }
     if (route === '/ui/api/posts/auto/rules') {      // user 2026-11-20: one click saves "What gets posted" (D332). Only the listed fields change; unknown rules and keys stay.

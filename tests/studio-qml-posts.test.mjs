@@ -160,6 +160,7 @@ describe('QML studio: Posts window (headless probe)', { skip }, () => {
     let r = await probe({ growth: GROWTH, actions: ['posts-open'] });
     assert.equal(r.s.growthStatus, 'open');
     assert.equal(r.s.growthText, 'Move 2 of your daily posts to 18:00-21:00: +34 % 24 h views on 12 posts.');
+    assert.match(r.s.growthApplyText, /^Replaces your random \d+-\d+ a day with fixed times \d\d:\d\d.* \(Undo keeps your old schedule\)\.$/, 'Apply says what it replaces');
     assert.match(r.s.growthNumbers, /^12 posts at 18:00-21:00 averaged 134 views in 24 h; 12 posts at other times averaged 100\./);
     assert.equal(JSON.parse(readFileSync(userScheduleFile(r.dataDir), 'utf8')).placement, 'random-daily', 'not applied without the click');
     r = await probe({ growth: GROWTH, actions: ['posts-open', 'posts-preview', 'posts-growth-apply', 'posts-preview'] });

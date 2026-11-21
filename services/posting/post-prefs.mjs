@@ -20,6 +20,9 @@ export const prefsFile = (dataDir) => path.join(dataDir, 'posting', PREFS_NAME);
 export const TONES = Object.freeze(['hype', 'clean']);
 export const PREF_LIMITS = Object.freeze({ hashtags: 10, hashtagChars: 40, footer: 500 });
 const HASHTAG = /^#[\p{L}\p{N}_]{1,39}$/u;
+// the post editor's rule (services/posting/index.mjs edit): no control characters except a line break
+const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f]/;
+const CONTROL_G = /[\u0000-\u0009\u000b-\u001f\u007f]/g;
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
 
@@ -41,8 +44,9 @@ export function checkPrefs(j) {
   let tags = null;
   if (!Array.isArray(t.hashtags) || t.hashtags.length > PREF_LIMITS.hashtags || !t.hashtags.every((s) => typeof s === 'string' && HASHTAG.test(s))) {
     add('hashtags', `own hashtags: up to ${PREF_LIMITS.hashtags}, each like #gaming (letters, numbers or _ after the #, at most ${PREF_LIMITS.hashtagChars} characters)`);
-  } else tags = [...new Map(t.hashtags.map((s) => [s.toLowerCase(), s])).values()];
-  if (typeof t.footer !== 'string' || t.footer.length > PREF_LIMITS.footer || /[<>]/.test(t.footer)) add('footer', `the description footer is plain text of at most ${PREF_LIMITS.footer} characters, without < or >`);
+  } else if (t.hashtags.some((s) => s.toLowerCase() === '#shorts')) add('hashtags', 'leave #Shorts out of your own hashtags: Shorts get it already, and other videos must not have it');
+  else tags = [...new Map(t.hashtags.map((s) => [s.toLowerCase(), s])).values()];
+  if (typeof t.footer !== 'string' || t.footer.length > PREF_LIMITS.footer || /[<>]/.test(t.footer) || CONTROL.test(t.footer)) add('footer', `the description footer is plain text of at most ${PREF_LIMITS.footer} characters, without < or > or control characters`);
   const ks = isPlain(j.kindShare) ? j.kindShare : null;
   let share = null;
   if (!ks || Object.keys(ks).some((k) => !RULE_KINDS.includes(k)) || !RULE_KINDS.every((k) => Number.isInteger(ks[k]) && ks[k] >= 0 && ks[k] <= 100)) {
@@ -98,9 +102,10 @@ export function loadTextStyle(file = DEFAULT_TEXT_STYLE) {
 const hash32 = (s) => { let h = 2166136261; for (const c of String(s)) { h ^= c.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; };
 const len = (s) => Array.from(s).length;
 
-/** The post text with the user's choices applied. Pure. text = prefs.text. A title that would pass titleMax with the
- *  emoji keeps its old form; hashtags are the drafted ones plus the user's own (no repeats, any case). */
-export function applyTextPrefs(post, text, { kind = 'short', seed = '', titleMax = null, style = loadTextStyle() } = {}) {
+/** The post text with the user's choices applied. Pure. text = prefs.text. Each addition (the emoji, the footer, each own
+ *  hashtag) is kept only when the composed text still passes `fits` (the caller's checkLimits against
+ *  data/posting/limits.json) and titleMax; otherwise it is left out. #Shorts from the user is never added. */
+export function applyTextPrefs(post, text, { kind = 'short', seed = '', titleMax = null, fits = () => true, style = loadTextStyle() } = {}) {
   let title = String(post.title ?? '');
   let description = String(post.description ?? '');
   const hashtags = Array.isArray(post.hashtags) ? [...post.hashtags] : [];
@@ -113,11 +118,16 @@ export function applyTextPrefs(post, text, { kind = 'short', seed = '', titleMax
     if (list.length) {
       const e = list[hash32(`${seed}:emoji`) % list.length];
       const next = `${title} ${e}`;
-      if (titleMax === null || len(next) <= titleMax) title = next;
+      if ((titleMax === null || len(next) <= titleMax) && fits({ title: next, description, hashtags })) title = next;
     }
   }
-  if (typeof t.footer === 'string' && t.footer.trim()) description = `${description}\n\n${t.footer.trim()}`;
+  const foot = typeof t.footer === 'string' ? t.footer.replace(/\r\n?/g, '\n').replace(CONTROL_G, ' ').trim() : '';
+  if (foot && fits({ title, description: `${description}\n\n${foot}`, hashtags })) description = `${description}\n\n${foot}`;
   const seen = new Set(hashtags.map((h) => String(h).toLowerCase()));
-  for (const h of Array.isArray(t.hashtags) ? t.hashtags : []) if (!seen.has(h.toLowerCase())) { hashtags.push(h); seen.add(h.toLowerCase()); }
+  for (const h of Array.isArray(t.hashtags) ? t.hashtags : []) {
+    if (typeof h !== 'string' || !HASHTAG.test(h) || h.toLowerCase() === '#shorts' || seen.has(h.toLowerCase())) continue;
+    if (!fits({ title, description, hashtags: [...hashtags, h] })) continue;
+    hashtags.push(h); seen.add(h.toLowerCase());
+  }
   return { title, description, hashtags };
 }

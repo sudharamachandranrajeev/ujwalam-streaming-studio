@@ -11,7 +11,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { DB_NAME, openStore } from '../services/analytics/index.mjs';
-import { analyseTiming, applySuggestion, dismissSuggestion, exploreSlots, loadTimingConfig, readGrowthLog, readRecord, refreshSuggestion, undoSuggestion } from '../services/analytics/timing.mjs';
+import { analyseTiming, applySuggestion, dismissSuggestion, exploreSlots, loadTimingConfig, readGrowthLog, readRecord, refreshSuggestion, undoSuggestion, weekGapOk } from '../services/analytics/timing.mjs';
 import { savePrefs, defaultPrefs } from '../services/posting/post-prefs.mjs';
 import { HARD_GAP_MINUTES, hhmmMinutes, userScheduleFile } from '../services/posting/schedule.mjs';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
@@ -80,20 +80,21 @@ describe('growth-led timing math (PT4)', () => {
 function writeTmp(j) { const f = path.join(mk(), 'g.json'); writeFileSync(f, JSON.stringify(j)); return f; }
 
 describe('the suggestion record and its clicks (PT4)', () => {
-  const fresh = () => analyseTiming({ videos: FIXTURE, cfg, schedule: SCHED, tz: 'UTC' });
+  const src = (d) => (existsSync(userScheduleFile(d)) ? readFileSync(userScheduleFile(d), 'utf8') : null);
+  const fresh = (d) => analyseTiming({ videos: FIXTURE, cfg, schedule: SCHED, tz: 'UTC', source: d ? src(d) : null });
 
   test('showing a suggestion writes only its record: the schedule is not touched without the click', () => {
     const d = mk();
-    const rec = refreshSuggestion({ dataDir: d, analysis: fresh(), cfg });
+    const rec = refreshSuggestion({ dataDir: d, analysis: fresh(d), cfg });
     assert.equal(rec.status, 'open');
     assert.equal(existsSync(userScheduleFile(d)), false);
     assert.deepEqual(readGrowthLog(d), []);
-    assert.equal(refreshSuggestion({ dataDir: d, analysis: fresh(), cfg }).createdAt, rec.createdAt, 'the same suggestion is kept');
+    assert.equal(refreshSuggestion({ dataDir: d, analysis: fresh(d), cfg }).createdAt, rec.createdAt, 'the same suggestion is kept');
   });
 
   test('Apply writes the schedule (custom times, 60-minute floor kept, other settings kept), logs it; Undo removes it again', () => {
     const d = mk();
-    const rec = refreshSuggestion({ dataDir: d, analysis: fresh(), cfg });
+    const rec = refreshSuggestion({ dataDir: d, analysis: fresh(d), cfg });
     assert.equal(applySuggestion(d, 'g-nope').ok, false);
     const r = applySuggestion(d, rec.id);
     assert.equal(r.ok, true);
@@ -102,7 +103,7 @@ describe('the suggestion record and its clicks (PT4)', () => {
     assert.deepEqual(sch.customTimes.fri, rec.times);
     assert.equal(readGrowthLog(d).at(-1).action, 'apply');
     assert.equal(applySuggestion(d, rec.id).code, 'not-open', 'applied once');
-    assert.equal(refreshSuggestion({ dataDir: d, analysis: fresh(), cfg }).status, 'applied', 'an applied change stays with its Undo');
+    assert.equal(refreshSuggestion({ dataDir: d, analysis: fresh(d), cfg }).status, 'applied', 'an applied change stays with its Undo');
     const u = undoSuggestion(d, rec.id);
     assert.equal(u.ok, true);
     assert.equal(existsSync(userScheduleFile(d)), false, 'there was no schedule file before: it is gone again');
@@ -114,14 +115,14 @@ describe('the suggestion record and its clicks (PT4)', () => {
     const d = mk();
     const before = `${JSON.stringify({ placement: 'random-daily', postsPerDayMax: 6, minGapMinutes: 90, seed: 5 }, null, 2)}\n`;
     writeFileSync(userScheduleFile(d), before);
-    const rec = refreshSuggestion({ dataDir: d, analysis: fresh(), cfg });
+    const rec = refreshSuggestion({ dataDir: d, analysis: fresh(d), cfg });
     applySuggestion(d, rec.id);
     const sch = JSON.parse(readFileSync(userScheduleFile(d), 'utf8'));
     assert.deepEqual([sch.minGapMinutes, sch.seed, sch.placement], [90, 5, 'custom'], 'other settings stay');
     assert.equal(undoSuggestion(d, rec.id).ok, true);
     assert.equal(readFileSync(userScheduleFile(d), 'utf8'), before);
     const d2 = mk();
-    const rec2 = refreshSuggestion({ dataDir: d2, analysis: fresh(), cfg });
+    const rec2 = refreshSuggestion({ dataDir: d2, analysis: fresh(d2), cfg });
     applySuggestion(d2, rec2.id);
     writeFileSync(userScheduleFile(d2), JSON.stringify({ placement: 'fill-gaps' }));
     assert.equal(undoSuggestion(d2, rec2.id).code, 'changed-since');
@@ -130,10 +131,10 @@ describe('the suggestion record and its clicks (PT4)', () => {
 
   test('Dismiss changes nothing and the same suggestion is not offered again for a while', () => {
     const d = mk();
-    const rec = refreshSuggestion({ dataDir: d, analysis: fresh(), cfg });
+    const rec = refreshSuggestion({ dataDir: d, analysis: fresh(d), cfg });
     assert.equal(dismissSuggestion(d, rec.id).ok, true);
     assert.equal(existsSync(userScheduleFile(d)), false);
-    assert.equal(refreshSuggestion({ dataDir: d, analysis: fresh(), cfg }), null);
+    assert.equal(refreshSuggestion({ dataDir: d, analysis: fresh(d), cfg }), null);
     assert.equal(readRecord(d).status, 'dismissed');
   });
 });
@@ -211,5 +212,78 @@ describe('growth suggestion routes (PT4)', () => {
     seedStore(t.dataDir, posts(5, 19, 300));
     const g = (await t.get('/ui/api/posts/growth-suggestion')).json();
     assert.deepEqual([g.enabled, g.count, g.reason, g.record], [true, 5, 'few-posts', null]);
+  });
+});
+
+describe('Codex review of PT4 (D410)', () => {
+  const src = (d) => (existsSync(userScheduleFile(d)) ? readFileSync(userScheduleFile(d), 'utf8') : null);
+  const an = (d, schedule = SCHED) => analyseTiming({ videos: FIXTURE, cfg, schedule, tz: 'UTC', source: src(d) });
+
+  test('P1: the undo record is saved before the schedule; a stop after the record leaves the schedule as it was and the suggestion open', () => {
+    const d = mk();
+    const before = JSON.stringify({ placement: 'random-daily', postsPerDayMax: 6 });
+    writeFileSync(userScheduleFile(d), before);
+    const rec = refreshSuggestion({ dataDir: d, analysis: an(d), cfg });
+    const r = applySuggestion(d, rec.id, { stopAfter: 'record' });
+    assert.equal(r.record.status, 'applying');
+    assert.equal(readRecord(d).before, before, 'the whole file as it was is in the record');
+    assert.equal(readFileSync(userScheduleFile(d), 'utf8'), before, 'schedule untouched');
+    assert.equal(refreshSuggestion({ dataDir: d, analysis: an(d), cfg }).status, 'open', 'recovered: nothing changed');
+  });
+
+  test('P1: a stop after the schedule was replaced is recovered as applied, and Undo puts the old file back', () => {
+    const d = mk();
+    const before = JSON.stringify({ placement: 'random-daily', postsPerDayMax: 6 });
+    writeFileSync(userScheduleFile(d), before);
+    const rec = refreshSuggestion({ dataDir: d, analysis: an(d), cfg });
+    applySuggestion(d, rec.id, { stopAfter: 'schedule' });
+    assert.equal(JSON.parse(readFileSync(userScheduleFile(d), 'utf8')).placement, 'custom');
+    assert.equal(readRecord(d).status, 'applying');
+    const back = refreshSuggestion({ dataDir: d, analysis: an(d), cfg });
+    assert.equal(back.status, 'applied'); assert.equal(back.recovered, true);
+    assert.equal(undoSuggestion(d, rec.id).ok, true);
+    assert.equal(readFileSync(userScheduleFile(d), 'utf8'), before);
+  });
+
+  test('P2: each weekday keeps its own count (Monday 2, Sunday 0 stays 0)', () => {
+    const custom = { placement: 'custom', windowStart: '00:00', windowEnd: '24:00', minGapMinutes: 60,
+      customTimes: { mon: ['10:00', '12:00'], tue: ['10:00'], wed: ['10:00'], thu: ['10:00'], fri: ['10:00'], sat: ['10:00'], sun: [] } };
+    const s = analyseTiming({ videos: FIXTURE, cfg, schedule: custom, tz: 'UTC' }).suggestion;
+    assert.ok(s);
+    assert.deepEqual(Object.fromEntries(Object.entries(s.change.customTimes).map(([k, v]) => [k, v.length])), { mon: 2, tue: 1, wed: 1, thu: 1, fri: 1, sat: 1, sun: 0 });
+  });
+
+  test('P2/P3: refused when not every slot fits; the actual times keep 60 min, across midnight too; exploration on the actual times', () => {
+    const tight = analyseTiming({ videos: FIXTURE, cfg, schedule: { ...SCHED, windowStart: '18:00', windowEnd: '20:00', postsPerDayMax: 6 }, tz: 'UTC' });
+    assert.equal(tight.suggestion, null); assert.equal(tight.reason, 'no-room');
+    const full = analyseTiming({ videos: FIXTURE, cfg, schedule: { ...SCHED, windowStart: '00:00', windowEnd: '24:00', postsPerDayMax: 24 }, tz: 'UTC' }).suggestion;
+    assert.ok(full, 'a whole day of 24 still fits');
+    assert.equal(full.times.length, 24);
+    for (const max of [6, 14, 20, 24]) {
+      const s = analyseTiming({ videos: FIXTURE, cfg, schedule: { ...SCHED, windowStart: '00:00', windowEnd: '24:00', postsPerDayMax: max }, tz: 'UTC' }).suggestion;
+      assert.ok(s, `max=${max}`);
+      const m = s.times.map(hhmmMinutes);
+      assert.equal(m.length, max, 'every slot placed');
+      for (let i = 1; i < m.length; i += 1) assert.ok(m[i] - m[i - 1] >= 60);
+      assert.ok(1440 - m.at(-1) + m[0] >= 60, `across midnight: ${s.times.at(-1)} to ${s.times[0]}`);
+      assert.equal(weekGapOk(s.change.customTimes, 60), true);
+      assert.ok(s.exploreTimes.length * 5 <= s.times.length, 'at most 1 in 5 of the actual times explore');
+    }
+    assert.equal(weekGapOk({ mon: ['23:30'], tue: ['00:10'] }, 60), false, 'the check sees midnight');
+  });
+
+  test('P2: a stale suggestion is refused after the schedule changed, in plain words', () => {
+    const d = mk();
+    writeFileSync(userScheduleFile(d), JSON.stringify({ placement: 'random-daily' }));
+    const rec = refreshSuggestion({ dataDir: d, analysis: an(d), cfg });
+    writeFileSync(userScheduleFile(d), JSON.stringify({ placement: 'fill-gaps' }));
+    const r = applySuggestion(d, rec.id);
+    assert.equal(r.code, 'schedule-changed'); assert.match(r.text, /Open the Posts window again/);
+    assert.equal(JSON.parse(readFileSync(userScheduleFile(d), 'utf8')).placement, 'fill-gaps', 'the later edit stays');
+  });
+
+  test('P3: the Apply text says what it replaces', () => {
+    const s = an(mk()).suggestion;
+    assert.equal(s.applyText, `Replaces your random 3-6 a day with fixed times ${s.times.join(', ')} (Undo keeps your old schedule).`);
   });
 });

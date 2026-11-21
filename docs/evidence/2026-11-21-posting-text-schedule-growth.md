@@ -227,3 +227,16 @@ UNVERIFIED (PT4/PT5):
 - The new card and the Posts window banner were checked only by the probe-driven QML tests, not clicked in the running
   studio. The preview picks its emoji from the post id, while packaging uses the clip's hash, so the emoji shown can
   differ from the one used.
+
+## Codex review fixes (D410 addendum, 2026-11-21)
+
+Each run was one file, with UJWALAM_HEADLESS=1 at BelowNormal and a temp UJWALAM_DATA_ROOT, after live-check exit 0 ("off air, studio open"). The studio was rebuilt first (`node app/studio/tools/build.mjs`).
+
+| File | Result | New cases |
+|---|---|---|
+| tests/posting-pt4-growth.test.mjs | 17/17 pass | P1 stop after the record (schedule untouched, back to open); P1 stop after the schedule (recovered as applied, Undo restores the bytes); per-day counts; refusal when not all slots fit; 60 min kept across midnight for 6/14/20/24 a day; explore at most 1 in 5 of the actual times; stale proposal refused; Apply text |
+| tests/posting-pt5-settings.test.mjs | 11/11 pass | #Shorts refused; footer control characters refused and stripped; composed text kept inside the limits.json limits |
+| tests/studio-qml-posts.test.mjs | 6/6 pass | Apply text shown in the Posts window |
+| tests/studio-qml-posting.test.mjs | 15/15 pass | (unchanged) |
+| tests/posting-pt1-text.test.mjs | 5/5 pass | |
+| tests/posting-auto-chain.test.mjs | 15/15 pass | |

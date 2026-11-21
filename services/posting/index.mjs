@@ -148,6 +148,9 @@ const countMatches = (s, re) => [...String(s).matchAll(re)].length;
 const HASHTAG = /(?:^|\s)#[^\s#]+/gu;
 const MENTION = /(?:^|\s)@[^\s@]+/gu;
 
+/** PT5 (D410): a check for applyTextPrefs: the post with a changed title, description or hashtags still passes every limit. */
+export const limitsFit = (post, limits) => (p) => checkLimits({ ...post, ...p }, limits).checks.every((x) => x.ok);
+
 /** Checks the composed platform fields against the target's limits. A field without max is not length-checked. Pure. */
 export function checkLimits(post, limits) {
   const L = limits?.targets?.[post.target];
@@ -317,7 +320,7 @@ export async function packageRun(opts) {
         target,
       };
       // PT5 (D410): the user's tone, emoji, own hashtags and footer; the defaults change nothing
-      Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: 'short', seed: sha, titleMax: limits.targets?.[target]?.fields?.title?.max ?? null }));
+      Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: 'short', seed: sha, titleMax: limits.targets?.[target]?.fields?.title?.max ?? null, fits: limitsFit(post, limits) }));
       const dur = Number(row.facts?.duration);
       const peak = Number.isFinite(Number(c.anchor)) && Number.isFinite(Number(c.start)) ? Number(c.anchor) - Number(c.start) : 0;
       const at = Math.min(Math.max(peak, 0), Number.isFinite(dur) && dur > 0.4 ? dur - 0.2 : Math.max(peak, 0));
@@ -447,7 +450,7 @@ export async function packageUploads(opts) {
       target,
     };
     // PT5 (D410): the user's tone, emoji, own hashtags and footer (Settings > Posting & growth); the defaults change nothing
-    Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: row.kind, seed: sha, titleMax }));
+    Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: row.kind, seed: sha, titleMax, fits: limitsFit(post, limits) }));
     const at = uploadCoverAt(row, seconds);
     const coverOk = await extractCover(ffmpeg, dst, at, path.join(dir, 'cover.jpg'));
     const stamp = now().toISOString();
