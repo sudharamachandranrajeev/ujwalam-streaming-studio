@@ -519,6 +519,52 @@ class StopGuardTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_lock_is_free_again_after_an_on_air_stop_or_not_started(self):
+        # coordinator 2026-11-21: every exit of make() releases the heavy-job lock in this process
+        import beatdrop  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdrelock-")
+        saved = beatdrop._make_locked
+        try:
+            def on_air(res, *a, started=None, **k):
+                raise beatdrop.OnAir("on air")
+
+            def not_started(res, *a, started=None, **k):
+                beatdrop._not_started(subprocess.CompletedProcess([], cc.NO_JOB_RC, "", "not run"))
+
+            def boom(res, *a, started=None, **k):
+                raise RuntimeError("unexpected")
+            for fake, want in ((on_air, beatdrop.STOPPED_ON_AIR), (not_started, beatdrop.NOT_STARTED), (boom, None)):
+                beatdrop._make_locked = fake
+                if want is None:
+                    with self.assertRaises(RuntimeError):
+                        beatdrop.make("rec.mkv", {}, tmp, tmp, "ffmpeg", [], [], live=lambda: False, lock_dir=tmp)
+                else:
+                    res = beatdrop.make("rec.mkv", {}, tmp, tmp, "ffmpeg", [], [], live=lambda: False, lock_dir=tmp)
+                    self.assertEqual(res["status"], want)
+                with cc.HeavyJobLock(tmp, job="after") as lk:
+                    self.assertTrue(lk.held, fake.__name__)
+        finally:
+            beatdrop._make_locked = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_own_part_delete_is_retried_while_it_is_held(self):
+        # coordinator 2026-11-21: a part file a just-ended child (or a scanner) still holds is removed once freed
+        import threading  # noqa: PLC0415
+        import beatdrop  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bddrop-")
+        try:
+            part = os.path.join(tmp, "beatdrop-aaaaaaaaaaaa.mp4.part")
+            fh = open(part, "wb")
+            if os.name == "nt":  # an open handle blocks the delete on Windows
+                threading.Timer(0.5, fh.close).start()
+            else:
+                fh.close()
+            self.assertTrue(beatdrop._drop(part))
+            self.assertFalse(os.path.exists(part))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_orphan_sweep_waits_for_the_first_started_child(self):
         # review round 6, item 2: a job that cannot start its render sweeps nothing; once it started, it does
         import beatdrop  # noqa: PLC0415

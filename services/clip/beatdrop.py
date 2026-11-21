@@ -789,8 +789,20 @@ def sweep_videos(wd, render_json, keep=()):
     return gone
 
 
-def _drop(path):
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+def _drop(path, tries=20, wait=0.1):
+    """Removes one of this job's own files. A file a just-ended child had open (or a scanner is reading) can refuse
+    the delete for a moment on Windows: retried for up to tries*wait seconds, then left and logged."""
+    import sys  # noqa: PLC0415
+    import time  # noqa: PLC0415
+    for i in range(tries):
+        try:
+            os.remove(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as e:
+            if i == tries - 1:
+                print(f"beatdrop: could not remove {os.path.basename(path)} ({type(e).__name__})", file=sys.stderr)
+                return False
+            time.sleep(wait)
+    return False

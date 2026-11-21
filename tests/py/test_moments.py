@@ -251,7 +251,15 @@ class MomentTests(unittest.TestCase):
             self.assertIn("holder since", str(e.exception), "the busy message names the job and its start")
             p.kill()
             p.wait(timeout=30)
-            with cc.HeavyJobLock(td) as lk:  # killed holder: free at once
+            # Windows frees a dead process's byte-range locks a moment after it is signalled ended (LockFileEx docs:
+            # the time "depends upon available system resources"); under a full suite that moment can be seen
+            for _ in range(50):
+                try:
+                    with cc.HeavyJobLock(td):
+                        break
+                except cc.ClipError:
+                    time.sleep(0.1)
+            with cc.HeavyJobLock(td) as lk:  # killed holder: free (within the OS's own unlock delay)
                 self.assertTrue(lk.held)
                 self.assertEqual(json.load(open(lock, encoding="utf-8"))["pid"], os.getpid())
             p.stdout.close()

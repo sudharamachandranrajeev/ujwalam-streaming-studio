@@ -187,3 +187,13 @@ Codex found the containment and the bounded wait fixed. The other items:
 Runs (CPU, headless, BelowNormal, temp data root, live-check exit 0 first): StopGuardTests + PlannerTests +
 test_render_watch 40 run, OK (1 POSIX skip); test_clip_montage 35 OK; lint 0 findings. Rendered class not run (the
 coordinator runs it): UNVERIFIED.
+
+## Full venv suite on c227204 (2026-11-21), coordinator: two failures
+
+| Failure | Cause | Fix | Test |
+|---|---|---|---|
+| `RenderedMontageTests.test_live_flip_mid_render_stops_it`: the run's own `.mp4.part` left after the live flip | `_drop` tried the delete once and ignored the error. On Windows a file the just-killed ffmpeg had open, or a scanner is reading, can refuse the delete for a moment. In isolation the test passes (122 s), so the race is UNVERIFIED as the exact cause | `_drop` retries for up to 2 s, then logs the file it could not remove | `test_own_part_delete_is_retried_while_it_is_held` (handle held 0.5 s, then removed) |
+| `test_moments ... killed_holder_frees_it`: "holder since ..., pid 8504" | the pid belongs to the test's own `job='holder'` subprocess, not the unittest process. Windows frees a killed process's byte-range lock a moment after the process is signalled ended (LockFileEx: the time "depends upon available system resources"), and the test retook the lock at once | the test waits up to 5 s for the OS to free the lock before it asserts | the same test; plus `test_lock_is_free_again_after_an_on_air_stop_or_not_started` (on air, not started and an unexpected error: the lock is taken again in the same process) |
+
+Run (CPU, headless, temp data root, live-check exit 0 first; test_moments and the whole of test_beatdrop including
+the rendered class, in one process with one data root): 54 tests in 359 s, OK (1 POSIX skip); no `could not remove` line was logged.
