@@ -45,7 +45,8 @@
 // Daily budget (quota-budget.mjs, Codex review 2026-11-13): every upload start or resume counts against the rules'
 // maxUploadsPerDay (UTC day) and the quota units (Pacific day); every API read (schedule reads, status checks) counts 1
 // unit. Over budget: the items wait ('daily-cap-reached' / 'quota-day-used'), no attempt is used.
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
@@ -62,7 +63,7 @@ import { DEFAULT_SCHEDULE, SCHEDULE_FLAG, ScheduleError, chunkDeadlineMs, fallba
 import { readChannelSchedule } from './schedule-read.mjs';
 import { ensureScheduleSeed } from './schedule-seed.mjs';
 import { backlogOrder, clipFacts } from './backlog-order.mjs';
-import { createQuotaBudget, loadQuota, quotaFallback, recordQuotaExceeded } from './quota-budget.mjs';
+import { createQuotaBudget, exhaustedUntil, loadQuota, quotaFallback, recordQuotaExceeded } from './quota-budget.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
 
@@ -95,6 +96,38 @@ function takeRunNow(dataDir) {
   if (!existsSync(f)) return false;
   try { rmSync(f, { force: true }); } catch { return false; }
   return true;
+}
+
+/**
+ * Codex review 2026-11-21 (D409): ONE reservation for every new publish time. The chain (before each upload session) and
+ * the studio's "Post now (public)" both check a fresh channel read and the queue, and record their time in the queue,
+ * inside this lock (<dataDir>/posting/schedule.lock, created exclusively). So a queued post can never start within the gap
+ * of a public post being made, and a public post can never go out within the gap of a slot the chain just checked.
+ * A lock left by a process that ended, or older than LOCK_STALE_MS, is taken over. Waiting past waitMs throws
+ * code 'schedule-busy' (the caller waits; nothing is sent).
+ */
+export const LOCK_NAME = 'schedule.lock';
+export const LOCK_STALE_MS = 10 * 60 * 1000;
+/** Queue states of a "Post now (public)" item: being sent (its time is held from start until it ends), sent, unknown. */
+export const PUBLIC_STATES = Object.freeze(['public-uploading', 'public-done', 'public-unknown']);
+const pidAlive = (pid) => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
+export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, staleMs = LOCK_STALE_MS } = {}) {
+  const f = path.join(dataDir, 'posting', LOCK_NAME);
+  mkdirSync(path.dirname(f), { recursive: true });
+  const token = `${process.pid}-${randomUUID()}`;
+  const start = Date.now();
+  for (;;) {
+    try { writeFileSync(f, JSON.stringify({ pid: process.pid, token, at: Date.now() }), { flag: 'wx' }); break; } catch (e) {
+      if (e?.code !== 'EEXIST') throw Object.assign(new Error('schedule lock unusable'), { code: 'schedule-busy' });
+      let age = 0; try { age = Date.now() - statSync(f).mtimeMs; } catch { continue; } // gone meanwhile: try again
+      const cur = readJson(f);
+      // A half-written file (unreadable) is only taken over once it is old; a holder that ended is taken over at once.
+      if (age > staleMs || (cur && !pidAlive(cur.pid))) { try { rmSync(f, { force: true }); } catch { /* next round */ } continue; }
+      if (Date.now() - start >= waitMs) throw Object.assign(new Error('schedule busy'), { code: 'schedule-busy' });
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  try { return await fn(); } finally { if (readJson(f)?.token === token) { try { rmSync(f, { force: true }); } catch { /* taken over */ } } }
 }
 
 export const backoffMs =(attempts) => Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1));
@@ -150,10 +183,12 @@ export function createUploadQueue(file, now = () => Date.now()) {
       Object.assign(it, { state: 'queued', attempts: 0, nextAt: null, reason: null, updatedAt: new Date(now()).toISOString() });
       write(j); return it;
     },
-    /** A crash mid-upload leaves 'uploading': it is just queued again (the saved session resumes it). */
+    /** A crash mid-upload leaves 'uploading': it is just queued again (the saved session resumes it). A "Post now
+     *  (public)" left 'public-uploading' by a process that ended is 'public-unknown': its time stays taken. */
     recover() {
       const j = read(); let n = 0;
       for (const it of Object.values(j.items)) if (it.state === 'uploading') { it.state = 'queued'; it.reason ??= 'interrupted'; n++; }
+      for (const it of Object.values(j.items)) if (it.state === 'public-uploading' && !pidAlive(it.pid)) { it.state = 'public-unknown'; it.sentPublishAt ??= new Date(now()).toISOString(); n++; }
       if (n) write(j);
       return n;
     },
@@ -181,6 +216,7 @@ const REASON_TEXT = {
   'quota-busy': "Waiting: today's YouTube quota count was busy; tried again shortly",
   'quota-exceeded': 'Waiting: YouTube said the upload quota is used up for today; tried again tomorrow, counted the old way (1,650 units each) until then',
   'schedule-clash': 'Getting a new public time: a post was scheduled on the channel within an hour of the planned one',
+  'schedule-busy': 'Waiting: another post is being scheduled or sent right now; tried again in a few minutes',
 };
 
 /** Plain words for a queue reason code (or a failure code). */
@@ -285,7 +321,9 @@ export function createPostChain(opts) {
   /** post-schedule: every queued item without a usable slot gets the next slot, in queue order. The channel is read once,
    *  and only when some item needs a slot or a due item's slot must be re-checked before its upload starts (dueIds).
    *  On any doubt (scope, read, settings) the items wait without a slot; a due item to re-check waits with its slot. */
-  async function ensureSlots(auth, dueIds = new Set()) {
+  // Codex review 2026-11-21: true only after a complete channel read in this pass with no upload session started since.
+  let freshRead = false;
+  async function ensureSlots(auth, dueIds = new Set(), { force = false } = {}) {
     const t = nowMs();
     const queued = queue.items().filter((i) => i.state === 'queued');
     const cfg = scheduleCfg();
@@ -299,7 +337,7 @@ export function createPostChain(opts) {
     const capWait = (i) => i.reason === 'schedule-beyond-cap' && i.nextAt && Date.parse(i.nextAt) > t;
     const need = queued.filter((i) => !i.publishAt || isRetry(i, t, cfg));
     const recheck = queued.filter((i) => dueIds.has(i.id) && i.publishAt && !i.session && !isRetry(i, t, cfg));
-    if (!need.some((i) => !capWait(i)) && !recheck.length) return cfg;
+    if (!force && !need.some((i) => !capWait(i)) && !recheck.length) return cfg;
     const wait = (code, delay) => {
       if (NOTICE_TEXT[code]) notice(code);
       // A too-close slot is dropped here (it can no longer be used) and marked for the D314 retry; nothing else is released.
@@ -330,6 +368,7 @@ export function createPostChain(opts) {
       count: read.count, scanned: read.scanned, truncated: read.truncated, readAt: toIso(t) });
     // Page cap hit: an older scheduled post could be past the pages read, so no slot is given out (never a guess).
     if (read.truncated) { wait('schedule-read-incomplete', SIGNIN_WAIT_MS); return cfg; }
+    freshRead = true;
     // D375 slots for new items and D314 retries: the gaps around the channel's scheduled and recent posts (schedule.mjs).
     const plan = planQueueSlots({ items: queue.items(), channelLast: read.last, channelTimes: [...(read.times ?? []), ...(read.recent ?? [])], nowMs: t, cfg });
     let given = 0; let moved = 0; let capped = 0;
@@ -392,12 +431,20 @@ export function createPostChain(opts) {
     // The daily budget first: a pass that cannot upload anything does not read the channel either.
     const capOf = Number.isInteger(rules?.maxUploadsPerDay) ? rules.maxUploadsPerDay : null;
     const overBudget = (items, why) => {
-      for (const i of items) queue.patch(i.id, { reason: why, nextAt: new Date(nowMs() + SIGNIN_WAIT_MS).toISOString() });
+      // After YouTube's quotaExceeded the items wait until the next Pacific midnight (one wait, no attempt used).
+      const until = why === 'quota-exceeded' ? (exhaustedUntil(dataDir, nowMs()) ?? nowMs() + SIGNIN_WAIT_MS) : nowMs() + SIGNIN_WAIT_MS;
+      for (const i of items) queue.patch(i.id, { reason: why, nextAt: new Date(until).toISOString() });
       log(`posting: ${REASON_TEXT[why]}; ${items.length} clip(s) wait`);
     };
     const firstWhy = budget.uploadBlock(capOf);
     if (firstWhy) { overBudget(due, firstWhy); return; }
-    const cfg = await ensureSlots(auth, new Set(due.map((i) => i.id)));
+    const busyWait = (items) => { for (const i of items) queue.patch(i.id, { reason: 'schedule-busy', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() }); };
+    freshRead = false;
+    let cfg;
+    try { cfg = await withScheduleLock(dataDir, () => ensureSlots(auth, new Set(due.map((i) => i.id))), opts.lockOpts); } catch (e) {
+      if (e?.code !== 'schedule-busy') throw e;
+      busyWait(due); return;
+    }
     if (!cfg) return; // no valid settings: nothing can be re-checked, so nothing uploads
     for (const [n, item] of due.entries()) {
       if (halted) return;
@@ -420,28 +467,43 @@ export function createPostChain(opts) {
       }
       // A slot that was due for its re-check but could not be checked (or was moved later) waits for its turn.
       if (cur.nextAt && Date.parse(cur.nextAt) > nowMs()) continue;
-      // PT2 (D408) the one hard rule, right before this upload session starts: a channel read older than
-      // recheckMaxAgeMinutes is made again (a failed read keeps the item waiting), then the slot must be at least the gap
-      // from every channel time and every other queue time. A clash gives it the next free slot now; it uploads later.
-      if (!cur.session) {
-        const readAt = Date.parse(queue.schedule()?.readAt ?? '');
-        if (!Number.isFinite(readAt) || nowMs() - readAt > cfg.recheckMaxAgeMinutes * 60000) {
-          await ensureSlots(auth, new Set([item.id]));
-          const again = queue.get(item.id);
-          if (!again || again.state !== 'queued' || again.publishAt !== publishAt || (again.nextAt && Date.parse(again.nextAt) > nowMs())) continue;
-        }
-        const clash = slotClash({ item: queue.get(item.id), items: queue.items(), channelTimes: savedChannelTimes({ schedule: queue.schedule() }, nowMs()), cfg });
-        if (clash !== null) {
-          queue.patch(item.id, { publishAt: null, reslot: true, reason: 'schedule-clash', nextAt: null });
-          log(`posting: ${item.id}: ${REASON_TEXT['schedule-clash']}`);
-          await ensureSlots(auth);
-          continue;
-        }
+      // PT2 (D408) the one hard rule, right before this upload session starts (Codex review 2026-11-21, D409): inside the
+      // shared schedule lock the channel is read again (unless a complete read was made in this pass with no upload
+      // started since); an incomplete or failed read keeps the item waiting (fail closed). The slot is re-planned against
+      // that read, then must be at least the gap from every channel time and every other queue time (a "Post now
+      // (public)" included; while one is being sent nothing new starts). The upload is charged and marked in the queue
+      // before the lock is released, so a public post checked after it sees this time.
+      let gate;
+      try {
+        gate = await withScheduleLock(dataDir, async () => {
+          if (!cur.session) {
+            if (queue.items().some((i) => i.state === 'public-uploading')) { queue.patch(item.id, { reason: 'schedule-busy', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() }); return 'skip'; }
+            if (!freshRead) {
+              await ensureSlots(auth, new Set([item.id]), { force: true });
+              const again = queue.get(item.id);
+              if (!freshRead || !again || again.state !== 'queued' || again.publishAt !== publishAt || (again.nextAt && Date.parse(again.nextAt) > nowMs())) return 'skip';
+            }
+            const clash = slotClash({ item: queue.get(item.id), items: queue.items(), channelTimes: savedChannelTimes({ schedule: queue.schedule() }, nowMs()), cfg });
+            if (clash !== null) {
+              queue.patch(item.id, { publishAt: null, reslot: true, reason: 'schedule-clash', nextAt: null });
+              log(`posting: ${item.id}: ${REASON_TEXT['schedule-clash']}`);
+              await ensureSlots(auth);
+              return 'skip';
+            }
+          }
+          // Every upload start or resume counts against today's budget: checked and charged in one locked step right before it.
+          const why = budget.reserveUpload(capOf);
+          if (why) return why;
+          queue.patch(item.id, { state: 'uploading', reason: null, nextAt: null });
+          freshRead = false; // the next session reads the channel again
+          return 'go';
+        }, opts.lockOpts);
+      } catch (e) {
+        if (e?.code !== 'schedule-busy') throw e;
+        busyWait([item]); continue;
       }
-      // Every upload start or resume counts against today's budget: checked and charged in one locked step right before it.
-      const why = budget.reserveUpload(capOf);
-      if (why) { overBudget(due.slice(n).filter((i) => queue.get(i.id)?.state === 'queued'), why); return; }
-      queue.patch(item.id, { state: 'uploading', reason: null, nextAt: null });
+      if (gate === 'skip') continue;
+      if (gate !== 'go') { overBudget(due.slice(n).filter((i) => queue.get(i.id)?.state === 'queued'), gate); return; }
       // Task bar and tray (D311 proposed): an upload in progress is a task with its own progress (MB sent of MB).
       const task = { id: `upload-${String(item.id).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60)}`, kind: 'upload', title: 'Uploading a clip to YouTube (scheduled)', startedAt: nowMs(),
         stage: 'upload', stages: ['upload'], stageText: 'Uploading to YouTube', unit: 'MB' };
@@ -508,9 +570,12 @@ export function createPostChain(opts) {
           // (quota-budget.mjs), the user is told in plain words, and the item waits (no attempt used; its slot is kept
           // and re-checked before the next try). Nothing else uploads in this pass.
           taskEnd = { state: 'waiting', note: 'Waiting: the YouTube upload quota is used up for today' };
-          try { recordQuotaExceeded(dataDir, nowMs()); } catch { /* the budget still blocks on the next quota answer */ }
+          // Codex review 2026-11-21: the wait ends at the next Pacific midnight (when Google resets the quota), persisted
+          // in quota-model.json so every pass and the studio see it; a repeated answer never extends the fallback.
+          let until = null;
+          try { until = Date.parse(recordQuotaExceeded(dataDir, nowMs()).exhaustedUntil); } catch { /* the budget still blocks on the next quota answer */ }
           notice('quota-fallback');
-          queue.patch(item.id, { state: 'queued', reason: 'quota-exceeded', nextAt: new Date(nowMs() + MAX_DELAY_MS).toISOString() });
+          queue.patch(item.id, { state: 'queued', reason: 'quota-exceeded', nextAt: new Date(Number.isFinite(until) ? until : nowMs() + MAX_DELAY_MS).toISOString() });
           log(`posting: ${REASON_TEXT['quota-exceeded']}`);
           return;
         } else if (code === 'oauth-no-client' || code === 'oauth-reauth-needed') {

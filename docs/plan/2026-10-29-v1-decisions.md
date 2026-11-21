@@ -2398,3 +2398,22 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
   `templates.json textPools` and `data/games/<id>/posting.json`. A line that needs a missing fact is never used. No line
   repeats within the last 20. Drafts the user has not edited are redrafted once (`source.textVersion` 2).
 - PT5 (the post text card in Settings) and PT4 (growth suggestions) are not built yet. They come next.
+- Codex fixes (review 2026-11-21). These replace the points above where they differ:
+  - One reservation: `withScheduleLock` (`services/posting/auto-chain.mjs`, file `posting/schedule.lock`) covers both
+    the chain and "Post now (public)". Each one checks a fresh channel read and the queue inside the lock, and records
+    its time in the queue before it lets go. A public post is a queue item. It is `public-uploading` while it is sent,
+    and the chain starts no session then. Once sent it is `public-done`, and its start and end times stay taken. If it
+    is not sent, the hold is given back.
+  - "Post now (public)" reads the channel just before it goes. A read that fails, is refused by the quota or is
+    incomplete refuses the click, and nothing is sent. The 60-min check covers now up to the estimated end of the upload.
+  - The chain reads the channel just before each new upload session. The pass's first read counts only for the first
+    session. `recheckMaxAgeMinutes` is retired. An incomplete read fails closed.
+  - The channel read now covers the whole uploads list. The `lookbackDays` stop is gone. Hitting `maxPages` counts as
+    incomplete, so nothing is scheduled.
+  - Quota: each upload's share now includes one full channel read at its worst (1 + 2 x maxPages = 81 units), so about
+    5 a day fit under the unit sum and 24 under the bucket. A quotaExceeded answer blocks uploads until the next Pacific
+    midnight (`exhaustedUntil` in `quota-model.json`). Under the fallback, the same day's earlier bucket uploads count
+    1,600 units each again. A repeated answer never makes the fallback last longer.
+  - Redraft: a draft from before the `editedByUser` marker is redrafted only if its text still exactly matches the old
+    template, rendered again with its stored values (`legacyText` in `services/posting/index.mjs`). Any other draft,
+    and one whose values cannot be found, is left as it is.

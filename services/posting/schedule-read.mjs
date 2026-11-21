@@ -8,12 +8,11 @@
 // (at most cfg.maxPages x cfg.pageSize): playlistItems.list part=snippet,contentDetails -> video ids, when each was added
 // (snippet.publishedAt) and when it went public (contentDetails.videoPublishedAt); videos.list part=status -> privacyStatus
 // + publishAt. Only these parts are read (no titles or descriptions). Nothing is written; tokens never leave memory.
-// Big channels (D375): the uploads list comes newest first, so the scan stops at the first page whose items were ALL
-// added more than cfg.lookbackDays ago. The statuses of every item on that last page are still read (videos.list, Codex
-// review 2026-11-13), so a post on the page that ends the scan is never missed. Such a scan is complete (not truncated).
-// Only reaching maxPages first is truncated; the caller then gives out no slot (fail closed). Residual risk: a video
-// uploaded before the lookback, on a later page, but scheduled to go public later is not seen (UNVERIFIED that the
-// uploads list is ordered by the time a video was added; a page with an unreadable time never ends the scan).
+// Whole channel (Codex review 2026-11-21, D409): every page of the uploads list is read, to its end (no nextPageToken).
+// An old upload can still carry a future publishAt, so no lookback ends the scan any more (cfg.lookbackDays is no
+// longer used here). Reaching cfg.maxPages with pages left is truncated (incomplete): the caller gives out no slot and
+// uploads nothing (fail closed). A channel with more than maxPages x pageSize uploads must raise maxPages.
+// Cost: 1 (channels.list) + 2 per page (playlistItems.list + videos.list) quota units per read.
 // Any failure throws ScheduleError: 'schedule-scope-missing' (403 insufficient permissions / 401) or 'schedule-read-failed'.
 // The caller never guesses a slot when this throws.
 import { ScheduleError, futureScheduleTimes, latestFutureSchedule } from './schedule.mjs';
@@ -43,8 +42,7 @@ export async function readChannelSchedule({ accessToken, fetchImpl = fetch, nowM
   const ch = await getJson(fetchImpl, `${API}/channels?part=contentDetails&mine=true`, accessToken);
   const uploads = ch?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
   if (typeof uploads !== 'string' || !uploads) throw new ScheduleError('schedule-read-failed', 'no uploads list found for this channel');
-  const cutoff = nowMs - cfg.lookbackDays * DAY_MS;
-  const videos = []; const wentPublic = new Map(); let pageToken = null; let pages = 0; let scanned = 0; let reachedLookback = false;
+  const videos = []; const wentPublic = new Map(); let pageToken = null; let pages = 0; let scanned = 0;
   do {
     const q = new URLSearchParams({ part: 'snippet,contentDetails', playlistId: uploads, maxResults: String(cfg.pageSize) });
     if (pageToken) q.set('pageToken', pageToken);
@@ -52,8 +50,6 @@ export async function readChannelSchedule({ accessToken, fetchImpl = fetch, nowM
     pages++;
     const items = Array.isArray(page?.items) ? page.items : [];
     pageToken = typeof page?.nextPageToken === 'string' && page.nextPageToken ? page.nextPageToken : null;
-    const added = items.map((i) => msOf(i?.snippet?.publishedAt));
-    const stop = items.length > 0 && added.every((t) => t !== null && t < cutoff);
     const ids = [];
     for (const i of items) {
       const id = i?.contentDetails?.videoId;
@@ -67,7 +63,6 @@ export async function readChannelSchedule({ accessToken, fetchImpl = fetch, nowM
       const v = await getJson(fetchImpl, `${API}/videos?part=status&id=${ids.map(encodeURIComponent).join(',')}`, accessToken);
       if (Array.isArray(v?.items)) videos.push(...v.items);
     }
-    if (stop) { reachedLookback = true; pageToken = null; break; }
   } while (pageToken && pages < cfg.maxPages);
   const { last, count } = latestFutureSchedule(videos, nowMs);
   const recent = [];
@@ -76,5 +71,5 @@ export async function readChannelSchedule({ accessToken, fetchImpl = fetch, nowM
     const t = wentPublic.get(v.id);
     if (t !== undefined && t <= nowMs && t > nowMs - RECENT_DAYS * DAY_MS) recent.push(t);
   }
-  return { last, count, times: futureScheduleTimes(videos, nowMs), recent: recent.sort((x, y) => x - y), scanned, pages, truncated: Boolean(pageToken), reachedLookback };
+  return { last, count, times: futureScheduleTimes(videos, nowMs), recent: recent.sort((x, y) => x - y), scanned, pages, truncated: Boolean(pageToken) };
 }

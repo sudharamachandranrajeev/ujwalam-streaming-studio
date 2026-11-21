@@ -9,7 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { QUEUE_NAME, RUN_NOW_NAME, createPostChain, createUploadQueue, requestRunNow } from '../services/posting/auto-chain.mjs';
+import { QUEUE_NAME, RUN_NOW_NAME, createPostChain, createUploadQueue, requestRunNow, withScheduleLock } from '../services/posting/auto-chain.mjs';
+import { READONLY_SCOPE } from '../services/posting/oauth.mjs';
+import { slotClash, loadScheduleConfig, DEFAULT_SCHEDULE } from '../services/posting/schedule.mjs';
 import { publicNowClash, scheduleNextFree } from '../services/posting/auto-settings.mjs';
 import { postId } from '../services/posting/index.mjs';
 import { uploadMetadata } from '../services/posting/youtube.mjs';
@@ -62,21 +64,36 @@ async function boot({ sinks = [], flags = { posting: true, 'auto-post': true } }
   writeFileSync(path.join(dataDir, 'flags.local.json'), JSON.stringify({ flags }));
   const id = makePackage(dataDir);
   const calls = [];
+  // The fake channel (D409 fresh read before Post now): `channel.scheduled` = future publish times; `channel.error` =
+  // HTTP status of channels.list; `channel.pages` = how many pages of 50 uploads the list has (more than maxPages =
+  // incomplete).
+  const channel = { scheduled: [], error: null, pages: 1, initFail: false };
   const fetchImpl = async (url, o) => {
     calls.push({ url: String(url), body: typeof o?.body === 'string' ? o.body : null });
-    if (String(url).includes('uploadType=resumable')) return jsonRes(200, {}, { location: 'https://upload.example/s1' });
+    const u = new URL(String(url));
+    if (u.pathname.endsWith('/youtube/v3/channels')) return channel.error ? jsonRes(channel.error, { error: { code: channel.error } }) : jsonRes(200, { items: [{ contentDetails: { relatedPlaylists: { uploads: 'UUx' } } }] });
+    if (u.pathname.endsWith('/youtube/v3/playlistItems')) {
+      const p = Number(u.searchParams.get('pageToken') ?? 0);
+      const ids = p === 0 ? channel.scheduled.map((_, k) => `sch${k}`) : [`old${p}`];
+      return jsonRes(200, { items: ids.map((v) => ({ snippet: { publishedAt: '2026-01-01T00:00:00Z' }, contentDetails: { videoId: v } })), ...(p + 1 < channel.pages ? { nextPageToken: String(p + 1) } : {}) });
+    }
+    if (u.pathname.endsWith('/youtube/v3/videos') && (o?.method ?? 'GET') === 'GET') {
+      const ids = u.searchParams.get('id').split(',');
+      return jsonRes(200, { items: ids.map((v) => (v.startsWith('sch') ? { id: v, status: { privacyStatus: 'private', publishAt: new Date(channel.scheduled[Number(v.slice(3))]).toISOString() } } : { id: v, status: { privacyStatus: 'public' } })) });
+    }
+    if (String(url).includes('uploadType=resumable')) return channel.initFail ? jsonRes(500, { error: { code: 500 } }) : jsonRes(200, {}, { location: 'https://upload.example/s1' });
     if (url === 'https://upload.example/s1') return jsonRes(200, { id: 'VIDPUB', status: { uploadStatus: 'uploaded' } });
     throw new Error(`unexpected ${url}`);
   };
-  const auth = { status: async () => ({ signedIn: true, hasClient: true }), accessToken: async () => 'fake-token' };
+  const auth = { status: async () => ({ signedIn: true, hasClient: true }), accessToken: async () => 'fake-token', grantedScopes: async () => [READONLY_SCOPE] };
   const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
   const srv = createStudioServer({ uiRoot: UI, core, host: createFakeHost(), launchKey: KEY, dataDir, feedbackDir: mk(), now: () => T0,
-    youtube: { auth, fetchImpl, outputsStatus: async () => ({ sinks }) } });
+    youtube: { auth, fetchImpl, outputsStatus: async () => ({ sinks }), lockOpts: { waitMs: 100 } } });
   const { port } = await srv.listen();
   const cookie = (await raw(port, { url: `/login?k=${KEY}` })).headers['set-cookie'][0].split(';')[0];
   const csrf = (await raw(port, { url: '/ui/api/session', headers: { cookie } })).json().csrf;
   const post = (route, body) => raw(port, { method: 'POST', url: route, body: JSON.stringify(body), headers: { cookie, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf } });
-  return { srv, dataDir, id, calls, post, queue: createUploadQueue(path.join(dataDir, 'posting', QUEUE_NAME), () => T0) };
+  return { srv, dataDir, id, calls, channel, post, queue: createUploadQueue(path.join(dataDir, 'posting', QUEUE_NAME), () => T0) };
 }
 // the after() above removes folders; servers close here
 const closeAll = (...c) => { for (const x of c) x.srv.close(); };
@@ -174,5 +191,80 @@ describe('PT3 Post now (public)', () => {
       assert.equal(r.status, 409, state); assert.equal(c.calls.length, 0);
       closeAll(c);
     }
+  });
+
+  // ---- Codex review 2026-11-21 (D409) ----
+  const sentInit = (c) => c.calls.some((x) => x.url.includes('uploadType=resumable'));
+  test('a fresh channel read right before: a post scheduled on YouTube 50 min from now refuses it, though nothing was saved', async () => {
+    const c = await boot();
+    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
+    assert.equal(c.queue.schedule(), null, 'no saved read at all');
+    c.channel.scheduled = [T0 + 50 * 60e3];
+    const r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
+    assert.equal(r.status, 409, r.text); assert.equal(r.json().error, 'too-close'); assert.equal(r.json().at, new Date(T0 + 50 * 60e3).toISOString());
+    assert.ok(c.calls.some((x) => x.url.includes('/channels')), 'read the channel');
+    assert.equal(sentInit(c), false, 'nothing sent');
+    assert.equal(c.queue.get(c.id), null, 'no hold left behind');
+    closeAll(c);
+  });
+
+  test('a failed, scope-less or incomplete channel read refuses it (fail closed, nothing sent)', async () => {
+    let c = await boot();
+    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
+    c.channel.error = 500;
+    let r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
+    assert.equal(r.status, 502); assert.equal(r.json().error, 'schedule-read-failed'); assert.equal(sentInit(c), false);
+    closeAll(c);
+    c = await boot();
+    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
+    c.channel.pages = 41; // the shipped maxPages is 40
+    r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
+    assert.equal(r.status, 409); assert.equal(r.json().error, 'schedule-read-incomplete'); assert.equal(sentInit(c), false);
+    closeAll(c);
+  });
+
+  test('sent: recorded in the queue as a taken time; the chain and Schedule next free slot keep an hour from it', async () => {
+    const c = await boot();
+    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
+    const r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
+    assert.equal(r.status, 200, r.text);
+    const it = c.queue.get(c.id);
+    assert.equal(it.state, 'public-done'); assert.equal(it.sentPublishAt, new Date(T0).toISOString()); assert.equal(it.videoId, 'VIDPUB');
+    // A queued slot 30 min after it now clashes (the check right before a session) ...
+    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
+    assert.equal(slotClash({ item: { id: 'q', publishAt: new Date(T0 + 30 * 60e3).toISOString() }, items: c.queue.items(), cfg }), T0);
+    // ... and the next free slot is an hour or more away.
+    const s = scheduleNextFree(c.dataDir, 'other', { nowMs: T0 });
+    assert.ok(s.ok && Date.parse(s.item.publishAt) - T0 >= HOUR);
+    closeAll(c);
+  });
+
+  test('one reservation: the schedule lock held by the chain refuses it; a chain upload running refuses it too', async () => {
+    const c = await boot();
+    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
+    let release; const held = new Promise((res) => { release = res; });
+    const holder = withScheduleLock(c.dataDir, () => held);
+    await new Promise((res) => setTimeout(res, 20));
+    let r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
+    assert.equal(r.status, 409); assert.equal(r.json().error, 'schedule-busy'); assert.equal(sentInit(c), false);
+    release(); await holder;
+    c.queue.add('chainclip'); c.queue.patch('chainclip', { state: 'uploading', publishAt: new Date(T0 + 5 * HOUR).toISOString() });
+    r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
+    assert.equal(r.status, 409); assert.equal(r.json().error, 'upload-in-progress'); assert.equal(sentInit(c), false);
+    closeAll(c);
+  });
+
+  test('a failed send gives the hold back (the clip can be tried again)', async () => {
+    const c = await boot();
+    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
+    c.channel.initFail = true; // the upload session start fails (500 from Google)
+    let r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
+    assert.notEqual(r.status, 200);
+    const it = c.queue.get(c.id);
+    assert.equal(it.state, 'removed'); assert.equal(it.publishAt, null); assert.equal(it.reason, 'public-not-sent');
+    c.channel.initFail = false;
+    r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
+    assert.equal(r.status, 200, r.text); assert.equal(c.queue.get(c.id).state, 'public-done');
+    closeAll(c);
   });
 });

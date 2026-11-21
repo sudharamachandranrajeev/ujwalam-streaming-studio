@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
-import { createPostChain, createUploadQueue, readQueueSummary } from '../services/posting/auto-chain.mjs';
+import { createPostChain, createUploadQueue, readQueueSummary, requestRunNow } from '../services/posting/auto-chain.mjs';
 import { createPostStore } from '../services/posting/index.mjs';
 import { checkPostStatus } from '../services/posting/youtube.mjs';
 import { tasksDir } from '../services/studio-ui/tasks.mjs';
@@ -318,13 +318,15 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     assert.deepEqual(sent(g), [iso(FIRST), iso(FIRST + 6 * HOUR), iso(FIRST + 12 * HOUR)]);
     assert.deepEqual(e.queue().items().map((i) => i.publishAt), sent(g), 'queue order = slot order');
     assert.deepEqual(e.queue().items().map((i) => i.sentPublishAt), sent(g), 'recorded = what Google got');
-    assert.equal(g.count('channels'), 1, 'the channel is read once per pass');
+    // D409 (Codex review 2026-11-21): the channel is read right before every new upload session (the pass's first read
+    // serves the first session).
+    assert.equal(g.count('channels'), 3, 'one channel read per upload session');
     assert.deepEqual(e.uploads().flatMap((r) => r.posted.map((p) => p.publishAt)).sort(), [...sent(g)].sort());
     const s = readQueueSummary(e.dataDir, null, T0);
     assert.equal(s.nextPublishAt, iso(FIRST)); assert.equal(s.lastPublishAt, iso(FIRST + 12 * HOUR)); assert.equal(s.attention, 0);
     assert.ok(!/fake-access/.test(readFileSync(path.join(e.dataDir, 'posting', 'upload-queue.json'), 'utf8')));
     await c.afterRun(e.runDir, IDLE);
-    assert.equal(g.count('channels'), 1, 'nothing new to schedule: no channel read'); assert.equal(g.videos.length, 3);
+    assert.equal(g.count('channels'), 3, 'nothing new to schedule: no channel read'); assert.equal(g.videos.length, 3);
   });
 
   test('existing schedule in YouTube Studio: 6 h after the latest FUTURE one; past, public and unlisted ones are ignored', async () => {
@@ -779,9 +781,8 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     let hand = null;
     g.opt.onVideo = () => {
       if (hand !== null) return;
-      // The first upload took 11 minutes (older than recheckMaxAgeMinutes 10) and someone scheduled a post by hand
-      // 20 minutes after the second clip's slot.
-      e.clock.t += 11 * MIN;
+      // Codex review 2026-11-21 (D409): no clock advance at all; the channel is read again before EVERY new session,
+      // however fresh the last read. Someone scheduled a post by hand 20 minutes after the second clip's slot.
       hand = FIRST + 6 * HOUR + 20 * MIN;
       g.opt.channel = [vid('hand', 'private', iso(hand))];
     };
@@ -807,12 +808,73 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     assert.equal(g.videos.length, 0); assert.equal(it.state, 'queued'); assert.equal(it.reason, 'quota-exceeded'); assert.equal(it.attempts, 0);
     assert.ok(Date.parse(it.nextAt) > T0, 'waits');
     const q = loadQuota(e.dataDir, undefined, { nowMs: T0 });
-    assert.equal(q.model, 'unit-sum'); assert.equal(q.uploadsPerDayFit, 6); assert.match(q.modelText, /used up/);
+    assert.equal(q.model, 'unit-sum'); assert.equal(q.uploadsPerDayFit, 5); assert.match(q.modelText, /used up/);
     const notice = JSON.parse(readFileSync(path.join(tasksDir(e.dataDir), 'auto-post-notice.json'), 'utf8'));
     assert.match(notice.title, /upload quota is used up/);
     assert.match(readQueueSummary(e.dataDir, null, T0).message, /quota is used up for today/);
+    // Codex review 2026-11-21: the wait ends at the next Pacific midnight (T0 = 02:00 PST -> 08:00Z the next day), not 6 h on.
+    const midnight = Date.parse('2026-11-10T08:00:00Z');
+    assert.equal(it.nextAt, iso(midnight));
+    // Passes before then send nothing and use no attempt, even when Run auto-post now is asked for.
+    const inits = g.count('init');
+    e.clock.t = T0 + 7 * HOUR; await c.tick(IDLE);
+    e.clock.t += MIN; requestRunNow(e.dataDir, e.clock.t); await c.tick(IDLE);
+    assert.equal(g.count('init'), inits, 'no upload try before midnight Pacific');
+    assert.equal(e.queue().items()[0].attempts, 0);
+    // After midnight Pacific it goes up (counted the old way that day).
+    e.clock.t = midnight + MIN; await c.tick(IDLE);
+    assert.equal(e.queue().items()[0].state, 'done');
     // Two Pacific days later the bucket model is back.
     assert.equal(loadQuota(e.dataDir, undefined, { nowMs: T0 + 3 * 24 * HOUR }).model, 'upload-bucket');
+  });
+
+  test('D409: a failed channel read right before the second session keeps the second clip waiting (fail closed)', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0], ROWS[2]]); g.opt.hideOwnUploads = true; const c = schedChain(e, g);
+    g.opt.onVideo = () => { g.opt.channelError = 500; };
+    await c.afterRun(e.runDir, IDLE);
+    assert.equal(g.videos.length, 1, 'only the first went up');
+    const second = e.queue().items()[1];
+    assert.equal(second.state, 'queued'); assert.equal(second.reason, 'schedule-read-failed'); assert.equal(second.attempts, 0);
+    assert.equal(g.count('channels'), 2, 'read again right before the second session');
+  });
+
+  test('D409: an incomplete (page cap) read right before a session: nothing uploads', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]);
+    g.opt.channel = Array.from({ length: 120 }, (_, k) => vid(`p${k}`, 'public', null));
+    const c = schedChain(e, g, { scheduleFile: schedFile(e, { maxPages: 2, pageSize: 50 }) });
+    await c.afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0);
+    assert.equal(e.queue().items()[0].reason, 'schedule-read-incomplete');
+  });
+
+  test('D409: while a Post now (public) is being sent, the chain starts no session; its time then counts as taken', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true; const c = schedChain(e, g);
+    const q = e.queue();
+    q.add('pub'); q.patch('pub', { state: 'public-uploading', publishAt: iso(T0), pid: process.pid });
+    await c.afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0);
+    const it = e.queue().items().find((i) => i.id !== 'pub');
+    assert.equal(it.reason, 'schedule-busy'); assert.equal(it.attempts, 0);
+    // It went public 30 min later; the clip's slot must be an hour or more from that time.
+    q.patch('pub', { state: 'public-done', sentPublishAt: iso(T0 + 30 * MIN) });
+    q.patch(it.id, { publishAt: iso(T0 + 3 * HOUR) }); // 2.5 h after the public post: inside this test's 6 h gap
+    e.clock.t = T0 + 6 * MIN; await c.tick(IDLE);
+    const done = e.queue().items().find((i) => i.id === it.id);
+    assert.equal(done.state, 'done');
+    assert.ok(Math.abs(Date.parse(done.sentPublishAt) - (T0 + 30 * MIN)) >= 6 * HOUR, 'kept the gap from the public post');
+  });
+
+  test('D409: the schedule lock held elsewhere: the chain waits (no attempt, nothing sent)', async () => {
+    const { withScheduleLock } = await import('../services/posting/auto-chain.mjs');
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    const c = schedChain(e, g, { lockOpts: { waitMs: 100 } });
+    let release; const held = new Promise((r) => { release = r; });
+    const holder = withScheduleLock(e.dataDir, () => held);
+    await new Promise((r) => setTimeout(r, 20));
+    await c.afterRun(e.runDir, IDLE);
+    release(); await holder;
+    assert.equal(g.count('init'), 0);
+    assert.equal(e.queue().items()[0].reason, 'schedule-busy'); assert.equal(e.queue().items()[0].attempts, 0);
   });
 
 });

@@ -30,9 +30,9 @@ const T0 = Date.parse('2026-11-13T10:00:00Z');
 const iso = (t) => new Date(t).toISOString();
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 
-describe('channel read: lookback (D375)', () => {
-  // 2500 uploads, one every 6 h, newest first; three scheduled ones among the newest. The shipped settings check at most
-  // 40 pages of 50 (2000 uploads): without the lookback this channel would hit the cap and nothing would upload.
+describe('channel read: whole uploads list (D375, D409)', () => {
+  // Uploads one every 6 h, newest first; three scheduled ones among the newest. The shipped settings read at most
+  // 40 pages of 50 (2000 uploads).
   function fakeChannel(total, extra = []) {
     const ups = Array.from({ length: total }, (_, i) => ({ id: `v${i}`, added: T0 - i * 6 * HOUR }));
     const sched = new Map([['v0', T0 + 5 * HOUR], ['v1', T0 + 30 * HOUR], ['v3', T0 + 3 * DAY], ...extra]);
@@ -56,33 +56,32 @@ describe('channel read: lookback (D375)', () => {
     return { fetchImpl, calls };
   }
 
-  test('more than 1000 uploads: the read stops at the first page older than the lookback; complete, not truncated', async () => {
+  // Codex review 2026-11-21 (D409): no lookback ends the scan any more; every page is read to its end.
+  test('every page is read to the end: a channel within maxPages is complete; cost 1 + 2 per page', async () => {
     const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
-    assert.equal(cfg.lookbackDays, 120); assert.equal(cfg.maxPages * cfg.pageSize, 2000);
-    const f = fakeChannel(2500);
+    assert.equal(cfg.maxPages * cfg.pageSize, 2000);
+    const f = fakeChannel(1990);
     const r = await readChannelSchedule({ accessToken: 'x', fetchImpl: f.fetchImpl, nowMs: T0, cfg });
-    assert.equal(r.truncated, false); assert.equal(r.reachedLookback, true);
-    // 120 days at 4 uploads a day = 480 uploads = 10 pages, then the 11th page is all older: 11 pages, never 40
-    assert.equal(r.pages, 11); assert.equal(f.calls.playlist, 11); assert.equal(f.calls.videos, 11, 'the page that ends the scan is still status-checked');
-    assert.ok(r.scanned >= 480 && r.scanned < 1000);
+    assert.equal(r.truncated, false); assert.equal(r.reachedLookback, undefined);
+    assert.equal(r.pages, 40); assert.equal(f.calls.playlist, 40); assert.equal(f.calls.videos, 40); assert.equal(r.scanned, 1990);
+    assert.equal(f.calls.channels + f.calls.playlist + f.calls.videos, 1 + 2 * 40, 'quota units of one read');
     assert.deepEqual(r.times.map(iso), [T0 + 5 * HOUR, T0 + 30 * HOUR, T0 + 3 * DAY].map(iso));
   });
 
-  test('a post on the page that ends the scan (uploaded long ago, scheduled ahead) is still seen (Codex review)', async () => {
+  test('an upload older than the old 120-day lookback but scheduled ahead is seen (Codex review 2026-11-21)', async () => {
     const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
-    // v500 sits on the 11th page (items 500..549), all added more than 120 days back; it goes public in 2 days.
-    const f = fakeChannel(2500, [['v500', T0 + 2 * DAY]]);
+    // v1500 was added 375 days ago (far past any lookback) and goes public in 2 days.
+    const f = fakeChannel(1990, [['v1500', T0 + 2 * DAY]]);
     const r = await readChannelSchedule({ accessToken: 'x', fetchImpl: f.fetchImpl, nowMs: T0, cfg });
-    assert.equal(r.reachedLookback, true); assert.equal(r.pages, 11);
-    assert.ok(r.times.includes(T0 + 2 * DAY), 'the cutoff page post counts as a taken time');
+    assert.equal(r.truncated, false);
+    assert.ok(r.times.includes(T0 + 2 * DAY), 'the old upload\'s future time counts as taken');
   });
 
-  test('a page with an item that has no added date is never treated as past the lookback (keeps reading, fail closed)', async () => {
-    const cfg = { ...loadScheduleConfig(DEFAULT_SCHEDULE), maxPages: 2 };
+  test('more uploads than maxPages x pageSize: truncated (incomplete), the caller fails closed', async () => {
+    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
     const f = fakeChannel(2500);
-    const wrap = async (u) => { const r = await f.fetchImpl(u); if (!String(u).includes('/playlistItems')) return r; const b = await r.json(); b.items[0].snippet = {}; return { ok: true, status: 200, json: async () => b }; };
-    const r = await readChannelSchedule({ accessToken: 'x', fetchImpl: wrap, nowMs: T0 + 400 * DAY, cfg });
-    assert.equal(r.reachedLookback, false); assert.equal(r.truncated, true);
+    const r = await readChannelSchedule({ accessToken: 'x', fetchImpl: f.fetchImpl, nowMs: T0, cfg });
+    assert.equal(r.truncated, true); assert.equal(r.pages, 40);
   });
 });
 
@@ -428,7 +427,7 @@ describe('Codex review: delete race, slot re-check, daily budget', () => {
     writeFileSync(unitSum, JSON.stringify({ model: 'unit-sum', quotaUnitsPerDay: 10000, insertUnits: 1600, thumbnailUnits: 50, readReserveUnits: 100 }));
     const q = loadQuota(dataDir, unitSum);
     assert.equal(q.uploadsPerDayFit, 0); assert.equal(q.quotaUnitsPerDay, 1000);
-    assert.equal(defaultCard(dataDir).maxPerDay, 18, 'bucket model: (1000 - 100) / 50 covers');
+    assert.equal(defaultCard(dataDir).maxPerDay, 6, 'bucket model: (1000 - 100) / (50 covers + 81 for the channel read before each upload, D409)');
   });
 });
 

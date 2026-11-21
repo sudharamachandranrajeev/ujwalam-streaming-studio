@@ -6,8 +6,11 @@
 //   units:   quota units used in a Pacific day (Google resets the quota at midnight Pacific time): an upload attempt
 //            counts insert + thumbnail units (quota.json), every API read (schedule reads, status checks for the
 //            delete) 1 unit.
-// Admission: an upload may start only while units + one upload <= quotaUnitsPerDay - readReserveUnits (the same sum as
-// the "uploads a day fit" number, so a fit of 0 never uploads); reads may use the whole quota.
+// Admission: an upload may start only while units + one upload <= quotaUnitsPerDay - readReserveUnits; reads may use the
+// whole quota. The "uploads a day fit" number counts each upload as its own units plus one full channel read at its
+// worst (1 + 2 x maxPages; the channel is read again before every upload session, Codex review 2026-11-21), so a fit of
+// 0 never uploads. After YouTube's quotaExceeded nothing uploads before the next Pacific midnight (quota-model.json
+// exhaustedUntil), and under the fallback the day's earlier bucket-model uploads are recounted at insertUnits each.
 // Every check and its charge run in ONE transaction (BEGIN IMMEDIATE ... COMMIT, busy timeout BUSY_WAIT_MS), so the
 // chain and the studio server never lose a charge or both pass the same last slot. SQLite's file lock is held by the OS
 // and released when the holding process ends in any way (no stale lock file to take over). Every exception path rolls
@@ -28,7 +31,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { MAX_PER_DAY } from './auto-post.mjs';
-import { checkUserSchedule, userScheduleFile } from './schedule.mjs';
+import { DEFAULT_SCHEDULE, checkUserSchedule, loadScheduleConfig, userScheduleFile } from './schedule.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const DEFAULT_QUOTA = path.join(REPO, 'data', 'posting', 'quota.json');
@@ -40,7 +43,7 @@ export const QUOTA_MODELS = Object.freeze(['upload-bucket', 'unit-sum']);
 /** Plain words for the Settings quota line and the task bar. */
 export const QUOTA_MODEL_TEXT = Object.freeze({
   'upload-bucket': "Uploads use YouTube's own upload allowance (up to 100 a day); each one still costs 50 quota units for its cover picture.",
-  'unit-sum': 'Uploads are counted the old way: 1,650 quota units each, so about 6 a day fit in 10,000 units.',
+  'unit-sum': 'Uploads are counted the old way: 1,650 quota units each, plus a channel read before each one, so about 5 a day fit in 10,000 units.',
   fallback: 'YouTube said the upload quota was used up, so uploads wait for tomorrow and are counted the old way (1,650 units each) until then.',
 });
 export const BUSY_WAIT_MS = 3 * 1000;
@@ -86,12 +89,48 @@ export function loadQuota(dataDir, file = DEFAULT_QUOTA, { nowMs = Date.now() } 
   const model = fb ? 'unit-sum' : shipped;
   const reserve = n('readReserveUnits');
   const thumb = n('thumbnailUnits');
-  const perUpload = model === 'upload-bucket' ? thumb : n('insertUnits') + thumb;
+  const insert = model === 'upload-bucket' ? (Number.isFinite(j?.insertUnits) && j.insertUnits >= 0 ? j.insertUnits : null) : n('insertUnits');
+  const perUpload = model === 'upload-bucket' ? thumb : insert + thumb;
   const bucket = model === 'upload-bucket' ? Math.floor(n('uploadBucketPerDay')) : null;
-  let fit = Math.max(0, perUpload > 0 ? Math.floor((quota - reserve) / perUpload) : MAX_PER_DAY);
+  // Codex review 2026-11-21 (D409): the channel is read again before every upload session, so each upload's share of the
+  // sum also carries one full read at its worst (1 + 2 x maxPages units, the amount reserved before the read).
+  const readPerUpload = readUnitsPerSession(dataDir);
+  const each = perUpload + readPerUpload;
+  let fit = Math.max(0, each > 0 ? Math.floor((quota - reserve) / each) : MAX_PER_DAY);
   if (bucket !== null) fit = Math.min(fit, bucket);
-  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, readReserveUnits: reserve, uploadsPerDayFit: Math.min(fit, MAX_PER_DAY), userSet: user.quotaUnitsPerDay !== undefined,
-    model, uploadsCap: bucket, fallback: fb, modelText: fb ? QUOTA_MODEL_TEXT.fallback : QUOTA_MODEL_TEXT[model] };
+  const ex = exhaustedUntil(dataDir, nowMs);
+  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, readUnitsPerUpload: readPerUpload, insertUnits: insert, readReserveUnits: reserve, uploadsPerDayFit: Math.min(fit, MAX_PER_DAY), userSet: user.quotaUnitsPerDay !== undefined,
+    model, uploadsCap: bucket, fallback: fb, exhaustedUntil: ex, modelText: fb ? QUOTA_MODEL_TEXT.fallback : QUOTA_MODEL_TEXT[model] };
+}
+
+/** The units one channel schedule read may use at most: 1 + 2 x maxPages (the user's schedule settings, else the shipped
+ *  file). Throws QuotaError when neither gives a valid maxPages. */
+export function readUnitsPerSession(dataDir) {
+  let cfg = null;
+  try { cfg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: typeof dataDir === 'string' ? userScheduleFile(dataDir) : null }); } catch { cfg = readJson(DEFAULT_SCHEDULE); }
+  const p = cfg?.maxPages;
+  if (!Number.isInteger(p) || p < 1) throw new QuotaError('quota-unreadable', 'schedule setting maxPages is not valid');
+  return 1 + 2 * p;
+}
+
+/** The first moment of the next Pacific day after t (ms): Google resets the quota at midnight Pacific time. */
+export function nextPacificMidnight(t) {
+  const day = pacificDay(t);
+  let hi = t + 3600e3;
+  while (pacificDay(hi) === day) hi += 3600e3;
+  let lo = hi - 3600e3; // lo is still `day` (or t itself)
+  if (lo < t) lo = t;
+  while (hi - lo > 1) { const mid = Math.floor((lo + hi) / 2); if (pacificDay(mid) === day) lo = mid; else hi = mid; }
+  return hi;
+}
+
+/** Codex review 2026-11-21: after YouTube's quotaExceeded nothing uploads before this time (ms; the next Pacific
+ *  midnight after the answer), or null. Never throws. */
+export function exhaustedUntil(dataDir, nowMs = Date.now()) {
+  if (typeof dataDir !== 'string') return null;
+  const j = readJson(path.join(dataDir, 'posting', QUOTA_MODEL_NAME));
+  const t = typeof j?.exhaustedUntil === 'string' ? Date.parse(j.exhaustedUntil) : NaN;
+  return Number.isFinite(t) && t > nowMs ? t : null;
 }
 
 /** PT2: the active quotaExceeded fallback ({ since, until }: Pacific days) or null. It ends after `until`. Never throws. */
@@ -102,15 +141,23 @@ export function quotaFallback(dataDir, nowMs = Date.now()) {
   return pacificDay(nowMs) <= j.until ? { since: j.since ?? null, until: j.until } : null;
 }
 
-/** PT2: YouTube answered quotaExceeded under the bucket model: count the old way for today and fallbackDays more Pacific
- *  days, then try the bucket again. -> the saved state. */
+/** PT2: YouTube answered quotaExceeded: nothing uploads before the next Pacific midnight (exhaustedUntil, persisted),
+ *  and under the bucket model the count goes the old way for today and fallbackDays more Pacific days, then the bucket
+ *  is tried again. Codex review 2026-11-21: a repeated answer while a fallback is active never moves `until` further
+ *  out (only exhaustedUntil is set again, to the same or the next midnight). -> the saved state. */
 export function recordQuotaExceeded(dataDir, nowMs = Date.now(), file = DEFAULT_QUOTA) {
   const fd = readJson(file)?.fallbackDays;
   const days = Number.isInteger(fd) && fd >= 0 && fd <= 30 ? fd : 1;
   const today = pacificDay(nowMs);
-  const [y, m, d] = today.split('-').map(Number);
-  const until = new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
-  const state = { model: 'unit-sum', since: today, until, at: new Date(nowMs).toISOString(), reason: 'quotaExceeded' };
+  const active = quotaFallback(dataDir, nowMs);
+  const prev = readJson(path.join(dataDir, 'posting', QUOTA_MODEL_NAME));
+  let since = today; let until;
+  if (active) { since = active.since ?? today; until = active.until; } else {
+    const [y, m, d] = today.split('-').map(Number);
+    until = new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+  }
+  const state = { model: 'unit-sum', since, until, at: new Date(nowMs).toISOString(), reason: 'quotaExceeded',
+    exhaustedUntil: new Date(nextPacificMidnight(nowMs)).toISOString(), answers: (active && Number.isInteger(prev?.answers) ? prev.answers : 0) + 1 };
   const f = path.join(dataDir, 'posting', QUOTA_MODEL_NAME);
   mkdirSync(path.dirname(f), { recursive: true });
   writeFileSync(`${f}.tmp`, JSON.stringify(state, null, 2)); renameSync(`${f}.tmp`, f);
@@ -210,6 +257,7 @@ export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = n
         migrateLegacy(db, days);
         checkRows(db);
         db.prepare('DELETE FROM counter WHERE day < ?').run(utcDay(t - KEEP_DAYS * 86400000));
+        db.prepare("DELETE FROM meta WHERE key LIKE 'bucket-uploads:%' AND substr(key, 16) < ?").run(utcDay(t - KEEP_DAYS * 86400000));
         const r = fn(db, days);
         db.exec('COMMIT');
         return r;
@@ -223,10 +271,20 @@ export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = n
       try { db?.close(); } catch { /* already closed */ }
     }
   }
-  const snapshot = (db, d) => ({ uploads: { day: d.utc, n: count(db, 'uploads', d.utc) }, units: { day: d.pacific, n: count(db, 'units', d.pacific) } });
+  // Codex review 2026-11-21: uploads charged under the bucket model on each Pacific day (meta 'bucket-uploads:<day>'),
+  // so a quotaExceeded fallback can recount them at the unit-sum cost the same day.
+  const bucketKey = (day) => `bucket-uploads:${day}`;
+  const bucketCount = (db, day) => {
+    const v = db.prepare('SELECT value FROM meta WHERE key = ?').get(bucketKey(day))?.value;
+    if (v === undefined) return 0;
+    const n = Number(v);
+    if (!Number.isSafeInteger(n) || n < 0) throw new QuotaError('quota-unreadable', 'the quota counter database has a row that is not valid');
+    return n;
+  };
+  const snapshot = (db, d) => ({ uploads: { day: d.utc, n: count(db, 'uploads', d.utc) }, units: { day: d.pacific, n: count(db, 'units', d.pacific) }, bucketUploads: { day: d.pacific, n: bucketCount(db, d.pacific) } });
 
   /** Today's counters. Throws QuotaError when the database cannot be used or holds a row that is not valid. */
-  const state = () => tx(snapshot);
+  const state = () => tx((db, d) => { const { uploads, units } = snapshot(db, d); return { uploads, units }; });
 
   /** One transaction: getQuota, today's counters, decide(s, q) -> reason (nothing charged) | null (charge(db, d, q) runs). */
   const step = (decide, charge) => {
@@ -240,15 +298,24 @@ export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = n
     } catch (e) { return e.code === 'quota-busy' ? 'quota-busy' : 'quota-unreadable'; }
   };
   const uploadWhy = (s, q, maxPerDay) => {
+    // YouTube said quotaExceeded: nothing starts before the next Pacific midnight (no attempt is used meanwhile).
+    if (Number.isFinite(q.exhaustedUntil) && q.exhaustedUntil > nowMs()) return 'quota-exceeded';
     if (Number.isInteger(maxPerDay) && s.uploads.n >= maxPerDay) return 'daily-cap-reached';
     if (Number.isInteger(q.uploadsCap) && s.uploads.n >= q.uploadsCap) return 'quota-day-used'; // PT2 upload bucket (counted per UTC day)
-    if (s.units.n + q.perUploadUnits > q.quotaUnitsPerDay - q.readReserveUnits) return 'quota-day-used';
+    // Under the fallback, today's earlier bucket-model uploads also cost their insert units (recounted the old way).
+    const recount = q.fallback && Number.isFinite(q.insertUnits) ? (s.bucketUploads?.n ?? 0) * q.insertUnits : 0;
+    if (s.units.n + recount + q.perUploadUnits > q.quotaUnitsPerDay - q.readReserveUnits) return 'quota-day-used';
     return null;
   };
   const readWhy = (s, q, units) => (s.units.n + units > q.quotaUnitsPerDay ? 'quota-day-used' : null);
   const peek = (decide) => step(decide, () => {});
   const refuse = (why) => { throw Object.assign(new Error(why), { code: why }); };
-  const chargeUploadRow = (db, d, q) => { add(db, 'uploads', d.utc, 1); add(db, 'units', d.pacific, q.perUploadUnits); };
+  const chargeUploadRow = (db, d, q) => {
+    add(db, 'uploads', d.utc, 1); add(db, 'units', d.pacific, q.perUploadUnits);
+    if (q.model === 'upload-bucket') {
+      db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(bucketKey(d.pacific), String(bucketCount(db, d.pacific) + 1));
+    }
+  };
   /** Reserves `units` of reads on the current Pacific day. -> { why, day } (day = the day charged, null when refused). */
   const reserveReadOn = (units) => {
     let day = null;

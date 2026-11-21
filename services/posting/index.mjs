@@ -474,6 +474,38 @@ export async function packageUploads(opts) {
   return { packaged, skipped };
 }
 
+/**
+ * What the pre-PT1 templates generated for a draft (Codex review 2026-11-21): the target's base text (with its
+ * kinds.<kind> override for a finished video), with {n} and {date} from the values the draft was made with: the
+ * clips-folder file name (source.file) for a finished video, else the run's candidates.json (rank, recordStartUtc)
+ * for a clip variant. -> { title, description, tags, hashtags } | null (a value cannot be found). Reads only.
+ */
+export function legacyText(e, p, templates, profile) {
+  const base = templates?.targets?.[p?.target];
+  if (!isPlain(base) || typeof base.title !== 'string') return null;
+  let n; let date; let tpl = base;
+  if (typeof p.source?.file === 'string') {
+    const name = path.basename(p.source.file);
+    const tail = CANVAS_TAIL.exec(name); const dm = NAME_DATE.exec(name);
+    date = dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : 'unknown-date';
+    n = tail ? Number(tail[1]) : 1;
+    const kind = p.source.kind;
+    if (typeof kind === 'string' && isPlain(base.kinds?.[kind])) tpl = { ...base, ...base.kinds[kind] };
+  } else {
+    if (typeof e?.dir !== 'string') return null;
+    const cands = readJson(path.join(path.resolve(e.dir, '..', '..', '..'), 'candidates.json'));
+    if (!isPlain(cands) || !Array.isArray(cands.candidates)) return null;
+    const idx = cands.candidates.findIndex((c) => isPlain(c) && c.id === p.source?.clipId);
+    if (idx < 0) return null;
+    const c = cands.candidates[idx];
+    n = Number.isInteger(c.rank) ? c.rank : idx + 1;
+    date = typeof cands.recordStartUtc === 'string' && /^\d{4}-\d{2}-\d{2}/.test(cands.recordStartUtc) ? cands.recordStartUtc.slice(0, 10) : 'unknown-date';
+  }
+  const ctx = { profile, n, date }; const missing = new Set();
+  return { title: renderText(tpl.title, ctx, missing), description: renderText(tpl.description, ctx, missing),
+    tags: (tpl.tags ?? []).map((t) => renderText(t, ctx, missing)), hashtags: (tpl.hashtags ?? []).map((t) => renderText(t, ctx, missing)) };
+}
+
 // ---------------------------------------------------------------- store (studio UI)
 
 export const postId = (entry) => `${entry.sha256.slice(0, 16)}.${entry.target}`;
@@ -589,6 +621,12 @@ export function createPostStore(opts) {
         if (e.status !== 'draft') continue;
         const p = load(e);
         if (!p || p.editedByUser || p.source?.textVersion === TEXT_VERSION) continue;
+        // Codex review 2026-11-21 (D409): a draft from before the editedByUser marker is redrafted only while its text
+        // is exactly what the old templates made for it (re-rendered from its stored values); any other text may be the
+        // user's own words and is kept untouched. No stored values to re-render from: kept too.
+        const old = legacyText(e, p, opts.templates, prof);
+        if (!old || old.title !== p.title || old.description !== p.description
+          || JSON.stringify(old.tags) !== JSON.stringify(p.tags ?? []) || JSON.stringify(old.hashtags) !== JSON.stringify(p.hashtags ?? [])) continue;
         const known = isPlain(p.source?.facts) ? { facts: p.source.facts, game: p.source.game ?? null } : (opts.factsFor?.(p) ?? { facts: {}, game: null });
         const facts = cleanFacts(known.facts);
         const d = draftText({ templates: opts.templates, kind: p.source?.kind ?? 'short', game: known.game, facts, seed: e.sha256,

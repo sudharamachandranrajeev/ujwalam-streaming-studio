@@ -3,7 +3,7 @@
 // day, the whole day as the window, gap 60..1440), the upload-bucket quota model with its quotaExceeded fallback.
 // Pure slot math and local files in temp folders; no network.
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -12,7 +12,7 @@ import {
 } from '../services/posting/schedule.mjs';
 import { MAX_PER_DAY, validateRules } from '../services/posting/auto-post.mjs';
 import { checkCard } from '../services/posting/auto-settings.mjs';
-import { QUOTA_MODEL_NAME, loadQuota, quotaFallback, recordQuotaExceeded } from '../services/posting/quota-budget.mjs';
+import { QUOTA_MODEL_NAME, createQuotaBudget, exhaustedUntil, loadQuota, nextPacificMidnight, quotaFallback, recordQuotaExceeded } from '../services/posting/quota-budget.mjs';
 import { quotaReason } from '../services/posting/youtube.mjs';
 
 const tmp = [];
@@ -111,13 +111,54 @@ describe('PT2 quota: the upload bucket by default, the unit sum after quotaExcee
     const s = recordQuotaExceeded(d, NOW);
     assert.equal(s.model, 'unit-sum');
     const q = loadQuota(d, undefined, { nowMs: NOW });
-    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap], ['unit-sum', 6, null]);
+    // (10000 - 100) / (1650 + 81 read units a session) = 5 (Codex review 2026-11-21: a channel read before each upload)
+    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.readUnitsPerUpload], ['unit-sum', 5, null, 81]);
     assert.match(q.modelText, /used up/);
     assert.equal(loadQuota(d, undefined, { nowMs: NOW + 24 * HOUR }).model, 'unit-sum', 'the next day still counts the old way');
     assert.equal(loadQuota(d, undefined, { nowMs: NOW + 48 * HOUR }).model, 'upload-bucket', 'then the bucket is tried again');
     // A broken state file is no fallback (the bucket stays; YouTube's next answer decides).
     writeFileSync(path.join(d, 'posting', QUOTA_MODEL_NAME), '{ broken');
     assert.equal(loadQuota(d, undefined, { nowMs: NOW }).model, 'upload-bucket');
+  });
+
+  // Codex review 2026-11-21 (D409)
+  test('quotaExceeded: nothing uploads until the next Pacific midnight, persisted; a repeated answer never extends it', () => {
+    const d = mk();
+    const s = recordQuotaExceeded(d, NOW); // 2026-11-21T06:00Z = 2026-11-20 22:00 Pacific
+    assert.equal(s.exhaustedUntil, '2026-11-21T08:00:00.000Z', 'midnight Pacific (PST, UTC-8)');
+    assert.equal(nextPacificMidnight(Date.parse('2026-07-01T12:00:00Z')), Date.parse('2026-07-02T07:00:00Z'), 'PDT, UTC-7');
+    assert.equal(exhaustedUntil(d, NOW + HOUR), Date.parse(s.exhaustedUntil));
+    assert.equal(exhaustedUntil(d, NOW + 2 * HOUR), null, 'over at midnight Pacific, not 6 h later');
+    assert.equal(loadQuota(d, undefined, { nowMs: NOW }).exhaustedUntil, Date.parse(s.exhaustedUntil));
+    const b = createQuotaBudget({ dataDir: d, nowMs: () => NOW + HOUR });
+    assert.equal(b.uploadBlock(), 'quota-exceeded');
+    assert.equal(b.reserveUpload(), 'quota-exceeded', 'refused, nothing charged');
+    assert.equal(b.state().uploads.n, 0);
+    // The same answer again later (next day, still under the fallback): `until` stays, only the wait is set again.
+    const s2 = recordQuotaExceeded(d, NOW + 20 * HOUR);
+    assert.equal(s2.until, s.until); assert.equal(s2.since, s.since); assert.equal(s2.answers, 2);
+    assert.equal(s2.exhaustedUntil, '2026-11-22T08:00:00.000Z');
+    const s3 = recordQuotaExceeded(d, NOW + 20 * HOUR + MIN);
+    assert.equal(s3.until, s.until); assert.equal(s3.exhaustedUntil, s2.exhaustedUntil, 'repeats the same day change nothing');
+  });
+
+  test('switching to the fallback recounts the day\'s earlier bucket-model uploads at the unit-sum cost', () => {
+    const d = mk();
+    let t = NOW + 3 * HOUR; // 2026-11-21 01:00 Pacific
+    const b = createQuotaBudget({ dataDir: d, nowMs: () => t });
+    for (let k = 0; k < 6; k++) assert.equal(b.reserveUpload(), null, `bucket upload ${k}`);
+    assert.equal(b.state().units.n, 6 * 50);
+    // YouTube says quotaExceeded; after the wait (next midnight) the same Pacific day is long over, so test the recount
+    // on the same day by clearing only the wait.
+    recordQuotaExceeded(d, t);
+    const f = path.join(d, 'posting', QUOTA_MODEL_NAME);
+    writeFileSync(f, JSON.stringify({ ...JSON.parse(readFileSync(f, 'utf8')), exhaustedUntil: null }));
+    assert.equal(loadQuota(d, undefined, { nowMs: t }).model, 'unit-sum');
+    // 300 units used + 6 x 1600 recounted = 9900; one more at 1650 would pass 9900: refused the same day (without the
+    // recount 300 + 1650 would pass).
+    assert.equal(b.uploadBlock(), 'quota-day-used');
+    t += 24 * HOUR; // the next Pacific day: nothing to recount, the fallback still counts 1650 each
+    assert.equal(b.uploadBlock(), null);
   });
 
   test('youtube.mjs reads the quota reason from the error answer', async () => {
