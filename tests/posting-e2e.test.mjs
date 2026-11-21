@@ -112,7 +112,8 @@ async function fakeGoogle() {
         if (url.searchParams.get('playlistId') !== 'UUfake') return send(404, {});
         const size = Number(url.searchParams.get('maxResults')); const from = Number(url.searchParams.get('pageToken') ?? 0);
         const list = all(); const page = list.slice(from, from + size);
-        return send(200, { items: page.map((v) => ({ snippet: { publishedAt: v.addedAt ?? '2026-11-09T09:00:00.000Z' }, contentDetails: { videoId: v.id } })), ...(from + size < list.length ? { nextPageToken: String(from + size) } : {}) });
+        // A public video carries its public time (v.publicAt, else an old one); a missing one makes the read incomplete.
+        return send(200, { items: page.map((v) => ({ snippet: { publishedAt: v.addedAt ?? '2026-11-09T09:00:00.000Z' }, contentDetails: { videoId: v.id, ...(v.status?.privacyStatus === 'public' && v.publicAt !== null ? { videoPublishedAt: v.publicAt ?? '2025-01-01T00:00:00.000Z' } : {}) } })), ...(from + size < list.length ? { nextPageToken: String(from + size) } : {}) });
       }
       return send(404, {});
     });
@@ -964,6 +965,132 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     release(); await holder;
     assert.equal(g.count('init'), 0);
     assert.equal(e.queue().items()[0].reason, 'schedule-busy'); assert.equal(e.queue().items()[0].attempts, 0);
+  });
+
+  // ---- D409 third Codex review (2026-11-21) ----
+  test('D409-3: a video that goes public DURING the channel read still counts (the reference time is taken after the read)', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    // It went public at T0 + 1 min; the read starts at T0 and its pages come back at T0 + 2 min.
+    const pub = T0 + MIN;
+    g.opt.channel = [{ ...vid('pub', 'public', null), publicAt: iso(pub) }];
+    const fetchImpl = async (u, o) => { if (String(u).includes('/playlistItems')) e.clock.t = T0 + 2 * MIN; return g.fetchImpl(u, o); };
+    await schedChain(e, g, { fetchImpl }).afterRun(e.runDir, IDLE);
+    const it = e.queue().items()[0];
+    assert.equal(it.state, 'done');
+    assert.ok(Math.abs(Date.parse(it.sentPublishAt) - pub) >= 6 * HOUR, `the new time keeps the gap from the video that went public mid-read (${it.sentPublishAt})`);
+    assert.deepEqual(e.queue().schedule().recentTimes, [iso(pub)]);
+  });
+
+  test('D409-3: a public channel video without a valid public time: nothing uploads, no time given (fail closed)', async () => {
+    for (const bad of [null, 'not-a-time']) {
+      const g = await fakeGoogle(); const e = setup([ROWS[0]]);
+      g.opt.channel = [{ ...vid('pub', 'public', null), publicAt: bad }];
+      await schedChain(e, g).afterRun(e.runDir, IDLE);
+      assert.equal(g.count('init'), 0, String(bad));
+      const it = e.queue().items()[0];
+      assert.equal(it.reason, 'schedule-read-incomplete'); assert.equal(it.publishAt, null); assert.equal(it.attempts, 0);
+    }
+  });
+
+  test('D409-3: the lock taken over during the channel read: no session starts (ownership is re-checked after every read)', async () => {
+    const { LOCK_NAME } = await import('../services/posting/auto-chain.mjs');
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    const f = path.join(e.dataDir, 'posting', LOCK_NAME);
+    let stolen = false;
+    const fetchImpl = async (u, o) => {
+      if (!stolen && String(u).includes('/playlistItems')) { stolen = true; writeFileSync(f, JSON.stringify({ pid: process.pid, token: 'thief', at: Date.now(), beat: Date.now() })); }
+      return g.fetchImpl(u, o);
+    };
+    await schedChain(e, g, { fetchImpl }).afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0, 'nothing was sent');
+    const it = e.queue().items()[0];
+    assert.equal(it.state, 'queued'); assert.equal(it.reason, 'schedule-busy'); assert.equal(it.attempts, 0);
+    assert.equal(JSON.parse(readFileSync(f, 'utf8')).token, 'thief', 'the other holder\'s lock is left alone');
+  });
+
+  test('D409-3: a hung session start ends at its request deadline: the item waits (no attempt), the lock is free for the next tick', async () => {
+    const { LOCK_NAME } = await import('../services/posting/auto-chain.mjs');
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    let hang = true;
+    // A fake request that never answers and ignores the abort signal.
+    const fetchImpl = (u, o) => (hang && String(u).includes('uploadType=resumable') ? new Promise(() => {}) : g.fetchImpl(u, o));
+    const c = schedChain(e, g, { fetchImpl, requestMs: 100 });
+    const t = Date.now();
+    await c.afterRun(e.runDir, IDLE);
+    assert.ok(Date.now() - t < 5000, 'the pass did not hang');
+    let it = e.queue().items()[0];
+    assert.equal(it.state, 'queued'); assert.equal(it.reason, 'request-timeout'); assert.equal(it.attempts, 0);
+    assert.ok(!existsSync(path.join(e.dataDir, 'posting', LOCK_NAME)), 'the lock was released');
+    hang = false; e.clock.t += 6 * MIN; await c.tick(IDLE);
+    it = e.queue().items()[0];
+    assert.equal(it.state, 'done'); assert.equal(g.videos.length, 1);
+  });
+
+  test('D409-3: a hung progress query and a hung chunk also end at their deadlines (session kept, no attempt)', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    let hang = 'chunk';
+    const fetchImpl = (u, o) => {
+      const cr = String(o?.headers?.['Content-Range'] ?? '');
+      if (String(u).includes('/session/') && ((hang === 'chunk' && !cr.startsWith('bytes */')) || (hang === 'query' && cr.startsWith('bytes */')))) return new Promise(() => {});
+      return g.fetchImpl(u, o);
+    };
+    const c = schedChain(e, g, { fetchImpl, requestMs: 100, chunkRequestMs: 100 });
+    await c.afterRun(e.runDir, IDLE);
+    let it = e.queue().items()[0];
+    assert.equal(it.reason, 'request-timeout'); assert.equal(it.attempts, 0); assert.ok(it.session, 'the session is kept');
+    hang = 'query'; e.clock.t += 6 * MIN; await c.tick(IDLE);
+    it = e.queue().items()[0];
+    assert.equal(it.reason, 'request-timeout'); assert.equal(it.attempts, 0); assert.ok(it.session);
+    hang = null; e.clock.t += 6 * MIN; await c.tick(IDLE);
+    it = e.queue().items()[0];
+    assert.equal(it.state, 'done'); assert.equal(g.count('init'), 1, 'resumed the same session');
+  });
+
+  test('D409-3: the whole hold is capped: a hung request does not block the next tick beyond the cap', async () => {
+    const { LOCK_NAME } = await import('../services/posting/auto-chain.mjs');
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    let hang = true;
+    const fetchImpl = (u, o) => (hang && String(u).includes('uploadType=resumable') ? new Promise(() => {}) : g.fetchImpl(u, o));
+    // The request deadline is far away; only the hold cap (300 ms) ends the pass.
+    const c = schedChain(e, g, { fetchImpl, requestMs: 60 * 60e3, lockOpts: { maxHoldMs: 300 } });
+    const t = Date.now();
+    await c.afterRun(e.runDir, IDLE);
+    assert.ok(Date.now() - t < 3000, `the pass ended at the cap (${Date.now() - t} ms)`);
+    let it = e.queue().items()[0];
+    assert.equal(it.state, 'queued'); assert.equal(it.reason, 'request-timeout'); assert.equal(it.attempts, 0);
+    assert.ok(!existsSync(path.join(e.dataDir, 'posting', LOCK_NAME)), 'the lock was released at the cap');
+    hang = false; e.clock.t += 6 * MIN; await c.tick(IDLE);
+    it = e.queue().items()[0];
+    assert.equal(it.state, 'done'); assert.equal(g.videos.length, 1, 'the next tick posts');
+  });
+
+  test('D409-3: two processes contend for a stale lock: exactly one wins (atomic takeover)', async () => {
+    const { spawn } = await import('node:child_process');
+    const { pathToFileURL } = await import('node:url');
+    const { LOCK_NAME } = await import('../services/posting/auto-chain.mjs');
+    const mod = pathToFileURL(path.resolve('services/posting/auto-chain.mjs')).href;
+    const scriptDir = mk();
+    const script = path.join(scriptDir, 'contend.mjs');
+    writeFileSync(script, [
+      `const { withScheduleLock } = await import(${JSON.stringify(mod)});`,
+      'const [dataDir, goAt] = process.argv.slice(2);',
+      'while (Date.now() < Number(goAt)) { /* start together */ }',
+      'try { await withScheduleLock(dataDir, () => new Promise((r) => setTimeout(r, 1500)), { waitMs: 200 }); console.log("won"); }',
+      'catch (e) { console.log(e?.code === "schedule-busy" ? "busy" : `error ${e?.code}`); }',
+    ].join('\n'));
+    const run = (d, goAt) => new Promise((resolve) => {
+      const p = spawn(process.execPath, [script, d, String(goAt)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = ''; p.stdout.on('data', (b) => { out += b; }); p.stderr.on('data', (b) => { out += b; });
+      p.on('close', () => resolve(out.trim()));
+    });
+    for (let round = 0; round < 3; round++) {
+      const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
+      // A stale lock: its process is gone.
+      writeFileSync(path.join(d, 'posting', LOCK_NAME), JSON.stringify({ pid: 2 ** 30, token: 'dead', at: Date.now(), beat: Date.now() }));
+      const goAt = Date.now() + 1500;
+      const outs = await Promise.all([run(d, goAt), run(d, goAt)]);
+      assert.deepEqual(outs.slice().sort(), ['busy', 'won'], `round ${round}: ${JSON.stringify(outs)}`);
+    }
   });
 
 });

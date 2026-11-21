@@ -2434,3 +2434,21 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
     (`READ_DEADLINE_MS`). Past it the read is incomplete and the request is aborted.
   - The lock holder writes a heartbeat every 5 s. Another holder takes the lock over only if the holder's process is gone
     or the heartbeat is older than 2 min (`LOCK_STALE_MS`, at least 3 read deadlines). A pass that loses the lock stops.
+- Third Codex review (2026-11-21). These replace the points above where they differ:
+  - The channel read takes its reference time from the clock after the last page comes back (`readAt`). Every public
+    video that went public within the last 2 days counts, including one that went public during the read. The chain
+    plans the slots from that later time.
+  - A `nextPageToken` that is present but not a non-empty string, and a public video with a missing or invalid
+    `videoPublishedAt`, make the read incomplete (fail closed). Only an absent token ends the list.
+  - Lock takeover is atomic. The contender renames the stale lock file to a unique tombstone (only one rename can win).
+    It then compares the tombstone with the exact content it judged stale, and only then deletes it. A file that does
+    not match is put back with an exclusive create, never over a new lock. Release uses the same compare-before-delete
+    step. The heartbeat only refreshes an existing file and never re-creates one.
+  - Ownership (`hold.held()`) is checked after every channel read, right before any session starts or resumes, in
+    `beforeNewSession` (including the expired-session restart) before and after its read, and before every chunk.
+  - Every YouTube request has a deadline: the session start, the progress query and the thumbnail each get
+    `REQUEST_MS` (60 s). Each chunk gets `CHUNK_REQUEST_MS` (10 min), on top of the scheduled chunk deadline. A request
+    past its deadline fails that item for this pass with `request-timeout`. No try is used, the session is kept, and the
+    item waits 5 min.
+  - The whole lock hold is capped (`LOCK_MAX_HOLD_MS`, 60 min). At the cap the hold's requests are aborted, `held()`
+    turns false, the lock file is released and the pass ends. The item in flight waits with `request-timeout`.

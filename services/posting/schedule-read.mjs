@@ -45,7 +45,10 @@ const msOf = (v) => { const t = typeof v === 'string' ? Date.parse(v) : NaN; ret
 export const READ_DEADLINE_MS = 30 * 1000;
 const incomplete = (what) => new ScheduleError('schedule-read-incomplete', `the channel answer was incomplete (${what})`);
 
-/** opts.deadlineMs (default READ_DEADLINE_MS): hard deadline on the whole read. */
+/** opts.deadlineMs (default READ_DEADLINE_MS): hard deadline on the whole read.
+ *  opts.nowMs: a clock function (preferred) or a fixed time. Third Codex review (D409): with a clock, the reference time
+ *  is taken AFTER the last page came back (returned as readAt), so a video that went public during the read still
+ *  counts as a recent post. */
 export async function readChannelSchedule({ accessToken, fetchImpl = fetch, nowMs, cfg, deadlineMs = READ_DEADLINE_MS }) {
   const stop = new AbortController();
   let timer = null;
@@ -69,7 +72,11 @@ async function readAll({ accessToken, fetchImpl, nowMs, cfg }) {
     // D409 (second Codex review): a malformed or partial answer is incomplete, never an empty or partial success.
     if (!Array.isArray(page?.items)) throw incomplete('no playlist items list');
     const items = page.items;
-    pageToken = typeof page?.nextPageToken === 'string' && page.nextPageToken ? page.nextPageToken : null;
+    // Third Codex review (D409): only an absent nextPageToken ends the list; any other non-string or empty value is a
+    // malformed answer, so the read is incomplete (fail closed), never "the end".
+    if (page.nextPageToken === undefined) pageToken = null;
+    else if (typeof page.nextPageToken === 'string' && page.nextPageToken) pageToken = page.nextPageToken;
+    else throw incomplete('a malformed next page token');
     const ids = [];
     for (const i of items) {
       const id = i?.contentDetails?.videoId;
@@ -89,12 +96,17 @@ async function readAll({ accessToken, fetchImpl, nowMs, cfg }) {
       videos.push(...ids.map((id) => got.get(id)));
     }
   } while (pageToken && pages < cfg.maxPages);
-  const { last, count } = latestFutureSchedule(videos, nowMs);
+  // The reference time is taken now, after the whole read (third Codex review, D409).
+  const ref = typeof nowMs === 'function' ? nowMs() : nowMs;
+  const { last, count } = latestFutureSchedule(videos, ref);
   const recent = [];
   for (const v of videos) {
     if (v?.status?.privacyStatus !== 'public') continue;
     const t = wentPublic.get(v.id);
-    if (t !== undefined && t <= nowMs && t > nowMs - RECENT_DAYS * DAY_MS) recent.push(t);
+    // A public video without a valid time could be one that went public a minute ago: incomplete (fail closed).
+    if (t === undefined) throw incomplete('a public video without a valid public time');
+    // Anything public up to (and, on a skewed clock, after) the reference time counts; only old ones drop out.
+    if (t > ref - RECENT_DAYS * DAY_MS) recent.push(t);
   }
-  return { last, count, times: futureScheduleTimes(videos, nowMs), recent: recent.sort((x, y) => x - y), scanned, pages, truncated: Boolean(pageToken) };
+  return { last, count, times: futureScheduleTimes(videos, ref), recent: recent.sort((x, y) => x - y), scanned, pages, truncated: Boolean(pageToken), readAt: ref };
 }

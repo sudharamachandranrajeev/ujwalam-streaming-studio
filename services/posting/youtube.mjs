@@ -42,6 +42,35 @@ export class UploadError extends Error {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Third Codex review (D409): every YouTube request has a deadline. Session start and progress queries: REQUEST_MS;
+ *  each chunk: CHUNK_REQUEST_MS (on top of the scheduled chunk deadline, which still aborts first when it is nearer). */
+export const REQUEST_MS = 60 * 1000;
+export const CHUNK_REQUEST_MS = 10 * 60 * 1000;
+/**
+ * fetch with a hard deadline. It settles at the deadline even when fetchImpl ignores the abort signal (a race).
+ *   past ms             -> UploadError 'request-timeout' (the request is aborted)
+ *   outer aborted       -> UploadError 'request-timeout' (the caller's pass was stopped, e.g. the lock hold's cap)
+ *   guard aborted       -> an AbortError (the scheduled chunk deadline; the caller checks guard.aborted)
+ */
+function timedFetch(fetchImpl, url, init, ms, { outer = null, guard = null } = {}) {
+  const ctl = new AbortController();
+  return new Promise((resolve, reject) => {
+    let done = false; let timer = null;
+    const finish = (fn, v) => {
+      if (done) return; done = true; clearTimeout(timer);
+      outer?.removeEventListener('abort', onOuter); guard?.removeEventListener('abort', onGuard);
+      fn(v);
+    };
+    const onOuter = () => { ctl.abort(); finish(reject, new UploadError('request-timeout', 'the upload pass was stopped; nothing more is sent')); };
+    const onGuard = () => { ctl.abort(); finish(reject, Object.assign(new Error('aborted at the chunk deadline'), { name: 'AbortError' })); };
+    if (outer?.aborted) { onOuter(); return; }
+    if (guard?.aborted) { onGuard(); return; }
+    outer?.addEventListener('abort', onOuter, { once: true }); guard?.addEventListener('abort', onGuard, { once: true });
+    timer = setTimeout(() => { ctl.abort(); finish(reject, new UploadError('request-timeout', `YouTube did not answer within ${Math.round(ms / 1000)} s`)); }, Math.min(ms, MAX_TIMER_MS));
+    Promise.resolve().then(() => fetchImpl(url, { ...init, signal: ctl.signal })).then((r) => finish(resolve, r), (e) => finish(reject, e));
+  });
+}
+
 /** Builds the fixed snippet from a post.json entry. privacyStatus is hardcoded here, never from `post`.
  *  publishAt (RFC 3339 UTC, from the post-schedule queue slot, D310 proposed) makes YouTube publish the private video at
  *  that time; it is never read from post.json and only accepted as a valid future-looking ISO string ending in Z. */
@@ -69,12 +98,12 @@ export async function quotaReason(res) {
 }
 
 /** Starts a resumable session; returns the session URL from the Location header. */
-async function initiateSession(fetchImpl, accessToken, metadata, bytes) {
-  const res = await fetchImpl(UPLOAD_INIT_URL, {
+async function initiateSession(fetchImpl, accessToken, metadata, bytes, net = {}) {
+  const res = await timedFetch(fetchImpl, UPLOAD_INIT_URL, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': String(bytes) },
     body: JSON.stringify(metadata),
-  });
+  }, net.requestMs ?? REQUEST_MS, { outer: net.outer });
   if (!res.ok) {
     // PT2 (D408): YouTube's quota answer (403 with reason quotaExceeded or uploadLimitExceeded) is its own code, so the
     // chain can fall back to the unit-sum quota model and wait for the next day instead of retrying.
@@ -101,8 +130,8 @@ function readRange(file, start, end) {
  *  Returns a byte count, or { resource } when the session already finished (the answer to the last chunk was lost):
  *  Google answers a progress query on a completed session with the video resource (UNVERIFIED against real Google).
  *  404/410 = the session is gone (expired): code 'upload-session-gone'; any other failure is transient and keeps the session. */
-async function queryProgress(fetchImpl, sessionUrl, totalBytes) {
-  const res = await fetchImpl(sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes */${totalBytes}` } });
+async function queryProgress(fetchImpl, sessionUrl, totalBytes, net = {}) {
+  const res = await timedFetch(fetchImpl, sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes */${totalBytes}` } }, net.requestMs ?? REQUEST_MS, { outer: net.outer });
   if (res.status === 308) {
     const range = res.headers.get('range'); // "bytes=0-12345" = bytes 0..12345 received
     const m = range ? /bytes=0-(\d+)/.exec(range) : null;
@@ -116,9 +145,9 @@ async function queryProgress(fetchImpl, sessionUrl, totalBytes) {
 /** After a chunk was aborted at its deadline: asks Google whether the session finished anyway (the last byte may have
  *  arrived just before the abort). Finished = its resource; otherwise (or unknown) stop with 'slot-passed-mid' and keep
  *  the session, so the next pass checks it again and drops it if it is still unfinished. */
-async function afterDeadline(fetchImpl, sessionUrl, totalBytes) {
+async function afterDeadline(fetchImpl, sessionUrl, totalBytes, net = {}) {
   let p = null;
-  try { p = await queryProgress(fetchImpl, sessionUrl, totalBytes); } catch { /* unknown: checked again on the next pass */ }
+  try { p = await queryProgress(fetchImpl, sessionUrl, totalBytes, net); } catch { /* unknown: checked again on the next pass */ }
   if (p && typeof p === 'object') return p.resource;
   throw new UploadError('slot-passed-mid', 'the upload did not finish in time before the planned public time; stopped so it does not go public at once');
 }
@@ -128,7 +157,7 @@ async function afterDeadline(fetchImpl, sessionUrl, totalBytes) {
  *  guard (scheduled uploads only): { deadline (ms, on the nowMs clock), nowMs, fallbackBps }. Every chunk request is
  *  aborted at the deadline, so no byte is sent after it: Google gets the final byte before the deadline or never. The
  *  final chunk only starts when its estimated transfer time (slowest chunk measured in this run, else fallbackBps) fits. */
-async function uploadChunks(fetchImpl, sessionUrl, filePath, totalBytes, chunkSize, startOffset = 0, beforeChunk = null, guard = null) {
+async function uploadChunks(fetchImpl, sessionUrl, filePath, totalBytes, chunkSize, startOffset = 0, beforeChunk = null, guard = null, net = {}) {
   if (typeof startOffset === 'object') return startOffset.resource; // the session had already finished
   let offset = startOffset;
   let attempt = 0;
@@ -150,18 +179,19 @@ async function uploadChunks(fetchImpl, sessionUrl, filePath, totalBytes, chunkSi
     const started = performance.now();
     try {
       const body = await readRange(filePath, offset, end);
-      res = await fetchImpl(sessionUrl, {
+      res = await timedFetch(fetchImpl, sessionUrl, {
         method: 'PUT',
         headers: { 'Content-Length': String(body.length), 'Content-Range': `bytes ${offset}-${end - 1}/${totalBytes}` },
         body,
-        ...(stop ? { signal: stop.signal } : {}),
-      });
+      }, net.chunkRequestMs ?? CHUNK_REQUEST_MS, { outer: net.outer, guard: stop?.signal ?? null });
     } catch (e) {
-      if (stop?.signal.aborted) return afterDeadline(fetchImpl, sessionUrl, totalBytes);
+      if (stop?.signal.aborted) return afterDeadline(fetchImpl, sessionUrl, totalBytes, net);
+      // A chunk past its own request deadline, or a stopped pass: the item fails for this pass (the session is kept).
+      if (e?.code === 'request-timeout') throw e;
       attempt++;
       if (attempt > MAX_RETRIES) throw new UploadError('upload-failed', `network error after ${MAX_RETRIES} retries: ${e?.message ?? e}`);
       await sleep(Math.min(1000 * 2 ** attempt, 30000));
-      const p = await queryProgress(fetchImpl, sessionUrl, totalBytes); // resume from Google's own count, not our guess
+      const p = await queryProgress(fetchImpl, sessionUrl, totalBytes, net); // resume from Google's own count, not our guess
       if (typeof p === 'object') return p.resource;
       offset = p;
       continue;
@@ -178,7 +208,7 @@ async function uploadChunks(fetchImpl, sessionUrl, filePath, totalBytes, chunkSi
       attempt++;
       if (attempt > MAX_RETRIES) throw new UploadError('upload-failed', `HTTP ${res.status} after ${MAX_RETRIES} retries`);
       await sleep(Math.min(1000 * 2 ** attempt, 30000));
-      const p = await queryProgress(fetchImpl, sessionUrl, totalBytes);
+      const p = await queryProgress(fetchImpl, sessionUrl, totalBytes, net);
       if (typeof p === 'object') return p.resource;
       offset = p;
       continue;
@@ -189,11 +219,11 @@ async function uploadChunks(fetchImpl, sessionUrl, filePath, totalBytes, chunkSi
 }
 
 /** Best-effort cover upload. Returns true on success, false on any failure (never throws: not fatal). */
-async function setThumbnail(fetchImpl, accessToken, videoId, coverPath) {
+async function setThumbnail(fetchImpl, accessToken, videoId, coverPath, net = {}) {
   try {
     const bytes = statSync(coverPath).size;
     const body = await readRange(coverPath, 0, bytes);
-    const res = await fetchImpl(THUMBNAIL_URL(videoId), { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'image/jpeg', 'Content-Length': String(bytes) }, body });
+    const res = await timedFetch(fetchImpl, THUMBNAIL_URL(videoId), { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'image/jpeg', 'Content-Length': String(bytes) }, body }, net.requestMs ?? REQUEST_MS, { outer: net.outer });
     return res.ok;
   } catch { return false; }
 }
@@ -208,6 +238,8 @@ export async function uploadVideo(opts) {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const now = opts.now ?? (() => new Date().toISOString());
   const chunkSize = opts.chunkSize ?? DEFAULT_CHUNK;
+  // Third Codex review (D409): request deadlines, and the caller's stop signal (the schedule-lock hold's cap).
+  const net = { requestMs: opts.requestMs, chunkRequestMs: opts.chunkRequestMs, outer: opts.signal ?? null };
 
   // D409 (second Codex review, 2026-11-21): no code path sends a video without a publish time. Refused before anything
   // is read or sent, whoever the caller is.
@@ -237,7 +269,7 @@ export async function uploadVideo(opts) {
   let offset = 0;
   if (sessionUrl) {
     // Only a vanished session starts a new one. Any other failure keeps it: a second session could upload the video twice.
-    try { offset = await queryProgress(fetchImpl, sessionUrl, bytes); } catch (e) { if (e?.code !== 'upload-session-gone') throw e; sessionUrl = null; offset = 0; }
+    try { offset = await queryProgress(fetchImpl, sessionUrl, bytes, net); } catch (e) { if (e?.code !== 'upload-session-gone') throw e; sessionUrl = null; offset = 0; }
     // An unfinished session whose publish time differs from the slot (e.g. started before scheduling was switched on) or
     // is now too close is dropped: Google never turns an unfinished resumable upload into a video (UNVERIFIED against
     // real Google), so this cannot post twice. A FINISHED session is recorded with the time it really carried.
@@ -250,7 +282,7 @@ export async function uploadVideo(opts) {
     // channel read and the 60-min rule, inside its schedule lock). It throws to stop; the lead check below runs after it.
     if (typeof opts.beforeNewSession === 'function') await opts.beforeNewSession(publishAt);
     if (!ahead(publishAt, opts.minLeadMs ?? 0)) throw new UploadError('slot-passed', 'the planned public time is too close to start this upload');
-    sessionUrl = await initiateSession(fetchImpl, opts.accessToken, metadata, bytes);
+    sessionUrl = await initiateSession(fetchImpl, opts.accessToken, metadata, bytes, net);
     sent = publishAt;
     opts.sessions?.set(opts.sha256, sessionUrl, sent);
   }
@@ -262,7 +294,7 @@ export async function uploadVideo(opts) {
   // A scheduled session's chunks must end opts.chunkDeadlineMs before its time (aborted otherwise; see uploadChunks).
   // FALLBACK_BPS only applies when a caller passes no setting (auto-chain always passes data/posting/schedule.json's).
   const guard = sent === null ? null : { deadline: Date.parse(sent) - (opts.chunkDeadlineMs ?? 0), nowMs, fallbackBps: opts.fallbackBps ?? FALLBACK_BPS };
-  const resource = await uploadChunks(fetchImpl, sessionUrl, opts.videoPath, bytes, chunkSize, offset, beforeChunk, guard);
+  const resource = await uploadChunks(fetchImpl, sessionUrl, opts.videoPath, bytes, chunkSize, offset, beforeChunk, guard, net);
   const videoId = resource?.id;
   if (typeof videoId !== 'string' || !videoId) throw new UploadError('upload-failed', 'no video id in the finished response');
 
@@ -273,7 +305,7 @@ export async function uploadVideo(opts) {
   if (typeof opts.recordUploaded === 'function') await opts.recordUploaded({ videoId, at });
 
   let thumbnailOk = null;
-  if (opts.coverPath) thumbnailOk = await setThumbnail(fetchImpl, opts.accessToken, videoId, opts.coverPath);
+  if (opts.coverPath) thumbnailOk = await setThumbnail(fetchImpl, opts.accessToken, videoId, opts.coverPath, net);
 
   // publishAt = the time this video was really sent with (the session's), which may differ from opts.publishAt.
   return { videoId, thumbnailOk, uploadStatus: typeof resource?.status?.uploadStatus === 'string' ? resource.status.uploadStatus : null, publishAt: sent };
@@ -298,7 +330,7 @@ export async function uploadPost(opts) {
   const accessToken = await auth.accessToken();
   const r = await uploadVideo({
     post, sha256, videoPath: video.file, coverPath: cover?.file, accessToken,
-    ledger: store.ledger, limits: opts.limits ?? loadLimits(), outputsStatus: opts.outputsStatus, fetchImpl: opts.fetchImpl, now: opts.now, sessions: opts.sessions, publishAt: opts.publishAt, minLeadMs: opts.minLeadMs, marginMs: opts.marginMs, chunkDeadlineMs: opts.chunkDeadlineMs, fallbackBps: opts.fallbackBps, nowMs: opts.nowMs, beforeChunk: opts.beforeChunk, beforeNewSession: opts.beforeNewSession, chunkSize: opts.chunkSize,
+    ledger: store.ledger, limits: opts.limits ?? loadLimits(), outputsStatus: opts.outputsStatus, fetchImpl: opts.fetchImpl, now: opts.now, sessions: opts.sessions, publishAt: opts.publishAt, minLeadMs: opts.minLeadMs, marginMs: opts.marginMs, chunkDeadlineMs: opts.chunkDeadlineMs, fallbackBps: opts.fallbackBps, nowMs: opts.nowMs, beforeChunk: opts.beforeChunk, beforeNewSession: opts.beforeNewSession, chunkSize: opts.chunkSize, signal: opts.signal, requestMs: opts.requestMs, chunkRequestMs: opts.chunkRequestMs,
     recordUploaded: async ({ videoId }) => { store.ledger.annotate(sha256, post.target, { videoId }); },
   });
   // LL2 (D338): a "posted" label row in the local learning store when the store knows the data folder. Never fails the upload.

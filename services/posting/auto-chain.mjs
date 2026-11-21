@@ -115,7 +115,29 @@ export const LOCK_NAME = 'schedule.lock';
 export const LOCK_BEAT_MS = 5 * 1000;
 export const LOCK_STALE_MS = 2 * 60 * 1000;
 const pidAlive = (pid) => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
-export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, staleMs = LOCK_STALE_MS, beatMs = LOCK_BEAT_MS } = {}) {
+/** Third Codex review (D409): the whole hold is capped (a pass never blocks posting for longer); past it the hold is
+ *  given up (held() false, hold.signal aborted, the file released) and withScheduleLock rejects with
+ *  code 'schedule-hold-cap'. */
+export const LOCK_MAX_HOLD_MS = 60 * 60 * 1000;
+const readRaw = (file) => { try { return readFileSync(file, 'utf8'); } catch { return null; } };
+const parseOr = (raw) => { try { return JSON.parse(raw); } catch { return null; } };
+/**
+ * Third Codex review (D409): removes the lock file only if it is still exactly the one judged (same raw content).
+ * The file is first renamed to a unique tombstone: only one rename of a given file can win, so two contenders never
+ * both remove it. If the tombstone turns out not to be the judged file (another contender replaced it in between),
+ * it is put back (never removed). -> true when the judged file was removed.
+ */
+function removeIfSame(f, judgedRaw) {
+  const tomb = `${f}.${process.pid}-${randomUUID()}.tomb`;
+  try { renameSync(f, tomb); } catch { return false; } // gone already, or another contender renamed it first
+  const raw = readRaw(tomb);
+  if (raw !== null && raw === judgedRaw) { try { rmSync(tomb, { force: true }); } catch { /* a leftover tombstone is harmless */ } return true; }
+  // Not the judged file: put it back where it was. Exclusive (link + unlink): never over a file created meanwhile.
+  try { renameSync(tomb, `${tomb}.back`); writeFileSync(f, raw ?? '', { flag: 'wx' }); } catch { /* a new lock exists: its holder wins */ }
+  try { rmSync(`${tomb}.back`, { force: true }); } catch { /* harmless */ }
+  return false;
+}
+export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, staleMs = LOCK_STALE_MS, beatMs = LOCK_BEAT_MS, maxHoldMs = LOCK_MAX_HOLD_MS } = {}) {
   const f = path.join(dataDir, 'posting', LOCK_NAME);
   mkdirSync(path.dirname(f), { recursive: true });
   const token = `${process.pid}-${randomUUID()}`;
@@ -124,26 +146,41 @@ export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, staleM
     try { writeFileSync(f, JSON.stringify({ pid: process.pid, token, at: Date.now(), beat: Date.now() }), { flag: 'wx' }); break; } catch (e) {
       if (e?.code !== 'EEXIST') throw Object.assign(new Error('schedule lock unusable'), { code: 'schedule-busy' });
       let mtime = 0; try { mtime = statSync(f).mtimeMs; } catch { continue; } // gone meanwhile: try again
-      const cur = readJson(f);
+      const raw = readRaw(f);
+      if (raw === null) continue;
+      const cur = parseOr(raw);
       const beat = Number.isFinite(cur?.beat) ? Math.max(cur.beat, mtime) : mtime;
       const gone = cur ? !pidAlive(cur.pid) || Date.now() - beat > staleMs : Date.now() - mtime > staleMs;
-      if (gone) { try { rmSync(f, { force: true }); } catch { /* next round */ } continue; }
+      // Atomic takeover: only the contender whose rename wins, and only of the very file it judged, removes it.
+      if (gone) { removeIfSame(f, raw); continue; }
       if (Date.now() - start >= waitMs) throw Object.assign(new Error('schedule busy'), { code: 'schedule-busy' });
       await new Promise((r) => setTimeout(r, 50));
     }
   }
   let lost = false;
-  const mine = () => readJson(f)?.token === token;
+  const stop = new AbortController();
+  const mine = () => parseOr(readRaw(f))?.token === token;
   const beatTimer = setInterval(() => {
     if (lost) return;
-    if (!mine()) { lost = true; return; }
-    try { writeFileSync(f, JSON.stringify({ pid: process.pid, token, at: start, beat: Date.now() })); } catch { /* the next beat tries again */ }
+    if (!mine()) { lost = true; stop.abort(); return; }
+    // 'r+': refresh the existing file only, never re-create one that was removed (same length: the times are 13 digits).
+    try { writeFileSync(f, JSON.stringify({ pid: process.pid, token, at: start, beat: Date.now() }), { flag: 'r+' }); } catch { /* the next beat tries again */ }
   }, beatMs);
   beatTimer.unref?.();
-  const hold = { held: () => !lost && mine() };
-  try { return await fn(hold); } finally {
-    clearInterval(beatTimer);
-    if (mine()) { try { rmSync(f, { force: true }); } catch { /* taken over */ } }
+  const release = () => { const raw = readRaw(f); if (raw !== null && parseOr(raw)?.token === token) removeIfSame(f, raw); };
+  const hold = { held: () => !lost && mine(), signal: stop.signal };
+  let capTimer = null;
+  const cap = new Promise((_, reject) => {
+    capTimer = setTimeout(() => {
+      lost = true; stop.abort(); release();
+      reject(Object.assign(new Error('the schedule lock hold passed its cap'), { code: 'schedule-hold-cap' }));
+    }, maxHoldMs);
+    capTimer.unref?.();
+  });
+  try { return await Promise.race([fn(hold), cap]); } finally {
+    clearTimeout(capTimer); clearInterval(beatTimer);
+    lost = true;
+    release();
   }
 }
 
@@ -252,6 +289,7 @@ const REASON_TEXT = {
   'quota-exceeded': 'Waiting: YouTube said the upload quota is used up for today; tried again tomorrow, counted the old way (1,650 units each) until then',
   'schedule-clash': 'Getting a new public time: a post was scheduled on the channel within an hour of the planned one',
   'schedule-busy': 'Waiting: another post is being scheduled or sent right now; tried again in a few minutes',
+  'request-timeout': 'Waiting: YouTube did not answer in time; tried again in a few minutes',
 };
 
 /** Plain words for a queue reason code (or a failure code). */
@@ -361,7 +399,8 @@ export function createPostChain(opts) {
   //     publishAt is checked against it.
   //   freshUnused: that read has not served a new upload session yet (one read serves at most one new session).
   //   readFail: the reason code of the last read that failed or was incomplete in this hold.
-  let holdTimes = null; let freshUnused = false; let readFail = null;
+  //   curHold: the current hold ({ held() }); every channel read is followed by an ownership check.
+  let holdTimes = null; let freshUnused = false; let readFail = null; let curHold = null;
   async function ensureSlots(auth, dueIds = new Set(), { force = false } = {}) {
     const t = nowMs();
     const queued = queue.items().filter((i) => i.state === 'queued');
@@ -399,19 +438,24 @@ export function createPostChain(opts) {
     // The whole read's units are reserved before the first request (locked check + charge); unused ones are given back.
     let scan;
     try { scan = budget.reserveScan(1 + 2 * cfg.maxPages, opts.fetchImpl ?? fetch); } catch (e) { wait(String(e?.code ?? 'quota-unreadable'), SIGNIN_WAIT_MS); return cfg; }
-    try { read = await readChannelSchedule({ accessToken, fetchImpl: scan.fetch, nowMs: t, cfg, ...(opts.readDeadlineMs ? { deadlineMs: opts.readDeadlineMs } : {}) }); } catch (e) {
+    // Third Codex review (D409): the reader takes its reference time from the clock AFTER the read completes (readAt), so a
+    // video that went public while the pages were read still counts; that later time is also the planning time below.
+    try { read = await readChannelSchedule({ accessToken, fetchImpl: scan.fetch, nowMs, cfg, ...(opts.readDeadlineMs ? { deadlineMs: opts.readDeadlineMs } : {}) }); } catch (e) {
       const code = e instanceof ScheduleError ? e.code : 'schedule-read-failed';
       wait(code, code === 'schedule-scope-missing' ? SIGNIN_WAIT_MS : BASE_DELAY_MS);
       return cfg;
     } finally { scan.done(); }
+    // The lock may have been taken over while the read ran: the read then serves nothing (the holder stops).
+    if (curHold && !curHold.held()) { wait('schedule-busy', BASE_DELAY_MS); return cfg; }
+    const tr = Number.isFinite(read.readAt) ? Math.max(read.readAt, t) : nowMs();
     queue.setSchedule({ channelLast: read.last !== null ? toIso(read.last) : null, channelTimes: (read.times ?? []).map(toIso), recentTimes: (read.recent ?? []).map(toIso),
-      count: read.count, scanned: read.scanned, truncated: read.truncated, readAt: toIso(t) });
+      count: read.count, scanned: read.scanned, truncated: read.truncated, readAt: toIso(tr) });
     // Page cap hit: an older scheduled post could be past the pages read, so no slot is given out (never a guess).
     if (read.truncated) { wait('schedule-read-incomplete', SIGNIN_WAIT_MS); return cfg; }
     holdTimes = [...(read.times ?? []), ...(read.recent ?? []), ...(read.last !== null && read.last !== undefined ? [read.last] : [])];
     freshUnused = true; readFail = null;
     // D375 slots for new items and D314 retries: the gaps around the channel's scheduled and recent posts (schedule.mjs).
-    const plan = planQueueSlots({ items: queue.items(), channelLast: read.last, channelTimes: [...(read.times ?? []), ...(read.recent ?? [])], nowMs: t, cfg });
+    const plan = planQueueSlots({ items: queue.items(), channelLast: read.last, channelTimes: [...(read.times ?? []), ...(read.recent ?? [])], nowMs: tr, cfg });
     let given = 0; let moved = 0; let capped = 0;
     for (const p of plan) {
       const i = queue.get(p.id); if (!i || i.state !== 'queued') continue; // moved or removed by the card meanwhile
@@ -424,7 +468,7 @@ export function createPostChain(opts) {
       const at = toIso(p.at);
       if (i.publishAt === at && !i.reslot) continue; // a slot that did not change
       if (i.publishAt) moved++; else given++;
-      queue.patch(i.id, { publishAt: at, slotAt: toIso(t), reslot: null, ...(clear ? { reason: null, nextAt: null } : {}) });
+      queue.patch(i.id, { publishAt: at, slotAt: toIso(tr), reslot: null, ...(clear ? { reason: null, nextAt: null } : {}) });
     }
     if (given || moved) log(`posting: gave ${given} clip(s) a publish time and moved ${moved} (at least ${cfg.intervalHours} h apart)`);
     if (capped) log(`posting: ${REASON_TEXT['schedule-beyond-cap']}; ${capped} clip(s) wait`);
@@ -483,16 +527,23 @@ export function createPostChain(opts) {
     // D409 (second Codex review): the whole pass (reads, checks, budget charge, every session start) runs in ONE hold of
     // the schedule lock, so no channel read is reused after the lock was let go.
     try { await withScheduleLock(dataDir, (hold) => uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold }), opts.lockOpts); } catch (e) {
+      if (e?.code === 'schedule-hold-cap') {
+        // Third Codex review (D409): the pass held the lock past its cap (a request hung). The lock is released, the hold's
+        // requests are aborted and nothing more is sent in it; the item in flight waits (no attempt used) for the next pass.
+        for (const i of due) { const c = queue.get(i.id); if (c?.state === 'uploading') queue.patch(i.id, { state: 'queued', reason: 'request-timeout', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() }); }
+        log(`posting: ${REASON_TEXT['request-timeout']}`);
+        return;
+      }
       if (e?.code !== 'schedule-busy') throw e;
       busyWait(due);
-    }
+    } finally { curHold = null; }
   }
 
   /** Read failures that keep an item waiting (no attempt used) when they stop a session start. */
-  const READ_WAITS = new Set(['schedule-read-failed', 'schedule-read-incomplete', 'schedule-scope-missing', 'schedule-config-bad', 'quota-day-used', 'quota-unreadable', 'quota-busy', 'not-signed-in', 'no-oauth-client', 'schedule-busy']);
+  const READ_WAITS = new Set(['schedule-read-failed', 'schedule-read-incomplete', 'schedule-scope-missing', 'schedule-config-bad', 'quota-day-used', 'quota-unreadable', 'quota-busy', 'not-signed-in', 'no-oauth-client', 'schedule-busy', 'request-timeout']);
 
   async function uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold }) {
-    holdTimes = null; freshUnused = false; readFail = null; // a new hold: nothing read in it yet
+    holdTimes = null; freshUnused = false; readFail = null; curHold = hold; // a new hold: nothing read in it yet
     const cfg = await ensureSlots(auth, new Set(due.map((i) => i.id)));
     if (!cfg) return; // no valid settings: nothing can be re-checked, so nothing uploads
     const clashOf = (it) => slotClash({ item: it, items: queue.items(), channelTimes: holdTimes ?? [], cfg });
@@ -548,6 +599,9 @@ export function createPostChain(opts) {
         if (!again || again.state !== 'queued' || again.publishAt !== publishAt) continue;
         if (clashOf(again) !== null) { await reslot(item.id); continue; }
       }
+      // Third Codex review (D409): ownership again right before any session starts or resumes (a read above may have
+      // taken long enough for a takeover).
+      if (!hold.held()) { busyWait(due.slice(n).filter((i) => queue.get(i.id)?.state === 'queued')); return; }
       queue.patch(item.id, { state: 'uploading', reason: null, nextAt: null });
       /** Runs in uploadVideo right before any new resumable session. The time checked above serves it once; any other new
        *  session (a restart after an expired one) gets a fresh read and the check now. Throws to stop (nothing sent). */
@@ -556,6 +610,7 @@ export function createPostChain(opts) {
         if (checkedFor !== null && checkedFor === at) { checkedFor = null; return; }
         checkedFor = null;
         await ensureSlots(auth, new Set(), { force: true });
+        if (!hold.held()) throw new UploadError('schedule-busy', 'the schedule lock was lost during the read; nothing was sent');
         if (!freshUnused) throw new UploadError(readFail ?? 'schedule-read-failed', 'no complete channel read right before the session');
         freshUnused = false;
         const it = queue.get(item.id);
@@ -575,10 +630,13 @@ export function createPostChain(opts) {
         // and YouTube's quota answer is recorded there.
         const g = await sendGated({ dataDir, budget, capOf, nowMs, send: () => uploadPost({
           id: item.id, store, auth, outputsStatus, fetchImpl: opts.fetchImpl, chunkSize: opts.chunkSize, sessions, publishAt, beforeNewSession,
+          // Third Codex review (D409): every YouTube request has a deadline, and the hold's cap aborts them all.
+          signal: hold.signal, ...(opts.requestMs ? { requestMs: opts.requestMs } : {}), ...(opts.chunkRequestMs ? { chunkRequestMs: opts.chunkRequestMs } : {}),
           minLeadMs: minLeadMs(cfg), marginMs: marginMs(cfg), chunkDeadlineMs: chunkDeadlineMs(cfg), fallbackBps: fallbackBps(cfg), nowMs,
           // Runs before every chunk, ahead of youtube.mjs's own slot check (post-schedule): Stop all, the live pause, progress.
           beforeChunk: async (pr) => {
             if (halted) { taskEnd = { state: 'failed', note: 'Stopped by you; it is tried again at the next start' }; throw new UploadError('stopped-by-user', 'stopped'); }
+            if (!hold.held()) throw new UploadError('schedule-busy', 'the schedule lock was lost; no further chunk is sent');
             const b = await liveBlock(outputsStatus);
             if (b) { taskEnd = { state: 'waiting', note: 'Paused while the stream runs; it resumes after' }; throw new UploadError('stream-active', b); }
             if (pr && Number.isFinite(pr.total) && pr.total > 0) {

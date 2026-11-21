@@ -82,7 +82,27 @@ posting-pt2-hard-gap, posting-pt3-actions, posting-random-daily, posting-rules-i
 posting-uploads, posting-youtube-cli, posting-youtube, posting, studio-ui-posting-auto, studio-ui-posting-queue,
 studio-ui-posting-youtube, studio-ui-posting, studio-qml-posting, studio-qml-posts.
 
+## Third Codex review (2026-11-21)
+
+| Item | Fix | Test |
+|---|---|---|
+| 1. The read time was taken before the read | `readChannelSchedule` takes a clock and reads it after the last page (`readAt`). Public videos from the last 2 days count with no upper bound. The chain plans from `readAt`. | posting-auto-d375: a video public at T0+1 min, with the page back at T0+2 min, is in `recent` and `readAt` is T0+2 min. posting-e2e: the same through the chain; the slot keeps the 6 h test gap from it. |
+| 2. Malformed page token, public video without a time | A present but bad `nextPageToken` (null, number, '', object) is incomplete. A public video with a missing or invalid `videoPublishedAt` is incomplete. | posting-auto-d375: 4 bad tokens and 4 bad times reject with `schedule-read-incomplete`. posting-e2e: a null or invalid time means no upload, no slot and no try used. The test fakes now give public videos a time. |
+| 3. Takeover was not atomic | The stale file is renamed to a unique tombstone, compared with the exact content judged stale, then deleted. A file that does not match is put back with an exclusive create. Release does the same. The heartbeat uses `r+` and never re-creates the file. `held()` is checked after every read, before a session starts or resumes, in `beforeNewSession` and before every chunk. | posting-e2e: 2 spawned node processes (`windowsHide`) contend for a dead-pid lock, 3 rounds, exactly one wins each round. A lock taken over during the channel read means no session, `schedule-busy`, and the other lock is left alone. The earlier lock tests still pass. |
+| 4. No request deadline | `timedFetch` in `youtube.mjs` settles at the deadline even when the fetch ignores the abort. The session start, progress query and thumbnail get 60 s and each chunk gets 10 min. The scheduled chunk deadline is kept. `request-timeout` waits 5 min with no try used. `withScheduleLock` has `maxHoldMs` (60 min): at the cap it aborts, releases the lock and rejects with `schedule-hold-cap`. | posting-e2e: a hung session start (100 ms deadline) leaves the item waiting, frees the lock, and the next tick posts. A hung chunk and then a hung progress query each time out with the session kept, then it resumes on the same session. With a 1 h request deadline and a 300 ms cap, the pass ends at the cap, the lock is released and the next tick posts. |
+
+Test runs after the third review (one file at a time, `UJWALAM_HEADLESS=1`, BelowNormal, temp `UJWALAM_DATA_ROOT`, live
+check exit 0): all 25 files listed above pass (exit 0), plus learning-signals. Counts: posting-auto-d375 51,
+posting-e2e 55.
+
 ## UNVERIFIED
+
+- Third review: (1) A pass stopped at the hold cap keeps running in the background until its aborted request
+  settles. It cannot send any more because `held()` is false and its requests are aborted, but it can still update its
+  own queue item. (2) Reading a response body (`res.json()`) after the headers arrive has no deadline of its own; the
+  hold cap covers it. (3) A tombstone that is put back is written again, not renamed, so its mtime changes. That only
+  happens when a lock was judged stale. (4) Node's `renameSync` replaces an existing target on Windows; the tombstone
+  names are unique, so the target never exists. The 60 s, 10 min and 60 min values are not measured on the real link.
 
 - Codex fixes, residual risks. (1) A public upload that runs much slower than its estimate (bytes at half
   fallbackKbps) could end within 60 min of a slot that was already given out after the estimated end. Before each

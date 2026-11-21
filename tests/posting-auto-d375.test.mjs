@@ -44,7 +44,8 @@ describe('channel read: whole uploads list (D375, D409)', () => {
         calls.playlist++;
         const from = Number(url.searchParams.get('pageToken') ?? 0); const size = Number(url.searchParams.get('maxResults'));
         const page = ups.slice(from, from + size);
-        return ok({ items: page.map((v) => ({ snippet: { publishedAt: iso(v.added) }, contentDetails: { videoId: v.id } })), ...(from + size < ups.length ? { nextPageToken: String(from + size) } : {}) });
+        // Public videos carry their public time (third Codex review: a public one without it is incomplete).
+        return ok({ items: page.map((v) => ({ snippet: { publishedAt: iso(v.added) }, contentDetails: { videoId: v.id, ...(sched.has(v.id) ? {} : { videoPublishedAt: '2025-01-01T00:00:00Z' }) } })), ...(from + size < ups.length ? { nextPageToken: String(from + size) } : {}) });
       }
       if (url.pathname.endsWith('/videos')) {
         calls.videos++;
@@ -113,6 +114,44 @@ describe('channel read: whole uploads list (D375, D409)', () => {
     const { READ_DEADLINE_MS } = await import('../services/posting/schedule-read.mjs');
     const { LOCK_STALE_MS } = await import('../services/posting/auto-chain.mjs');
     assert.ok(READ_DEADLINE_MS * 3 <= LOCK_STALE_MS, 'the read deadline is well under the lock stale time');
+  });
+
+  // ---- D409 third Codex review ----
+  test('a malformed nextPageToken (null, a number, empty) is incomplete, never the end of the list', async () => {
+    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
+    for (const bad of [null, 5, '', {}]) {
+      const f = fakeChannel(10);
+      const fetchImpl = async (u, o) => { const res = await f.fetchImpl(u, o); const b = await res.json(); const nb = new URL(u).pathname.endsWith('/playlistItems') ? { ...b, nextPageToken: bad } : b; return { ...res, json: async () => nb }; };
+      await assert.rejects(readChannelSchedule({ accessToken: 'x', fetchImpl, nowMs: T0, cfg }), { code: 'schedule-read-incomplete' }, JSON.stringify(bad));
+    }
+  });
+
+  test('a public video with a missing or invalid videoPublishedAt is incomplete (its time is never dropped)', async () => {
+    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
+    for (const bad of [undefined, null, 'yesterday', 12345]) {
+      const f = fakeChannel(10);
+      const fetchImpl = async (u, o) => {
+        const res = await f.fetchImpl(u, o); const b = await res.json();
+        const nb = new URL(u).pathname.endsWith('/playlistItems') ? { ...b, items: b.items.map((i, k) => (k === 2 ? { ...i, contentDetails: { videoId: i.contentDetails.videoId, ...(bad === undefined ? {} : { videoPublishedAt: bad }) } } : i)) } : b;
+        return { ...res, json: async () => nb };
+      };
+      await assert.rejects(readChannelSchedule({ accessToken: 'x', fetchImpl, nowMs: T0, cfg }), { code: 'schedule-read-incomplete' }, String(bad));
+    }
+  });
+
+  test('the reference time is taken after the read: a video that went public during it is a recent post', async () => {
+    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
+    const clock = { t: T0 };
+    const f = fakeChannel(10);
+    const fetchImpl = async (u, o) => {
+      const res = await f.fetchImpl(u, o); const b = await res.json();
+      if (!new URL(u).pathname.endsWith('/playlistItems')) return { ...res, json: async () => b };
+      clock.t = T0 + 2 * 60e3; // the page comes back 2 min after the read started
+      return { ...res, json: async () => ({ ...b, items: b.items.map((i, k) => (k === 2 ? { ...i, contentDetails: { ...i.contentDetails, videoPublishedAt: iso(T0 + 60e3) } } : i)) }) };
+    };
+    const r = await readChannelSchedule({ accessToken: 'x', fetchImpl, nowMs: () => clock.t, cfg });
+    assert.equal(r.readAt, T0 + 2 * 60e3);
+    assert.deepEqual(r.recent, [T0 + 60e3]);
   });
 });
 

@@ -74,7 +74,7 @@ async function boot({ sinks = [], flags = { posting: true, 'auto-post': true } }
     if (u.pathname.endsWith('/youtube/v3/playlistItems')) {
       const p = Number(u.searchParams.get('pageToken') ?? 0);
       const ids = p === 0 ? channel.scheduled.map((_, k) => `sch${k}`) : [`old${p}`];
-      return jsonRes(200, { items: ids.map((v) => ({ snippet: { publishedAt: '2026-01-01T00:00:00Z' }, contentDetails: { videoId: v } })), ...(p + 1 < channel.pages ? { nextPageToken: String(p + 1) } : {}) });
+      return jsonRes(200, { items: ids.map((v) => ({ snippet: { publishedAt: '2026-01-01T00:00:00Z' }, contentDetails: { videoId: v, ...(v.startsWith('sch') ? {} : { videoPublishedAt: '2026-01-01T00:00:00Z' }) } })), ...(p + 1 < channel.pages ? { nextPageToken: String(p + 1) } : {}) });
     }
     if (u.pathname.endsWith('/youtube/v3/videos') && (o?.method ?? 'GET') === 'GET') {
       const ids = u.searchParams.get('id').split(',');
