@@ -426,8 +426,10 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     sound starts one frame later.
     title (FX2, D411; replaces the RP4 card over blur): reel_title.prepare() dict {ass, fontsdir}; the name display
     burned over the joined picture with libass (the picture itself is never blurred or darkened; sound untouched).
-    music (RP3): reel_music.prepare() dict; its WAV (as long as the reel, level and fades applied) is mixed under audio
-    track 1 (the studio mix) with a sidechain duck keyed by that track; the other tracks are untouched."""
+    music (RP3/FX4): {"file"?, "duck"?, "sfx"?}; the bed WAV "file" (as long as the reel, level and fades applied) is
+    mixed under audio track 1 (the studio mix) with a sidechain duck keyed by that track; the FX3 join sound effects
+    WAV "sfx" is mixed into track 1 as it is; the other tracks are untouched. All in this one run: audio is encoded
+    once. transition (FX3) may carry "joins": one xfade kind per join (reel_transition.plan_set)."""
     ow, oh = int(frame["width"]), int(frame["height"])
     fd = fade_ms / 1000.0
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(threads), "-filter_threads", "2"]
@@ -463,7 +465,8 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
             acc += pieces[i - 1]["end"] - pieces[i - 1]["start"]
             vin = "[v0]" if i == 1 else f"[vx{i - 1}]"
             vout = vlast if i == n - 1 else f"[vx{i}]"
-            parts.append(f"{vin}[v{i}]xfade=transition={transition['xfade']}:duration={xd:.3f}:offset={acc - i * xd:.3f}{vout}")
+            kind = (transition.get("joins") or [])[i - 1] if transition.get("joins") else transition["xfade"]  # FX3
+            parts.append(f"{vin}[v{i}]xfade=transition={kind}:duration={xd:.3f}:offset={acc - i * xd:.3f}{vout}")
             for k in range(audio_tracks):
                 ain = f"[a0_{k}]" if i == 1 else f"[ax{i - 1}_{k}]"
                 aout = aj(k) if i == n - 1 else f"[ax{i}_{k}]"
@@ -486,15 +489,23 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         parts.append(f"[vth]{'[vcap]' if captions else '[vcat]'}concat=n=2:v=1:a=0[vout]")
         for k in range(audio_tracks):  # 800 samples at 48 kHz = one frame at 60 fps
             parts.append(f"[ab{k}]adelay=delays=800S:all=1[aout{k}]")
-    if music:  # RP3: the bed under the studio mix, ducked by it
+    if music:  # RP3/FX4: the bed under the studio mix, ducked by it; FX3: the join sound effects on top, not ducked
         mi = len(pieces) + (1 if thumbnail else 0)
-        dk = music["duck"]
-        argv += ["-i", music["file"]]
-        parts.append(f"[{mi}:a]aresample=48000[mbed]")
-        parts.append("[amus0]asplit=2[mgame][mkey]")
-        parts.append(f"[mbed][mkey]sidechaincompress=threshold={float(dk['threshold']):g}:ratio={float(dk['ratio']):g}:"
-                     f"attack={float(dk['attackMs']):g}:release={float(dk['releaseMs']):g}[mduck]")
-        parts.append(f"[mgame][mduck]amix=inputs=2:duration=first:normalize=0[{alast}0]")
+        mixin = ["[amus0]"]
+        if music.get("file"):
+            dk = music["duck"]
+            argv += ["-i", music["file"]]
+            parts.append(f"[{mi}:a]aresample=48000[mbed]")
+            parts.append("[amus0]asplit=2[mgame][mkey]")
+            parts.append(f"[mbed][mkey]sidechaincompress=threshold={float(dk['threshold']):g}:ratio={float(dk['ratio']):g}:"
+                         f"attack={float(dk['attackMs']):g}:release={float(dk['releaseMs']):g}[mduck]")
+            mixin = ["[mgame]", "[mduck]"]
+            mi += 1
+        if music.get("sfx"):
+            argv += ["-i", music["sfx"]]
+            parts.append(f"[{mi}:a]aresample=48000[msfx]")
+            mixin.append("[msfx]")
+        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0[{alast}0]")
     maps = ["-map", "[vout]"] + [x for k in range(audio_tracks) for x in ("-map", f"[aout{k}]")]
     # CL1 (D350): nothing here adds time (no pad or hold; a crossfade only shortens: each join overlaps by xd); the fps
     # filter can round a piece by up to one frame, so the output is also cut at the type's maximum.

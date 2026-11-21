@@ -88,6 +88,7 @@ import reel_length as rl  # noqa: E402
 import reel_thumbnail as rth  # noqa: E402
 import reel_title as rti  # noqa: E402
 import reel_music as rmu  # noqa: E402
+import reel_sfx as rsfx  # noqa: E402
 import reel_transition as rt  # noqa: E402
 import clip_signals as sig  # noqa: E402
 import clip_validate as val  # noqa: E402
@@ -685,12 +686,14 @@ def cmd_live_review(a):
                      else {"backend": "none", "status": "off"})
         hook = m["hook"]
         pk = _look_pick(ex, c["id"], os.path.basename(c["file"]))  # FX1: this clip's look
-        tr = None if ass else ex["transition"]  # RP1: captions keep the hard cut
+        tr = None if ass else _look_transition(ex, pk, m["pieces"], ex["transition"])  # RP1: captions keep the hard cut
         xd = mont.crossfade_sec(m["pieces"], tr) if pieces_path else 0.0
         thumb, trec = _thumbnail(ffmpeg, c["file"], m, "live-clip", frame, wd, ex) if pieces_path else (None, None)
         ttl, tirec = _title(wd, m["pieces"], xd, frame, ex, pk) if pieces_path else (None, None)
         mus, murec = (_music(wd, m["pieces"], xd, tirec, ex, c["id"], os.path.basename(c["file"]))
                       if pieces_path and sinfo.get("has_audio") else (None, None))
+        mus, sfxrec = (_with_sfx(wd, ex, tr, m["pieces"], xd, pk, mus) if pieces_path and sinfo.get("has_audio")
+                       else (mus, None))  # FX3
         for lid in wanted:
             try:
                 out_sec = None
@@ -717,12 +720,13 @@ def cmd_live_review(a):
         _drop_fonts(wd)
         rti.cleanup(wd)
         rmu.cleanup(wd)
+        rsfx.cleanup(wd)
         out_rows.append({"id": c["id"], "start": c["start"], "end": c["end"], "wallStart": c["wallStart"],
                          "source": os.path.basename(c["file"]), "sourcePath": c["file"],
                          "score": c["score"], "labels": c["labels"], "reasons": c["reasons"],
                          **({"pieces": m["pieces"]} if pieces_path else {}), "retimed": bool(c.get("retimed")),
                          "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec,
-                         "title": tirec, "music": murec, "look": pk, "captions": cinfo, "hook": hook, "files": files,
+                         "title": tirec, "music": murec, "look": pk, "sfx": sfxrec, "captions": cinfo, "hook": hook, "files": files,
                          "errors": errors})
         _look_remember(ex, pk if files else None)
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
@@ -1092,6 +1096,30 @@ def _look_remember(ex, pk, track=None):
         lk["history"] = look.remember(lk["dataDir"], pk, lk["cfg"], track=track, history=lk["history"])
 
 
+def _look_transition(exr, pk, pieces, legacy):
+    """FX3: the joins of this reel from the look's transition set (None = hard cut); without the look, the RP1 choice.
+    The RP5 mix may still pick the hard cut for a reel."""
+    if pk is None:
+        return legacy
+    lr = exr.get("learning")
+    if (lr and (lr.get("picks") or {}).get("transition") == "cut") or not pk.get("transitions"):
+        return None
+    return rt.plan_set(pieces, pk["transitions"], pk["seed"])
+
+
+def _with_sfx(wd, exr, tr, pieces, xd, pk, mus):
+    """FX3: the join sound effects of this reel added to the music dict render_argv takes -> (music dict, record)."""
+    if not (pk and tr and tr.get("sfx") and exr["look"]["look"]["transitions"].get("sfx", True)):
+        return mus, None
+    try:
+        f = rsfx.prepare(wd, tr, pieces, xd, pk["seed"])
+    except (OSError, ValueError) as e:
+        eprint(f"sound effects: not made ({str(e)[-120:]}); the reel renders without them")
+        rsfx.cleanup(wd)
+        return mus, None
+    return (dict(mus or {}, sfx=f), {"kinds": tr["sfx"], "peakDb": tr["sfxDb"]}) if f else (mus, None)
+
+
 def _name_part(ex, pk):
     """The clip look's name settings for reel_title.plan, None for the default, or False when the look has no name."""
     if pk is None:
@@ -1307,11 +1335,12 @@ def cmd_montage(a):
         exr = lmix.reel_choices(ex, mix, cid, vrec)  # RP5: this reel's transition/title/music (ex as is without a mix)
         pk = _look_pick(exr, cid, os.path.basename(vrec))  # FX1: this reel's look
         # RP1: captions keep the hard cut (their timeline is the sum of the pieces); each cross-faded join shortens the reel
-        tr = None if ass else exr["transition"]
+        tr = None if ass else _look_transition(exr, pk, m["pieces"], exr["transition"])  # FX3: the look's set
         xd = mont.crossfade_sec(m["pieces"], tr)
         thumb, trec = _thumbnail(ffmpeg, vrec, m, typ, frame, wd, ex, matches)  # RP6
         ttl, tirec = _title(wd, m["pieces"], xd, frame, exr, pk)  # FX2
         mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec))  # RP3
+        mus, sfxrec = _with_sfx(wd, exr, tr, m["pieces"], xd, pk, mus)  # FX3
         def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ):
             return mont.render_argv(ffmpeg, vrec, m["pieces"], frame, rnd.ENCODERS[enc], rnd.AUDIO,
                                     int(cfg["audioFadeMs"]), "montage-v.mp4.part",
@@ -1332,6 +1361,7 @@ def cmd_montage(a):
         _drop_fonts(wd)
         rti.cleanup(wd)
         rmu.cleanup(wd)
+        rsfx.cleanup(wd)
         files, errors = [], []
         hook = m.get("hook") or {"on": False}
         if r.returncode == 0:
@@ -1363,7 +1393,7 @@ def cmd_montage(a):
         out_sec = _pieces_out_sec(m, xd, thumb, lim[typ]["maxSec"])
         rows.append({"id": cid, "start": 0.0, "end": out_sec, "score": m["score"], "labels": m["labels"],
                      "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec, "title": tirec, "music": murec,
-                     "look": pk,
+                     "look": pk, "sfx": sfxrec,
                      "pieces": m["pieces"], "part": m.get("part"), "parts": m.get("parts"),
                      # the overlaps of a cross fade can take a reel planned at its shortest length below it
                      "trimmed": m.get("trimmed"), "belowMin": m.get("belowMin") or (out_sec < lim[typ]["minSec"]) or None, "kills": m.get("kills"), "streakKills": m.get("streakKills"),
@@ -1501,6 +1531,7 @@ def cmd_recaption(a):
     _drop_fonts(wd)
     rti.cleanup(wd)
     rmu.cleanup(wd)
+    rsfx.cleanup(wd)
     if r.returncode != 0:
         try:
             os.remove(os.path.join(wd, name + ".part"))
