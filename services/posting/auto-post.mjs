@@ -67,7 +67,8 @@ export const NOTICE_TEXT = Object.freeze({
   'not-signed-in': 'Auto-post is on but YouTube is not signed in: nothing uploads',
   'no-oauth-client': 'Auto-post is on but the YouTube app key is missing: nothing uploads',
   'schedule-scope-missing': 'Auto-post is on but YouTube needs a new sign-in to read scheduled posts: nothing uploads',
-  'sender-elsewhere': 'Auto-post is on but another copy of Ujwalam holds the posting lock: nothing uploads from here',
+  'sender-stuck': 'Auto-post is on but a posting lock was left behind by a closed copy of Ujwalam: nothing uploads until you clear it',
+  'sender-elsewhere':'Auto-post is on but another copy of Ujwalam holds the posting lock: nothing uploads from here',
   'quota-fallback':'YouTube said the upload quota is used up: uploads wait until tomorrow and are counted the old way (1,650 units each) until then',
 });
 

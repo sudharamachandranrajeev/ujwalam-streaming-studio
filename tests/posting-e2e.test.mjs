@@ -1090,6 +1090,50 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     assert.equal(it.state, 'done'); assert.equal(g.videos.length, 1, 'the next tick posts');
   });
 
+  test('D409-5: a crash-left claim: refused with the stuck notice, one click clears it, the next pass sends; a live claimant is never cleared', async () => {
+    const { LOCK_NAME, stuckLock, clearStuckLock } = await import('../services/posting/auto-chain.mjs');
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    const f = path.join(e.dataDir, 'posting', LOCK_NAME);
+    mkdirSync(path.dirname(f), { recursive: true });
+    // The crash: the old lock (dead holder) and the claim of a claimant that died before the exclusive create.
+    writeFileSync(f, JSON.stringify({ pid: 2 ** 30, start: 1000, token: 'old-1', at: Date.now() }));
+    writeFileSync(`${f}.old-1.claim`, JSON.stringify({ pid: 2 ** 30 - 1, start: 2000 }));
+    const c = schedChain(e, g);
+    await c.afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0, 'nothing sent while stuck');
+    let it = e.queue().items()[0];
+    assert.equal(it.reason, 'sender-elsewhere'); assert.equal(it.attempts, 0);
+    const tasks = readdirSync(tasksDir(e.dataDir)).filter((n) => n.endsWith('.json')).map((n) => JSON.parse(readFileSync(path.join(tasksDir(e.dataDir), n), 'utf8')));
+    assert.ok(tasks.some((t) => /posting lock was left behind/.test(t.title ?? '') && /Clear stuck posting lock/.test(t.note ?? '')), JSON.stringify(tasks));
+    // No automatic removal: a second pass still refuses and both files stay.
+    e.clock.t += 6 * MIN; await c.tick(IDLE);
+    assert.ok(existsSync(f) && existsSync(`${f}.old-1.claim`)); assert.equal(g.count('init'), 0);
+    // A click with a stale id is refused; the right id clears exactly those two files.
+    assert.deepEqual(clearStuckLock(e.dataDir, 'other'), { cleared: false, code: 'changed' });
+    assert.equal(stuckLock(e.dataDir).id, 'old-1');
+    assert.deepEqual(clearStuckLock(e.dataDir, 'old-1'), { cleared: true });
+    assert.ok(!existsSync(f) && !existsSync(`${f}.old-1.claim`));
+    e.clock.t += 6 * MIN; await c.tick(IDLE);
+    it = e.queue().items()[0];
+    assert.equal(it.state, 'done'); assert.equal(g.videos.length, 1, 'the next pass sends (mock)');
+
+    // A live claimant (the pid is alive and started at the recorded time) is never cleared; a reused pid is.
+    const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
+    const f2 = path.join(d, 'posting', LOCK_NAME);
+    writeFileSync(f2, JSON.stringify({ pid: 2 ** 30, start: 1000, token: 'old-2', at: Date.now() }));
+    writeFileSync(`${f2}.old-2.claim`, JSON.stringify({ pid: process.ppid, start: 5_000_000 }));
+    const same = { procStart: () => 5_000_000 };
+    assert.equal(stuckLock(d, same), null, 'live claimant: not stuck');
+    assert.deepEqual(clearStuckLock(d, 'old-2', same), { cleared: false, code: 'not-stuck' });
+    assert.equal(stuckLock(d, { procStart: () => null }), null, 'unknown start: not stuck');
+    assert.ok(existsSync(f2) && existsSync(`${f2}.old-2.claim`));
+    assert.equal(stuckLock(d, { procStart: () => 5_000_000 + 60_000 })?.id, 'old-2', 'pid reused (another start time): stuck');
+    // A live lock holder is never cleared either, even with a dead claimant.
+    writeFileSync(f2, JSON.stringify({ pid: process.ppid, start: 7_000_000, token: 'old-2', at: Date.now() }));
+    writeFileSync(`${f2}.old-2.claim`, JSON.stringify({ pid: 2 ** 30, start: 1 }));
+    assert.equal(stuckLock(d, { procStart: () => 7_000_000 }), null);
+  });
+
   test('D409-4: two sender processes: the second refuses; three contenders on a dead lock: exactly one sends', async () => {
     const { spawn } = await import('node:child_process');
     const { pathToFileURL } = await import('node:url');

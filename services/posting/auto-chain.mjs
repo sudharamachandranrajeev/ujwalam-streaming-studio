@@ -48,6 +48,7 @@
 // D409 (second Codex review, 2026-11-21): this chain is the only sender. Every upload goes through sendGated (budget
 // gate + quotaExceeded record) inside one schedule-lock hold per pass; every new session is preceded by a complete
 // channel read in that hold and the 60-min check. The studio's Upload button and `cli.mjs youtube upload` only queue.
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -129,6 +130,61 @@ const parseOr = (raw) => { try { return JSON.parse(raw); } catch { return null; 
 const inProcess = new Map(); // lock file -> Promise settled when this process's current hold of it ends
 const refuse = (file) => Object.assign(new Error('another sender holds the posting lock; nothing was sent'), { code: 'sender-elsewhere', lockFile: file });
 
+const claimFileOf = (f, token) => `${f}.${String(token).replace(/[^A-Za-z0-9-]/g, '').slice(0, 80)}.claim`;
+/** This process's start time (ms), written into the lock and the claim. */
+const MY_START = Math.round(performance.timeOrigin);
+const START_SLACK_MS = 5000; // the OS start time and Node's timeOrigin differ by the Node start-up, far below this
+/** Another process's start time (ms) or null (unknown). Windows: one hidden PowerShell call (D191); elsewhere null. */
+function osProcStart(pid) {
+  if (process.platform !== 'win32') return null;
+  try {
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${Number(pid)} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`],
+      { windowsHide: true, encoding: 'utf8', timeout: 10000 });
+    const t = Date.parse(String(r.stdout ?? '').trim());
+    return r.status === 0 && Number.isFinite(t) ? t : null;
+  } catch { return null; }
+}
+/**
+ * 'dead' | 'alive' | 'unknown' for a recorded owner { pid, start? }. Dead = the pid is gone, or the pid now belongs to a
+ * process that started at another time (pid reused). A pid that is alive with no way to compare the start is 'unknown'.
+ */
+function ownerState(owner, procStart = osProcStart) {
+  if (!owner || !Number.isInteger(owner.pid) || owner.pid <= 0) return 'unknown';
+  if (!pidAlive(owner.pid)) return 'dead';
+  if (!Number.isFinite(owner.start)) return 'unknown';
+  const now = owner.pid === process.pid ? MY_START : procStart(owner.pid);
+  if (!Number.isFinite(now)) return 'unknown';
+  return Math.abs(now - owner.start) > START_SLACK_MS ? 'dead' : 'alive';
+}
+/**
+ * Fifth Codex review (D409): a stuck posting lock = the lock file AND the claim file naming it, both with provably dead
+ * owners (a crash between the claim and the exclusive create). Never removed automatically: the notice offers one
+ * click, "Clear stuck posting lock" (D332). -> null | { id (the lock's token), lockFile, claimFile }.
+ */
+export function stuckLock(dataDir, { procStart = osProcStart } = {}) {
+  const f = path.resolve(dataDir, 'posting', LOCK_NAME);
+  const lockRaw = readRaw(f); const lock = lockRaw === null ? null : parseOr(lockRaw);
+  if (!lock || typeof lock.token !== 'string') return null;
+  const claimFile = claimFileOf(f, lock.token);
+  const claimRaw = readRaw(claimFile); const claim = claimRaw === null ? null : parseOr(claimRaw);
+  if (!claim) return null;
+  if (ownerState(claim, procStart) !== 'dead' || ownerState(lock, procStart) !== 'dead') return null;
+  return { id: lock.token, lockFile: f, claimFile, lockRaw, claimRaw };
+}
+/** The click: re-verifies that the stuck lock is still the same one (id) with dead owners, then removes exactly that
+ *  lock file and then its claim. -> { cleared: true } | { cleared: false, code }. */
+export function clearStuckLock(dataDir, id, opts = {}) {
+  const s = stuckLock(dataDir, opts);
+  if (!s) return { cleared: false, code: 'not-stuck' };
+  if (s.id !== id) return { cleared: false, code: 'changed' };
+  // The lock first: while the claim stays, no other process can replace the lock (the claim path is blocked), so the
+  // file removed is the one verified. Then the claim, which names a lock that no longer exists.
+  if (readRaw(s.lockFile) !== s.lockRaw || readRaw(s.claimFile) !== s.claimRaw) return { cleared: false, code: 'changed' };
+  try { rmSync(s.lockFile); } catch { return { cleared: false, code: 'changed' }; }
+  try { rmSync(s.claimFile, { force: true }); } catch { /* a leftover claim names a lock that no longer exists */ }
+  return { cleared: true };
+}
+
 /** Exclusive create of the lock file; on an existing file, the dead-holder path or a refusal. -> true | throws. */
 function createLock(f, body) {
   try { writeFileSync(f, body, { flag: 'wx' }); return true; } catch (e) { if (e?.code !== 'EEXIST') throw refuse(f); }
@@ -137,8 +193,9 @@ function createLock(f, body) {
   // Provably not held: its process has ended, or it is this process's own leftover (this process holds the mutex).
   const dead = cur && typeof cur.token === 'string' && Number.isInteger(cur.pid) && (cur.pid === process.pid || !pidAlive(cur.pid));
   if (!dead) throw refuse(f);
-  const claim = `${f}.${String(cur.token).replace(/[^A-Za-z0-9-]/g, '').slice(0, 80)}.claim`;
-  try { writeFileSync(claim, String(process.pid), { flag: 'wx' }); } catch { throw refuse(f); } // another process judges the same lock
+  const claim = claimFileOf(f, cur.token);
+  // Fifth Codex review: the claim names its claimant (pid + process start time), so a crash-left claim can be proven dead.
+  try { writeFileSync(claim, JSON.stringify({ pid: process.pid, start: MY_START }), { flag: 'wx' }); } catch { throw refuse(f); } // another process judges the same lock
   try {
     if (readRaw(f) !== raw) throw refuse(f); // changed since it was judged
     rmSync(f);
@@ -160,7 +217,7 @@ export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, maxHol
   let endMutex; inProcess.set(f, new Promise((r) => { endMutex = r; }));
   const token = `${process.pid}-${randomUUID()}`;
   // 2. The file guard against a second sender process.
-  try { createLock(f, JSON.stringify({ pid: process.pid, token, at: Date.now() })); } catch (e) { inProcess.delete(f); endMutex(); throw e; }
+  try { createLock(f, JSON.stringify({ pid: process.pid, start: MY_START, token, at: Date.now() })); } catch (e) { inProcess.delete(f); endMutex(); throw e; }
   let lost = false;
   const stop = new AbortController();
   const mine = () => parseOr(readRaw(f))?.token === token;
@@ -537,7 +594,9 @@ export function createPostChain(opts) {
       if (e?.code === 'sender-elsewhere') {
         // Fourth Codex review (D409): a lock that is not provably ours: refuse, never take it over. Plain-words notice.
         for (const i of due) queue.patch(i.id, { reason: 'sender-elsewhere', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() });
-        notice('sender-elsewhere', e.lockFile ?? null);
+        // Fifth Codex review: a crash-left claim with a dead lock: the notice offers the one-click clear (never automatic).
+        let stuck = null; try { stuck = stuckLock(dataDir, opts.procStart ? { procStart: opts.procStart } : {}); } catch { stuck = null; }
+        if (stuck) notice('sender-stuck'); else notice('sender-elsewhere', e.lockFile ?? null);
         log(`posting: ${REASON_TEXT['sender-elsewhere']}`);
         return;
       }
@@ -803,6 +862,7 @@ export function createPostChain(opts) {
     writeTaskFile(dataDir, { id: NOTICE_TASK, kind: 'upload', title: NOTICE_TEXT[code], state: 'waiting', startedAt: noticeSince, updatedAt: t,
       note: code === 'no-rules' || code === 'bad-rules' ? `Settings > Posting & growth > Auto-post${detail ? `: ${detail}` : ''}`
         : code === 'unfilled-placeholders' ? `Posts view, or your profile${detail ? `: ${detail}` : ''}`
+        : code === 'sender-stuck' ? 'Settings > Posting & growth > Auto-post: click "Clear stuck posting lock"'
         : code === 'sender-elsewhere' ? `Close the other Ujwalam. If none is open, restart the studio${detail ? `; lock file: ${detail}` : ''}` : 'Settings > Posting & growth > Auto-post' });
   }
 

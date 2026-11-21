@@ -34,7 +34,7 @@ import { BOTS, BOT_LABELS, GRACEFUL_MS, createBots } from '../bots/index.mjs';
 import { createFlags } from '../flags/index.mjs';
 import { LEDGER_NAME, POSTING_FLAG, createPostStore } from '../posting/index.mjs';
 import { createYoutubeAuth } from '../posting/oauth.mjs';
-import { QUEUE_NAME, createUploadQueue, requestRunNow, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
+import { QUEUE_NAME, clearStuckLock, createUploadQueue, requestRunNow, stuckLock, readQueueSummary, reasonText, shownPublishAt, streamOnly } from '../posting/auto-chain.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
 import { previewRules } from '../posting/preview.mjs';
 import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
@@ -1662,7 +1662,9 @@ export function createStudioServer(opts) {
         channel = r.channel ?? null; liveError = r.error ?? null;
       }
       const count = Number(url.searchParams.get('count') ?? 10);
-      try { return json(res, 200, { ...schedulePreview(opts.dataDir, { nowMs: t, count: Number.isFinite(count) ? count : 10, channel }), liveError }); } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
+      // Fifth Codex review (D409): a stuck posting lock (crash-left claim, both owners dead) is shown with its one-click clear.
+      let stuck = null; try { const s = stuckLock(opts.dataDir, opts.procStart ? { procStart: opts.procStart } : {}); stuck = s ? { id: s.id } : null; } catch { stuck = null; }
+      try { return json(res, 200, { ...schedulePreview(opts.dataDir, { nowMs: t, count: Number.isFinite(count) ? count : 10, channel }), liveError, stuckLock: stuck }); } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
     }
     if (req.method === 'GET' && route === '/ui/api/posts/auto') {
       // Read-only: the auto-post mode and what a run would do now. Enabling stays a flag; nothing is changed here.
@@ -1963,6 +1965,15 @@ export function createStudioServer(opts) {
       const r = move ? moveQueueItem(opts.dataDir, body.id, body.at, { nowMs: now() }) : removeQueueItem(opts.dataDir, body.id);
       return r.ok ? json(res, 200, { ok: true, state: r.item.state, publishAt: r.item.publishAt ?? null, queue: readQueueSummary(opts.dataDir, flags) })
         : json(res, r.code === 'unknown' ? 404 : 409, { error: r.code, text: r.text });
+    }
+    if (route === '/ui/api/posts/auto/clear-lock') {
+      // "Clear stuck posting lock": one click, no confirm (D332). Removes that exact lock and its claim only after checking
+      // again that both are the same files and both owners are dead; otherwise refused and nothing is removed.
+      if (typeof opts.dataDir !== 'string' || typeof body.id !== 'string' || body.id.length > 200 || Object.keys(body).some((k) => k !== 'id')) return json(res, 400, { error: 'bad-params' });
+      const r = clearStuckLock(opts.dataDir, body.id, opts.procStart ? { procStart: opts.procStart } : {});
+      if (!r.cleared) return json(res, 409, { error: r.code });
+      try { requestRunNow(opts.dataDir, now()); } catch { /* the next tick runs a pass anyway */ }
+      return json(res, 200, { cleared: true });
     }
     if (route === '/ui/api/posts/auto/run') {
       // PT3 (D408) "Run auto-post now": one click asks the chain for a pass at once (request file; the chain's next tick

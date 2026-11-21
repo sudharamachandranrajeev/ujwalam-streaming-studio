@@ -97,6 +97,24 @@ async function boot({ sinks = [], flags = { posting: true, 'auto-post': true } }
 // the after() above removes folders; servers close here
 const closeAll = (...c) => { for (const x of c) x.srv.close(); };
 
+describe('D409-5 Clear stuck posting lock', () => {
+  test('one click clears it (bad id refused); nothing stuck -> refused', async () => {
+    const c = await boot();
+    try {
+    const f = path.join(c.dataDir, 'posting', 'schedule.lock');
+    writeFileSync(f, JSON.stringify({ pid: 2 ** 30, start: 1000, token: 'tok-9', at: T0 }));
+    writeFileSync(`${f}.tok-9.claim`, JSON.stringify({ pid: 2 ** 30 - 1, start: 2000 }));
+    assert.equal((await c.post('/ui/api/posts/auto/clear-lock', { id: 'tok-9', x: 1 })).status, 400);
+    assert.equal((await c.post('/ui/api/posts/auto/clear-lock', { id: 'nope' })).json().error, 'changed');
+    const r = await c.post('/ui/api/posts/auto/clear-lock', { id: 'tok-9' });
+    assert.equal(r.status, 200, r.text);
+    assert.ok(!existsSync(f) && !existsSync(`${f}.tok-9.claim`));
+    assert.equal(existsSync(path.join(c.dataDir, 'posting', RUN_NOW_NAME)), true, 'a pass is asked for');
+    assert.equal((await c.post('/ui/api/posts/auto/clear-lock', { id: 'tok-9' })).json().error, 'not-stuck');
+    } finally { closeAll(c); }
+  });
+});
+
 describe('PT3 Run auto-post now', () => {
   test('refused while a stream is live or starting, and with auto-post off; otherwise the request file is written', async () => {
     for (const state of ['live', 'starting']) {

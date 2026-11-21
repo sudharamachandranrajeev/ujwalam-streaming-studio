@@ -111,7 +111,21 @@ Test runs after the fourth review (one file at a time, `UJWALAM_HEADLESS=1`, Bel
 studio-qml-posting (12), studio-qml-posts (4) and learning-signals (10) pass with exit 0. Counts: posting-e2e 56,
 posting-auto-d375 51, studio-ui-posting-youtube 11.
 
+## Fifth Codex review (2026-11-21)
+
+| Item | Fix | Test |
+|---|---|---|
+| A crash-left claim made every later process refuse forever | The claim and the lock carry pid + process start time. `stuckLock` reports a lock whose claim and holder are both provably dead. The chain then shows the "posting lock was left behind" notice; Settings > Posting & growth > Auto-post shows "Clear stuck posting lock" (one click, D332). `clearStuckLock` re-verifies the same files and dead owners, removes the lock, then the claim, and asks for a pass. No automatic removal. | posting-e2e: crash-left claim, refused with the notice, a second pass still refuses and keeps both files, a stale id is refused, the click clears, the next pass sends (mock). A live claimant, an unknown start time and a live lock holder are never stuck; a reused pid is. posting-pt3-actions: the route rejects extra fields and a stale id, clears with the right id and writes the run-now file, then answers `not-stuck`. |
+
+Runs (one file at a time, same rules, all exit 0): posting-auto-chain 15, posting-e2e 57, posting-pt3-actions 9,
+studio-qml-posting 12, studio-ui-posting 8, studio-ui-posting-auto 8, studio-ui-posting-queue 6,
+studio-ui-posting-youtube 11.
+
 ## UNVERIFIED
+
+- Fifth review: the other process's start time comes from one hidden PowerShell call (Windows only; elsewhere unknown,
+  so never cleared). Its agreement with Node's `performance.timeOrigin` within 5 s is assumed, not measured. The
+  QML button was checked only through the probe-driven test, not clicked in the running studio.
 
 - Fourth review: (1) a leftover claim file (a crash between the claim and the exclusive create, a few lines of code)
   blocks the dead-lock path for that exact lock; every pass then refuses with the notice until the file is removed by

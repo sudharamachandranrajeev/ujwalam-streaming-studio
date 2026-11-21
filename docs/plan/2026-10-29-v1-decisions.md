@@ -2474,3 +2474,14 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
     (`fallbackKbps` in `data/posting/schedule.json`) and the slowest chunk measured, plus `REQUEST_MS` (`chunkTimeoutMs`).
     A chunk that times out after Google has received more bytes resumes from Google's count with no try used. With no
     progress the item waits (`request-timeout`, no try used, session kept).
+- Fifth Codex review (2026-11-21). These replace the points above where they differ:
+  - The lock and the claim record their owner's pid and process start time. An owner is dead when its pid is gone,
+    or when the pid now belongs to a process with another start time (pid reused; 5 s slack). A live pid whose start
+    time cannot be read counts as not dead.
+  - A crash between the claim and the exclusive create leaves a claim behind. If the claimant and the lock's holder
+    are both dead, the pass still refuses, and the notice says a closed copy left its posting lock behind. Settings >
+    Posting & growth > Auto-post then shows "Clear stuck posting lock" (one click, no confirm, D332). The click checks
+    again that both files are the same ones with dead owners, removes the lock and then its claim, and asks for a pass.
+    Nothing is removed automatically. A live claimant or a live lock holder is never cleared.
+  - Known item: the studio has no single-instance guard. A second studio's chain refuses through the lock
+    (`sender-elsewhere`); it is not stopped from starting.

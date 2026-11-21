@@ -34,6 +34,7 @@ Column {
     property string message: ""
     property string movingId: ""          // the clip whose new time is being typed
     property string moveText: ""
+    property string stuckLockId: ""       // D409 fifth review: a posting lock left by a closed copy (empty = none)
     // "What gets posted" (user 2026-11-20): the rules in use when they are the user's own shape (edited in place, unknown
     // rules and keys kept by the server); otherwise the card's own controls below write the rules.
     property bool rulesOwn: false
@@ -193,6 +194,7 @@ Column {
 
     function renderTimes(b) {
         const err = b.error || "", live = b.liveError || "";
+        stuckLockId = (b.stuckLock && typeof b.stuckLock.id === "string") ? b.stuckLock.id : "";
         let info;
         if (err === "schedule-read-incomplete")
             info = "The last channel read did not reach back far enough to see every scheduled post, so no time is given (nothing uploads until it does).";
@@ -376,6 +378,17 @@ Column {
             message = ok ? "Auto-post runs now: new clips are checked and due uploads start within half a minute."
                 : (b && b.error === "stream-live") || err === "stream-live" ? "Not run: a stream is live or starting. Auto-post waits until it ends."
                 : "Not run: " + ((b && b.error) ? b.error : err);
+        });
+    }
+
+    // D409 (fifth Codex review): one click clears a posting lock left behind by a closed copy (D332: no confirm).
+    function clearLock() {
+        const g = gen;
+        Api.post("ui/api/posts/auto/clear-lock", { id: stuckLockId }, (ok, b, err) => {
+            if (g !== gen) return;
+            message = ok ? "Stuck posting lock cleared. Auto-post runs again within half a minute."
+                : "Not cleared: the lock changed or its owner is still running (" + ((b && b.error) ? b.error : err) + ").";
+            loadTimes(false);
         });
     }
 
@@ -870,6 +883,13 @@ Column {
             tip: "Checks for new clips and starts the uploads that are due, without waiting for the next check. Never while a stream is live or starting."
             onClicked: ap.runNow()
         }
+        UButton {
+            objectName: "autopostClearLock"
+            visible: ap.stuckLockId !== ""
+            text: "Clear stuck posting lock"
+            tip: "A copy of Ujwalam that has closed left its posting lock behind, so nothing uploads. This removes that lock (only if its owner is really gone)."
+            onClicked: ap.clearLock()
+        }
         Quiet { objectName: "autopostMsg"; text: ap.message }
     }
 
@@ -877,7 +897,7 @@ Column {
     function probe() {
         return { loaded: loaded, card: JSON.parse(JSON.stringify(card)), dirty: dirty, fit: fit, flags: flagsText, problem: problem,
             rulesOwn: rulesOwn, rulesProblem: rulesProblem, rules: JSON.parse(JSON.stringify(rulesEdit)), notices: notices.slice(), customNext: customNext.slice(),
-            timesInfo: timesInfo, times: times.map(t => t.text), message: message };
+            timesInfo: timesInfo, times: times.map(t => t.text), message: message, stuckLockId: stuckLockId };
     }
 
     // ap-upload:<on|off> | ap-kind:<id>:<on|off> | ap-score:<n> | ap-perday:<n> | ap-gap:<h> | ap-days:<n> | ap-placement:<id>
@@ -887,6 +907,7 @@ Column {
         const a = p[0], arg = p[1];
         const on = (v) => v === "on" || v === "1";
         if (a === "ap-upload") return set("autoUpload", on(arg));
+        if (a === "ap-clearlock") { if (stuckLockId === "") return false; clearLock(); return true }
         if (a === "ap-kind" && p.length === 3) return setKind(arg, on(p[2]));
         const n = parseInt(arg, 10);
         if (a === "ap-score" && !isNaN(n)) return setNum("minScore", n, 0, 100);
