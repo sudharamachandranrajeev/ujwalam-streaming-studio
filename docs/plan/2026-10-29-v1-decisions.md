@@ -2452,3 +2452,25 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
     item waits 5 min.
   - The whole lock hold is capped (`LOCK_MAX_HOLD_MS`, 60 min). At the cap the hold's requests are aborted, `held()`
     turns false, the lock file is released and the pass ends. The item in flight waits with `request-timeout`.
+- Fourth Codex review (2026-11-21). These replace the points above where they differ:
+  - One sender by design. The studio's posting chain (`createPostChain`, started once by
+    `services/studio-ui/launch.mjs`) is the only code that starts upload sessions or sends chunks. `uploadPost` has no
+    other caller. `cli.mjs youtube upload`, the Upload button and "Run auto-post now" only queue the clip and write the
+    run-now request file (already so since the second review; checked again).
+  - Inside that process an in-process mutex per lock file serialises passes. A second pass waits up to `waitMs`, then
+    waits with `schedule-busy` (no try used).
+  - The lock file stays only as a guard against a second sender process. A lock that is present and not provably ours
+    is never taken over: the pass refuses with `sender-elsewhere`, and the task area says in plain words that another
+    copy of Ujwalam holds the posting lock. The one exception is a lock whose process has ended, or this process's own
+    leftover. Only the process that will then hold it removes it, under an exclusive claim file for that exact lock,
+    followed by an exclusive create. Any failure on that path refuses. The tombstone rename, the heartbeat and
+    `LOCK_STALE_MS` are gone.
+  - The launcher has no single-instance guard (searched `launch.mjs` and the repo, 2026-11-21). A second studio on the
+    same data folder is therefore refused by the file lock, not prevented from starting.
+  - Every YouTube request, including the read of its answer's body, has one deadline (`timedFetch` with a `read`
+    step): the session start, the progress query, every chunk, the cover and the status check (`checkUploadStatus`,
+    which had none).
+  - The chunk deadline is no longer a fixed 10 min. It is the chunk's size at the slower of the floor speed
+    (`fallbackKbps` in `data/posting/schedule.json`) and the slowest chunk measured, plus `REQUEST_MS` (`chunkTimeoutMs`).
+    A chunk that times out after Google has received more bytes resumes from Google's count with no try used. With no
+    progress the item waits (`request-timeout`, no try used, session kept).

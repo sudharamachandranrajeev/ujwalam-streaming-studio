@@ -95,7 +95,30 @@ Test runs after the third review (one file at a time, `UJWALAM_HEADLESS=1`, Belo
 check exit 0): all 25 files listed above pass (exit 0), plus learning-signals. Counts: posting-auto-d375 51,
 posting-e2e 55.
 
+## Fourth Codex review (2026-11-21)
+
+| Item | Fix | Test |
+|---|---|---|
+| 1. Stale-lock takeover racy with 3 contenders | One sender by design: only the studio's chain sends (`uploadPost` has no other caller; the CLI and the Upload button only queue and write the run-now file). An in-process mutex serialises passes. The file lock only guards against a second sender process: a lock that is not provably ours is refused with `sender-elsewhere` and a plain-words notice, never taken over. A dead-pid lock is replaced only by the process that will hold it, under an exclusive claim for that exact lock and an exclusive create; any failure refuses. Tombstone, heartbeat and stale-age logic removed. | posting-e2e: a live other holder and unreadable content are refused and left untouched; a dead holder's lock is replaced; a taken claim refuses; a second in-process pass waits, then runs; no claim or tombstone files left. The chain with another live process's lock: `sender-elsewhere`, no try used, nothing sent, the lock left alone. Spawned processes: the second process refuses while the first holds; 3 contenders on a dead lock, 3 rounds, exactly one wins each round. |
+| 2. Untimed status request; body reads without deadline | `timedFetch` runs the fetch and a `read` step (body, headers) under one deadline. Used by the session start, progress query, every chunk, the cover and `checkUploadStatus`. | studio-ui-posting-youtube: `checkUploadStatus` with a hung request and with a hung `json()` both end with `request-timeout`. |
+| 3. Fixed 10-min chunk deadline | `chunkTimeoutMs(bytes, floorBps, slowestBps)` = bytes at the slower of `fallbackKbps` (data) and the slowest measured chunk, plus `REQUEST_MS`. A chunk timeout queries Google: measured progress resumes from Google's count with no try used; no progress waits (`request-timeout`, no try). | studio-ui-posting-youtube: `chunkTimeoutMs` grows with size and with a slower measured speed, never below the floor; a hung chunk after 100 bytes arrived resumes (`init, chunk, query, chunk`, no retry wait); with no progress it stops after one query. |
+
+Single instance: the launcher has no single-instance guard (searched `services/studio-ui/launch.mjs` and the repo). A
+second studio on the same data folder is refused by the file lock, not prevented from starting.
+
+Test runs after the fourth review (one file at a time, `UJWALAM_HEADLESS=1`, BelowNormal, a fresh temp
+`UJWALAM_DATA_ROOT` per file, live check exit 0 before each file): all 23 `posting*` and `studio-ui-posting*` files,
+studio-qml-posting (12), studio-qml-posts (4) and learning-signals (10) pass with exit 0. Counts: posting-e2e 56,
+posting-auto-d375 51, studio-ui-posting-youtube 11.
+
 ## UNVERIFIED
+
+- Fourth review: (1) a leftover claim file (a crash between the claim and the exclusive create, a few lines of code)
+  blocks the dead-lock path for that exact lock; every pass then refuses with the notice until the file is removed by
+  hand. (2) Windows pid reuse can make a dead holder's pid look alive: the pass refuses (safe side), notice shown.
+  (3) The floor speed (`fallbackKbps` 1000) and the `REQUEST_MS` margin are not measured on the real link.
+  (4) `oauth.mjs` token requests and `schedule-read.mjs` page reads were not changed here: the read is covered by its
+  30 s whole-read deadline; the token refresh was not reviewed for a deadline.
 
 - Third review: (1) A pass stopped at the hold cap keeps running in the background until its aborted request
   settles. It cannot send any more because `held()` is false and its requests are aborted, but it can still update its

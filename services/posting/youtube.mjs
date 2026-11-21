@@ -42,17 +42,25 @@ export class UploadError extends Error {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Third Codex review (D409): every YouTube request has a deadline. Session start and progress queries: REQUEST_MS;
- *  each chunk: CHUNK_REQUEST_MS (on top of the scheduled chunk deadline, which still aborts first when it is nearer). */
+/** Third Codex review (D409): every YouTube request has a deadline. Session start, progress queries, the cover and the
+ *  status check: REQUEST_MS. Fourth Codex review: the deadline covers reading the answer's body too (timedFetch's read).
+ *  Each chunk: chunkTimeoutMs (its size at the floor speed fallbackKbps from data/posting/schedule.json, plus
+ *  REQUEST_MS for the answer), on top of the scheduled chunk deadline, which still aborts first when it is nearer. */
 export const REQUEST_MS = 60 * 1000;
-export const CHUNK_REQUEST_MS = 10 * 60 * 1000;
+/** Per-chunk request deadline: bytes at the slower of the floor speed and the slowest chunk measured so far, plus
+ *  REQUEST_MS. A healthy slow chunk is never cut at a fixed time. */
+export function chunkTimeoutMs(bytes, floorBps, slowestBps = null) {
+  const bps = Math.max(1, Math.min(floorBps, slowestBps ?? floorBps));
+  return Math.ceil((bytes / bps) * 1000) + REQUEST_MS;
+}
 /**
- * fetch with a hard deadline. It settles at the deadline even when fetchImpl ignores the abort signal (a race).
+ * fetch AND the read of its answer (read(res), e.g. res.json()) under one hard deadline. It settles at the deadline
+ * even when fetchImpl or the body read ignores the abort signal (a race). -> read's result (default: the response).
  *   past ms             -> UploadError 'request-timeout' (the request is aborted)
  *   outer aborted       -> UploadError 'request-timeout' (the caller's pass was stopped, e.g. the lock hold's cap)
  *   guard aborted       -> an AbortError (the scheduled chunk deadline; the caller checks guard.aborted)
  */
-function timedFetch(fetchImpl, url, init, ms, { outer = null, guard = null } = {}) {
+function timedFetch(fetchImpl, url, init, ms, { outer = null, guard = null, read = (r) => r } = {}) {
   const ctl = new AbortController();
   return new Promise((resolve, reject) => {
     let done = false; let timer = null;
@@ -67,7 +75,7 @@ function timedFetch(fetchImpl, url, init, ms, { outer = null, guard = null } = {
     if (guard?.aborted) { onGuard(); return; }
     outer?.addEventListener('abort', onOuter, { once: true }); guard?.addEventListener('abort', onGuard, { once: true });
     timer = setTimeout(() => { ctl.abort(); finish(reject, new UploadError('request-timeout', `YouTube did not answer within ${Math.round(ms / 1000)} s`)); }, Math.min(ms, MAX_TIMER_MS));
-    Promise.resolve().then(() => fetchImpl(url, { ...init, signal: ctl.signal })).then((r) => finish(resolve, r), (e) => finish(reject, e));
+    Promise.resolve().then(() => fetchImpl(url, { ...init, signal: ctl.signal })).then((r) => read(r)).then((v) => finish(resolve, v), (e) => finish(reject, e));
   });
 }
 
@@ -103,14 +111,15 @@ async function initiateSession(fetchImpl, accessToken, metadata, bytes, net = {}
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': String(bytes) },
     body: JSON.stringify(metadata),
-  }, net.requestMs ?? REQUEST_MS, { outer: net.outer });
+  }, net.requestMs ?? REQUEST_MS, { outer: net.outer,
+    read: async (r) => ({ ok: r.ok, status: r.status, location: r.ok ? r.headers.get('location') : null, quota: !r.ok && r.status === 403 ? await quotaReason(r) : false }) });
   if (!res.ok) {
     // PT2 (D408): YouTube's quota answer (403 with reason quotaExceeded or uploadLimitExceeded) is its own code, so the
     // chain can fall back to the unit-sum quota model and wait for the next day instead of retrying.
-    if (res.status === 403 && await quotaReason(res)) throw new UploadError('quota-exceeded', 'YouTube says the upload quota for today is used up');
+    if (res.quota) throw new UploadError('quota-exceeded', 'YouTube says the upload quota for today is used up');
     throw new UploadError('upload-init-failed', `HTTP ${res.status} starting the resumable session`);
   }
-  const loc = res.headers.get('location');
+  const loc = res.location;
   if (!loc) throw new UploadError('upload-init-failed', 'no session URL in the response');
   return loc;
 }
@@ -131,13 +140,18 @@ function readRange(file, start, end) {
  *  Google answers a progress query on a completed session with the video resource (UNVERIFIED against real Google).
  *  404/410 = the session is gone (expired): code 'upload-session-gone'; any other failure is transient and keeps the session. */
 async function queryProgress(fetchImpl, sessionUrl, totalBytes, net = {}) {
-  const res = await timedFetch(fetchImpl, sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes */${totalBytes}` } }, net.requestMs ?? REQUEST_MS, { outer: net.outer });
+  const res = await timedFetch(fetchImpl, sessionUrl, { method: 'PUT', headers: { 'Content-Range': `bytes */${totalBytes}` } }, net.requestMs ?? REQUEST_MS, { outer: net.outer,
+    read: async (r) => {
+      const out = { ok: r.ok, status: r.status, range: r.status === 308 ? r.headers.get('range') : null, resource: null };
+      if (r.ok && r.status !== 308) { try { out.resource = await r.json(); } catch { /* no body */ } }
+      return out;
+    } });
   if (res.status === 308) {
-    const range = res.headers.get('range'); // "bytes=0-12345" = bytes 0..12345 received
+    const range = res.range; // "bytes=0-12345" = bytes 0..12345 received
     const m = range ? /bytes=0-(\d+)/.exec(range) : null;
     return m ? Number(m[1]) + 1 : 0;
   }
-  if (res.ok) { let resource = null; try { resource = await res.json(); } catch { /* no body */ } return { resource }; } // already complete
+  if (res.ok) return { resource: res.resource }; // already complete
   if (res.status === 404 || res.status === 410) throw new UploadError('upload-session-gone', `HTTP ${res.status}: the upload session no longer exists`);
   throw new UploadError('upload-resume-query-failed', `HTTP ${res.status} checking upload progress`);
 }
@@ -179,14 +193,26 @@ async function uploadChunks(fetchImpl, sessionUrl, filePath, totalBytes, chunkSi
     const started = performance.now();
     try {
       const body = await readRange(filePath, offset, end);
+      // Fourth Codex review (D409): the chunk's deadline grows with its size (floor speed from data), never a fixed time.
+      const chunkMs = net.chunkRequestMs ?? chunkTimeoutMs(end - offset, net.floorBps ?? FALLBACK_BPS, slowestBps);
       res = await timedFetch(fetchImpl, sessionUrl, {
         method: 'PUT',
         headers: { 'Content-Length': String(body.length), 'Content-Range': `bytes ${offset}-${end - 1}/${totalBytes}` },
         body,
-      }, net.chunkRequestMs ?? CHUNK_REQUEST_MS, { outer: net.outer, guard: stop?.signal ?? null });
+      }, chunkMs, { outer: net.outer, guard: stop?.signal ?? null,
+        read: async (r) => { const out = { ok: r.ok, status: r.status, resource: null }; if (r.ok && r.status !== 308) out.resource = await r.json(); return out; } });
     } catch (e) {
       if (stop?.signal.aborted) return afterDeadline(fetchImpl, sessionUrl, totalBytes, net);
-      // A chunk past its own request deadline, or a stopped pass: the item fails for this pass (the session is kept).
+      if (e?.code === 'request-timeout' && !net.outer?.aborted) {
+        // A chunk past its own deadline: ask Google how far it got. Measured progress = resume from there, no try used;
+        // none (or unknown) = the item waits for this pass (the session is kept, no attempt).
+        let p = null;
+        try { p = await queryProgress(fetchImpl, sessionUrl, totalBytes, net); } catch { /* unknown */ }
+        if (p && typeof p === 'object') return p.resource;
+        if (typeof p === 'number' && p > offset) { offset = p; continue; }
+        throw e;
+      }
+      // A stopped pass: the item fails for this pass (the session is kept).
       if (e?.code === 'request-timeout') throw e;
       attempt++;
       if (attempt > MAX_RETRIES) throw new UploadError('upload-failed', `network error after ${MAX_RETRIES} retries: ${e?.message ?? e}`);
@@ -203,7 +229,7 @@ async function uploadChunks(fetchImpl, sessionUrl, filePath, totalBytes, chunkSi
       slowestBps = slowestBps === null ? bps : Math.min(slowestBps, bps);
       offset = end; attempt = 0; continue;
     }
-    if (res.ok) return res.json(); // 200/201: upload complete
+    if (res.ok) return res.resource; // 200/201: upload complete (its body was read inside the deadline)
     if (res.status >= 500 || res.status === 0) {
       attempt++;
       if (attempt > MAX_RETRIES) throw new UploadError('upload-failed', `HTTP ${res.status} after ${MAX_RETRIES} retries`);
@@ -223,8 +249,7 @@ async function setThumbnail(fetchImpl, accessToken, videoId, coverPath, net = {}
   try {
     const bytes = statSync(coverPath).size;
     const body = await readRange(coverPath, 0, bytes);
-    const res = await timedFetch(fetchImpl, THUMBNAIL_URL(videoId), { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'image/jpeg', 'Content-Length': String(bytes) }, body }, net.requestMs ?? REQUEST_MS, { outer: net.outer });
-    return res.ok;
+    return await timedFetch(fetchImpl, THUMBNAIL_URL(videoId), { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'image/jpeg', 'Content-Length': String(bytes) }, body }, net.requestMs ?? REQUEST_MS, { outer: net.outer, read: (r) => r.ok });
   } catch { return false; }
 }
 
@@ -239,7 +264,8 @@ export async function uploadVideo(opts) {
   const now = opts.now ?? (() => new Date().toISOString());
   const chunkSize = opts.chunkSize ?? DEFAULT_CHUNK;
   // Third Codex review (D409): request deadlines, and the caller's stop signal (the schedule-lock hold's cap).
-  const net = { requestMs: opts.requestMs, chunkRequestMs: opts.chunkRequestMs, outer: opts.signal ?? null };
+  // Fourth Codex review: floorBps (fallbackKbps from data/posting/schedule.json) sizes each chunk's own deadline.
+  const net = { requestMs: opts.requestMs, chunkRequestMs: opts.chunkRequestMs, outer: opts.signal ?? null, floorBps: opts.fallbackBps ?? FALLBACK_BPS };
 
   // D409 (second Codex review, 2026-11-21): no code path sends a video without a publish time. Refused before anything
   // is read or sent, whoever the caller is.
@@ -345,12 +371,14 @@ export async function uploadPost(opts) {
 
 /** GET videos.list for one video. Returns { found, uploadStatus, processingStatus, privacyStatus, failureReason, rejectionReason }.
  *  UNVERIFIED: videos.list may need a broader scope than youtube.upload; a 401/403 is reported as 'status-not-permitted'. */
-export async function checkUploadStatus({ videoId, accessToken, fetchImpl }) {
+export async function checkUploadStatus({ videoId, accessToken, fetchImpl, requestMs = REQUEST_MS, signal = null }) {
   const f = fetchImpl ?? fetch;
-  const res = await f(VIDEOS_URL(videoId), { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } });
+  // Fourth Codex review (D409): the request and the read of its body share one deadline (timedFetch).
+  const res = await timedFetch(f, VIDEOS_URL(videoId), { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } }, requestMs, { outer: signal,
+    read: async (r) => ({ ok: r.ok, status: r.status, json: r.ok ? await r.json() : null }) });
   if (res.status === 401 || res.status === 403) throw new UploadError('status-not-permitted', `HTTP ${res.status}: the sign-in scope may not allow reading video status`);
   if (!res.ok) throw new UploadError('status-check-failed', `HTTP ${res.status} reading the video status`);
-  const j = await res.json();
+  const j = res.json;
   const item = Array.isArray(j?.items) ? j.items[0] : null;
   if (!item) return { found: false, uploadStatus: null, processingStatus: null, privacyStatus: null, failureReason: null, rejectionReason: null };
   const str = (v) => (typeof v === 'string' ? v : null);

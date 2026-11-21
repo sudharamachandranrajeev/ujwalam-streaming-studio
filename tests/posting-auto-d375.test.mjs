@@ -112,8 +112,8 @@ describe('channel read: whole uploads list (D375, D409)', () => {
     await assert.rejects(readChannelSchedule({ accessToken: 'x', fetchImpl, nowMs: T0, cfg, deadlineMs: 50 }), { code: 'schedule-read-incomplete' });
     assert.ok(Date.now() - t < 5000); assert.equal(aborted, true);
     const { READ_DEADLINE_MS } = await import('../services/posting/schedule-read.mjs');
-    const { LOCK_STALE_MS } = await import('../services/posting/auto-chain.mjs');
-    assert.ok(READ_DEADLINE_MS * 3 <= LOCK_STALE_MS, 'the read deadline is well under the lock stale time');
+    const { LOCK_MAX_HOLD_MS } = await import('../services/posting/auto-chain.mjs');
+    assert.ok(READ_DEADLINE_MS * 3 <= LOCK_MAX_HOLD_MS, 'the read deadline is well under the sender lock hold cap');
   });
 
   // ---- D409 third Codex review ----

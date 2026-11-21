@@ -202,6 +202,55 @@ describe('checkUploadStatus (fake fetch)', () => {
   });
 });
 
+describe('D409-4: request deadlines cover the body; chunk deadline by size; progress after a timeout uses no try', () => {
+  test('checkUploadStatus: a hung request and a hung body both end at the deadline', async () => {
+    const hangReq = () => new Promise(() => {});
+    await assert.rejects(checkUploadStatus({ videoId: 'A', accessToken: 't', fetchImpl: hangReq, requestMs: 80 }), { code: 'request-timeout' });
+    const hangBody = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: () => new Promise(() => {}) });
+    const t = Date.now();
+    await assert.rejects(checkUploadStatus({ videoId: 'A', accessToken: 't', fetchImpl: hangBody, requestMs: 80 }), { code: 'request-timeout' });
+    assert.ok(Date.now() - t < 3000);
+  });
+
+  test('chunkTimeoutMs grows with the chunk size at the floor speed (the slower of floor and measured), plus REQUEST_MS', async () => {
+    const { chunkTimeoutMs, REQUEST_MS } = await import('../services/posting/youtube.mjs');
+    const floor = (1000 * 1000) / 8; // fallbackKbps 1000
+    assert.equal(chunkTimeoutMs(8 * 1024 * 1024, floor), Math.ceil((8 * 1024 * 1024 / floor) * 1000) + REQUEST_MS);
+    assert.ok(chunkTimeoutMs(16 * 1024 * 1024, floor) > chunkTimeoutMs(8 * 1024 * 1024, floor));
+    assert.ok(chunkTimeoutMs(1024, floor, floor / 10) > chunkTimeoutMs(1024, floor), 'a slower measured speed gives more time');
+    assert.equal(chunkTimeoutMs(1024, floor, floor * 10), chunkTimeoutMs(1024, floor), 'a faster measured speed never shortens it below the floor');
+  });
+
+  test('a chunk past its deadline with measured progress resumes from Google\'s count (no try used); without progress it waits', async () => {
+    const { uploadVideo } = await import('../services/posting/youtube.mjs');
+    const d = mk(); const file = path.join(d, 'v.mp4'); writeFileSync(file, VIDEO);
+    const post = { status: 'approved', target: 'youtube-shorts', title: 'T', description: 'D', tags: [], hashtags: [], unresolved: [], source: { sha256: sha } };
+    const mkFake = (progressOnTimeout) => {
+      let received = 0; let hung = 0; const calls = [];
+      const fetchImpl = async (u, o) => {
+        if (String(u).includes('uploadType=resumable')) { calls.push('init'); return jsonRes(200, {}, { location: 'https://upload.example/session/1' }); }
+        const cr = String(o?.headers?.['Content-Range'] ?? '');
+        if (cr.startsWith('bytes */')) { calls.push('query'); return received ? jsonRes(308, null, { range: `bytes=0-${received - 1}` }) : jsonRes(308, null); }
+        calls.push('chunk');
+        const [, a] = /bytes (\d+)-/.exec(cr);
+        if (Number(a) === 0 && hung < 3) { hung++; if (progressOnTimeout) received = 100; return new Promise(() => {}); } // part arrived, then the answer hung
+        received = VIDEO.length;
+        return jsonRes(200, { id: 'VID1', status: { uploadStatus: 'uploaded' } });
+      };
+      return { fetchImpl, calls };
+    };
+    const base = { post, sha256: sha, videoPath: file, accessToken: 't', ledger: { get: () => null, put() {}, setStatus() {} }, limits: { targets: { 'youtube-shorts': { fields: {} } } },
+      outputsStatus: async () => ({ sinks: [] }), publishAt: '2099-01-01T00:00:00.000Z', chunkSize: VIDEO.length, chunkRequestMs: 80, requestMs: 1000 };
+    const ok = mkFake(true);
+    const r = await uploadVideo({ ...base, fetchImpl: ok.fetchImpl });
+    assert.equal(r.videoId, 'VID1');
+    assert.deepEqual(ok.calls, ['init', 'chunk', 'query', 'chunk'], 'resumed from byte 100 after the timeout, no retry wait');
+    const none = mkFake(false);
+    await assert.rejects(uploadVideo({ ...base, fetchImpl: none.fetchImpl }), { code: 'request-timeout' });
+    assert.deepEqual(none.calls, ['init', 'chunk', 'query'], 'no progress: stops for this pass (the item waits, no attempt)');
+  });
+});
+
 describe('UI source rules', () => {
   test('no innerHTML, no external script, upload button present, no typed confirmation (D332)', () => {
     const js = readFileSync(path.join(UI, 'js', 'app.js'), 'utf8') + readFileSync(path.join(UI, 'js', 'api.js'), 'utf8');

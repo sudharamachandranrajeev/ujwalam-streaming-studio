@@ -40,8 +40,9 @@ const DAY_MS = 24 * 3600 * 1000;
 export const RECENT_DAYS = 2;
 const msOf = (v) => { const t = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null; };
 
-/** D409 (second Codex review): one read must end within this time, well under the schedule lock's stale time
- *  (auto-chain.mjs LOCK_STALE_MS). Past it the read is incomplete (fail closed) and its requests are aborted. */
+/** D409 (second Codex review): one read, every page's request AND its body, must end within this time, well under the
+ *  sender lock's hold cap (auto-chain.mjs LOCK_MAX_HOLD_MS). Past it the read is incomplete (fail closed) and its
+ *  requests are aborted. */
 export const READ_DEADLINE_MS = 30 * 1000;
 const incomplete = (what) => new ScheduleError('schedule-read-incomplete', `the channel answer was incomplete (${what})`);
 

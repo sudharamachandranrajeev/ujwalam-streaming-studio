@@ -49,7 +49,7 @@
 // gate + quotaExceeded record) inside one schedule-lock hold per pass; every new session is preceded by a complete
 // channel read in that hold and the 60-min check. The studio's Upload button and `cli.mjs youtube upload` only queue.
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
@@ -102,18 +102,23 @@ function takeRunNow(dataDir) {
 }
 
 /**
- * Codex review 2026-11-21 (D409): ONE reservation for every new publish time. The chain holds this lock
- * (<dataDir>/posting/schedule.lock, created exclusively) for its whole upload pass: the channel reads, the 60-min check,
- * the upload charge and every upload session start happen in one hold, so no read is reused after the lock was let go.
- * Second Codex review: the holder refreshes the file every beatMs (a heartbeat). The lock is taken over only when its
- * holder is gone: its process has ended, or it has not refreshed the file for staleMs (an unreadable, half-written file
- * counts by its age). A live holder is never taken over, however long it holds. fn gets { held() }: false once the
- * file is no longer this hold's (taken over), so the holder stops before it sends. Waiting past waitMs throws
- * code 'schedule-busy' (the caller waits; nothing is sent).
+ * Fourth Codex review 2026-11-21 (D409): ONE sender. The studio's posting chain (createPostChain, started once by
+ * services/studio-ui/launch.mjs) is the only code that starts upload sessions or sends chunks: uploadPost has no other
+ * caller; `cli.mjs youtube upload`, the studio's Upload button and "Run auto-post now" only queue the clip and write the
+ * run-now request file. The whole pass (channel reads, the 60-min check, the upload charge, every session start and
+ * chunk) runs in one hold:
+ *   1. an in-process mutex per lock file: two passes in this process never overlap (a second waits up to waitMs, then
+ *      throws code 'schedule-busy'; nothing is sent);
+ *   2. the file <dataDir>/posting/schedule.lock, created exclusively, only as a guard against a SECOND sender process
+ *      (e.g. a second studio on the same data folder: no single-instance guard exists in the launcher, UNVERIFIED that
+ *      one is ever started). A lock that is present and not provably ours is never taken over: the pass refuses with
+ *      code 'sender-elsewhere' (plain-words notice; nothing sent). The one exception: a lock whose process is dead (or
+ *      a leftover of this very process, which holds the in-process mutex) may be removed by the process that will then
+ *      hold it, under an exclusive claim file for that exact lock, followed by an exclusive create. Any failure on
+ *      that path (claim taken, file changed, create lost) refuses. No rename, no takeover of a live holder.
+ * fn gets { held(), signal }: held() is false once the file is no longer this hold's, so the holder stops before it sends.
  */
 export const LOCK_NAME = 'schedule.lock';
-export const LOCK_BEAT_MS = 5 * 1000;
-export const LOCK_STALE_MS = 2 * 60 * 1000;
 const pidAlive = (pid) => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
 /** Third Codex review (D409): the whole hold is capped (a pass never blocks posting for longer); past it the hold is
  *  given up (held() false, hold.signal aborted, the file released) and withScheduleLock rejects with
@@ -121,53 +126,46 @@ const pidAlive = (pid) => { if (!Number.isInteger(pid) || pid <= 0) return false
 export const LOCK_MAX_HOLD_MS = 60 * 60 * 1000;
 const readRaw = (file) => { try { return readFileSync(file, 'utf8'); } catch { return null; } };
 const parseOr = (raw) => { try { return JSON.parse(raw); } catch { return null; } };
-/**
- * Third Codex review (D409): removes the lock file only if it is still exactly the one judged (same raw content).
- * The file is first renamed to a unique tombstone: only one rename of a given file can win, so two contenders never
- * both remove it. If the tombstone turns out not to be the judged file (another contender replaced it in between),
- * it is put back (never removed). -> true when the judged file was removed.
- */
-function removeIfSame(f, judgedRaw) {
-  const tomb = `${f}.${process.pid}-${randomUUID()}.tomb`;
-  try { renameSync(f, tomb); } catch { return false; } // gone already, or another contender renamed it first
-  const raw = readRaw(tomb);
-  if (raw !== null && raw === judgedRaw) { try { rmSync(tomb, { force: true }); } catch { /* a leftover tombstone is harmless */ } return true; }
-  // Not the judged file: put it back where it was. Exclusive (link + unlink): never over a file created meanwhile.
-  try { renameSync(tomb, `${tomb}.back`); writeFileSync(f, raw ?? '', { flag: 'wx' }); } catch { /* a new lock exists: its holder wins */ }
-  try { rmSync(`${tomb}.back`, { force: true }); } catch { /* harmless */ }
-  return false;
+const inProcess = new Map(); // lock file -> Promise settled when this process's current hold of it ends
+const refuse = (file) => Object.assign(new Error('another sender holds the posting lock; nothing was sent'), { code: 'sender-elsewhere', lockFile: file });
+
+/** Exclusive create of the lock file; on an existing file, the dead-holder path or a refusal. -> true | throws. */
+function createLock(f, body) {
+  try { writeFileSync(f, body, { flag: 'wx' }); return true; } catch (e) { if (e?.code !== 'EEXIST') throw refuse(f); }
+  const raw = readRaw(f);
+  const cur = raw === null ? null : parseOr(raw);
+  // Provably not held: its process has ended, or it is this process's own leftover (this process holds the mutex).
+  const dead = cur && typeof cur.token === 'string' && Number.isInteger(cur.pid) && (cur.pid === process.pid || !pidAlive(cur.pid));
+  if (!dead) throw refuse(f);
+  const claim = `${f}.${String(cur.token).replace(/[^A-Za-z0-9-]/g, '').slice(0, 80)}.claim`;
+  try { writeFileSync(claim, String(process.pid), { flag: 'wx' }); } catch { throw refuse(f); } // another process judges the same lock
+  try {
+    if (readRaw(f) !== raw) throw refuse(f); // changed since it was judged
+    rmSync(f);
+    try { writeFileSync(f, body, { flag: 'wx' }); } catch { throw refuse(f); } // a create in between won: refuse
+    return true;
+  } finally { try { rmSync(claim, { force: true }); } catch { /* a leftover claim names a lock that no longer exists */ } }
 }
-export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, staleMs = LOCK_STALE_MS, beatMs = LOCK_BEAT_MS, maxHoldMs = LOCK_MAX_HOLD_MS } = {}) {
-  const f = path.join(dataDir, 'posting', LOCK_NAME);
+
+export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, maxHoldMs = LOCK_MAX_HOLD_MS } = {}) {
+  const f = path.resolve(dataDir, 'posting', LOCK_NAME);
   mkdirSync(path.dirname(f), { recursive: true });
-  const token = `${process.pid}-${randomUUID()}`;
-  const start = Date.now();
-  for (;;) {
-    try { writeFileSync(f, JSON.stringify({ pid: process.pid, token, at: Date.now(), beat: Date.now() }), { flag: 'wx' }); break; } catch (e) {
-      if (e?.code !== 'EEXIST') throw Object.assign(new Error('schedule lock unusable'), { code: 'schedule-busy' });
-      let mtime = 0; try { mtime = statSync(f).mtimeMs; } catch { continue; } // gone meanwhile: try again
-      const raw = readRaw(f);
-      if (raw === null) continue;
-      const cur = parseOr(raw);
-      const beat = Number.isFinite(cur?.beat) ? Math.max(cur.beat, mtime) : mtime;
-      const gone = cur ? !pidAlive(cur.pid) || Date.now() - beat > staleMs : Date.now() - mtime > staleMs;
-      // Atomic takeover: only the contender whose rename wins, and only of the very file it judged, removes it.
-      if (gone) { removeIfSame(f, raw); continue; }
-      if (Date.now() - start >= waitMs) throw Object.assign(new Error('schedule busy'), { code: 'schedule-busy' });
-      await new Promise((r) => setTimeout(r, 50));
-    }
+  // 1. In-process mutex.
+  const waitStart = Date.now();
+  while (inProcess.has(f)) {
+    const left = waitMs - (Date.now() - waitStart);
+    if (left <= 0) throw Object.assign(new Error('schedule busy'), { code: 'schedule-busy' });
+    let t; await Promise.race([inProcess.get(f), new Promise((r) => { t = setTimeout(r, left); })]); clearTimeout(t);
   }
+  let endMutex; inProcess.set(f, new Promise((r) => { endMutex = r; }));
+  const token = `${process.pid}-${randomUUID()}`;
+  // 2. The file guard against a second sender process.
+  try { createLock(f, JSON.stringify({ pid: process.pid, token, at: Date.now() })); } catch (e) { inProcess.delete(f); endMutex(); throw e; }
   let lost = false;
   const stop = new AbortController();
   const mine = () => parseOr(readRaw(f))?.token === token;
-  const beatTimer = setInterval(() => {
-    if (lost) return;
-    if (!mine()) { lost = true; stop.abort(); return; }
-    // 'r+': refresh the existing file only, never re-create one that was removed (same length: the times are 13 digits).
-    try { writeFileSync(f, JSON.stringify({ pid: process.pid, token, at: start, beat: Date.now() }), { flag: 'r+' }); } catch { /* the next beat tries again */ }
-  }, beatMs);
-  beatTimer.unref?.();
-  const release = () => { const raw = readRaw(f); if (raw !== null && parseOr(raw)?.token === token) removeIfSame(f, raw); };
+  // Only this hold ever changes a file carrying its token (nobody takes over a live holder), so check-then-remove is safe.
+  const release = () => { if (mine()) { try { rmSync(f, { force: true }); } catch { /* the next pass sees it as this process's leftover */ } } };
   const hold = { held: () => !lost && mine(), signal: stop.signal };
   let capTimer = null;
   const cap = new Promise((_, reject) => {
@@ -178,9 +176,10 @@ export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, staleM
     capTimer.unref?.();
   });
   try { return await Promise.race([fn(hold), cap]); } finally {
-    clearTimeout(capTimer); clearInterval(beatTimer);
+    clearTimeout(capTimer);
     lost = true;
     release();
+    inProcess.delete(f); endMutex();
   }
 }
 
@@ -290,6 +289,7 @@ const REASON_TEXT = {
   'schedule-clash': 'Getting a new public time: a post was scheduled on the channel within an hour of the planned one',
   'schedule-busy': 'Waiting: another post is being scheduled or sent right now; tried again in a few minutes',
   'request-timeout': 'Waiting: YouTube did not answer in time; tried again in a few minutes',
+  'sender-elsewhere': 'Not sending: another copy of Ujwalam is uploading, or left its posting lock behind. Close the other copy; tried again in a few minutes',
 };
 
 /** Plain words for a queue reason code (or a failure code). */
@@ -532,6 +532,13 @@ export function createPostChain(opts) {
         // requests are aborted and nothing more is sent in it; the item in flight waits (no attempt used) for the next pass.
         for (const i of due) { const c = queue.get(i.id); if (c?.state === 'uploading') queue.patch(i.id, { state: 'queued', reason: 'request-timeout', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() }); }
         log(`posting: ${REASON_TEXT['request-timeout']}`);
+        return;
+      }
+      if (e?.code === 'sender-elsewhere') {
+        // Fourth Codex review (D409): a lock that is not provably ours: refuse, never take it over. Plain-words notice.
+        for (const i of due) queue.patch(i.id, { reason: 'sender-elsewhere', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() });
+        notice('sender-elsewhere', e.lockFile ?? null);
+        log(`posting: ${REASON_TEXT['sender-elsewhere']}`);
         return;
       }
       if (e?.code !== 'schedule-busy') throw e;
@@ -795,7 +802,8 @@ export function createPostChain(opts) {
     if (code !== noticeNow) { noticeNow = code; noticeSince = t; }
     writeTaskFile(dataDir, { id: NOTICE_TASK, kind: 'upload', title: NOTICE_TEXT[code], state: 'waiting', startedAt: noticeSince, updatedAt: t,
       note: code === 'no-rules' || code === 'bad-rules' ? `Settings > Posting & growth > Auto-post${detail ? `: ${detail}` : ''}`
-        : code === 'unfilled-placeholders' ? `Posts view, or your profile${detail ? `: ${detail}` : ''}` : 'Settings > Posting & growth > Auto-post' });
+        : code === 'unfilled-placeholders' ? `Posts view, or your profile${detail ? `: ${detail}` : ''}`
+        : code === 'sender-elsewhere' ? `Close the other Ujwalam. If none is open, restart the studio${detail ? `; lock file: ${detail}` : ''}` : 'Settings > Posting & growth > Auto-post' });
   }
 
   /** Approvals by the rules, enqueue of auto-approved posts, then the due uploads. Safe to call often. */

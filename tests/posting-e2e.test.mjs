@@ -924,34 +924,60 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     assert.deepEqual(await sendGated({ dataDir: d, budget: { reserveUpload: () => null }, send: async () => 'ok' }), { result: 'ok' });
   });
 
-  test('D409: the schedule lock is taken over only when its holder is gone (process ended or heartbeat stopped)', async () => {
+  test('D409-4: the sender lock: a live other holder is refused (never taken over); only a dead holder\'s lock is replaced', async () => {
     const { LOCK_NAME, withScheduleLock } = await import('../services/posting/auto-chain.mjs');
     const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
     const f = path.join(d, 'posting', LOCK_NAME);
-    // A live holder (this process) that took the lock 20 minutes ago and still beats: never taken over.
-    writeFileSync(f, JSON.stringify({ pid: process.pid, token: 'other', at: Date.now() - 20 * 60e3, beat: Date.now() }));
-    await assert.rejects(withScheduleLock(d, async () => 'x', { waitMs: 150 }), { code: 'schedule-busy' });
-    // Its process ended: taken over at once.
-    writeFileSync(f, JSON.stringify({ pid: 2 ** 30, token: 'other', at: Date.now(), beat: Date.now() }));
-    assert.equal(await withScheduleLock(d, async () => 'won', { waitMs: 150 }), 'won');
-    // A live pid whose heartbeat stopped (file not refreshed for staleMs): taken over.
-    writeFileSync(f, JSON.stringify({ pid: process.pid, token: 'other', at: Date.now(), beat: Date.now() }));
-    await new Promise((r) => setTimeout(r, 250));
-    assert.equal(await withScheduleLock(d, async () => 'won', { waitMs: 150, staleMs: 100 }), 'won');
-    // A holder that keeps beating holds past staleMs; a contender waits.
+    // A live other process (the parent of this test process) holds it: refused at once, however old; file untouched.
+    const other = JSON.stringify({ pid: process.ppid, token: 'other', at: Date.now() - 20 * 60e3 });
+    writeFileSync(f, other);
+    await assert.rejects(withScheduleLock(d, async () => 'x', { waitMs: 150 }), { code: 'sender-elsewhere' });
+    assert.equal(readFileSync(f, 'utf8'), other, 'a live holder\'s lock is never touched');
+    // Unreadable content (not provably ours): refused, untouched.
+    writeFileSync(f, '{half');
+    await assert.rejects(withScheduleLock(d, async () => 'x'), { code: 'sender-elsewhere' });
+    assert.equal(readFileSync(f, 'utf8'), '{half');
+    // Its process ended: replaced by the process that then holds it.
+    writeFileSync(f, JSON.stringify({ pid: 2 ** 30, token: 'dead', at: Date.now() }));
+    assert.equal(await withScheduleLock(d, async () => 'won'), 'won');
+    assert.ok(!existsSync(f), 'released after the pass');
+    // A dead holder's lock whose claim another process already took: refused (no second remover).
+    writeFileSync(f, JSON.stringify({ pid: 2 ** 30, token: 'dead2', at: Date.now() }));
+    writeFileSync(`${f}.dead2.claim`, '1');
+    await assert.rejects(withScheduleLock(d, async () => 'x'), { code: 'sender-elsewhere' });
+    assert.ok(existsSync(f));
+    rmSync(`${f}.dead2.claim`); rmSync(f);
+    // In this process: a second pass waits for the first (in-process mutex), then times out without sending.
     let release; const held = new Promise((r) => { release = r; });
-    const holder = withScheduleLock(d, () => held, { beatMs: 20 });
-    await new Promise((r) => setTimeout(r, 300));
-    await assert.rejects(withScheduleLock(d, async () => 'x', { waitMs: 150, staleMs: 100 }), { code: 'schedule-busy' });
+    const holder = withScheduleLock(d, () => held);
+    await new Promise((r) => setTimeout(r, 20));
+    await assert.rejects(withScheduleLock(d, async () => 'x', { waitMs: 100 }), { code: 'schedule-busy' });
+    const queued = withScheduleLock(d, async () => 'next', { waitMs: 5000 });
     release(); await holder;
-    // held() turns false once the file is no longer this hold's.
+    assert.equal(await queued, 'next', 'the waiting pass runs once the first ends');
+    // held() turns false once the file is no longer this hold's; the other file is left alone.
     const lost = await withScheduleLock(d, async (hold) => {
       const before = hold.held();
-      writeFileSync(f, JSON.stringify({ pid: process.pid, token: 'thief', at: Date.now(), beat: Date.now() }));
+      writeFileSync(f, JSON.stringify({ pid: process.ppid, token: 'thief', at: Date.now() }));
       return [before, hold.held()];
-    }, { beatMs: 10000 });
+    });
     assert.deepEqual(lost, [true, false]);
     assert.ok(existsSync(f), 'the other holder\'s file is left alone');
+    // No leftover claim or tombstone files.
+    assert.deepEqual(readdirSync(path.join(d, 'posting')).filter((n) => /\.(claim|tomb|back)$/.test(n)), []);
+  });
+
+  test('D409-4: a lock held by another live process: the chain refuses with a plain-words notice (no attempt, nothing sent)', async () => {
+    const { LOCK_NAME } = await import('../services/posting/auto-chain.mjs');
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    const f = path.join(e.dataDir, 'posting', LOCK_NAME);
+    mkdirSync(path.dirname(f), { recursive: true });
+    writeFileSync(f, JSON.stringify({ pid: process.ppid, token: 'other-studio', at: Date.now() }));
+    await schedChain(e, g).afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0, 'nothing was sent');
+    const it = e.queue().items()[0];
+    assert.equal(it.state, 'queued'); assert.equal(it.reason, 'sender-elsewhere'); assert.equal(it.attempts, 0);
+    assert.equal(JSON.parse(readFileSync(f, 'utf8')).token, 'other-studio', 'the other sender\'s lock is left alone');
   });
 
   test('D409: the schedule lock held elsewhere: the chain waits (no attempt, nothing sent)', async () => {
@@ -1064,7 +1090,7 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     assert.equal(it.state, 'done'); assert.equal(g.videos.length, 1, 'the next tick posts');
   });
 
-  test('D409-3: two processes contend for a stale lock: exactly one wins (atomic takeover)', async () => {
+  test('D409-4: two sender processes: the second refuses; three contenders on a dead lock: exactly one sends', async () => {
     const { spawn } = await import('node:child_process');
     const { pathToFileURL } = await import('node:url');
     const { LOCK_NAME } = await import('../services/posting/auto-chain.mjs');
@@ -1076,20 +1102,29 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
       'const [dataDir, goAt] = process.argv.slice(2);',
       'while (Date.now() < Number(goAt)) { /* start together */ }',
       'try { await withScheduleLock(dataDir, () => new Promise((r) => setTimeout(r, 1500)), { waitMs: 200 }); console.log("won"); }',
-      'catch (e) { console.log(e?.code === "schedule-busy" ? "busy" : `error ${e?.code}`); }',
+      'catch (e) { console.log(e?.code === "sender-elsewhere" ? "refused" : `error ${e?.code}`); }',
     ].join('\n'));
     const run = (d, goAt) => new Promise((resolve) => {
       const p = spawn(process.execPath, [script, d, String(goAt)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = ''; p.stdout.on('data', (b) => { out += b; }); p.stderr.on('data', (b) => { out += b; });
       p.on('close', () => resolve(out.trim()));
     });
+    // Two processes: the first holds; the second, started while the first holds, refuses (no wait, no takeover).
+    {
+      const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
+      const first = run(d, Date.now());
+      const f = path.join(d, 'posting', LOCK_NAME);
+      for (let t = Date.now(); !existsSync(f) && Date.now() - t < 10000;) await new Promise((r) => setTimeout(r, 20));
+      assert.equal(await run(d, Date.now()), 'refused');
+      assert.equal(await first, 'won');
+    }
     for (let round = 0; round < 3; round++) {
       const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
-      // A stale lock: its process is gone.
-      writeFileSync(path.join(d, 'posting', LOCK_NAME), JSON.stringify({ pid: 2 ** 30, token: 'dead', at: Date.now(), beat: Date.now() }));
+      // A lock whose process is gone; three contenders start together.
+      writeFileSync(path.join(d, 'posting', LOCK_NAME), JSON.stringify({ pid: 2 ** 30, token: 'dead', at: Date.now() }));
       const goAt = Date.now() + 1500;
-      const outs = await Promise.all([run(d, goAt), run(d, goAt)]);
-      assert.deepEqual(outs.slice().sort(), ['busy', 'won'], `round ${round}: ${JSON.stringify(outs)}`);
+      const outs = await Promise.all([run(d, goAt), run(d, goAt), run(d, goAt)]);
+      assert.deepEqual(outs.slice().sort(), ['refused', 'refused', 'won'], `round ${round}: ${JSON.stringify(outs)}`);
     }
   });
 
