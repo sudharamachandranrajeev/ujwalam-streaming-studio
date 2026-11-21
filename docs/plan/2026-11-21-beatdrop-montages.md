@@ -222,6 +222,10 @@ Medium, Very High 167; scenes not identical, so indicative). "Ultra frame rate" 
 motion comes from the replay's 0.5x, not from retiming 1x footage. A full match (5.5 min, Max, HUD and replay
 controls on) is recorded for the moment finder (encounter types). The replay can also show the enemy's point of view
 (user, 2026-11-21): BD6 can offer the victim's view of a kill as a reverse angle.
+The replay has no seek bar: every new point of view means playing from the start. BD6 therefore plans passes, not
+shots: it lists every shot it wants per point of view (own FPP, own TPP, each enemy), the user plays the replay once
+per point of view while the card records continuously, and Ujwalam cuts the shots out afterwards by aligning each pass
+to the match (timer, sound). The guide asks for the fewest passes that cover the chosen kills.
 
 6.5 **Option order.** Proposed order: BD1-BD3 (moments, song map, beat-locked edit) and BD4 first, then BD5, BD7,
 LV1, RR1, and BD6 when 6.4 is answered.
