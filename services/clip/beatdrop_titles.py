@@ -443,7 +443,7 @@ def text_width(font_file):
 def credit_layout(lines, pc, lk, frame):
     """Codex BD5 review: every credit character stays inside the frame. -> (rows [(text, source line index)], size):
     lines wrapped to 92 % of the frame width measured with the credit font's own advance widths, and the size lowered
-    only when the rows would pass the bottom of the frame."""
+    only when the rows would pass the bottom of the frame or a row cannot be cut narrow enough (a letter with its marks)."""
     ow, oh = int(frame["width"]), int(frame["height"])
     size = float(pc["sizeOfHeight"]) * oh
     gap, y = float(pc["lineGap"]), float(pc["y"]) * oh
@@ -453,7 +453,8 @@ def credit_layout(lines, pc, lk, frame):
         room = CREDIT_WIDTH_OF_FRAME * ow - 2 * bord
         rows = [(r, i) for i, line in enumerate(lines) for r in _wrap(line, lambda s: width(s, size) <= room)]
         bottom = y + (len(rows) - 1) * gap * size + 0.6 * size
-        if bottom <= CREDIT_BOTTOM_OF_FRAME * oh or size <= 4.0:
+        wide = any(width(r, size) > room for r, _ in rows)
+        if (bottom <= CREDIT_BOTTOM_OF_FRAME * oh and not wide) or size <= 4.0:
             return rows, size
         size *= 0.9
 

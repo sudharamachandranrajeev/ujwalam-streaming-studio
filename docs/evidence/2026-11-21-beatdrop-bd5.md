@@ -64,3 +64,5 @@ before it).
 
 Codex verify round 3: a long unspaced word could be cut between a base letter and its combining mark; the cut now
 moves so a mark stays with its letter (test added). 18 tests OK after the fix.
+Codex verify round 4: a letter followed by many spacing marks could still be wider than the room; credit_layout now
+also lowers the size while any row is too wide (down to 4 px). 18 tests OK.
