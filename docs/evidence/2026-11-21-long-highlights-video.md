@@ -25,7 +25,8 @@ ON by default (user-requested).
 | tests/posting-auto.test.mjs | 14 pass, 0 fail |
 | tests/posting-rules-in-data.test.mjs | 8 pass, 0 fail |
 | tests/posting-backlog-order.test.mjs | 5 pass, 0 fail |
-| tests/studio-qml-shell.test.mjs, tests/studio-qml-posting.test.mjs | 0 tests ran (studio build not present in this worktree): NOT VERIFIED |
+| tests/studio-qml-shell.test.mjs | 5 pass, 0 fail (after the commit hook built the studio) |
+| tests/studio-qml-posting.test.mjs | 12 pass, 0 fail (default card kinds now include long-highlights) |
 
 What the tests cover:
 
@@ -46,4 +47,4 @@ What the tests cover:
 - A real NVENC render from a real recording (length, sync, transitions, the H frame).
 - The concat-copy join of AAC parts on real files (small gaps at joins possible).
 - YouTube's 15-minute limit for unverified accounts (videos up to 20 minutes would fail there).
-- The QML views (kind toggle text, cleanup reason text): no studio build here.
+- The cleanup reason text in SettingsClips.qml (not covered by a probe test).
