@@ -49,11 +49,12 @@ ID = re.compile(r"^[0-9a-f]{16}$")
 MARKUP = "<>{}"
 INVISIBLE = "͏ᅟᅠㅤﾠ"
 HIDDEN_CATS = ("Cf", "Co", "Cs")
+BREAK_CATS = ("Cc", "Zl", "Zp")  # controls and the line/paragraph separators U+2028/U+2029: a new description line
 
 
 def unsafe_text(s):
-    """True when s holds a character a credit may not carry (see MARKUP / INVISIBLE / HIDDEN_CATS)."""
-    return any(ch in MARKUP or ch in INVISIBLE or unicodedata.category(ch) in ("Cc",) + HIDDEN_CATS for ch in s)
+    """True when s holds a character a credit may not carry (see MARKUP / INVISIBLE / HIDDEN_CATS / BREAK_CATS)."""
+    return any(ch in MARKUP or ch in INVISIBLE or unicodedata.category(ch) in BREAK_CATS + HIDDEN_CATS for ch in s)
 NCS_PART = "[^|｜]"
 NAME = re.compile(r"^(?P<artist>.+?)\s+-\s+(?P<title>.+?)\s*(?:\[(?P<tag>[^\]]*)\])?\s*$")
 
@@ -146,7 +147,7 @@ def _identity_cache(data_dir, cfg):
 def _clean(v, n):
     if not isinstance(v, str):
         return ""
-    v = "".join(" " if ch in MARKUP or unicodedata.category(ch) == "Cc" else
+    v = "".join(" " if ch in MARKUP or unicodedata.category(ch) in BREAK_CATS else
                 "" if ch in INVISIBLE or unicodedata.category(ch) in HIDDEN_CATS else ch for ch in v)
     v = re.sub(r"\s+", " ", v).strip()
     return v[:n]

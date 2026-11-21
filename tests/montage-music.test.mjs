@@ -92,7 +92,8 @@ describe('ncs-filename credit (D417)', () => {
   });
   test('a link that is not the song\'s YouTube link, or injected text, is refused', () => {
     for (const bad of [{ link: 'https://evil.example/x' }, { link: 'https://youtu.be/short' }, { link: '' }, { artist: 'A\nBuy now' }, { title: '<b>x' },
-      { artist: 'Ae​ro' }, { artist: 'Ae­ro' }, { title: 'S\u0085x' }, { artist: 'Ae\u{E0001}ro' }, { title: 'Sx' }, { title: 'Sㅤx' }]) {
+      { artist: 'Ae​ro' }, { artist: 'Ae­ro' }, { title: 'S\u0085x' }, { artist: 'Ae\u{E0001}ro' }, { title: 'Sx' }, { title: 'Sㅤx' },
+      { artist: 'A Buy now' }, { title: 'S x' }]) {
       const mm = musicOf({ kind: 'montage', music: { ...rec, credit: { ...NCS_CREDIT, ...bad } } });
       assert.equal(musicCredit(mm).use, 'refuse', JSON.stringify(bad));
     }

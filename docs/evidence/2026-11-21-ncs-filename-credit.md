@@ -18,6 +18,8 @@ Status: tests pass; Codex review fixed (one P2, three P3), Codex second verify c
   category rule in both languages (`unsafe_text` / `CREDIT_BAD`): `< > { }`, Cc, Cf, Co, Cs, plus CGJ and the Hangul
   fillers. `credit_problems` uses it too, so a credit Python calls complete is never refused by posting for a character.
 - Second verify: no findings.
+- Commit security review (automated, medium): U+2028/U+2029 (categories Zl, Zp) could start a new description line.
+  Fixed: both rules refuse Zl and Zp; the cleaner turns them into a space. Tests added in both languages.
 
 ## Test results (2026-11-21)
 - `python -I -m unittest discover -s tests/py -t tests/py -p test_montage_music.py` (.venv-gpu): Ran 18 tests, OK.

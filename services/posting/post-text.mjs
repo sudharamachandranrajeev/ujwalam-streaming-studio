@@ -87,7 +87,7 @@ let mmCfg = null;
 const montageCfg = () => (mmCfg ??= readJson(MONTAGE_MUSIC_FILE));
 // < > { }, controls, format characters (bidi, zero-width, soft hyphen, BOM, tag characters ...), private use, lone
 // surrogates and the invisible marks outside those categories; the same rule as montage_music.py unsafe_text
-const CREDIT_BAD = /[<>{}\p{Cc}\p{Cf}\p{Co}\p{Cs}͏ᅟᅠㅤﾠ]/u;
+const CREDIT_BAD = /[<>{}\p{Cc}\p{Zl}\p{Zp}\p{Cf}\p{Co}\p{Cs}͏ᅟᅠㅤﾠ]/u;
 /** The plain-word reason a credit is not usable, or null. */
 export function creditProblem(c, cfg = montageCfg(), origin = null) {
   if (!cfg) return 'the montage music settings are missing';

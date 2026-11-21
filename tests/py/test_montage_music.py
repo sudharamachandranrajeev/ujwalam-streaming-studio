@@ -234,6 +234,8 @@ class NcsFilenameTests(unittest.TestCase):
             "tag character": ok.replace("Aero", "Ae\U000e0001ro"),
             "private use": ok.replace("Aero", "Aero"),
             "hangul filler": ok.replace("Aero", "Aeㅤro"),
+            "line separator": ok.replace("Aero", "Ae ro"),
+            "paragraph separator": ok.replace("Aero", "Ae ro"),
         }
         for why, name in rej.items():
             self.assertIsNone(mm.parse_ncs_name(name, self.cfg), why)
@@ -257,7 +259,7 @@ class NcsFilenameTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_invisible_characters_make_a_credit_incomplete(self):
-        for ch in ("​", "­", "\u0085", "﻿"):
+        for ch in ("​", "­", "\u0085", "﻿", " ", " "):
             self.assertFalse(mm.complete({"artist": f"A{ch}B", "title": "T"}, self.cfg), repr(ch))
 
     def test_disabled_by_data(self):
