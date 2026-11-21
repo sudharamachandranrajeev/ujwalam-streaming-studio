@@ -2354,3 +2354,24 @@ Codex review (2026-11-21), all five fixed on the same branch:
 - Parts live in a per-attempt folder removed in finally; folders left by a kill are removed at the next start.
 
 - Re-review: the plan keeps 2 s under maxSec and a probed file over maxSec is failed and removed; abandoned attempt folders are cleared at the start of every long step; long.json names its recording and, with the flag on, the current one supersedes a stale longNotMade.
+
+## D407 — Facial mocap addendum accepted as the live-avatar part of the face AI plan (decided, 2026-11-21)
+
+- User's answers (2026-11-21): merge into `2026-11-08-face-ai-design.md` and queue after the clip work; the avatar is
+  made from the user's photo (8 Nov plan §5), not VRM or Live2D; Ujwalam tracks the face natively (no VMC bridge to an
+  external app); the offline body-mocap track (RGB MoCap installed by the user, export watcher + clip template) is
+  included; the F-M0 tracker spike may use a short private webcam recording, gitignored, never committed.
+- Changed from the addendum as received: switching on is one click (D332, no typed "yes"); user-requested, so the flags
+  ship on once each phase passes; personal names replaced by "the user".
+- Needs the user's yes before use: `tf2onnx` (install) for the 52-value expression model.
+- Plan: `docs/plan/2026-11-21-ujwalam-facial-mocap-addendum.md`.
+
+## D408 — Clip music, name display and transitions; posting text, limits and growth timing (planned, 2026-11-21)
+
+- Clip look (user 2026-11-20): plan `docs/plan/2026-11-21-clip-music-name-transitions.md` (FX1-FX6). The RP4 centre
+  title card over blur is retired (the user did not pick it).
+- Posting (user 2026-11-21): plan `docs/plan/2026-11-21-posting-text-schedule-growth.md` (PT1-PT5). The one hard
+  schedule rule is 60 minutes from every scheduled video (channel and queue), re-checked before each upload; every other
+  limit is the user's setting, posts a day up to 24 (the most a 1 h gap allows); growth-led timing changes apply only
+  after the user's click.
+- Order: posting PT first (the user's live complaint), then clip look FX.
