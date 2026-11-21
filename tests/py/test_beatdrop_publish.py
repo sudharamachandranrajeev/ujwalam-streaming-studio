@@ -93,14 +93,47 @@ class Publish(unittest.TestCase):
         self.assertEqual(ups[0]["video"]["size"], len(b"second take!"))
         with open(first[0]["file"] + pub.MUSIC_SIDECAR, encoding="utf-8") as fh:
             self.assertEqual(json.load(fh)["music"]["source"], "user-folder")
-        # posted: the next retake is a new video beside it
-        doc = {"version": 1, "files": [dict(ups[0], posted=[{"platform": "youtube", "videoId": "V1"}])]}
-        with open(os.path.join(data, pub.UPLOADS), "w", encoding="utf-8") as fh:
-            json.dump(doc, fh)
+        # being uploaded right now (a queue item of these bytes with state uploading): the retake is a new video
+        import hashlib  # noqa: PLC0415
+        sha = hashlib.sha256(b"second take!").hexdigest()[:16]
+        os.makedirs(os.path.join(data, "posting"))
+        with open(os.path.join(data, pub.UPLOAD_QUEUE), "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "items": {f"{sha}.youtube-shorts": {"id": f"{sha}.youtube-shorts", "state": "uploading"}}}, fh)
         third = render("beatdrop-c.mp4", {"source": "made-here", "seed": 2}, b"third")
         self.assertEqual(len(third), 1)
         self.assertNotEqual(third[0]["file"], first[0]["file"])
+        with open(first[0]["file"], "rb") as fh:
+            self.assertEqual(fh.read(), b"second take!")  # the bytes in flight were not touched
         self.assertEqual(len(uploads()), 2)
+        # posted: the next retake of that file is a new video too
+        doc = {"version": 1, "files": [dict(u, posted=[{"platform": "youtube", "videoId": "V1"}]) for u in uploads()]}
+        with open(os.path.join(data, pub.UPLOADS), "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        os.remove(os.path.join(data, pub.UPLOAD_QUEUE))
+        fourth = render("beatdrop-d.mp4", {"source": "made-here", "seed": 3}, b"fourth")
+        self.assertEqual(len(fourth), 1)
+        self.assertEqual(len(uploads()), 3)
+        # no uploads list at all: unknown, so a new file (never an overwrite)
+        os.remove(os.path.join(data, pub.UPLOADS))
+        self.assertEqual(len(render("beatdrop-e.mp4", {"source": "made-here", "seed": 4}, b"fifth")), 1)
+
+    def test_a_row_from_before_bd7c_without_source_is_the_same_render(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        work = os.path.join(tmp.name, "beatdrop")
+        os.makedirs(os.path.join(work, "clips", "B1"))
+        doc = rdoc({"source": "made-here", "seed": 1}, files=("beatdrop-h",))
+        name = doc["clips"][0]["files"][0]["file"]
+        with open(os.path.join(work, "clips", "B1", name), "wb") as fh:
+            fh.write(b"v")
+        pubd = os.path.join(tmp.name, "old.mp4")
+        with open(pubd, "wb") as fh:
+            fh.write(b"v")
+        for fn, obj in (("render.json", doc), ("report.json", {"results": [{"id": "B1", "file": name, "ok": True}]}),
+                        (pub.PUBLISHED, {"files": [{"id": "B1", "layout": "beatdrop-h", "file": pubd}]})):
+            with open(os.path.join(work, fn), "w", encoding="utf-8") as fh:
+                json.dump(obj, fh)
+        self.assertEqual(pub.publish(work, os.path.join(tmp.name, "clips"), os.path.join(tmp.name, "d"), "codm", {}), [])
 
     def test_user_folder_song_is_marked_for_the_gate(self):
         _, ups = self._run({"source": "folder", "track": "my-song.mp3"})

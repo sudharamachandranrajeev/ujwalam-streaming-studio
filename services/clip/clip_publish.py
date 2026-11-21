@@ -193,10 +193,12 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         if old is not None:
             # BD7c: a BeatDrop retake is a new render (new file name) under the same id and layout. Not yet posted: it
             # replaces the published copy in place (as recaption does). Already posted: it is published as a new video.
-            if tool != "clipper.beatdrop" or old.get("source") == f["file"]:
+            # Codex BD7c verify: a row without a source (written before BD7c) is the same render; replaced only when its
+            # uploads row is found, not posted and not being uploaded right now; anything unknown gets a new file.
+            if tool != "clipper.beatdrop" or old.get("source") in (None, f["file"]):
                 continue
             up = upload_row(data_dir, old["file"])
-            if up is None or not up.get("posted"):
+            if up is not None and not up.get("posted") and not _uploading(data_dir, old["file"]):
                 _replace_published(old, src, c, label, rdoc, data_dir)
                 continue
         day = os.path.join(to, names.day_folder(when))
@@ -244,6 +246,28 @@ def upload_row(data_dir, file):
     except ClipError:
         return None
     return next((x for x in doc.get("files") or [] if isinstance(x, dict) and x.get("file") == file), None)
+
+
+UPLOAD_QUEUE = os.path.join("posting", "upload-queue.json")  # services/posting/auto-chain.mjs QUEUE_NAME
+
+
+def _uploading(data_dir, file):
+    """True when posting's upload queue has a package of this file's bytes in flight (state uploading, or a resumable
+    session kept for a resume), or when that cannot be told (unreadable queue or file): never replace those bytes."""
+    p = os.path.join(data_dir, UPLOAD_QUEUE)
+    if not os.path.isfile(p):
+        return False
+    try:
+        items = (load_json(p).get("items") or {}).values()
+        h = hashlib.sha256()
+        with open(file, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+    except (ClipError, OSError, AttributeError):
+        return True
+    pre = h.hexdigest()[:16] + "."  # index.mjs postId: <sha256 first 16>.<target>
+    return any(isinstance(it, dict) and str(it.get("id", "")).startswith(pre)
+               and (it.get("state") == "uploading" or it.get("session")) for it in items)
 
 
 def _replace_published(old, src, c, label, rdoc, data_dir):
