@@ -61,3 +61,6 @@ before it).
 - Real footage: the pin on real replays (C/D), the look of titles, hero and credits to the user, the CODM colours.
 - Pillow and libass widths agree on the real screen (both FreeType; kerning may differ by a few px; the 8 % margin covers it).
 - NVENC render with titles (tests render with libopenh264 on the CPU).
+
+Codex verify round 3: a long unspaced word could be cut between a base letter and its combining mark; the cut now
+moves so a mark stays with its letter (test added). 18 tests OK after the fix.

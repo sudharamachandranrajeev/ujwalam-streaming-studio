@@ -28,6 +28,7 @@ import math
 import os
 import re
 import shutil
+import unicodedata
 
 import beatdrop_fx as bfx
 from clip_common import ClipError, load_json
@@ -416,6 +417,10 @@ def _wrap(line, fits):
                 rows.append(cur)
                 cur = ""
             k = max(1, max((j for j in range(1, len(w) + 1) if fits(w[:j])), default=1))
+            while 1 < k < len(w) and unicodedata.category(w[k]) in ("Mn", "Mc", "Me"):
+                k -= 1  # Codex BD5 verify: a combining mark stays with its base character
+            if 0 < k < len(w) and unicodedata.category(w[k]) in ("Mn", "Mc", "Me"):
+                k = next((j for j in range(k + 1, len(w) + 1) if j == len(w) or unicodedata.category(w[j]) not in ("Mn", "Mc", "Me")))
             rows.append(w[:k])
             w = w[k:]
         if cur and not fits(f"{cur} {w}"):

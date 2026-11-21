@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -168,6 +169,10 @@ class SlotTests(unittest.TestCase):
         bottom = float(prm["y"]) * 1920 + (len(rows) - 1) * float(prm["lineGap"]) * size + 0.6 * size
         self.assertLessEqual(bottom, 0.96 * 1920)
         print(f"BD5 credits on 9:16: {len(lines)} lines -> {len(rows)} rows at {size:.1f} px")
+        # a long unspaced word with combining marks is never cut between a base letter and its mark
+        word = "é" * 200
+        for r, _ in self.bt.credit_layout([word], prm, lk, frame)[0]:
+            self.assertNotEqual(unicodedata.category(r[0]), "Mn", "a row starts with a lone combining mark")
         # a short credit is not wrapped and keeps the preset size
         rows2, size2 = self.bt.credit_layout(["Song: A - B"], prm, lk, frame)
         self.assertEqual((rows2, size2), ([("Song: A - B", 0)], float(prm["sizeOfHeight"]) * 1920))
