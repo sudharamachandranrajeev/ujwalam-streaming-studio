@@ -210,6 +210,12 @@ frame) yes; slow motion yes, 0.5x selectable. Free camera and other players not 
 replay is recorded from the capture card with the HUD hidden; alignment to the original match uses sound and the match
 timer shown before the HUD is hidden; 0.5x playback is recorded as native slow motion (retimed to 1x where the beat
 plan needs real time).
+The replay screen also has a free camera (FREE CAM SPEED) and an IMMERSIVE MODE switch, which hides the HUD, the names
+and the device ID. Training replays recorded 2026-11-21 from the capture card (ffmpeg dshow, 1080p60 NVENC CQ19 + card
+HDMI audio; local only, outside the repo, never committed; they show other players' names and a device ID):
+A FPP with HUD and replay controls (47 s), B FPP with HUD (48 s), B2 FPP clean (51 s), C TPP clean (43 s), D TPP clean at
+0.5x (90 s). All have game audio (card HDMI, independent of the user's headphone monitoring). They are the first
+BD5 pin-tracking and BD6 alignment fixtures from real footage.
 
 6.5 **Option order.** Proposed order: BD1-BD3 (moments, song map, beat-locked edit) and BD4 first, then BD5, BD7,
 LV1, RR1, and BD6 when 6.4 is answered.
