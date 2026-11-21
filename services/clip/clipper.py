@@ -936,7 +936,8 @@ def _long_video(a):
         eprint(f"long video: FAILED: {type(e).__name__}: {str(e)[-200:]}")
         status = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[-200:]}"}
     rec = getattr(a, "recording", None)
-    status = dict(status, createdAt=_now(), flag=lv.FLAG, recording=os.path.basename(rec) if rec else None)
+    status = dict(status, createdAt=_now(), flag=lv.FLAG, recording=os.path.basename(rec) if rec else None,
+                  **lv.recording_identity(rec))
     try:
         write_json_atomic(os.path.join(out, lv.STATUS), status)
     except (OSError, ClipError) as e:

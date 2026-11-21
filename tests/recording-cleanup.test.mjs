@@ -15,6 +15,8 @@ import {
 import { loadDefinitions, DEFAULT_FLAGS_FILE } from '../services/flags/index.mjs';
 
 const tmp = [];
+// D406: long.json as the clipper writes it (long_video.recording_identity: resolved path; size, ino, mtimeNs).
+const longDoc = (status, file) => { const id = fileIdentity(file); return { status, recordingPath: path.resolve(file), recordingId: id ? { size: id.size, ino: id.ino, mtimeNs: id.mtimeNs } : null }; };
 const mk = () => { const d = safeRoot(mkdtempSync(path.join(os.tmpdir(), 'ujw-reccl-'))); tmp.push(d); return d; };
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 
@@ -92,17 +94,17 @@ describe('recording cleanup (D403)', () => {
     assert.deepEqual(r.kept.map((k) => k.reason), ['long-video-not-made']); assert.equal(r.deleted.length, 0);
     const dir = path.join(x.dataDir, 'clips', 'runs', '2026-11-18 20-00-00 H', 'long'); mkdirSync(dir, { recursive: true });
     for (const status of ['off', 'failed']) {
-      writeFileSync(path.join(dir, 'long.json'), JSON.stringify({ status, recording: path.basename(x.h) }));
+      writeFileSync(path.join(dir, 'long.json'), JSON.stringify(longDoc(status, x.h)));
       r = await x.run({ longOn: true }); assert.deepEqual(r.kept.map((k) => k.reason), ['long-video-not-made'], status);
     }
     assert.equal(cleanupPlan({ dataDir: x.dataDir, longOn: true })[0].reason, 'long-video-not-made', 'the Settings list says so too');
-    writeFileSync(path.join(dir, 'long.json'), JSON.stringify({ status: 'skipped', recording: path.basename(x.h) }));
+    writeFileSync(path.join(dir, 'long.json'), JSON.stringify(longDoc('skipped', x.h)));
     r = await x.run({ longOn: true }); assert.equal(r.deleted.length, 2, 'too short counts as done');
     // made, on another session; and with the flag off the old record still counts (D403)
     const y = fixture(); y.job({ longNotMade: null });
     assert.deepEqual((await y.run({ longOn: true })).kept.map((k) => k.reason), ['long-video-not-made'], 'null is no proof either');
     const yd = path.join(y.dataDir, 'clips', 'runs', '2026-11-18 20-00-00 H', 'long'); mkdirSync(yd, { recursive: true });
-    writeFileSync(path.join(yd, 'long.json'), JSON.stringify({ status: 'made', recording: path.basename(y.h) }));
+    writeFileSync(path.join(yd, 'long.json'), JSON.stringify(longDoc('made', y.h)));
     assert.equal((await y.run({ longOn: true })).deleted.length, 2);
     const z = fixture(); z.job();
     assert.equal((await z.run({ longOn: false })).deleted.length, 2);
@@ -111,9 +113,16 @@ describe('recording cleanup (D403)', () => {
   test('Codex D406 re-review: a later long video (made, for this recording) supersedes a stale longNotMade of the clip job; one of another recording does not', async () => {
     const x = fixture(); x.job({ longNotMade: 'the long video step did not finish; see the log' });
     const dir = path.join(x.dataDir, 'clips', 'runs', '2026-11-18 20-00-00 H', 'long'); mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, 'long.json'), JSON.stringify({ status: 'made', recording: 'another H.mkv' }));
-    let r = await x.run({ longOn: true }); assert.deepEqual(r.kept.map((k) => k.reason), ['long-video-not-made'], 'bound to the recording');
-    writeFileSync(path.join(dir, 'long.json'), JSON.stringify({ status: 'made', recording: path.basename(x.h) }));
+    // Codex D406 P1: the same file name in another folder, the same path with another file, or a missing field: kept
+    const other = mk(); const twin = path.join(other, path.basename(x.h)); writeFileSync(twin, Buffer.alloc(4096, 1));
+    const forFile = longDoc('made', x.h);
+    for (const doc of [longDoc('made', twin), { ...forFile, recordingPath: twin }, { ...forFile, recordingId: { ...forFile.recordingId, ino: '1' } },
+      { ...forFile, recordingId: { ...forFile.recordingId, mtimeNs: '1' } }, { status: 'made', recordingPath: x.h }, { status: 'made', recording: path.basename(x.h) }]) {
+      writeFileSync(path.join(dir, 'long.json'), JSON.stringify(doc));
+      const r0 = await x.run({ longOn: true }); assert.deepEqual(r0.kept.map((k) => k.reason), ['long-video-not-made'], JSON.stringify(doc));
+    }
+    let r;
+    writeFileSync(path.join(dir, 'long.json'), JSON.stringify(longDoc('made', x.h)));
     r = await x.run({ longOn: true }); assert.equal(r.deleted.length, 2, 'the current long.json wins over the stale record');
   });
 
@@ -313,7 +322,7 @@ describe('recordings with no clip job: their clips decide (user 2026-11-20: "Del
     assert.equal(plan.verdicts.find((v) => v.file === w.f.h).reason, 'long-video-not-made (no long video yet)');
     let r = await runRecordingCleanup(opts);
     assert.equal(r.deleted.length, 0);
-    const long = (stem, status) => { const d = path.join(w.dataDir, 'clips', 'runs', stem, 'long'); mkdirSync(d, { recursive: true }); writeFileSync(path.join(d, 'long.json'), JSON.stringify({ status, recording: `${stem}.mkv` })); };
+    const long = (stem, status) => { const d = path.join(w.dataDir, 'clips', 'runs', stem, 'long'); mkdirSync(d, { recursive: true }); writeFileSync(path.join(d, 'long.json'), JSON.stringify(longDoc(status, path.join(w.folder, `${stem}.mkv`)))); };
     long('alpha-20261101-200000', 'failed'); long('practice-h-1', 'skipped');
     assert.equal(planBackfill({ ...opts }).verdicts.find((v) => v.file === w.f.h).reason, 'long-video-not-made (the long video failed)');
     r = await runRecordingCleanup(opts);

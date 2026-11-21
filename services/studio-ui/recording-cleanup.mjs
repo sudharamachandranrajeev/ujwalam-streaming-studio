@@ -333,7 +333,14 @@ export function longVideoDone(dataDir, session, file) {
   const j = readJson(path.join(clipsDir(dataDir), 'runs', session, 'long', 'long.json'));
   if (!j) return { done: false, why: 'no long video yet' };
   // Codex D406: bound to the recording it was made from (clipper writes its file name); another file's is no proof.
-  if (typeof file !== 'string' || j.recording !== path.basename(file)) return { done: false, why: 'the long video is for another recording' };
+  // Codex D406: the file's resolved path and identity (size, ino, mtimeNs; dev differs between Python and Node on
+  // Windows, the path pins the volume) as written by the clipper must match the file now; a missing field or any
+  // mismatch is no proof.
+  const samePath = typeof file === 'string' && typeof j.recordingPath === 'string' && key(j.recordingPath) === key(file);
+  const now = fileIdentity(file); const was = j.recordingId;
+  const LONG_ID = ['size', 'ino', 'mtimeNs'];
+  const sameFile = !!now && isPlain(was) && Object.keys(was).sort().join() === 'ino,mtimeNs,size' && LONG_ID.every((k) => typeof was[k] === 'string' && /^\d{1,40}$/.test(was[k]) && was[k] === now[k]) && was.ino !== '0';
+  if (!samePath || !sameFile) return { done: false, why: 'the long video is for another recording' };
   if (j.status === 'made' || j.status === 'skipped') return { done: true, why: j.status };
   if (j.status === 'off') return { done: false, why: 'made while the long video was switched off' };
   return { done: false, why: 'the long video failed' };

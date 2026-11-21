@@ -256,7 +256,11 @@ class Step(unittest.TestCase):
             import clipper  # noqa: PLC0415
             a = argparse.Namespace(out=os.path.join(d, "run"), data_dir=d, recording=rec, detect_ran=True)
             os.makedirs(a.out, exist_ok=True)
-            self.assertEqual(clipper._long_video(a)["recording"], "h.mkv")
+            st = clipper._long_video(a)
+            self.assertEqual(st["recording"], "h.mkv")
+            self.assertEqual(st["recordingPath"], os.path.abspath(rec))  # Codex D406: bound to the file, not its name
+            self.assertEqual(sorted(st["recordingId"]), ["ino", "mtimeNs", "size"])
+            self.assertEqual(st["recordingId"]["size"], "0")
 
     def test_no_recording(self):
         with tempfile.TemporaryDirectory() as d:

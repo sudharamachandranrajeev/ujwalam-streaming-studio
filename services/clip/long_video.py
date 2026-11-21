@@ -127,6 +127,19 @@ def fit(segs, max_sec, tr, batch_pieces=None):
 CAP_MARGIN_SEC = 2.0
 
 
+def recording_identity(rec):
+    """Codex D406: binds long.json to the recording file (the studio's fileIdentity without dev, which Python and Node
+    report differently on Windows (measured 2026-11-21): size, ino, mtimeNs as strings, plus the resolved path); the recording cleanup takes it as proof only when all of it matches the file now."""
+    try:
+        st = os.stat(rec) if rec else None
+    except OSError:
+        st = None
+    if st is None:
+        return {"recordingPath": None, "recordingId": None}
+    return {"recordingPath": os.path.abspath(rec),
+            "recordingId": {"size": str(st.st_size), "ino": str(st.st_ino), "mtimeNs": str(st.st_mtime_ns)}}
+
+
 def over_cap(actual, cfg):
     return float(actual) > float(cfg["maxSec"])
 
