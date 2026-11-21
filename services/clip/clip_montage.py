@@ -415,8 +415,45 @@ def crossfade_sec(pieces, transition):
     return round(min(float(transition["ms"]) / 1000.0, shortest / 2.0), 3)
 
 
+def _ramp_video(p):
+    """RS2 speed-ramp (D412): the piece's picture times remapped (slow from at for sec at factor, then catch-up fast
+    until the piece is back on its own clock: the piece keeps its length)."""
+    r = p.get("ramp")
+    if not r:
+        return ""
+    a, b, c, f, g = r["at"], r["at"] + r["sec"], r["catchUpEnd"], r["factor"], r["catchUp"]
+    return (f",setpts='if(lt(T,{a:.4f}),T,if(lt(T,{b:.4f}),{a:.4f}+(T-{a:.4f})/{f:.4f},"
+            f"if(lt(T,{c:.4f}),{a:.4f}+({b - a:.4f})/{f:.4f}+(T-{b:.4f})/{g:.4f},T)))/TB'")
+
+
+def _ramp_audio(p, i, k, tail):
+    """The piece's sound through the same ramp: kept in sync (atempo on each part) or muted over the ramp. -> filter
+    lines writing [a{i}_{k}] (tail = the fades after it)."""
+    r = p["ramp"]
+    a, b, c = r["at"], r["at"] + r["sec"], r["catchUpEnd"]
+    src = f"[{i}:a:{k}]aresample=48000,asetpts=PTS-STARTPTS"
+    if r.get("audio") == "mute":  # same length in and out: silent from at to the catch-up end
+        return [f"{src},volume=0:enable='between(t,{a:.4f},{c:.4f})',{tail}[a{i}_{k}]"]
+    n = f"r{i}_{k}"
+    return [f"{src},asplit=4[{n}a][{n}b][{n}c][{n}d]",
+            f"[{n}a]atrim=0:{a:.4f},asetpts=PTS-STARTPTS[{n}0]",
+            f"[{n}b]atrim={a:.4f}:{b:.4f},asetpts=PTS-STARTPTS,atempo={r['factor']:.4f}[{n}1]",
+            f"[{n}c]atrim={b:.4f}:{c:.4f},asetpts=PTS-STARTPTS,atempo={r['catchUp']:.4f}[{n}2]",
+            f"[{n}d]atrim={c:.4f},asetpts=PTS-STARTPTS[{n}3]",
+            f"[{n}0][{n}1][{n}2][{n}3]concat=n=4:v=0:a=1,{tail}[a{i}_{k}]"]
+
+
+def zoom_expr(z):
+    """RS2 zoom-pulse (D412): the zoompan zoom expression for pulses at z["times"] (reel seconds): up over inSec on a
+    quarter sine, back over outSec on a quarter cosine, peak z["scale"]."""
+    s, ti, to = float(z["scale"]), float(z["inSec"]), float(z["outSec"])
+    terms = [f"between(it,{t - ti:.3f},{t:.3f})*sin(PI/2*(it-{t - ti:.3f})/{ti:.3f})"
+             f"+gt(it,{t:.3f})*lte(it,{t + to:.3f})*cos(PI/2*(it-{t:.3f})/{to:.3f})" for t in z["times"]]
+    return f"1+{s - 1:.4f}*min(1,{'+'.join(terms)})" if terms else "1"
+
+
 def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, out_name, threads=4, audio_tracks=1, max_sec=None,
-                captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None):
+                captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None):
     """One ffmpeg run: each piece is its own input (-ss/-t, exact because it is re-encoded), scaled into the frame,
     audio faded in and out by fade_ms (no pop at a hard cut), then concatenated. Every audio track of the source
     (audio_tracks) is kept as its own track, in source order (track 1 = the studio mix); none is dropped or remixed.
@@ -431,7 +468,11 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     music (RP3/FX4): {"file"?, "duck"?, "sfx"?}; the bed WAV "file" (as long as the reel, level and fades applied) is
     mixed under audio track 1 (the studio mix) with a sidechain duck keyed by that track; the FX3 join sound effects
     WAV "sfx" is mixed into track 1 as it is; the other tracks are untouched. All in this one run: audio is encoded
-    once. transition (FX3) may carry "joins": one xfade kind per join (reel_transition.plan_set)."""
+    once. transition (FX3) may carry "joins": one xfade kind per join (reel_transition.plan_set).
+    RS2/RS4 (D412): a piece may carry "ramp" {at, sec, factor, catchUp, catchUpEnd, audio: sync|mute} (speed-ramp: the
+    piece keeps its length, so every timeline above stays right); zoom {times, scale, inSec, outSec} (zoom-pulse, a
+    zoompan over the joined picture); lut: a bare .cube name in the working folder applied once (lut3d) to the joined
+    picture. Neither touches the sound's encode: still one audio encode."""
     ow, oh = int(frame["width"]), int(frame["height"])
     fd = fade_ms / 1000.0
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(threads), "-filter_threads", "2"]
@@ -442,20 +483,33 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     for i, p in enumerate(pieces):
         d = p["end"] - p["start"]
         parts.append(f"[{i}:v]scale={ow}:{oh}:force_original_aspect_ratio=decrease:flags=lanczos,"
-                     f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=60,format=yuv420p,setpts=PTS-STARTPTS[v{i}]")
+                     f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS{_ramp_video(p)},fps=60,"
+                     f"format=yuv420p,setpts=PTS-STARTPTS[v{i}]")
         # hard cut: every piece fades in and out (no pop); crossfade: only the reel's own start and end (the joins
         # are the acrossfade)
         af = ["aresample=48000", "asetpts=PTS-STARTPTS"]
+        fades = []
         if not xd or i == 0:
-            af.append(f"afade=t=in:d={fd:.3f}")
+            fades.append(f"afade=t=in:d={fd:.3f}")
         if not xd or i == len(pieces) - 1:
-            af.append(f"afade=t=out:st={max(0.0, d - fd):.3f}:d={fd:.3f}")
+            fades.append(f"afade=t=out:st={max(0.0, d - fd):.3f}:d={fd:.3f}")
         for k in range(audio_tracks):
-            parts.append(f"[{i}:a:{k}]{','.join(af)}[a{i}_{k}]")
+            if p.get("ramp"):
+                parts += _ramp_audio(p, i, k, ",".join(fades or ["anull"]))
+            else:
+                parts.append(f"[{i}:a:{k}]{','.join(af + fades)}[a{i}_{k}]")
     vlast = "[vcat]" if captions or thumbnail else "[vout]"
     vfinal = vlast
     if title:
         vlast = "[vjoin]"
+    post = []  # RS4: zoom pulses and the style's colour, once, on the joined picture
+    if zoom and zoom.get("times"):
+        post.append(f"zoompan=z='{zoom_expr(zoom)}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={ow}x{oh}:fps=60")
+    if lut:
+        post.append(f"lut3d=file={lut}:interp=tetrahedral")
+    vgraded = vlast
+    if post:
+        vlast = "[vgr]"
     alast = "ab" if thumbnail else "aout"  # RP6: the sound is delayed by the thumbnail frame
     music = music if audio_tracks else None
 
@@ -477,6 +531,8 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         ins = "".join(f"[v{i}]" + "".join(f"[a{i}_{k}]" for k in range(audio_tracks)) for i in range(len(pieces)))
         outs = vlast + "".join(aj(k) for k in range(audio_tracks))
         parts.append(ins + f"concat=n={len(pieces)}:v=1:a={audio_tracks}{outs}")
+    if post:
+        parts.append(f"[vgr]{','.join(post)}{vgraded}")
     if title:  # FX2 (D411): the name display, an ASS file burned by libass over the joined picture (never blurred)
         parts.append(f"[vjoin]subtitles={title['ass']}:fontsdir={title['fontsdir']}{vfinal}")
     if captions:

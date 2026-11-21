@@ -1,0 +1,31 @@
+{
+  "id": "zoom-pulse",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Zoom pulse (RS2)",
+  "description": "A short punch-in on the reel picture at its moments (kills) or on the music's beats: the picture scales up to `scale` over inMs on a quarter sine and back over outMs on a quarter cosine (a zoompan over the joined reel, once in the filter graph; the sound is untouched). Pulses are at least 0.5 s apart (at most 2 per second) and never inside a join. Used by reel styles (D412) when the examples show zoom pulses; the size can be tuned in Settings > Clips > Reel styles. Not a flash: the brightness does not change. Flag reel-styles.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scale": { "type": "number", "minimum": 1.0, "maximum": 1.25 },
+        "inMs": { "type": "integer", "minimum": 80, "maximum": 550 },
+        "outMs": { "type": "integer", "minimum": 100, "maximum": 350 },
+        "on": { "enum": ["kills", "beats"] }
+      }
+    },
+    "defaults": { "scale": 1.08, "inMs": 150, "outMs": 200, "on": "kills" },
+    "safeRanges": { "scale": [1.0, 1.25], "inMs": [80, 550], "outMs": [100, 350] }
+  },
+  "canvases": ["V", "H"],
+  "themeTokens": [],
+  "durationMs": 550,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "4.10"
+}

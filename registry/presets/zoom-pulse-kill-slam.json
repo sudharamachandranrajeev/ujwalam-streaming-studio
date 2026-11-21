@@ -1,0 +1,32 @@
+{
+  "id": "zoom-pulse-kill-slam",
+  "version": "1.0.0",
+  "function": "zoom-pulse",
+  "functionVersion": "^1.0.0",
+  "name": "Kill slam (bigger zoom on each kill)",
+  "params": {
+    "scale": 1.15,
+    "inMs": 150,
+    "outMs": 220,
+    "on": "kills"
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "slam",
+    "intensity": "high",
+    "mood": "aggressive",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "zoom-pulse-beat-punch",
+    "speed-ramp-kill-slowmo"
+  ]
+}

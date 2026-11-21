@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "id": "fast-cuts",
+  "name": "Fast cuts",
+  "examples": [
+    {
+      "path": "D:/style-examples/style-example-1.mp4",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seconds": 24.0
+    },
+    {
+      "path": "D:/style-examples/style-example-2.mp4",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "seconds": 31.5
+    }
+  ],
+  "measured": {
+    "cuts": {
+      "ratePerMin": 40.0,
+      "shotSec": 1.2,
+      "shotP25": 1.0,
+      "shotP75": 1.5,
+      "beatShare": 0.7
+    },
+    "transitions": {
+      "mix": {
+        "hard": 0.2,
+        "fade": 0.4,
+        "flash": 0.4,
+        "whip": 0.0
+      },
+      "count": 10
+    },
+    "zooms": {
+      "ratePerMin": 12.0,
+      "scale": 1.15,
+      "sec": 0.35,
+      "inSec": 0.15,
+      "outSec": 0.2,
+      "shakePct": 0.3
+    },
+    "ramps": {
+      "ratePerMin": 4.0,
+      "factor": 0.5,
+      "fromCutSec": 0.8
+    },
+    "text": {
+      "perMin": 6.0,
+      "sec": 1.5,
+      "sizePct": 6.0,
+      "cornerShare": 0.0,
+      "afterCutSec": 0.4,
+      "band": "bottom"
+    },
+    "colour": {
+      "L": 50.0,
+      "a": 3.0,
+      "b": 12.0,
+      "contrast": 15.0,
+      "chroma": 20.0
+    },
+    "music": {
+      "bpm": 128.0,
+      "energyLevel": 0.8,
+      "mood": "edm"
+    },
+    "spread": {
+      "cuts": {
+        "shotSec": [
+          1.0,
+          1.4
+        ]
+      }
+    },
+    "omitted": []
+  },
+  "tune": {},
+  "analysedAt": "2026-11-21T12:00:00",
+  "cuts": {
+    "shotSec": 1.2,
+    "ratePerMin": 40.0,
+    "beatCuts": true,
+    "beatShare": 0.7
+  },
+  "ramps": {
+    "preset": "speed-ramp-kill-slowmo",
+    "factor": 0.5,
+    "sec": 0.6,
+    "ratePerMin": 4.0,
+    "unverified": true
+  },
+  "zooms": {
+    "preset": "zoom-pulse-kill-slam",
+    "scale": 1.15,
+    "inMs": 150,
+    "outMs": 200,
+    "ratePerMin": 12.0,
+    "on": "beats",
+    "shakePct": 0.3
+  },
+  "transitions": {
+    "mix": {
+      "hard": 0.2,
+      "fade": 0.4,
+      "flash": 0.4,
+      "whip": 0.0
+    },
+    "mode": "set",
+    "set": "cinematic",
+    "weights": {
+      "fade": 0.4,
+      "flash": 0.4,
+      "whip": 0.0
+    }
+  },
+  "text": {
+    "nameStyle": "lower-third",
+    "position": "lower-third",
+    "captionBand": "bottom",
+    "sizePct": 6.0,
+    "sec": 1.5
+  },
+  "colour": {
+    "lut": "style.cube",
+    "strength": 0.7,
+    "L": 50.0,
+    "a": 3.0,
+    "b": 12.0,
+    "contrast": 15.0,
+    "tone": "warm"
+  },
+  "music": {
+    "energyLevel": 0.8,
+    "mood": "edm",
+    "bpm": 128.0
+  },
+  "summary": "cuts every 1.2 s, 70 % on the beat, joins like cinematic, warm colour, zoom pulse on beats, slow motion to 50 % around moments, name as lower third, edm music"
+}

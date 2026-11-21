@@ -209,6 +209,7 @@ class BoundTests(unittest.TestCase):
             self.assertLess(out["peakMb"], 800.0)
             self.assertAlmostEqual(out["result"]["seconds"], 60.0, delta=0.1)
             self.assertEqual(out["result"]["cuts"]["count"], 29)
+            self.assertEqual(len(out["result"]["zooms"]["pulses"]), 10)  # every third shot has one
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

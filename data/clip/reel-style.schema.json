@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ujwalam.local/schema/reel-style.schema.json",
+  "title": "Reel style record v1 (RS2, D412): <data>/clips/styles/<id>/style.json. Numbers only: no frames, no OCR text; examples are stored by path and sha256, never copied.",
+  "type": "object",
+  "required": ["version", "id", "name", "examples", "measured", "cuts", "ramps", "zooms", "transitions", "text", "colour", "music", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "analysedAt": { "type": "string" },
+    "summary": { "type": "string", "maxLength": 400 },
+    "examples": {
+      "type": "array", "minItems": 1, "maxItems": 8,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["path", "sha256", "seconds"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1, "maxLength": 400 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 90 }
+        }
+      }
+    },
+    "perExample": { "type": "array", "items": { "type": "object", "additionalProperties": { "type": ["number", "null"] } } },
+    "measured": { "type": "object", "required": ["spread", "omitted"],
+      "properties": {
+        "omitted": { "type": "array", "items": { "type": "object", "required": ["part", "reason"], "additionalProperties": false,
+          "properties": { "part": { "type": "string" }, "reason": { "type": "string", "minLength": 1 } } } }
+      } },
+    "tune": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "shotSec": { "type": ["number", "null"], "minimum": 0.4, "maximum": 4.0 },
+        "lutStrength": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "zoomScale": { "type": ["number", "null"], "minimum": 1.0, "maximum": 1.25 },
+        "rampFactor": { "type": ["number", "null"], "minimum": 0.5, "maximum": 1.0 },
+        "musicEnergy": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "cuts": { "oneOf": [ { "type": "null" }, { "type": "object", "required": ["shotSec", "beatCuts"],
+      "properties": { "shotSec": { "type": "number", "minimum": 0.4, "maximum": 4.0 }, "beatCuts": { "type": "boolean" },
+                      "beatShare": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }, "ratePerMin": { "type": ["number", "null"] } } } ] },
+    "transitions": { "oneOf": [ { "type": "null" }, { "type": "object", "required": ["mode", "weights", "mix"],
+      "properties": { "mode": { "enum": ["hard", "set"] }, "set": { "enum": ["punchy", "cinematic", "clean", null] },
+                      "weights": { "type": "object", "additionalProperties": false, "required": ["fade", "flash", "whip"],
+                        "properties": { "fade": { "type": "number", "minimum": 0, "maximum": 1 }, "flash": { "type": "number", "minimum": 0, "maximum": 1 },
+                                        "whip": { "type": "number", "minimum": 0, "maximum": 1 } } },
+                      "mix": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 } } } } ] },
+    "zooms": { "oneOf": [ { "type": "null" }, { "type": "object", "required": ["preset", "scale", "inMs", "outMs", "on"],
+      "properties": { "preset": { "enum": ["zoom-pulse-beat-punch", "zoom-pulse-kill-slam"] }, "scale": { "type": "number", "minimum": 1.0, "maximum": 1.25 },
+                      "inMs": { "type": "integer", "minimum": 80, "exclusiveMaximum": 600 }, "outMs": { "type": "integer", "minimum": 100, "exclusiveMaximum": 400 },
+                      "on": { "enum": ["kills", "beats"] } } } ] },
+    "ramps": { "oneOf": [ { "type": "null" }, { "type": "object", "required": ["preset", "factor", "sec"],
+      "properties": { "preset": { "enum": ["speed-ramp-kill-slowmo", "speed-ramp-smooth"] }, "factor": { "type": "number", "minimum": 0.5, "maximum": 0.9 },
+                      "sec": { "type": "number", "minimum": 0.3, "maximum": 1.5 }, "unverified": { "const": true } } } ] },
+    "text": { "oneOf": [ { "type": "null" }, { "type": "object", "required": ["nameStyle", "position"],
+      "properties": { "nameStyle": { "enum": ["lower-third", "corner-tag", "kinetic"] },
+                      "position": { "enum": ["auto", "top-left", "top-right", "bottom-left", "bottom-right", "upper-third", "lower-third"] },
+                      "captionBand": { "enum": ["top", "middle", "bottom", null] } } } ] },
+    "colour": { "oneOf": [ { "type": "null" }, { "type": "object", "required": ["lut", "strength", "L", "a", "b", "contrast"],
+      "properties": { "lut": { "const": "style.cube" }, "strength": { "type": "number", "minimum": 0, "maximum": 1 },
+                      "tone": { "enum": ["warm", "cool", "neutral"] } } } ] },
+    "music": { "oneOf": [ { "type": "null" }, { "type": "object", "required": ["energyLevel"],
+      "properties": { "energyLevel": { "type": ["number", "null"], "minimum": 0, "maximum": 1 } } } ] }
+  }
+}

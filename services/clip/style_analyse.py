@@ -125,6 +125,22 @@ def _ocr_boxes(eng, img, min_score):
     return out
 
 
+def _grid_features(gray, n=4, per=10):
+    """Corners picked per cell of an n x n grid (each cell with its own quality line), so the strong corners of an
+    overlay (text, HUD) never take all the points from the picture behind it."""
+    import cv2  # noqa: PLC0415
+    np = _np()
+    h, w = gray.shape[:2]
+    out = []
+    for gy in range(n):
+        for gx in range(n):
+            y0, y1, x0, x1 = gy * h // n, (gy + 1) * h // n, gx * w // n, (gx + 1) * w // n
+            p = cv2.goodFeaturesToTrack(gray[y0:y1, x0:x1], per, 0.01, 4)
+            if p is not None:
+                out.append(p + np.array([[x0, y0]], np.float32))
+    return np.concatenate(out).astype(np.float32) if out else None
+
+
 def frame_pass(path, cfg, progress=None, ocr=True):
     """One decode of the example -> per-frame arrays and the text samples."""
     import cv2  # noqa: PLC0415
@@ -161,10 +177,15 @@ def frame_pass(path, cfg, progress=None, ocr=True):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         s, dx, dy, ok = 1.0, 0.0, 0.0, False
         if prev_gray is not None:
-            pts = cv2.goodFeaturesToTrack(prev_gray, 150, 0.01, 4)
+            pts = _grid_features(prev_gray)
             if pts is not None and len(pts) >= 8:
                 nxt, stt, _err = cv2.calcOpticalFlowPyrLK(prev_gray, gray, pts, None, winSize=(15, 15), maxLevel=3)
                 good = stt.reshape(-1) == 1
+                # overlays (captions, HUD, a name tag) stay still while the picture moves: when a fair share of the
+                # points moves, the still ones are left out of the fit, so an overlay never reads as a still picture
+                moving = good & (np.linalg.norm((nxt - pts).reshape(-1, 2), axis=1) > 0.3)
+                if moving.sum() >= max(8, 0.25 * good.sum()):
+                    good = moving
                 if good.sum() >= 8:
                     M, inl = cv2.estimateAffinePartial2D(pts[good], nxt[good], method=cv2.RANSAC,
                                                          ransacReprojThreshold=1.5)
@@ -369,10 +390,12 @@ def ramps(fp, events, cfg, pulses=()):
             continue
         best = []
         for k in range(w, len(sp) - w):
+            # motion per unit of time (mean, not median): a slowed or 30-in-60 picture repeats frames, and a repeated
+            # frame counts as no motion for its time
             with warnings.catch_warnings():  # a window inside a zoom pulse is all NaN: skipped below
                 warnings.simplefilter("ignore", RuntimeWarning)
-                b = np.nanmedian(sp[k - w:k])
-                f = np.nanmedian(sp[k:k + w])
+                b = np.nanmean(sp[k - w:k])
+                f = np.nanmean(sp[k:k + w])
             if np.isnan(b) or np.isnan(f) or max(b, f) < floor or min(b, f) < floor / 4:
                 continue
             ratio = max(b, f) / min(b, f)

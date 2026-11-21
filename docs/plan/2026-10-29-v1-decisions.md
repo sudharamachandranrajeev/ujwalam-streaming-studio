@@ -2583,3 +2583,7 @@ Evidence: `docs/evidence/2026-11-21-clip-look-fx1-fx4.md`.
 Accepted residuals (not fixed): (a) a check-then-open race in the user's own music folder needs a local process actively swapping links, and such a process already runs with the user's rights; (b) a cache-key collision needs a same-size edit in the middle of the file plus a deliberately restored `mtime_ns`.
 
 **Codex verify 2 (2026-11-21):** resume trusts a row only when it belongs to the reel file next to it. Each row stores `fileStamp` (the file's size and mtime in ns), and `--resume` keeps a reel only when the stamp matches the file. Before a reel renders, render.json is saved with that reel's old row removed. So an old row can never be paired with a newer file: not after a stop between the rename and the row, not when a fresh run renders over an earlier one, and not with an older row that has no stamp.
+
+## D412 — Reel styles RS1-RS4 as built (decided, 2026-11-21)
+
+In progress on branch claude/reel-styles; the full entry is written when RS4 is done. Flag `reel-styles` is ON by default (the user asked for the feature).

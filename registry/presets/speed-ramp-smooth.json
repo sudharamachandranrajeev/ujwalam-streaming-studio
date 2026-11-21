@@ -1,0 +1,32 @@
+{
+  "id": "speed-ramp-smooth",
+  "version": "1.0.0",
+  "function": "speed-ramp",
+  "functionVersion": "^1.0.0",
+  "name": "Smooth ramp (three-quarter speed, sound muted)",
+  "params": {
+    "factor": 0.75,
+    "sec": 0.8,
+    "catchUp": 1.5,
+    "audio": "mute"
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "drift",
+    "intensity": "medium",
+    "mood": "calm",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "speed-ramp-kill-slowmo",
+    "zoom-pulse-beat-punch"
+  ]
+}

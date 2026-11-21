@@ -1,0 +1,32 @@
+{
+  "id": "zoom-pulse-beat-punch",
+  "version": "1.0.0",
+  "function": "zoom-pulse",
+  "functionVersion": "^1.0.0",
+  "name": "Beat punch (small zoom on the beat)",
+  "params": {
+    "scale": 1.06,
+    "inMs": 120,
+    "outMs": 180,
+    "on": "beats"
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "pulse",
+    "intensity": "low",
+    "mood": "electric",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "zoom-pulse-kill-slam",
+    "speed-ramp-kill-slowmo"
+  ]
+}
