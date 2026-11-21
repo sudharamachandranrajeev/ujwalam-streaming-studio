@@ -72,4 +72,20 @@ Also merged `claude/alpha0-d1` (6d703ed, fonts + manifest). `tests/package-alpha
 
 Other tests re-run after the fixes: analytics 12, learning-mix 26 (node) and 9 (python), posting-auto-d375 51, posting-backlog-order 5, posting-preview 12, posting-pt5-settings 11, posting-schedule 28, studio-ui-growth 7. All passed.
 
-Still UNVERIFIED: older montages without a music record are now held back (`music-unknown`) until re-rendered; won-reel and impact-play clips without a record still post as before (only montages fail closed); the Montage music card does not yet show the "file changed, check the credit" note (it shows the credit as incomplete).
+## Clips without a music record (2026-11-21, D414 item 6)
+
+Rule for every kind that carries music (montage, won-match reel, impact play, live clip):
+
+- A clip with a record: as above.
+- A clip with no record (rendered before records were kept): made here and posted when the Clip look music folder is unset or empty and `<data>/clips/montage-music/history.json` does not exist (`legacyMadeHere` in `services/posting/post-text.mjs`, worked out once per posting run); otherwise held as `music-unknown` with "re-render to post: the song's source is not known".
+- New renders always write a record (`musicRecords: 1` in render.json; plain variants `music: null`). A missing or unreadable record in such a render is `{source: unknown}` and is held.
+
+| Test | Result |
+|---|---|
+| `tests/montage-music.test.mjs`: legacy, no folder and no pick history: montage, won-reel, impact-play and short all post | pass (10/10 in file) |
+| same file: legacy with a music folder set: all four held as music-unknown with the plain reason; legacy with pick history: won-reel and impact-play held | pass |
+| same file: `{source: unknown}` is held even when the legacy pass is true | pass |
+| `tests/py/test_clip_output_layout.py`: a render with `musicRecords` whose clip has no record publishes `{source: unknown}` to the row and the sidecar; an unknown-shape record is unknown | pass (17/17) |
+| posting-uploads 12, posting-e2e 61, posting-auto-d375 51 | pass |
+
+Still UNVERIFIED: the Montage music card does not yet show the "file changed, check the credit" note (it shows the credit as incomplete). The legacy rule has not run against the user's real clips folder.

@@ -3,9 +3,10 @@
 // data/games/<id>/posting.json per game); a line that names a fact the clip does not have is left out (never guessed),
 // a line over the platform's title limit (data/posting/limits.json) is left out, and the last N lines used are not used
 // again. The pick is seeded by the clip's bytes, so the same clip gets the same text. Pure except the history file.
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readSettings } from '../studio-ui/user-settings.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const TEXT_HISTORY_NAME = 'text-history.json';
@@ -103,7 +104,7 @@ export function creditProblem(c, cfg = montageCfg()) {
  */
 export function musicCredit(mm, cfg = montageCfg()) {
   if (mm === undefined || mm === null) return { use: 'none' };
-  if (mm === 'unknown') return { use: 'refuse', reason: "not posted: where this montage's music came from is not known (made before music records were kept); it stays in your clips folder", renderOnly: false, unknown: true };
+  if (mm === 'unknown') return { use: 'refuse', reason: "re-render to post: the song's source is not known", renderOnly: false, unknown: true };
   if (!isPlain(mm) || !cfg) return { use: 'refuse', reason: 'the montage music record cannot be read', renderOnly: false };
   if (mm.library !== cfg.library) return { use: 'refuse', reason: 'render only, not auto-posted: the montage song is not from your NCS library', renderOnly: true };
   const bad = creditProblem(mm.credit, cfg);
@@ -116,19 +117,29 @@ export function musicCredit(mm, cfg = montageCfg()) {
  * Codex BD review: a clip row's music, from the render's own record (row.music: clip_publish.py music_provenance, in
  * uploads.json or the <video>.music.json sidecar a clips-folder scan reads), as musicCredit's input. Made-here music
  * and no music -> undefined (postable); the NCS library -> { library: 'ncs', trackId, credit }; the D411 music folder
- * -> { library: null } (render only); a montage whose music is missing or of an unknown kind -> 'unknown' (refused).
- * Other kinds without a record are postable as before (their music, when any, is the made-here bed or none).
+ * -> { library: null } (render only); an unknown record -> 'unknown' (held). A row with no record (rendered before
+ * records were kept), of any kind: made here (postable) when legacyMadeHere (see legacyMadeHere), else 'unknown'.
  */
-export function musicOf(row) {
+export function musicOf(row, { legacyMadeHere = false } = {}) {
   if (!isPlain(row)) return 'unknown';
   if (row.montageMusic !== undefined) return row.montageMusic;
   const m = row.music;
-  if (m === undefined || m === null) return row.kind === 'montage' ? 'unknown' : undefined;
+  if (m === undefined || m === null) return legacyMadeHere ? undefined : 'unknown';
   if (!isPlain(m)) return 'unknown';
   if (m.source === 'generated' || m.source === 'none') return undefined;
   if (m.source === 'ncs') return { library: 'ncs', trackId: m.trackId, credit: m.credit ?? null };
   if (m.source === 'user-folder') return { library: null };
   return 'unknown';
+}
+/**
+ * Clips rendered before music records were kept: their music can only have been made here when the user never set the
+ * D411 clip-look music folder and no montage-music library track was ever picked (no pick history). Then true.
+ */
+export function legacyMadeHere(dataDir, cfg = montageCfg()) {
+  let folder;
+  try { folder = readSettings(dataDir).clips.look?.music?.folder ?? ''; } catch { return false; }
+  if (typeof folder !== 'string' || folder.trim() || !cfg || typeof cfg.history !== 'string') return false;
+  return !existsSync(path.join(dataDir, ...cfg.history.split('/')));
 }
 /** Fail closed before approve and upload: a post with a montage track must still carry its credit text. null = fine. */
 export function creditMissing(post) {

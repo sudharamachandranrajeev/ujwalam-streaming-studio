@@ -92,19 +92,22 @@ def name_rows(rdoc, game, layouts_by_id, det_weights=None, rec_start_local=None)
 MUSIC_SIDECAR = ".music.json"
 
 
-def music_provenance(c):
+def music_provenance(c, records=False):
     """Codex BD review (D414): where a rendered clip's music came from, from its own render.json entry ("music", the
     record clipper.py _music writes). -> {"source": "none"} (no music), {"source": "generated"} (made here: RP3 beds,
     D411 made-here fallback), {"source": "user-folder", "track"} (the D411 music folder: render only, never posted),
-    {"source": "ncs", "trackId", "credit"} (the NCS library: posted with its credit), or None when it cannot be told
-    (an older render without the record, or a record of an unknown shape): posting then refuses a montage."""
+    {"source": "ncs", "trackId", "credit"} (the NCS library: posted with its credit), {"source": "unknown"} (a record
+    of an unknown shape, or a render that keeps records but wrote none for this clip: held), or None (an older render
+    without records: posting's legacy rule decides)."""
     if not isinstance(c, dict) or "music" not in c:
-        return None
+        # a render that keeps music records (render.json musicRecords) but wrote none for this clip: unknown, held
+        # (fail closed); an older render without records: no record, posting's legacy rule decides
+        return {"source": "unknown"} if records else None
     m = c["music"]
     if m is None:
         return {"source": "none"}
     if not isinstance(m, dict):
-        return None
+        return {"source": "unknown"}
     src = m.get("source")
     if src == "ncs":
         return {"source": "ncs", "trackId": m.get("trackId"), "credit": m.get("credit")}
@@ -112,7 +115,7 @@ def music_provenance(c):
         return {"source": "user-folder", "track": m.get("track")}
     if src == "made-here" or (src is None and "track" not in m and "seed" in m):
         return {"source": "generated"}
-    return None
+    return {"source": "unknown"}
 
 
 def write_music_sidecar(video, prov):
@@ -170,7 +173,7 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                                    lambda n: names.clip_name(game, kind, when, label, n, canvas), start_nn)
         counters[(kind, canvas)] = nn
         how = _link_or_copy(src, os.path.join(day, name))
-        prov = music_provenance(c)
+        prov = music_provenance(c, bool(rdoc.get("musicRecords")))
         write_music_sidecar(os.path.join(day, name), prov)
         rows.append({"id": c["id"], "layout": f["layout"], "file": os.path.join(day, name), "how": how, "kind": kind,
                      "label": label, "seconds": round(float(c["end"]) - float(c["start"]), 3),

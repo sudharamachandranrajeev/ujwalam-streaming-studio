@@ -28,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { resolveString } from '../project/scene-preset.mjs';
-import { cleanFacts, createTextHistory, creditMissing, draftText, musicCredit, musicOf } from './post-text.mjs';
+import { cleanFacts, createTextHistory, creditMissing, draftText, legacyMadeHere, musicCredit, musicOf } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -401,6 +401,7 @@ export async function packageUploads(opts) {
   const ledger = createLedger(opts.ledgerFile);
   let ffmpeg = null;
   let flags = null;
+  const legacy = { legacyMadeHere: legacyMadeHere(opts.dataDir) }; // D414: clips rendered before music records
   for (const row of doc.files) {
     const file = isPlain(row) && typeof row.file === 'string' ? row.file : null;
     const skip = (reason) => skipped.push({ file: file ? path.basename(file) : '?', reason });
@@ -416,7 +417,7 @@ export async function packageUploads(opts) {
     // from anywhere else = render only, never posted (fail closed, plain-word reason)
     // Codex BD review: from the render's own music record (row.music), so a folder-scanned montage is checked too; a
     // montage whose music cannot be told is refused (music-unknown)
-    const mm = musicOf(row);
+    const mm = musicOf(row, legacy);
     const music = musicCredit(mm);
     if (music.use === 'refuse') { skipped.push({ file: path.basename(file), reason: music.renderOnly ? 'render-only' : music.unknown ? 'music-unknown' : 'music-credit-missing', detail: music.reason }); continue; }
     const tail = CANVAS_TAIL.exec(path.basename(file));

@@ -156,7 +156,10 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(pub.music_provenance({"music": {"source": "folder", "track": "t1"}}), {"source": "user-folder", "track": "t1"})
         self.assertEqual(pub.music_provenance({"music": {"source": "ncs", "trackId": "a", "credit": None}}),
                          {"source": "ncs", "trackId": "a", "credit": None})
-        self.assertIsNone(pub.music_provenance({"music": {"track": "t", "source": "other"}}))
+        self.assertEqual(pub.music_provenance({"music": {"track": "t", "source": "other"}}), {"source": "unknown"})
+        self.assertEqual(pub.music_provenance({"music": "x"}), {"source": "unknown"})
+        # fail closed: a render that keeps records (musicRecords) but wrote none for a clip -> unknown, never legacy
+        self.assertEqual(pub.music_provenance({"id": "x"}, True), {"source": "unknown"})
         recs = {"M01": {"source": "folder", "track": "t1"}, "M02": {"seed": 3, "total": 9.0}, "M03": None}
         clips = [{"id": c, "start": 0.0, "end": 9.0, "pieces": [{"start": 100.0 * (i + 1), "end": 100.0 * (i + 1) + 9, "kills": 2}],
                   **({"music": m} if c != "M03" else {}), "files": [{"layout": "montage-v", "file": "montage-v.mp4"}]}
@@ -176,6 +179,15 @@ class PublishTests(unittest.TestCase):
                 self.assertEqual(read_json(side), {"version": 1, "music": r["music"]})
             else:
                 self.assertFalse(os.path.exists(side))
+        # a new render (musicRecords set) whose clip has no record fails closed: unknown in the row and the sidecar
+        live = os.path.join(self.work, "live")
+        write(os.path.join(live, "render.json"), json.dumps({"tool": "clipper", "musicRecords": 1, "recording": "live-saves",
+                                                             "clips": [dict(clips[2], id="L01")]}))
+        write(os.path.join(live, "report.json"), json.dumps({"results": [{"id": "L01", "file": "montage-v.mp4", "ok": True}]}))
+        write(os.path.join(live, "clips", "L01", "montage-v.mp4"))
+        lrows = pub.publish(live, self.clips, self.data, "codm", LAYOUTS, WEIGHTS)
+        self.assertEqual([r.get("music") for r in lrows], [{"source": "unknown"}])
+        self.assertEqual(read_json(lrows[0]["file"] + pub.MUSIC_SIDECAR)["music"], {"source": "unknown"})
 
     def test_live_clip_uses_its_wall_time(self):
         ts = WHEN.timestamp()

@@ -435,10 +435,12 @@ def cmd_render(a):
                           "seconds": round(time.monotonic() - t1, 2), "sourceAudioTracks": sinfo.get("audio_tracks")})
             print(f"render {c['id']}/{lid}: {files[-1]['seconds']} s")
         out_rows.append({"id": c["id"], "start": c["start"], "end": c["end"], "captions": cinfo, "files": files,
+                         "music": None,  # D414: plain variants carry no music bed (the record posting reads)
                          "errors": errors})
         progress_line("render", n, len(cands), f"clip {c['id']} {'failed' if errors else 'done'}")
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": doc["recording"],
+        "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
         "encoder": encoder, "frame": frame, "layoutsVersion": lay_doc.get("version"),
         "seconds": round(time.monotonic() - t0, 2), "failed": failed, "clips": out_rows,
     })
@@ -751,6 +753,7 @@ def cmd_live_review(a):
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": "live-saves",
+        "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
         "saves": len(rows), "encoder": encoder, "frame": frame, "layoutsVersion": lay_doc.get("version"),
         "failed": failed, "matchGate": gate_info, "clips": out_rows,
     })
@@ -1573,6 +1576,7 @@ def cmd_montage(a):
     def _write_render(clips):  # render.json with the rows given; failed is read when it is called
         write_json_atomic(os.path.join(out, RENDER), {
             "tool": "clipper.montage", "toolVersion": TOOL_VERSION, "createdAt": _now(),
+            "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
             "recording": os.path.basename(a.recording), "vRecording": os.path.basename(vrec), "encoder": encoder,
             "vRecordingPath": vrec, "audioFadeMs": int(cfg["audioFadeMs"]),  # ED2: clipper.py recaption renders from these
             "reelHook": {"version": ex["hcfg"]["version"], "flag": rh.FLAG, "types": ex["hooks"]},
