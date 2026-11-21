@@ -203,7 +203,12 @@ export function stuckLock(dataDir, { procStart = osProcStart } = {}) {
 function createWhole(target, body) {
   const tmp = `${target}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
   const fd = openSync(tmp, 'wx');
-  try { writeSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); }
+  // Ninth Codex review: writeSync may write less than asked; loop until every byte is in the temp file.
+  try {
+    const buf = Buffer.from(body);
+    for (let off = 0; off < buf.length;) off += writeSync(fd, buf, off, buf.length - off);
+    fsyncSync(fd);
+  } finally { closeSync(fd); }
   try { linkSync(tmp, target); } finally { try { rmSync(tmp, { force: true }); } catch { /* removed as stale on a later start */ } }
 }
 /** On start: temp files of the lock and its claims older than 10 min (a crash between write and link) are removed. */
