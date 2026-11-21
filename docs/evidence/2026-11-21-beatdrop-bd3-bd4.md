@@ -130,3 +130,18 @@ noKillMarginSec before the anchor are that kill's own burst. Fixed, each with a 
   stopped by the tool because the PC ran low on memory. The render had started after 15 s (probes done, part file
   growing slowly). UNVERIFIED: the rendered-class tests on the final code. An earlier run of that class on this round's
   code (before the GuardStop handling and the test fixes) passed setUp and 11 of 13 tests; the 2 errors are fixed.
+
+## Codex verify of c370e5c (2026-11-21), round 3
+
+The coordinator ran the rendered class on c370e5c+merge: 10 OK in 1054 s.
+
+| Item | Fix | Test (tests/py/test_beatdrop.py) |
+|---|---|---|
+| 1 (P1) killing node left its ffmpeg | `run_tool` puts the child in a kill-on-close job (`clip_common.kill_on_close_job`) and ends the job on every stop path (stop, stall, timeout, finally) | `test_stop_ends_the_whole_tree`: the child starts a grandchild; after the stop the grandchild PID is gone (tasklist) |
+| 2 (P1) sweeps outside the lock | the orphan sweep, the render.json write (`write_render` callback from clipper), the old-video sweep and the on-air cleanup all run inside `make()` while holding HeavyJobLock; referenced files are never deleted | `test_sweeps_and_on_air_cleanup_run_inside_the_lock_and_touch_only_own_files` |
+| 3 (P2) sweep and cleanup too broad | only `^beatdrop-[0-9a-f]{12}\.mp4(\.part)?$` in wd; on air removes only this run's own part file and the probe file | `test_sweep_matches_only_its_own_names` (beatdrop-notes.mp4, other.mp4.part, beatdrop-plan.json and the referenced video survive); the lock test above (someone-else.mp4.part survives) |
+
+Runs (CPU, headless, BelowNormal, temp data root, live-check exit 0 first): StopGuardTests + PlannerTests 22 OK;
+test_render_watch 10 OK; test_clip_montage 35 OK.
+
+The rendered class on this round's code was stopped by the tool (the PC ran low on memory): UNVERIFIED until it is run once with memory free.

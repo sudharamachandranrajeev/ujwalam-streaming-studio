@@ -445,6 +445,94 @@ class StopGuardTests(unittest.TestCase):
         self.assertIn("stopped: on air", r.stderr)
         self.assertLess(time.monotonic() - t0, 20)
 
+    @unittest.skipUnless(os.name == "nt", "kill-on-close job is Windows")
+    def test_stop_ends_the_whole_tree(self):
+        # review round 3, item 1: a stopped child's own children (node's ffmpeg) end with it
+        import time  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdtree-")
+        try:
+            pidf = os.path.join(tmp, "grandchild.pid")
+            code = ("import subprocess, sys, time; "
+                    f"g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], creationflags={NOWIN}); "
+                    f"open({pidf!r}, 'w').write(str(g.pid)); time.sleep(120)")
+            r = cc.run_tool([sys.executable, "-c", code], stop=lambda: os.path.exists(pidf), poll_sec=0.2)
+            self.assertEqual(r.returncode, cc.STOPPED_RC)
+            with open(pidf, encoding="utf-8") as f:
+                gpid = int(f.read())
+            time.sleep(1.0)
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {gpid}", "/NH"], capture_output=True, text=True,
+                                 creationflags=NOWIN).stdout
+            self.assertNotIn(str(gpid), out, "the grandchild was ended with the child")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_sweep_matches_only_its_own_names(self):
+        # review round 3, item 3: only beatdrop-<12 hex>.mp4 / .mp4.part not referenced by render.json go
+        import beatdrop  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdsweep-")
+        try:
+            names = ["beatdrop-notes.mp4", "other.mp4.part", "beatdrop-aaaaaaaaaaaa.mp4",
+                     "beatdrop-bbbbbbbbbbbb.mp4.part", "beatdrop-cccccccccccc.mp4", "beatdrop-plan.json"]
+            for n in names:
+                open(os.path.join(tmp, n), "wb").close()
+            render = os.path.join(tmp, "render.json")
+            with open(render, "w", encoding="utf-8") as f:
+                json.dump({"clips": [{"files": [{"file": "beatdrop-aaaaaaaaaaaa.mp4"}]}]}, f)
+            gone = beatdrop.sweep_videos(tmp, beatdrop.referenced(render))
+            self.assertEqual(sorted(gone), ["beatdrop-bbbbbbbbbbbb.mp4.part", "beatdrop-cccccccccccc.mp4"])
+            self.assertEqual(sorted(os.listdir(tmp)), sorted(["beatdrop-notes.mp4", "other.mp4.part",
+                                                               "beatdrop-aaaaaaaaaaaa.mp4", "beatdrop-plan.json",
+                                                               "render.json"]))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_sweeps_and_on_air_cleanup_run_inside_the_lock_and_touch_only_own_files(self):
+        # review round 3, items 2 and 3: make() sweeps while holding the heavy-job lock; on air it removes only
+        # this run's own part file
+        import beatdrop  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdlock-")
+        held = {"now": False, "sweeps": []}
+
+        class Lock:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                held["now"] = True
+                return self
+
+            def __exit__(self, *a):
+                held["now"] = False
+        own = os.path.join(tmp, "beatdrop-dddddddddddd.mp4.part")
+        others = [os.path.join(tmp, n) for n in ("someone-else.mp4.part", "beatdrop-notes.mp4")]
+
+        def fake_locked(res, *a, **k):
+            res["part"] = own
+            open(own, "wb").close()
+            raise beatdrop.OnAir("on air during the render")
+        real_sweep = beatdrop.sweep_videos
+
+        def sweep(wd, keep):
+            held["sweeps"].append(held["now"])
+            return real_sweep(wd, keep)
+        saved = (cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos)
+        try:
+            for f in others:
+                open(f, "wb").close()
+            cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos = Lock, fake_locked, sweep
+            res = beatdrop.make("rec.mkv", {}, tmp, tmp, "ffmpeg", [], [], live=lambda: False,
+                                render_json=os.path.join(tmp, "render.json"), write_render=lambda r: None)
+            self.assertEqual(res["status"], "stopped: on air")
+            self.assertNotIn("part", res)
+            self.assertEqual(held["sweeps"], [True], "the orphan sweep ran inside the lock")
+            self.assertFalse(os.path.exists(own))
+            self.assertTrue(all(os.path.exists(f) for f in others), "other files survive")
+        finally:
+            cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_no_stop_runs_to_the_end(self):
         import clip_common as cc  # noqa: PLC0415
         r = cc.run_tool([sys.executable, "-c", "print('ok')"], stop=lambda: False, poll_sec=0.2)
@@ -697,7 +785,7 @@ class RenderedMontageTests(unittest.TestCase):
         render = os.path.join(self.out, "beatdrop", "render.json")
         with open(render, encoding="utf-8") as f:
             old = json.load(f)["clips"][0]["files"][0]["file"]
-        orphan = os.path.join(self.wd, "beatdrop-0000000000.mp4")
+        orphan = os.path.join(self.wd, "beatdrop-000000000000.mp4")
         with open(orphan, "wb") as f:
             f.write(b"crash leftover")
         env = dict(os.environ, UJWALAM_DATA_ROOT=self.data, UJWALAM_HEADLESS="1")

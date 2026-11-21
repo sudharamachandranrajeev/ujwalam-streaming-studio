@@ -435,6 +435,17 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
     path = None if watch is None or not stall_sec else (watch if os.path.isabs(watch) or not cwd else os.path.join(cwd, watch))
     with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:  # files, not pipes: no pipe can fill and block
         p = subprocess.Popen(argv, cwd=cwd, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
+        # the child's whole tree (node's ffmpeg, D415 review): a kill-on-close job on Windows, ended on every stop path
+        job = kill_on_close_job(p._handle) if os.name == "nt" else None
+
+        def kill():
+            try:
+                end_job_members(job)
+            except OSError:
+                pass
+            if p.poll() is None:
+                p.kill()
+            p.wait()
         t0 = last = time.monotonic()
         size, stalled, grew, stopped = -1, False, False, False
         try:
@@ -446,8 +457,7 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
                     pass
                 if stop is not None and stop() and p.poll() is None:
                     stopped = True
-                    p.kill()
-                    p.wait()
+                    kill()
                     break
                 now = time.monotonic()
                 if path is not None:
@@ -462,17 +472,18 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
                     if p.poll() is not None:  # it ended between the wait and this check: its own exit code counts
                         break
                     stalled = True
-                    p.kill()
-                    p.wait()
+                    kill()
                     break
                 if timeout is not None and now - t0 >= timeout:
-                    p.kill()
-                    p.wait()
+                    kill()
                     raise subprocess.TimeoutExpired(argv, timeout)
         finally:
             if p.poll() is None:
-                p.kill()
-                p.wait()
+                kill()
+            try:
+                end_job(job)  # also ends anything the child left behind after it exited
+            except OSError:
+                pass
         fo.seek(0)
         fe.seek(0)
         out = fo.read().decode("utf-8", errors="replace")

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import bisect
 import os
+import re
 import statistics
 
 import beatdrop_fx as bfx
@@ -572,7 +573,8 @@ STOPPED_ON_AIR = "stopped: on air"
 
 
 def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame=None, style=None,
-         seed_parts=(), live=on_air, audio_tracks=1, max_sec=None, lock_dir=None, cfg=None, measure=None, poll_sec=2.0):
+         seed_parts=(), live=on_air, audio_tracks=1, max_sec=None, lock_dir=None, cfg=None, measure=None, poll_sec=2.0,
+         render_json=None, write_render=None):
     """One BeatDrop montage, off air only, one heavy job at a time: the song (NCS library pick or the made-here bed),
     its song map, the plan (wd/beatdrop-plan.json; cut edges probed for brightness), the bed, the style's LUT and the
     one ffmpeg run (wd/beatdrop-<id>.mp4.part), then the flash check of the rendered file; only a file that passes
@@ -584,8 +586,11 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
     measure(path, stop) -> the fx test analyser's result (default measure_flash). Every child (song map, each
     brightness probe, the render, the flash check) runs under the same stop and live() is asked between steps: any
     stop ends the whole job "stopped: on air", nothing published.
-    The video gets a new name per render (beatdrop-<plan id>.mp4); the caller writes render.json pointing at it and
-    only then removes older videos (sweep_videos), so a crash never pairs a new video with an old music record.
+    The video gets a new name per render (beatdrop-<12 hex>.mp4). Inside the heavy-job lock: orphans from a crash
+    (this code's names, in wd, not referenced by render_json) are swept first; when the job ends done or failed,
+    write_render(res) writes render.json (atomically, pointing at the new video with its music record) and only then
+    the older videos are swept. A file render.json references is never deleted. On air, only this run's own part file
+    and probe file are removed.
     -> {"status" ("done" | "failed" | "stopped: on air"), "reason", "plan", "music" (the record for render.json),
         "returncode", "stderr", "file", "argv", "flash"}."""
     from clip_common import HeavyJobLock  # noqa: PLC0415
@@ -602,17 +607,26 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
     os.makedirs(wd, exist_ok=True)
     try:
         with HeavyJobLock(lock_dir, job="beatdrop"):
-            return _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame,
-                                style, seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec)
-    except Exception as e:  # noqa: BLE001 - only the on-air stops are handled, the rest re-raised
-        from style_analyse import GuardStop  # noqa: PLC0415 - the song map's own live guard
-        if not isinstance(e, (OnAir, GuardStop)):
-            raise
-        for f in os.listdir(wd):
-            if f.endswith(".part") or f == PROBE_FILE:
-                _drop(os.path.join(wd, f))
-        res.update(status=STOPPED_ON_AIR, reason="a stream or recording started (or that cannot be told)", file=None)
-        return res
+            sweep_videos(wd, referenced(render_json))
+            try:
+                _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame,
+                             style, seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec)
+            except Exception as e:  # noqa: BLE001 - only the on-air stops are handled, the rest re-raised
+                from style_analyse import GuardStop  # noqa: PLC0415 - the song map's own live guard
+                if not isinstance(e, (OnAir, GuardStop)):
+                    raise
+                for f in (res.get("part"), os.path.join(wd, PROBE_FILE)):
+                    if f:
+                        _drop(f)
+                res.update(status=STOPPED_ON_AIR, reason="a stream or recording started (or that cannot be told)",
+                           file=None)
+            res.pop("part", None)
+            if res["status"] != STOPPED_ON_AIR and write_render is not None:
+                write_render(res)
+                sweep_videos(wd, referenced(render_json) | ({res["file"]} if res["file"] else set()))
+            return res
+    finally:
+        res.pop("part", None)
 
 
 def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame, style,
@@ -643,9 +657,10 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
     res["plan"] = pl
     # a new name per render (plan, music record and the time): render.json points at it once it is written
     pid = hashlib.sha1(json.dumps([pl, res["music"], time.time_ns()], sort_keys=True, default=str)
-                       .encode("utf-8")).hexdigest()[:10]
+                       .encode("utf-8")).hexdigest()[:12]
     name = f"beatdrop-{pid}.mp4"
     part = os.path.join(wd, name + ".part")
+    res["part"] = part
     write_json_atomic(os.path.join(wd, PLAN), pl)
     wav = music_bed(wd, pl, song["path"], song["root"], cfg)
     lut = None
@@ -699,16 +714,31 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
     return res
 
 
+VIDEO_NAME = re.compile(r"^beatdrop-[0-9a-f]{12}\.mp4(\.part)?$")
+
+
+def referenced(render_json):
+    """The video names a BeatDrop render.json points at (empty when it is missing or unreadable)."""
+    if not render_json:
+        return set()
+    try:
+        doc = load_json(render_json)
+    except (ClipError, OSError, ValueError):
+        return set()
+    return {f.get("file") for c in (doc or {}).get("clips") or [] for f in c.get("files") or [] if f.get("file")}
+
+
 def sweep_videos(wd, keep):
-    """Removes BeatDrop videos and part files in wd that render.json does not point at (`keep`: the names it does).
-    Called after render.json is written (the previous video) and before a run (orphans from a crash)."""
+    """Removes this code's own videos and part files (exactly beatdrop-<12 hex>.mp4 / .mp4.part) in wd that are not in
+    `keep` (the names render.json points at). Called only inside make()'s heavy-job lock: before a run (orphans from a
+    crash) and after render.json is written (the previous video). Other files are never touched."""
     try:
         names = os.listdir(wd)
     except OSError:
         return []
     gone = []
     for f in names:
-        if f.startswith("beatdrop") and (f.endswith(".mp4") or f.endswith(".part")) and f not in keep:
+        if VIDEO_NAME.match(f) and f not in keep and f.split(".part")[0] not in keep:
             _drop(os.path.join(wd, f))
             gone.append(f)
     return gone
