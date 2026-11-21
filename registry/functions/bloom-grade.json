@@ -1,0 +1,69 @@
+{
+  "id": "bloom-grade",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Bloom grade (BD4)",
+  "description": "A steady glow over the whole montage (a blurred copy screen-blended at `glow`, saturation `saturation`) plus the reel style's LUT when one is set (lut3d once in the graph, `lut`: style|none). Constant over the montage: never a flash. BeatDrop montages (D415), flag beatdrop; tunable per preset. Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sigma": {
+          "type": "number",
+          "minimum": 4,
+          "maximum": 40
+        },
+        "glow": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 0.6
+        },
+        "saturation": {
+          "type": "number",
+          "minimum": 0.8,
+          "maximum": 1.4
+        },
+        "lut": {
+          "enum": [
+            "style",
+            "none"
+          ]
+        }
+      }
+    },
+    "defaults": {
+      "sigma": 14,
+      "glow": 0.3,
+      "saturation": 1.15,
+      "lut": "style"
+    },
+    "safeRanges": {
+      "sigma": [
+        4,
+        40
+      ],
+      "glow": [
+        0.1,
+        0.6
+      ],
+      "saturation": [
+        0.8,
+        1.4
+      ]
+    }
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "themeTokens": [],
+  "durationMs": 0,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD4"
+}

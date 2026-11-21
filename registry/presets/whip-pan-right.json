@@ -1,0 +1,32 @@
+{
+  "id": "whip-pan-right",
+  "version": "1.0.0",
+  "function": "whip-pan",
+  "functionVersion": "^1.0.0",
+  "name": "Whip right",
+  "params": {
+    "frames": 8,
+    "offset": 0.12,
+    "blur": 30,
+    "direction": 1
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "slide",
+    "intensity": "high",
+    "mood": "aggressive",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "whip-pan-left-soft",
+    "scope-zoom-transition-punch"
+  ]
+}

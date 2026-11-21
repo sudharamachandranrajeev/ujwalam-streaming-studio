@@ -1,0 +1,32 @@
+{
+  "id": "bloom-grade-hot",
+  "version": "1.0.0",
+  "function": "bloom-grade",
+  "functionVersion": "^1.0.0",
+  "name": "Hot saturated bloom",
+  "params": {
+    "sigma": 20,
+    "glow": 0.45,
+    "saturation": 1.3,
+    "lut": "style"
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "none",
+    "intensity": "medium",
+    "mood": "electric",
+    "colourUse": "multi",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "bloom-grade-teal-white",
+    "letterbox-cinema"
+  ]
+}

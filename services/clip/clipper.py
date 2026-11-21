@@ -1936,6 +1936,61 @@ def cmd_run(a):
     return rc
 
 
+def cmd_beatdrop(a):
+    """BD3/BD4 (D415): one BeatDrop montage of --recording (H canvas) from its BD1 moments (--moments, default
+    DIR/moments.json) and a song (Settings > Clips > Montage music: the NCS library pick; else the made-here bed) ->
+    DIR/beatdrop/clips/B1/beatdrop.mp4 + beatdrop-plan.json + DIR/beatdrop/render.json (musicRecords 1, the clip's music
+    record). Its own kind beside the kill montages (flag beatdrop): the other reels are not touched."""
+    import beatdrop as bd  # noqa: PLC0415
+    data_dir = resolve_data_dir(a.data_dir)
+    cfg = bd.load_config()
+    if not flag_on(data_dir, cfg["flag"]):
+        eprint(f"beatdrop: off (the '{cfg['flag']}' flag)")
+        return EXIT_FLAG_OFF
+    progress_line("montage", 0, 1, "making the BeatDrop montage")
+    ffmpeg, ffprobe = _tools(a)
+    mpath = a.moments or os.path.join(a.out, "moments.json")
+    if not os.path.isfile(mpath):
+        raise ClipError("no moments: run the moment finder (moments.py) on this recording first (or give --moments)")
+    mdoc = load_json(mpath)
+    info = media_info(ffprobe, a.recording)
+    style = None
+    if rstyle.on(data_dir):
+        st = rstyle.pick(data_dir, "montage", (os.path.basename(a.recording), "beatdrop"))
+        if st:
+            style = dict(rstyle.effective(st), id=st["id"], name=st["name"])
+    out = os.path.join(a.out, "beatdrop")
+    wd = os.path.join(out, "clips", "B1")
+    encoder = rnd.pick_encoder(a.encoder)
+    frame = dict(bd.load_config()["frame"])
+    if a.width and a.height:
+        frame = {"width": int(a.width), "height": int(a.height)}
+    res = bd.make(a.recording, mdoc, wd, data_dir, ffmpeg, rnd.ENCODERS[encoder], rnd.AUDIO, frame=frame, style=style,
+                  seed_parts=(os.path.basename(a.recording), "beatdrop"), audio_tracks=1 if info["has_audio"] else 0,
+                  max_sec=a.max_sec)
+    pl = res["plan"]
+    done = os.path.join(wd, bd.OUT)
+    row = {"id": "B1", "kind": "beatdrop", "start": 0.0, "end": pl["total"], "music": res["music"],
+           "style": {"id": style["id"], "name": style["name"]} if style else None,
+           "beatdrop": {"plan": bd.PLAN, "stats": pl["stats"], "targets": pl["targets"], "slots": pl["slots"]},
+           "files": [{"layout": "beatdrop-h", "file": bd.OUT, "geometry": "canvas"}] if res["file"] else [],
+           "errors": [] if res["file"] else [{"layout": "beatdrop-h", "error": res["stderr"][-300:]}],
+           "fileStamp": _file_stamp(done) if res["file"] else None}
+    write_json_atomic(os.path.join(out, RENDER), {
+        "tool": "clipper.beatdrop", "toolVersion": TOOL_VERSION, "createdAt": _now(),
+        "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
+        "recording": os.path.basename(a.recording), "encoder": encoder, "frame": frame,
+        "beatdrop": {"flag": cfg["flag"], "version": cfg["version"], "status": cfg["status"]},
+        "failed": 0 if res["file"] else 1, "clips": [row]})
+    if not res["file"]:
+        eprint("beatdrop B1: FAILED")
+        return 1
+    print(f"beatdrop B1: {pl['total']:.1f} s, {pl['stats']['pieces']} piece(s), {pl['stats']['kills']} kill(s), "
+          f"first drop at {pl['song']['firstDrop']:.2f} s, music {res['music'].get('source') if res['music'] else 'none'}")
+    progress_line("montage", 1, 1, "BeatDrop montage done")
+    return 0
+
+
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -2022,6 +2077,12 @@ def build_parser():
     s.add_argument("--resume", action="store_true",
                    help="keep each reel an earlier, stopped run of this folder finished; render only the missing ones")
     s.set_defaults(fn=cmd_montage)
+    s = sub.add_parser("beatdrop", help="one BeatDrop montage (BD3/BD4, D415; flag beatdrop) from the recording's moments")
+    common(s)
+    s.add_argument("--moments", type=os.path.abspath, help="BD1 moments JSON (default DIR/moments.json)")
+    s.add_argument("--encoder", default="auto"); s.add_argument("--max-sec", type=float)
+    s.add_argument("--width", type=int); s.add_argument("--height", type=int)
+    s.set_defaults(fn=cmd_beatdrop)
     s = sub.add_parser("recaption", help="render one reel again with its edited transcript (ED2, flag reel-captions)")
     common(s, recording=False)
     s.add_argument("--id", required=True); s.add_argument("--source", type=os.path.abspath)

@@ -1,0 +1,31 @@
+{
+  "id": "scope-zoom-transition-deep",
+  "version": "1.0.0",
+  "function": "scope-zoom-transition",
+  "functionVersion": "^1.0.0",
+  "name": "Deep scope dive",
+  "params": {
+    "scale": 2.4,
+    "inFrames": 12,
+    "outFrames": 14
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "slam",
+    "intensity": "high",
+    "mood": "electric",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "scope-zoom-transition-punch",
+    "whip-pan-right"
+  ]
+}

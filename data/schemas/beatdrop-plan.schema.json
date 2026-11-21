@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ujwalam.local/schemas/beatdrop-plan.schema.json",
+  "title": "BD3 BeatDrop montage plan (services/clip/beatdrop.py output, D415): numbers, kinds and effect ids only (no names, no text). Inline (no $ref) so the stdlib checker in reel_style.schema_problems reads it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "kind", "status", "fps", "songStart", "total", "frames", "song", "targets", "slots", "pieces", "effects", "stats"],
+  "properties": {
+    "version": { "const": 1 },
+    "kind": { "const": "beatdrop" },
+    "status": { "enum": ["unverified", "verified"] },
+    "fps": { "const": 60 },
+    "songStart": { "type": "number", "minimum": 0, "maximum": 3600 },
+    "total": { "type": "number", "exclusiveMinimum": 0, "maximum": 600 },
+    "frames": { "type": "integer", "minimum": 1, "maximum": 36000 },
+    "song": {
+      "type": "object", "additionalProperties": false, "required": ["bpm", "period", "firstDrop", "beats"],
+      "properties": {
+        "bpm": { "type": "number", "minimum": 40, "maximum": 250 },
+        "period": { "type": "number", "exclusiveMinimum": 0, "maximum": 2 },
+        "firstDrop": { "type": "number", "minimum": 0, "maximum": 600 },
+        "beats": { "type": "array", "maxItems": 3000, "items": { "type": "number", "minimum": 0, "maximum": 600 } }
+      }
+    },
+    "targets": {
+      "type": "object", "additionalProperties": false, "required": ["shotSec", "cutsPerMin", "beatShare", "source"],
+      "properties": {
+        "shotSec": { "type": "number", "exclusiveMinimum": 0, "maximum": 10 },
+        "cutsPerMin": { "type": "number", "minimum": 0, "maximum": 600 },
+        "beatShare": { "type": "number", "minimum": 0, "maximum": 1 },
+        "source": { "type": "string", "pattern": "^(defaults|style:[a-z0-9-]{1,64})$" }
+      }
+    },
+    "slots": {
+      "type": "object", "additionalProperties": false, "required": ["title", "hero", "credits"],
+      "properties": {
+        "title": { "type": "object", "additionalProperties": false, "required": ["start", "end", "content"],
+          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": "null" } } },
+        "hero": { "type": "object", "additionalProperties": false, "required": ["start", "end", "content"],
+          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": "null" } } },
+        "credits": { "type": "object", "additionalProperties": false, "required": ["start", "end", "content"],
+          "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 }, "content": { "type": "null" } } }
+      }
+    },
+    "pieces": {
+      "type": "array", "minItems": 1, "maxItems": 2000,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["part", "src", "speed", "outStart", "outFrames", "anchor", "game"],
+        "properties": {
+          "part": { "enum": ["cold-open", "drop", "body", "breakdown", "outro"] },
+          "src": { "type": "object", "additionalProperties": false, "required": ["start", "end"],
+            "properties": { "start": { "type": "number", "minimum": 0 }, "end": { "type": "number", "minimum": 0 } } },
+          "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
+          "outStart": { "type": "integer", "minimum": 0 },
+          "outFrames": { "type": "integer", "minimum": 1 },
+          "anchor": {
+            "type": ["object", "null"], "additionalProperties": false,
+            "required": ["kind", "frame", "srcT", "outFrame", "outT", "onBeat", "strength"],
+            "properties": {
+              "kind": { "enum": ["kill", "gunshot", "flick", "slide", "jump"] },
+              "frame": { "type": "integer", "minimum": 0 },
+              "srcT": { "type": "number", "minimum": 0 },
+              "outFrame": { "type": "integer", "minimum": 0 },
+              "outT": { "type": "number", "minimum": 0 },
+              "onBeat": { "type": "boolean" },
+              "strength": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          },
+          "game": { "type": "object", "additionalProperties": false, "required": ["gain", "keep"],
+            "properties": { "gain": { "type": "number", "minimum": 0, "maximum": 1 },
+              "keep": { "type": "array", "maxItems": 64, "items": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number", "minimum": 0 } } } } },
+          "ramp": { "type": "object", "additionalProperties": false, "required": ["at", "sec", "factor", "catchUp", "catchUpEnd", "audio"],
+            "properties": { "at": { "type": "number", "minimum": 0 }, "sec": { "type": "number", "minimum": 0.3, "maximum": 1.0 },
+              "factor": { "type": "number", "minimum": 0.5, "maximum": 0.9 }, "catchUp": { "type": "number", "minimum": 1.5, "maximum": 2.0 },
+              "catchUpEnd": { "type": "number", "minimum": 0 }, "audio": { "enum": ["sync", "mute"] } } }
+        }
+      }
+    },
+    "effects": {
+      "type": "array", "maxItems": 4000,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["fn", "at", "params"],
+        "properties": {
+          "fn": { "enum": ["scope-zoom-transition", "whip-pan", "impact-flash", "rgb-split", "shot-shake", "letterbox", "ragdoll-slowmo", "bloom-grade"] },
+          "at": { "type": "number", "minimum": 0 },
+          "end": { "type": "number", "minimum": 0 },
+          "mode": { "enum": ["flash", "pulse"] },
+          "params": { "type": "object" }
+        }
+      }
+    },
+    "stats": {
+      "type": "object", "additionalProperties": false, "required": ["pieces", "medianShotSec", "cutsPerMin", "onBeatShare", "kills"],
+      "properties": {
+        "pieces": { "type": "integer", "minimum": 0 },
+        "medianShotSec": { "type": ["number", "null"], "minimum": 0 },
+        "cutsPerMin": { "type": ["number", "null"], "minimum": 0 },
+        "onBeatShare": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "kills": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

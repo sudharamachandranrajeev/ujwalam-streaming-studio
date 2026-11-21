@@ -1,0 +1,31 @@
+{
+  "id": "shot-shake-tight",
+  "version": "1.0.0",
+  "function": "shot-shake",
+  "functionVersion": "^1.0.0",
+  "name": "Tight shot shake",
+  "params": {
+    "frames": 6,
+    "amplitude": 0.012,
+    "hz": 12
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "shake",
+    "intensity": "medium",
+    "mood": "aggressive",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "shot-shake-heavy",
+    "impact-flash-white"
+  ]
+}

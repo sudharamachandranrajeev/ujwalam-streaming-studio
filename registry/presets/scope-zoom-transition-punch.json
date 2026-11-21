@@ -1,0 +1,31 @@
+{
+  "id": "scope-zoom-transition-punch",
+  "version": "1.0.0",
+  "function": "scope-zoom-transition",
+  "functionVersion": "^1.0.0",
+  "name": "Scope punch-through",
+  "params": {
+    "scale": 1.8,
+    "inFrames": 8,
+    "outFrames": 10
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "slam",
+    "intensity": "high",
+    "mood": "electric",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "scope-zoom-transition-deep",
+    "whip-pan-right"
+  ]
+}

@@ -443,6 +443,44 @@ def _ramp_audio(p, i, k, tail):
             f"[{n}0][{n}1][{n}2][{n}3]concat=n=4:v=0:a=1,{tail}[a{i}_{k}]"]
 
 
+def _out_sec(p):
+    """BD3: a piece's length on the reel (its source span, or outFrames at 60 fps, or the span over its speed)."""
+    if p.get("outFrames"):
+        return int(p["outFrames"]) / 60.0
+    return (p["end"] - p["start"]) / float(p.get("speed") or 1.0)
+
+
+def _speed_video(p):
+    s = float(p.get("speed") or 1.0)
+    return "" if s == 1.0 else f",setpts=PTS/{s:.6f}"
+
+
+def _frames_video(p):
+    """BD3: exactly outFrames frames (a short source is held on its last frame, never shortened)."""
+    n = p.get("outFrames")
+    return f",tpad=stop_mode=clone:stop=4,trim=end_frame={int(n)},setpts=PTS-STARTPTS" if n else ""
+
+
+def _speed_audio(p):
+    s = float(p.get("speed") or 1.0)
+    return [] if s == 1.0 else [f"atempo={s:.6f}"]
+
+
+def _game_audio(p):
+    """BD3: the game sound at its duck gain except the keep windows (gunshot/kill cut-outs), then cut to the piece's
+    exact length. -> filters placed before the fades."""
+    out = []
+    n = p.get("outFrames")
+    if n:
+        d = int(n) / 60.0
+        out += [f"apad=whole_dur={d:.6f}", f"atrim=end={d:.6f}"]
+    g = p.get("game")
+    if g:
+        keep = "+".join(f"between(t,{a:.4f},{b:.4f})" for a, b in g.get("keep") or [])
+        out.append(f"volume='if({keep or 0},1,{float(g['gain']):.4f})':eval=frame")
+    return out
+
+
 def zoom_expr(z):
     """RS2 zoom-pulse (D412): the zoompan zoom expression for pulses at z["times"] (reel seconds): up over inSec on a
     quarter sine, back over outSec on a quarter cosine, peak z["scale"]."""
@@ -453,7 +491,8 @@ def zoom_expr(z):
 
 
 def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, out_name, threads=4, audio_tracks=1, max_sec=None,
-                captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None):
+                captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None,
+                fx=None):
     """One ffmpeg run: each piece is its own input (-ss/-t, exact because it is re-encoded), scaled into the frame,
     audio faded in and out by fade_ms (no pop at a hard cut), then concatenated. Every audio track of the source
     (audio_tracks) is kept as its own track, in source order (track 1 = the studio mix); none is dropped or remixed.
@@ -472,7 +511,13 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     RS2/RS4 (D412): a piece may carry "ramp" {at, sec, factor, catchUp, catchUpEnd, audio: sync|mute} (speed-ramp: the
     piece keeps its length, so every timeline above stays right); zoom {times, scale, inSec, outSec} (zoom-pulse, a
     zoompan over the joined picture); lut: a bare .cube name in the working folder applied once (lut3d) to the joined
-    picture. Neither touches the sound's encode: still one audio encode."""
+    picture. Neither touches the sound's encode: still one audio encode.
+    BD3 (D415, BeatDrop): a piece may carry "speed" (0.5-2, constant: picture setpts, sound atempo), "outFrames" (the
+    piece is exactly that many output frames: padded by its last frame and trimmed, so beat-locked joins never drift)
+    and "game" {gain, keep: [[a, b]]} (the game sound at gain except the keep windows, piece output seconds: the
+    gunshot and kill cut-outs). music "duck": None mixes the bed without the sidechain duck (BeatDrop ducks the game
+    instead). fx: a filter graph fragment from beatdrop_fx.graph() reading [fxin] and writing [fxout], run once on the
+    joined picture after zoom and lut. Pieces and calls without these keys render exactly as before."""
     ow, oh = int(frame["width"]), int(frame["height"])
     fd = fade_ms / 1000.0
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(threads), "-filter_threads", "2"]
@@ -481,14 +526,14 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     parts = []
     xd = crossfade_sec(pieces, transition)
     for i, p in enumerate(pieces):
-        d = p["end"] - p["start"]
+        d = _out_sec(p)
         parts.append(f"[{i}:v]scale={ow}:{oh}:force_original_aspect_ratio=decrease:flags=lanczos,"
-                     f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS{_ramp_video(p)},fps=60,"
-                     f"format=yuv420p,setpts=PTS-STARTPTS[v{i}]")
+                     f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS{_speed_video(p)}{_ramp_video(p)},fps=60,"
+                     f"format=yuv420p,setpts=PTS-STARTPTS{_frames_video(p)}[v{i}]")
         # hard cut: every piece fades in and out (no pop); crossfade: only the reel's own start and end (the joins
         # are the acrossfade)
-        af = ["aresample=48000", "asetpts=PTS-STARTPTS"]
-        fades = []
+        af = ["aresample=48000", "asetpts=PTS-STARTPTS"] + _speed_audio(p)
+        fades = _game_audio(p)
         if not xd or i == 0:
             fades.append(f"afade=t=in:d={fd:.3f}")
         if not xd or i == len(pieces) - 1:
@@ -508,7 +553,7 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     if lut:
         post.append(f"lut3d=file={lut}:interp=tetrahedral")
     vgraded = vlast
-    if post:
+    if post or fx:
         vlast = "[vgr]"
     alast = "ab" if thumbnail else "aout"  # RP6: the sound is delayed by the thumbnail frame
     music = music if audio_tracks else None
@@ -532,7 +577,9 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         outs = vlast + "".join(aj(k) for k in range(audio_tracks))
         parts.append(ins + f"concat=n={len(pieces)}:v=1:a={audio_tracks}{outs}")
     if post:
-        parts.append(f"[vgr]{','.join(post)}{vgraded}")
+        parts.append(f"[vgr]{','.join(post)}{'[vpost]' if fx else vgraded}")
+    if fx:  # BD4 (D415): the BeatDrop effects, once, on the graded picture
+        parts.append(fx.replace("[fxin]", "[vpost]" if post else "[vgr]").replace("[fxout]", vgraded))
     if title:  # FX2 (D411): the name display, an ASS file burned by libass over the joined picture (never blurred)
         parts.append(f"[vjoin]subtitles={title['ass']}:fontsdir={title['fontsdir']}{vfinal}")
     if captions:
@@ -554,10 +601,13 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
             dk = music["duck"]
             argv += ["-i", music["file"]]
             parts.append(f"[{mi}:a]aresample=48000[mbed]")
-            parts.append("[amus0]asplit=2[mgame][mkey]")
-            parts.append(f"[mbed][mkey]sidechaincompress=threshold={float(dk['threshold']):g}:ratio={float(dk['ratio']):g}:"
-                         f"attack={float(dk['attackMs']):g}:release={float(dk['releaseMs']):g}[mduck]")
-            mixin = ["[mgame]", "[mduck]"]
+            if dk is None:  # BD3 (D415): the game is ducked under the bed per piece; the bed is not ducked
+                mixin = ["[amus0]", "[mbed]"]
+            else:
+                parts.append("[amus0]asplit=2[mgame][mkey]")
+                parts.append(f"[mbed][mkey]sidechaincompress=threshold={float(dk['threshold']):g}:ratio={float(dk['ratio']):g}:"
+                             f"attack={float(dk['attackMs']):g}:release={float(dk['releaseMs']):g}[mduck]")
+                mixin = ["[mgame]", "[mduck]"]
             mi += 1
         if music.get("sfx"):
             argv += ["-i", music["sfx"]]

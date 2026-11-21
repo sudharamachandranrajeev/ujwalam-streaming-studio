@@ -1,0 +1,62 @@
+{
+  "id": "shot-shake",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Shot shake (BD4)",
+  "description": "Camera shake on a gunshot or kill: the picture shakes by `amplitude` of the frame height at `hz`, decaying to still over `frames` frames (inside a padded frame; untouched outside the window). No brightness change. BeatDrop montages (D415), flag beatdrop; tunable per preset. Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 12
+        },
+        "amplitude": {
+          "type": "number",
+          "minimum": 0.002,
+          "maximum": 0.03
+        },
+        "hz": {
+          "type": "number",
+          "minimum": 6,
+          "maximum": 20
+        }
+      }
+    },
+    "defaults": {
+      "frames": 6,
+      "amplitude": 0.012,
+      "hz": 12
+    },
+    "safeRanges": {
+      "frames": [
+        4,
+        12
+      ],
+      "amplitude": [
+        0.002,
+        0.03
+      ],
+      "hz": [
+        6,
+        20
+      ]
+    }
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "themeTokens": [],
+  "durationMs": 200,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD4"
+}

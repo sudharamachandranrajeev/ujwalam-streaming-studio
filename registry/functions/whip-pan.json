@@ -1,0 +1,69 @@
+{
+  "id": "whip-pan",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Whip pan (BD4)",
+  "description": "A fast sideways slide with directional motion blur across a join: the picture moves by `offset` of its width and back over `frames` frames (6-10) centred on the join, blurred along the move (dblur). Outside the window the picture is untouched. No brightness change. BeatDrop montages (D415), flag beatdrop; tunable per preset. Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "minimum": 6,
+          "maximum": 10
+        },
+        "offset": {
+          "type": "number",
+          "minimum": 0.04,
+          "maximum": 0.2
+        },
+        "blur": {
+          "type": "integer",
+          "minimum": 8,
+          "maximum": 60
+        },
+        "direction": {
+          "enum": [
+            -1,
+            1
+          ]
+        }
+      }
+    },
+    "defaults": {
+      "frames": 8,
+      "offset": 0.12,
+      "blur": 30,
+      "direction": 1
+    },
+    "safeRanges": {
+      "frames": [
+        6,
+        10
+      ],
+      "offset": [
+        0.04,
+        0.2
+      ],
+      "blur": [
+        8,
+        60
+      ]
+    }
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "themeTokens": [],
+  "durationMs": 170,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD4"
+}

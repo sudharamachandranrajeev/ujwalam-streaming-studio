@@ -1,0 +1,34 @@
+{
+  "$comment": "BeatDrop montages BD3/BD4 (D415, plan docs/plan/2026-11-21-beatdrop-montages.md): the beat-locked edit planner (services/clip/beatdrop.py) and its effects (services/clip/beatdrop_fx.py). Engine numbers only; game numbers (which moments anchor a piece, how long before and after) are in data/games/<game>/beatdrop.json. Target numbers come from the chosen reel style (RS1) when one is set; else from `targets` here. Status proposed: synthetic fixtures only, real footage UNVERIFIED.",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-21",
+  "flag": "beatdrop",
+  "fps": 60,
+  "maxSec": 60,
+  "frame": { "width": 1920, "height": 1080 },
+  "targets": {
+    "shotSec": 0.6, "cutsPerMin": 90, "beatShare": 0.75,
+    "source": "defaults from the five BeatDrop references (plan 1.3): median shot 0.12-0.67 s, 53-116 cuts/min, 44-82 % of cuts on a music onset"
+  },
+  "speed": { "min": 0.5, "max": 2.0 },
+  "coldOpen": { "minSec": 6, "maxSec": 25, "shotSec": 2.0, "speed": 0.75, "leadBeats": 1 },
+  "title": { "bars": 2 },
+  "outro": { "heroBars": 2, "creditsBars": 2, "heroSpeed": 0.5 },
+  "breakdown": { "speed": 0.5, "shotBars": 1 },
+  "audio": { "gameGain": 0.2, "calmGain": 0.08, "keepPreSec": 0.03, "keepPostSec": 0.25, "musicLevelDb": -14 },
+  "flash": { "maxPerSec": 3, "minGapSec": 0.34 },
+  "effects": {
+    "impact-flash": "impact-flash-white",
+    "whip-pan": "whip-pan-right",
+    "scope-zoom-transition": "scope-zoom-transition-punch",
+    "rgb-split": "rgb-split-glitch",
+    "shot-shake": "shot-shake-tight",
+    "letterbox": "letterbox-cinema",
+    "ragdoll-slowmo": "ragdoll-slowmo-half",
+    "bloom-grade": "bloom-grade-teal-white"
+  },
+  "rgbSplitEvery": 4,
+  "ragdollEvery": 3,
+  "musicSeedAvoidLast": 3
+}

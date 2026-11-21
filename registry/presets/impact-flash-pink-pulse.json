@@ -1,0 +1,36 @@
+{
+  "id": "impact-flash-pink-pulse",
+  "version": "1.0.0",
+  "function": "impact-flash",
+  "functionVersion": "^1.0.0",
+  "name": "Soft pink pulse",
+  "params": {
+    "frames": 1,
+    "alpha": 0.35,
+    "colour": "0xFFD0E0",
+    "pulseColour": "0xFF2E63",
+    "pulseAlpha": 0.12,
+    "pulseMs": 200,
+    "minGapSec": 0.5,
+    "maxPerSec": 2
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "burst",
+    "intensity": "high",
+    "mood": "electric",
+    "colourUse": "none",
+    "flashes": "medium"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "impact-flash-white",
+    "rgb-split-glitch"
+  ]
+}

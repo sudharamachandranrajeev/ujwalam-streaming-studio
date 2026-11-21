@@ -1,0 +1,16 @@
+{
+  "$comment": "BeatDrop planner game numbers for CODM (D415): which BD1 moment kinds anchor a piece on a beat, which go on off-beats, which make calm (cold open, breakdown, outro) shots, and how much of the game shows before and after an anchor. Read by services/clip/beatdrop.py. Proposed from the BeatDrop references (plan 1.3), not yet checked on the user's footage.",
+  "version": "1.0.0",
+  "game": "codm",
+  "status": "unverified",
+  "onBeatKinds": ["kill", "gunshot"],
+  "offBeatKinds": ["flick", "slide", "jump"],
+  "calmKinds": ["third-person", "scope-in"],
+  "noKillMarginSec": 0.6,
+  "anchorPreMinSec": 0.2,
+  "anchorPostMinSec": 0.25,
+  "evidence": {
+    "source": "plan docs/plan/2026-11-21-beatdrop-montages.md 1.3 (five BeatDrop references, measured 2026-11-21)",
+    "realFootage": "UNVERIFIED: synthetic fixtures only (tests/py/test_beatdrop.py)"
+  }
+}
