@@ -85,7 +85,9 @@ export function createTextHistory(dataDir, keep = 20) {
 const MONTAGE_MUSIC_FILE = path.join(REPO, 'data', 'clip', 'montage-music.json');
 let mmCfg = null;
 const montageCfg = () => (mmCfg ??= readJson(MONTAGE_MUSIC_FILE));
-const CREDIT_BAD = /[\u0000-\u001f\u007f<>{}]/;
+// < > { }, controls, format characters (bidi, zero-width, soft hyphen, BOM, tag characters ...), private use, lone
+// surrogates and the invisible marks outside those categories; the same rule as montage_music.py unsafe_text
+const CREDIT_BAD = /[<>{}\p{Cc}\p{Cf}\p{Co}\p{Cs}͏ᅟᅠㅤﾠ]/u;
 /** The plain-word reason a credit is not usable, or null. */
 export function creditProblem(c, cfg = montageCfg(), origin = null) {
   if (!cfg) return 'the montage music settings are missing';
@@ -94,7 +96,7 @@ export function creditProblem(c, cfg = montageCfg(), origin = null) {
   for (const k of ['artist', 'title']) if (typeof c[k] !== 'string' || !c[k].trim()) return `the song credit has no ${k}`;
   for (const [k, n] of Object.entries(mx)) {
     const v = c[k] ?? '';
-    if (typeof v !== 'string' || v.length > n || CREDIT_BAD.test(v)) return `the song credit's ${k} is not plain text of at most ${n} characters`;
+    if (typeof v !== 'string' || [...v].length > n || CREDIT_BAD.test(v)) return `the song credit's ${k} is not plain text of at most ${n} characters`;
   }
   if (origin && !(typeof c.link === 'string' && c.link.startsWith(cfg.ncsFilename.linkPrefix) && /^[A-Za-z0-9_-]{11}$/.test(c.link.slice(cfg.ncsFilename.linkPrefix.length)))) return "the NCS song credit's link is not a YouTube link";
   if (c.link && !/^https:\/\/[A-Za-z0-9.-]+(\/\S*)?$/.test(c.link)) return "the song credit's link must start with https://";

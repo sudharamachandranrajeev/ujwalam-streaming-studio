@@ -91,10 +91,16 @@ describe('ncs-filename credit (D417)', () => {
     assert.equal(musicCredit(musicOf({ kind: 'montage', music: { ...rec, credit: null } })).use, 'refuse');
   });
   test('a link that is not the song\'s YouTube link, or injected text, is refused', () => {
-    for (const bad of [{ link: 'https://evil.example/x' }, { link: 'https://youtu.be/short' }, { link: '' }, { artist: 'A\nBuy now' }, { title: '<b>x' }]) {
+    for (const bad of [{ link: 'https://evil.example/x' }, { link: 'https://youtu.be/short' }, { link: '' }, { artist: 'A\nBuy now' }, { title: '<b>x' },
+      { artist: 'Ae​ro' }, { artist: 'Ae­ro' }, { title: 'S\u0085x' }, { artist: 'Ae\u{E0001}ro' }, { title: 'Sx' }, { title: 'Sㅤx' }]) {
       const mm = musicOf({ kind: 'montage', music: { ...rec, credit: { ...NCS_CREDIT, ...bad } } });
       assert.equal(musicCredit(mm).use, 'refuse', JSON.stringify(bad));
     }
+  });
+  test('Codex D417 review: lengths count characters (code points) as Python does, not UTF-16 units', () => {
+    const wide = '\u{1D400}'.repeat(61); // 61 characters (122 UTF-16 units) is inside the 120-character artist limit
+    const mm = musicOf({ kind: 'montage', music: { ...rec, credit: { ...NCS_CREDIT, artist: wide } } });
+    assert.equal(musicCredit(mm).use, 'credit');
   });
   test('the credit text is stamped and checked like the library credit', () => {
     const mm = musicOf({ kind: 'montage', music: rec });

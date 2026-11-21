@@ -228,9 +228,37 @@ class NcsFilenameTests(unittest.TestCase):
             "long title": "A - " + "B" * 170 + f" {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus",
             "long genre": f"A - B {BAR} " + "G" * 70 + f" {BAR} NCS - Copyright Free Music [PTF5xgT-pm8].opus",
             "not a string": None,
+            "soft hyphen": ok.replace("Aero", "Ae­ro"),
+            "c1 control": ok.replace("Aero", "Ae\u0085ro"),
+            "word joiner range": ok.replace("Aero", "Ae⁤ro"),
+            "tag character": ok.replace("Aero", "Ae\U000e0001ro"),
+            "private use": ok.replace("Aero", "Aero"),
+            "hangul filler": ok.replace("Aero", "Aeㅤro"),
         }
         for why, name in rej.items():
             self.assertIsNone(mm.parse_ncs_name(name, self.cfg), why)
+
+    def test_refused_ncs_name_gets_no_loose_name_credit(self):
+        # Codex D417 review: a strict-refused NCS-marked name must not fall back to the loose "Artist - Title" parser
+        tmp = tempfile.mkdtemp(prefix="ujw-ncs-")
+        try:
+            folder = os.path.join(tmp, "m")
+            os.makedirs(folder)
+            bad = NCS_OK.replace("Aero", "Ae​ro")
+            loose = "Plain Artist - Plain­ Song.mp3"
+            for n in (bad, loose):
+                with open(os.path.join(folder, n), "wb") as f:
+                    f.write(n.encode("utf-8"))
+            rows = {r["file"]: r for r in mm.view(mm.scan(os.path.join(tmp, "d"), folder, self.cfg, tags=lambda p: {}, live=OFF), self.cfg)}
+            self.assertEqual((rows[bad]["source"], rows[bad]["complete"]), ("none", False))
+            # the loose parser still credits an unmarked name, without the invisible character
+            self.assertEqual((rows[loose]["source"], rows[loose]["title"], rows[loose]["complete"]), ("file name", "Plain Song", True))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_invisible_characters_make_a_credit_incomplete(self):
+        for ch in ("​", "­", "\u0085", "﻿"):
+            self.assertFalse(mm.complete({"artist": f"A{ch}B", "title": "T"}, self.cfg), repr(ch))
 
     def test_disabled_by_data(self):
         cfg = dict(self.cfg, ncsFilename=dict(self.cfg["ncsFilename"], enabled=False))
