@@ -173,6 +173,7 @@ class PublishTests(unittest.TestCase):
         self.assertEqual([r.get("music") for r in rows], [{"source": "user-folder", "track": "t1"}, {"source": "generated"}, None])
         up = read_json(os.path.join(self.data, "clips", "uploads.json"))["files"]
         self.assertEqual([r.get("music") for r in up], [r.get("music") for r in rows])
+        self.assertEqual([r.get("video") for r in up], [pub.video_binding(r["file"]) for r in rows], "rows bound to their video")
         for r in rows:
             side = r["file"] + pub.MUSIC_SIDECAR
             if r.get("music"):

@@ -222,6 +222,31 @@ describe('posting', () => {
     assert.deepEqual(r.skipped.map((x) => x.reason).sort(), ['music-unknown', 'music-unknown', 'music-unknown', 'render-only']);
   });
 
+  test('Codex verify: an uploads row counts only while it still describes its video; a replaced video is held', async () => {
+    const e = setup([{ name: 'codm_won-reel_20261121-140000_victory-kills-4_01_v.mp4', kind: 'won-reel', music: { source: 'none' } }]);
+    const up = path.join(e.dataDir, 'clips', 'uploads.json');
+    const doc = JSON.parse(readFileSync(up, 'utf8'));
+    const file = doc.files[0].file;
+    doc.files[0].video = videoBinding(file);
+    writeFileSync(up, JSON.stringify(doc));
+    // the no-music video is replaced by a library-music video under the same name (no sidecar for it)
+    writeFileSync(file, Buffer.from('a montage with an NCS song, other bytes'.repeat(8)));
+    const r = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: {}, ffmpeg: process.execPath });
+    assert.deepEqual(r.skipped.map((s) => s.reason), ['music-unknown'], 'from uploads.json');
+    const s = scanClipsFolder({ dataDir: e.dataDir, folder: path.dirname(path.dirname(file)), probeSeconds: () => 40 });
+    assert.equal(s.rows.length, 0, 'not in a day folder: the scan path is checked below');
+    const day = path.join(mk(), '2026-11-21'); mkdirSync(day, { recursive: true });
+    const moved = path.join(day, path.basename(file));
+    writeFileSync(moved, readFileSync(file));
+    const doc2 = { version: 1, files: [{ ...doc.files[0], file: moved }] };
+    writeFileSync(up, JSON.stringify(doc2));
+    const s2 = scanClipsFolder({ dataDir: e.dataDir, folder: path.dirname(day), probeSeconds: () => 40 });
+    assert.deepEqual(s2.rows[0].music, { source: 'unknown' }, 'folder scan: the row no longer describes the file');
+    // a row whose binding matches keeps its record
+    writeFileSync(up, JSON.stringify({ version: 1, files: [{ ...doc2.files[0], video: videoBinding(moved) }] }));
+    assert.deepEqual(scanClipsFolder({ dataDir: e.dataDir, folder: path.dirname(day), probeSeconds: () => 40 }).rows[0].music, { source: 'none' });
+  });
+
   test('Codex verify: the legacy pass covers only clips older than the provenance start, written once and never moved', async () => {
     const e = setup(LEGACY.filter((x) => x.kind === 'won-reel' || x.kind === 'impact-play'));
     const file = path.join(e.dataDir, ...PROVENANCE_FILE.split('/'));

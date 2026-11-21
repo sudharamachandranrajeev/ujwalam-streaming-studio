@@ -751,130 +751,69 @@ def _pid_alive(pid):
     return True
 
 
-def _proc_start(pid):
-    """When the process started (an opaque number), so a reused pid is not taken for the lock owner; None if unknown."""
-    if not isinstance(pid, int) or pid <= 0:
-        return None
-    try:
-        if os.name == "nt":
-            import ctypes
-            k = ctypes.windll.kernel32
-            h = k.OpenProcess(0x1000, False, pid)
-            if not h:
-                return None
-            try:
-                ft = [ctypes.c_ulonglong() for _ in range(4)]
-                if not k.GetProcessTimes(h, *[ctypes.byref(x) for x in ft]):
-                    return None
-                return int(ft[0].value)
-            finally:
-                k.CloseHandle(h)
-        with open(f"/proc/{pid}/stat", encoding="ascii") as fh:
-            return int(fh.read().rsplit(")", 1)[1].split()[19])
-    except (OSError, ValueError, IndexError, AttributeError):
-        return None
-
-
-LOCK_TORN_SEC = 60  # Codex verify: a lock file without a readable owner record is stale only when older than this
+LOCK_BYTE = 1 << 20  # Windows: the locked byte sits past the owner text, so a busy reader can still read who holds it
 
 
 class HeavyJobLock:
     """One heavy clip job at a time across processes (user limit 2026-10-27): the detector pass, the BD1 moment
-    finder, the BD2 song map and the montage-music scan share this one lock file. Codex verify: the owner record is
-    written to a temp file, flushed and linked into place (os.link fails when the lock exists), so nobody ever sees a
-    lock without its owner. A lock is stale only when its recorded pid is dead or was reused (start time differs), or
-    when it has no readable record and is older than LOCK_TORN_SEC; a stale lock is moved aside and checked before it
-    is dropped, so a fresh lock someone else just linked is never deleted."""
+    finder, the BD2 song map and the montage-music scan share this one lock. Codex verify: an OS-held lock on a lock
+    file that is never deleted (msvcrt.locking LK_NBLCK on Windows, fcntl.flock LOCK_EX|LOCK_NB elsewhere), held for
+    the job's life; the kernel frees it when the process ends, however it ends, so there is no staleness rule. The
+    owner text in the file (pid, job, time) is written after locking and is for the busy message only."""
 
     def __init__(self, folder=None, job="detector-pass"):
         self.job = job
         self.path = os.path.join(folder or tempfile.gettempdir(), LOCK_NAME)
         self.held = False
-        self.token = None
+        self.fh = None
 
-    def _read(self):
+    def _owner(self):
         try:
-            with open(self.path, "rb") as fh:
-                raw = fh.read()
-            st = os.stat(self.path)
-        except OSError:
-            return None, None, None
-        try:
-            rec = json.loads(raw.decode("utf-8"))
-            if not isinstance(rec, dict):
-                rec = None
-        except (ValueError, UnicodeDecodeError):
-            rec = None
-        return raw, rec, st.st_mtime
-
-    def _stale(self, rec, mtime):
-        if rec is None:
-            return mtime is not None and time.time() - mtime > LOCK_TORN_SEC
-        pid = rec.get("pid")
-        if not _pid_alive(pid):
-            return True
-        start, now = rec.get("start"), _proc_start(pid)
-        return start is not None and now is not None and start != now
-
-    def _drop_stale(self, raw):
-        aside = f"{self.path}.{os.getpid()}.{uuid.uuid4().hex}.stale"
-        try:
-            os.rename(self.path, aside)
-        except OSError:
-            return
-        try:
-            with open(aside, "rb") as fh:
-                moved = fh.read()
-        except OSError:
-            moved = None
-        if moved != raw:  # someone linked a fresh lock in between: put it back, never delete it
-            try:
-                os.link(aside, self.path)
-            except OSError:
-                pass
-        try:
-            os.remove(aside)
-        except OSError:
-            pass
+            with open(self.path, encoding="utf-8") as fh:
+                rec = json.loads(fh.read(4096).split("\n", 1)[0] or "{}")
+            return rec if isinstance(rec, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
     def __enter__(self):
-        self.token = uuid.uuid4().hex
-        rec = {"pid": os.getpid(), "start": _proc_start(os.getpid()), "job": self.job, "at": time.time(),
-               "token": self.token}
-        tmp = f"{self.path}.{os.getpid()}.{self.token}.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(rec, fh)
-            fh.flush()
-            os.fsync(fh.fileno())
+        fh = open(self.path, "a+b")  # created when missing, never truncated before the lock is ours, never deleted
         try:
-            for _ in range(3):
-                try:
-                    os.link(tmp, self.path)
-                except FileExistsError:
-                    raw, other, mtime = self._read()
-                    if raw is None:
-                        continue  # gone meanwhile: try again
-                    if not self._stale(other, mtime):
-                        pid = (other or {}).get("pid")
-                        raise ClipError(f"another heavy clip job is running (pid {pid}); one at a time") from None
-                    self._drop_stale(raw)
-                    continue
-                self.held = True
-                return self
-        finally:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-        raise ClipError("could not take the heavy-job lock")
+            if os.name == "nt":
+                import msvcrt  # noqa: PLC0415
+                fh.seek(LOCK_BYTE)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl  # noqa: PLC0415
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            o = self._owner()
+            since = time.strftime("%H:%M:%S", time.localtime(o["at"])) if isinstance(o.get("at"), (int, float)) else "?"
+            raise ClipError(f"another heavy clip job is running ({o.get('job', 'unknown job')} since {since}, "
+                            f"pid {o.get('pid', '?')}); one at a time") from None
+        try:
+            fh.seek(0)
+            fh.truncate()
+            fh.write((json.dumps({"pid": os.getpid(), "job": self.job, "at": time.time()}) + "\n").encode("utf-8"))
+            fh.flush()
+        except OSError:
+            pass  # the owner text is display only
+        self.fh, self.held = fh, True
+        return self
 
     def __exit__(self, *exc):
         if self.held:
-            _, rec, _ = self._read()
-            if rec and rec.get("token") == self.token:  # only ever our own lock
-                try:
-                    os.remove(self.path)
-                except OSError:
-                    pass
-            self.held = False
+            try:
+                if os.name == "nt":
+                    import msvcrt  # noqa: PLC0415
+                    self.fh.seek(LOCK_BYTE)
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl  # noqa: PLC0415
+                    fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            finally:
+                self.fh.close()
+                self.fh, self.held = None, False
         return False

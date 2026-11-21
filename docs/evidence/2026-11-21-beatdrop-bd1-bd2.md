@@ -103,6 +103,17 @@ Fixed already (Codex verify of dc85dcb + 2e1883b): song-map guard, song-map open
 
 Re-run after the fixes, one file at a time, CPU only: analytics 12, cli-data-dir 3, learning-mix 26, learning-signals 10, posting-auto-chain 15, posting-auto-d375 51, posting-auto 14, posting-custom-schedule 15, posting-e2e 61, posting-live-check 8, posting-preview 12, posting-pt1-text 5, posting-pt2-hard-gap 10, posting-pt3-actions 9, posting-pt5-settings 11, posting-rules-in-data 8, posting-schedule 28, posting-uploads 12, posting-youtube-cli 6, posting-youtube 9, studio-ui-posting-auto 8, studio-ui-posting-queue 6, studio-ui-posting-youtube 11, studio-ui-posting 8; python long_video 23, learning_mix 9, song_map 9, clip_live_review_gate 6. All passed. Two e2e fixtures (a won-reel added after the first run) now carry a record: a clip made after the start without one is held, as intended.
 
+## Second Codex verify fixes (2026-11-21, D414 item 8)
+
+Codex verify of 6c3664f: items 1, 2, 4, 5 and 6 fixed. Two were left:
+
+| Finding | Fix | Test (result) |
+|---|---|---|
+| P1 stale-lock recovery raced | OS-held lock (msvcrt.locking / fcntl.flock) on a persistent lock file; no staleness rules; owner text for display only | `tests/py/test_moments.py`: 4 processes start together, 1 WON and 3 BUSY; the lock file stays; a busy message names the holder's job and start; a killed holder's lock is free at once (pass, 10/10). detector_pass 37/37 (the lock file now stays after release), song_map 9/9 |
+| P1 uploads row trusted without checking the video | rows carry the video binding (clip_publish.py); `trustedMusic` in clips-source.mjs, used by the folder scan and by packageUploads on uploads.json | `tests/montage-music.test.mjs` "an uploads row counts only while it still describes its video": a no-music won-reel row whose video was replaced by other bytes under the same name is held (music-unknown) from uploads.json and is unknown in the folder scan; a matching row keeps its record (pass, 12/12). `test_clip_output_layout.py`: rows are bound to their video (pass, 18/18) |
+
+Re-run, one file at a time, CPU only: posting-e2e 61 (its fixture rows now carry the binding, as the publisher writes it), posting-uploads 12, posting 18, posting-auto-d375 51, posting-auto-chain 15, posting-backlog-order 5, posting-preview 12, analytics 12, learning-signals 10, learning_mix 9. All passed.
+
 Residual (accepted, D414): the data folder is the user's own; whoever can write it can rewrite a video and its sidecar together.
 
 Still UNVERIFIED: the Montage music card does not yet show the "file changed, check the credit" note (it shows the credit as incomplete). The legacy rule has not run against the user's real clips folder.

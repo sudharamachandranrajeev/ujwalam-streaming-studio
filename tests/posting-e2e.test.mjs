@@ -10,6 +10,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { createPostChain, createUploadQueue, readQueueSummary, requestRunNow } from '../services/posting/auto-chain.mjs';
 import { createPostStore } from '../services/posting/index.mjs';
+import { videoBinding } from '../services/posting/clips-source.mjs';
 import { checkPostStatus } from '../services/posting/youtube.mjs';
 import { tasksDir } from '../services/studio-ui/tasks.mjs';
 import { READONLY_SCOPE, SCOPE } from '../services/posting/oauth.mjs';
@@ -144,7 +145,7 @@ function setup(rows = ROWS) {
   const out = rows.map((r, i) => {
     const file = path.join(clips, r.name);
     writeFileSync(file, Buffer.from(`${r.name}-${i}`.repeat(8)));
-    return { file, label: 'x', seconds: r.seconds, kind: r.kind, ...(r.music ? { music: r.music } : {}), run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-09T09:00:00.000Z' };
+    return { file, label: 'x', seconds: r.seconds, kind: r.kind, ...(r.music ? { music: r.music } : {}), video: videoBinding(file), run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-09T09:00:00.000Z' };
   });
   mkdirSync(path.join(dataDir, 'clips', 'runs', 'run1'), { recursive: true });
   writeFileSync(path.join(dataDir, 'clips', 'uploads.json'), JSON.stringify({ version: 1, files: out }));
@@ -296,7 +297,7 @@ function addRow(e, r) {
   const doc = JSON.parse(readFileSync(f, 'utf8'));
   const file = path.join(path.dirname(doc.files[0].file), r.name);
   writeFileSync(file, Buffer.from(`${r.name}-late`.repeat(8)));
-  doc.files.push({ file, label: 'x', seconds: r.seconds, kind: r.kind, ...(r.music ? { music: r.music } : {}), run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-09T10:30:00.000Z' });
+  doc.files.push({ file, label: 'x', seconds: r.seconds, kind: r.kind, ...(r.music ? { music: r.music } : {}), video: videoBinding(file), run: 'run1', recording: 'r', posted: [], addedAt: '2026-11-09T10:30:00.000Z' });
   writeFileSync(f, JSON.stringify(doc));
 }
 

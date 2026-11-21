@@ -28,6 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { resolveString } from '../project/scene-preset.mjs';
+import { trustedMusic } from './clips-source.mjs';
 import { cleanFacts, createTextHistory, creditMissing, draftText, legacyContext, legacyFor, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 
@@ -411,7 +412,10 @@ export async function packageUploads(opts) {
   let ffmpeg = null;
   let flags = null;
   const legacy = legacyContext(opts.dataDir); // D414: clips rendered before music records (settings rule + provenance start)
-  for (const row of doc.files) {
+  for (const raw of doc.files) {
+    // Codex verify: an uploads.json row counts only while it still describes the file (scan rows are checked already)
+    const row = !Array.isArray(opts.rows) && isPlain(raw) && typeof raw.file === 'string' && path.isAbsolute(raw.file) && isRealFile(raw.file)
+      ? (({ music: _m, ...rest }) => { const mu = trustedMusic(raw, raw.file, legacy.since); return mu !== undefined ? { ...rest, music: mu } : rest; })(raw) : raw;
     const file = isPlain(row) && typeof row.file === 'string' ? row.file : null;
     const skip = (reason) => skipped.push({ file: file ? path.basename(file) : '?', reason });
     if (!file || !UPLOAD_KINDS.includes(row.kind)) { skip('unknown-kind'); continue; }

@@ -192,10 +192,15 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         how = _link_or_copy(src, os.path.join(day, name))
         prov = music_provenance(c, bool(rdoc.get("musicRecords")))
         write_music_sidecar(os.path.join(day, name), prov)
+        try:
+            vbind = video_binding(os.path.join(day, name))  # Codex verify: the row describes these bytes only
+        except OSError:
+            vbind = None
         rows.append({"id": c["id"], "layout": f["layout"], "file": os.path.join(day, name), "how": how, "kind": kind,
                      "label": label, "seconds": round(float(c["end"]) - float(c["start"]), 3),
                      **({"thumbnail": True} if f.get("thumbnail") else {}),  # RP6: frame 0 is the cover
                      **({"music": prov} if prov is not None else {}),  # D414: where its music came from (posting gate)
+                     **({"video": vbind} if vbind else {}),
                      # PT1 (D408): the clip's facts (medal, kills, result, mode; only the known ones) for its post text
                      **({"facts": rt.facts(c)} if rt.facts(c) else {}),
                      # RP5 (D373): the edit choices a reel was made with, so its results can be linked to them
@@ -209,6 +214,7 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                                 **({"facts": r["facts"]} if r.get("facts") else {}),
                                 **({"thumbnail": True} if r.get("thumbnail") else {}),
                                 **({"music": r["music"]} if r.get("music") else {}),
+                                **({"video": r["video"]} if r.get("video") else {}),
                                 **({"choices": r["choices"]} if r.get("choices") else {})} for r in rows])
     return rows
 

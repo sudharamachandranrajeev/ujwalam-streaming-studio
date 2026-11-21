@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { clipsFolder } from '../studio-ui/user-settings.mjs';
+import { clipTimeMs, readProvenanceSince } from './post-text.mjs';
 
 /** clip_names.py NAME_RE (keep the two in step). */
 export const CLIP_NAME = /^([a-z0-9-]+)_(short|montage|won-reel|impact-play|long-highlights)_(\d{8}-\d{6})_([a-z0-9-]+)_(\d{2,3})_(v|h|v-[a-z0-9-]+)\.mp4$/;
@@ -60,6 +61,23 @@ export function musicSidecar(file) {
   } catch { return unknown; }
 }
 
+/**
+ * Codex verify (D414): the music record for an existing uploads.json row and its file. The row is trusted only while
+ * its video binding (clip_publish.py video_binding, written with the row) matches the file. A row whose binding does
+ * not match, or that has none while the file is newer than the provenance start, is ignored: the sidecar decides, and
+ * no valid sidecar is unknown (held). A row with no binding on an older file keeps its record (legacy rule after).
+ */
+export function trustedMusic(row, file, sinceMs) {
+  const fromSidecar = () => musicSidecar(file) ?? { source: 'unknown' };
+  if (isPlain(row.video)) {
+    const v = videoBinding(file);
+    return v && v.size === row.video.size && v.head === row.video.head && v.tail === row.video.tail ? row.music : fromSidecar();
+  }
+  const t = clipTimeMs(file);
+  if (Number.isFinite(sinceMs) && (t === null || Math.floor(t) > sinceMs)) return fromSidecar();
+  return row.music === undefined ? musicSidecar(file) ?? undefined : row.music;
+}
+
 export function scanClipsFolder({ dataDir, folder = clipsFolder(dataDir), probeSeconds = ffprobeSeconds } = {}) {
   let known = [];
   try { const j = JSON.parse(readFileSync(path.join(dataDir, 'clips', 'uploads.json'), 'utf8')); if (Array.isArray(j?.files)) known = j.files.filter((r) => isPlain(r) && typeof r.file === 'string'); } catch { /* none yet */ }
@@ -67,6 +85,7 @@ export function scanClipsFolder({ dataDir, folder = clipsFolder(dataDir), probeS
   const byName = new Map(known.map((r) => [path.basename(r.file).toLowerCase(), r]));
   const rows = []; let unknown = 0;
   if (!realDir(folder)) return { folder, rows, unknown };
+  const since = readProvenanceSince(dataDir);
   for (const day of readdirSync(folder).filter((d) => DAY.test(d)).sort()) {
     const dir = path.join(folder, day);
     if (!realDir(dir)) continue;
@@ -76,7 +95,7 @@ export function scanClipsFolder({ dataDir, folder = clipsFolder(dataDir), probeS
       if (!m) { if (name.toLowerCase().endsWith('.mp4')) unknown++; continue; }
       if (!realFile(file)) continue;
       const row = byPath.get(norm(file)) ?? byName.get(name.toLowerCase());
-      if (row) { const mu = row.music === undefined ? musicSidecar(file) : null; rows.push({ ...row, file, ...(mu ? { music: mu } : {}) }); continue; }
+      if (row) { const { music: _m, ...rest } = row; const mu = trustedMusic(row, file, since); rows.push({ ...rest, file, ...(mu !== undefined ? { music: mu } : {}) }); continue; }
       // D414 (Codex BD review): the music record the publish step wrote next to the video; none = unknown (a montage
       // with unknown music is not posted, services/posting/post-text.mjs musicOf)
       const music = musicSidecar(file);

@@ -213,48 +213,48 @@ class MomentTests(unittest.TestCase):
                 self.assertFalse(os.path.exists(a) or os.path.exists(b))
             with open(os.path.join(td, cc.LOCK_NAME), "w", encoding="utf-8") as f:
                 f.write('{"pid": %d, "job": "moments"}' % os.getpid())
-            with self.assertRaises(cc.ClipError):
-                with cc.HeavyJobLock():
-                    pass
+            with cc.HeavyJobLock():  # owner text alone never decides: only the OS lock does
+                pass
         finally:
             tempfile.tempdir = old
             shutil.rmtree(td, ignore_errors=True)
 
-    def test_lock_is_atomic_and_never_drops_a_live_or_fresh_one(self):
-        """Codex verify: the owner record is linked into place whole; two concurrent acquirers in two processes, one
-        wins; a torn (unreadable) lock is stale only after LOCK_TORN_SEC; a dead pid's lock is taken."""
+    def test_lock_is_os_held_one_of_four_wins_and_a_killed_holder_frees_it(self):
+        """Codex verify: an OS-held lock (msvcrt.locking / fcntl.flock) on a lock file that is never deleted. Four
+        processes start together: one wins. A holder that is killed frees the lock at once (no staleness rule)."""
         import subprocess  # noqa: PLC0415
         import clip_common as cc  # noqa: PLC0415
         td = tempfile.mkdtemp(prefix="ujw-lock-")
+        here = os.path.dirname(os.path.abspath(cc.__file__))
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             go = os.path.join(td, "go")
             code = ("import os,sys,time;sys.path.insert(0,sys.argv[1]);import clip_common as cc\n"
                     "while not os.path.exists(sys.argv[3]): time.sleep(0.001)\n"
                     "try:\n with cc.HeavyJobLock(sys.argv[2]):\n  print('WON',flush=True);time.sleep(1.5)\n"
                     "except cc.ClipError: print('BUSY',flush=True)\n")
-            here = os.path.join(os.path.dirname(os.path.abspath(cc.__file__)))
             procs = [subprocess.Popen([sys.executable, "-I", "-c", code, here, td, go], stdout=subprocess.PIPE, text=True,
-                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)) for _ in range(4)]
+                                      creationflags=flags) for _ in range(4)]
             time.sleep(0.8)
             open(go, "w").close()
             outs = sorted(p.communicate(timeout=60)[0].strip() for p in procs)
             self.assertEqual(outs, ["BUSY", "BUSY", "BUSY", "WON"])
             lock = os.path.join(td, cc.LOCK_NAME)
-            self.assertFalse(os.path.exists(lock))
-            open(lock, "w").close()  # torn and fresh: another process between create and write (old code) -> busy
-            with self.assertRaises(cc.ClipError):
+            self.assertTrue(os.path.exists(lock), "the lock file is never deleted")
+            hold = ("import sys,time;sys.path.insert(0,sys.argv[1]);import clip_common as cc\n"
+                    "with cc.HeavyJobLock(sys.argv[2], job='holder'):\n print('HELD',flush=True);time.sleep(120)\n")
+            p = subprocess.Popen([sys.executable, "-I", "-c", hold, here, td], stdout=subprocess.PIPE, text=True, creationflags=flags)
+            self.assertEqual(p.stdout.readline().strip(), "HELD")
+            with self.assertRaises(cc.ClipError) as e:
                 with cc.HeavyJobLock(td):
                     pass
-            old = time.time() - cc.LOCK_TORN_SEC - 5
-            os.utime(lock, (old, old))
-            with cc.HeavyJobLock(td):  # torn and old: stale, taken
+            self.assertIn("holder since", str(e.exception), "the busy message names the job and its start")
+            p.kill()
+            p.wait(timeout=30)
+            with cc.HeavyJobLock(td) as lk:  # killed holder: free at once
+                self.assertTrue(lk.held)
                 self.assertEqual(json.load(open(lock, encoding="utf-8"))["pid"], os.getpid())
-            with open(lock, "w", encoding="utf-8") as fh:
-                json.dump({"pid": os.getpid(), "start": -1}, fh)  # our pid, other start time: a reused pid
-            with cc.HeavyJobLock(td):
-                pass
-            self.assertFalse(os.path.exists(lock))
-            self.assertEqual([n for n in os.listdir(td) if n != "go"], [], "no temp or aside files left")
+            p.stdout.close()
         finally:
             shutil.rmtree(td, ignore_errors=True)
 
