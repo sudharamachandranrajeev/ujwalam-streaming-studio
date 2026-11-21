@@ -159,6 +159,38 @@ class ClipperStyleTests(unittest.TestCase):
         self.assertIn("ttl, mus, zoom=zoom, lut=lut)", src)
         self.cl._style_cleanup(self.tmp)
 
+    def test_non_canvas_live_layouts_get_the_colour_and_a_plain_note(self):
+        """Codex RS verify: crop, fill and stack layouts render one piece of the save through their own geometry: the
+        style's colour (LUT) is applied there; pace, joins, zoom pulses and slow motion are not, and the clip row says
+        so in plain words per layout."""
+        import clip_render as rnd  # noqa: PLC0415
+        seen = []
+        real = rnd.run_tool
+        rnd.run_tool = lambda argv, **k: seen.append(" ".join(argv)) or type("R", (), {"returncode": 1, "stderr": "stop"})()
+        try:
+            for kind in ("crop", "fill", "canvas"):
+                with self.assertRaises(cc.ClipError):
+                    rnd.render_variant("ffmpeg", "save.mp4", {"width": 1920, "height": 1080, "has_audio": True},
+                                       {"id": "L1", "start": 1.0, "end": 9.0}, {"id": f"v-{kind}", "kind": kind}, FRAME,
+                                       "libopenh264", self.tmp, lut="style.cube")
+            with self.assertRaises(cc.ClipError):
+                rnd.render_variant("ffmpeg", "save.mp4", {"width": 1920, "height": 1080, "has_audio": True},
+                                   {"id": "L1", "start": 1.0, "end": 9.0}, {"id": "v-crop", "kind": "crop"}, FRAME,
+                                   "libopenh264", self.tmp)
+        finally:
+            rnd.run_tool = real
+        for a in seen[:3]:
+            self.assertEqual(a.count("lut3d=file=style.cube"), 1)
+        self.assertNotIn("lut3d", seen[3])  # no style: the command line as before
+        n = self.cl._style_skip_note({"id": "v-crop", "kind": "crop"})
+        self.assertEqual(n["layout"], "v-crop")
+        self.assertEqual(n["note"], "style not applied: v-crop (crop layout gets the colour only; pace, joins, zoom "
+                                    "pulses and slow motion need the canvas layout)")
+        import inspect  # noqa: PLC0415
+        src = inspect.getsource(self.cl)
+        self.assertIn("frame, encoder, wd, lut=lut)", src)
+        self.assertIn('**({"styleNotApplied": style_skips} if style_skips else {})', src)
+
     @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg missing")
     def test_rendered_reel_measures_back_close_to_the_style(self):
         import style_analyse as sa  # noqa: PLC0415

@@ -9,7 +9,7 @@
   "maxExamples": 8,
   "maxExampleSec": 90,
   "maxExampleMB": 500,
-  "guard": { "$comment": "Codex RS review: checked during decode; on air (stream or recording started) stops the job", "checkEveryFrames": 90, "maxWallSecPerExample": 600, "maxMemMb": 1500 },
+  "guard": { "$comment": "Codex RS review: checked during decode; on air (stream or recording started) stops the job", "checkEveryFrames": 90, "maxDecodeFps": 240, "maxWallSecPerExample": 600, "maxMemMb": 1500 },
   "minExampleSec": 3,
   "nameMaxChars": 40,
   "pathMaxChars": 400,

@@ -49,6 +49,16 @@ Run one file at a time, `UJWALAM_HEADLESS=1`, temp data folder, BelowNormal, CPU
 | `tests/studio-qml-settings.test.mjs` | 21/21 pass | Card shows the record's problem. Found while re-running: since RS3 the reel styles instance sat inside the server's `readiness()` function, so the routes and `close()` could not reach it (`reelStyles is not defined`; the test hung on the open poll timer). Moved to the server's own scope. |
 | `tests/studio-ui-server.test.mjs` | 40/40 pass | |
 
+## Codex verify fixes (2026-11-21)
+
+| Test file | Result | What it shows |
+|---|---|---|
+| `tests/py/test_style_analyse.py` | 17 tests: 16 OK in the file run; the 60 s bound took 392 s in two file runs while the PC was busy, then 63.2 s (216 MB) run alone. An A/B of the safe open against a plain open on a 10 s example showed no slowdown (2.0 s vs 1.9 s), so the slow runs are put down to load on the PC (UNVERIFIED cause) | New: a 3000 fps, 1 s mkv (ms clock, repeated times): the guard counts every decoded frame and stops at the cap (481 frames, 240 per probed second + 1) and at the second on-air check (frame 20), though sampling keeps about 30. Only the named demuxer opens: `a.m3u8`, `.txt`, `.ffconcat` refused; an HLS playlist named `.mp4`, an ffconcat list named `.mkv` and a matroska file named `.mp4` are refused, and the playlist's segment file is never created or read. |
+| `tests/py/test_clip_reel_style.py` | 6/6 OK | New: crop, fill and canvas variants carry `lut3d=file=style.cube` once; no style = command line as before; the plain-word note per non-canvas layout. |
+| `tests/py/test_clip_live_review_gate.py`, `test_reel_hook.py`, `test_music_library.py` plus `test_clip_contain.py`, `test_clip_pipeline.py` | 6, 21, 15, 7, 37: all OK | |
+
+A dref-bearing mov was not crafted; `enable_drefs=0` is passed and asserted (UNVERIFIED against a real dref file).
+
 ## Limits (left out or unverified)
 
 - UNVERIFIED on real footage and real example reels: all numbers above come from synthetic videos.

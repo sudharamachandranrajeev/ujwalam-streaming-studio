@@ -113,15 +113,47 @@ class Guard:
         self.n += 0 if force else 1
         if self.max_frames is not None and self.n > self.max_frames:
             raise ClipError("stopped: more frames than the length limit allows")
+        if self.clock() - self.t0 > self.wall:  # every decoded frame: a counter and a clock read only
+            raise ClipError(f"stopped: took longer than {self.wall:.0f} s")
         if not force and self.n % self.every:
             return
         if self.live is not None and self.live() is not False:
             raise ClipError("stopped: a stream or recording started (styles are analysed off air only)")
-        if self.clock() - self.t0 > self.wall:
-            raise ClipError(f"stopped: took longer than {self.wall:.0f} s")
         m = self.memory()
         if m is not None and m > self.mem:
             raise ClipError(f"stopped: used more than {self.mem:.0f} MB of memory")
+
+
+_DEMUX = {".mp4": "mov", ".mov": "mov", ".m4v": "mov", ".mkv": "matroska", ".webm": "matroska"}
+_DEMUX_NAMES = {"mov": "mov,mp4,m4a,3gp,3g2,mj2", "matroska": "matroska,webm"}
+
+
+def open_kw(path):
+    """Codex RS review: how an example is opened. The demuxer is named from the extension (mp4/mov family or
+    matroska/webm, never guessed from the content, so a playlist, concat list or image sequence is not read as one),
+    only the file protocol is allowed and mov data references (drefs) are off: the example never makes FFmpeg open
+    another file or address. Residual (accepted, as D411's music folder): the file could be swapped between the path
+    check and this open."""
+    fmt = _DEMUX.get(os.path.splitext(str(path))[1].lower())
+    if fmt is None:
+        raise ClipError(f"{os.path.basename(str(path))}: only mp4, mov, m4v, mkv and webm videos are read")
+    opts = {"protocol_whitelist": "file"}
+    if fmt == "mov":
+        opts["enable_drefs"] = "0"
+    return {"format": fmt, "options": opts}
+
+
+def safe_open(path):
+    import av  # noqa: PLC0415
+    kw = open_kw(path)
+    try:
+        c = av.open(path, **kw)
+    except av.error.FFmpegError as e:
+        raise ClipError(f"{os.path.basename(path)}: not a video this PC can read") from e
+    if c.format.name not in (kw["format"], _DEMUX_NAMES[kw["format"]]):  # the named demuxer, nothing else
+        c.close()
+        raise ClipError(f"{os.path.basename(path)}: not an mp4, mov, mkv or webm video")
+    return c
 
 
 def probe_example(path, cfg):
@@ -131,7 +163,7 @@ def probe_example(path, cfg):
     if size > int(cfg["maxExampleMB"]) * 1048576:
         raise ClipError(f"{os.path.basename(path)}: larger than {cfg['maxExampleMB']} MB")
     try:
-        with av.open(path) as c:
+        with safe_open(path) as c:
             st = next((x for x in c.streams if x.type == "video"), None)
             if st is None:
                 raise ClipError(f"{os.path.basename(path)}: no picture")
@@ -149,8 +181,7 @@ def probe_example(path, cfg):
 
 def _frames(path, max_fps, guard=None):
     """Decoded frames as BGR (motion size) with their time; frames above max_fps are skipped."""
-    import av  # noqa: PLC0415
-    c = av.open(path)
+    c = safe_open(path)
     try:
         st = next((s for s in c.streams if s.type == "video"), None)
         if st is None:
@@ -161,12 +192,12 @@ def _frames(path, max_fps, guard=None):
         step = 1.0 / min(rate, float(max_fps))
         nxt = -1e9
         for fr in c.decode(st):
+            if guard:  # every decoded frame, before any is skipped (repeated or crowded times included)
+                guard.tick()
             t = float(fr.time) if fr.time is not None else (nxt + step)
             if t < nxt - 0.5 * step:  # container times can be rounded to the ms: half a frame of slack
                 continue
             nxt = nxt + step if abs(t - nxt) < 0.5 * step else t + step
-            if guard:
-                guard.tick()
             yield t, fr, min(rate, float(max_fps))
     finally:
         c.close()
@@ -560,7 +591,7 @@ def beat_phase(path, bpm, ml, mcfg):
     times folded on the exact (fractional) beat period. music_library's own offset folds on a whole number of envelope
     frames, which drifts over a long example; the tempo itself is taken from music_library."""
     np = _np()
-    mono = ml.decode(path, ml.SR, 1, max_sec=float(mcfg["maxAnalyseSec"]))[:, 0]
+    mono = ml.decode(path, ml.SR, 1, max_sec=float(mcfg["maxAnalyseSec"]), open_kw=open_kw(path))[:, 0]
     env, rate, _c = ml._onsets(mono, ml.SR)  # noqa: SLF001 - same package; hop 1024, window 2048
     period = 60.0 / float(bpm)
     t = (np.arange(len(env)) * 1024 + 1024) / float(ml.SR)  # an onset peaks when it reaches the window centre
@@ -579,7 +610,7 @@ def analyse_video(path, cfg=None, progress=None, ocr=True, guard=None):
     t0 = time.perf_counter()
     sec = probe_example(path, cfg)  # refused before any decode when too long or too large
     if guard:
-        guard.start(max_frames=int((min(sec, float(cfg["maxExampleSec"])) + 1.0) * float(cfg["analyse"]["maxFps"])) + 30)
+        guard.start(max_frames=int((min(sec, float(cfg["maxExampleSec"])) + 1.0) * float(cfg["guard"]["maxDecodeFps"])))
     fp = frame_pass(path, cfg, progress, ocr=ocr, guard=guard)
     np = _np()
     fps = float(fp["fps"])
@@ -602,7 +633,7 @@ def analyse_video(path, cfg=None, progress=None, ocr=True, guard=None):
         mcfg = ml.load_config()
         if dur < float(cfg["analyse"]["minAudioSec"]):
             raise ClipError("too short for a tempo")
-        m = ml.analyse(path, mcfg)
+        m = ml.analyse(path, mcfg, open_kw=open_kw(path))
         music = {"bpm": m["bpm"], "beatOffset": beat_phase(path, m["bpm"], ml, mcfg), "energyLevel": m["energyLevel"], "mood": m["mood"],
                  "loudnessLufs": m["loudnessLufs"]}
     except (ClipError, OSError, ValueError, ImportError) as e:

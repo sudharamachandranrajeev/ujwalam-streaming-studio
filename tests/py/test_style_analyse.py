@@ -256,7 +256,7 @@ class GuardTests(unittest.TestCase):
         def live():
             calls.append(1)
             return len(calls) > 1  # off air at the first check, on air at the second
-        cfg = self.cfg(guard={"checkEveryFrames": 10, "maxWallSecPerExample": 600, "maxMemMb": 100000})
+        cfg = self.cfg(guard={"checkEveryFrames": 10, "maxWallSecPerExample": 600, "maxMemMb": 100000, "maxDecodeFps": 240})
         g = self.sa.Guard(cfg, live)
         with self.assertRaisesRegex(self.sa.ClipError, "a stream or recording started"):
             self.sa.analyse_video(self.path, cfg, ocr=False, guard=g)
@@ -287,6 +287,51 @@ class GuardTests(unittest.TestCase):
         g = self.sa.Guard(self.cfg(), lambda: True)
         with self.assertRaisesRegex(self.sa.ClipError, "stream or recording"):
             self.sa.sha256_file(self.path, guard=g)
+
+    def test_guard_sees_every_decoded_frame_crowded_times(self):
+        """Codex RS verify: 3000 frames in 1 s (the matroska ms clock repeats times): sampling keeps about 30 of them,
+        but the guard counts every decoded frame, so the frame cap and the on-air check are not bypassed."""
+        p = os.path.join(self.tmp, "crowded.mkv")
+        r = cc.run_tool(["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=3000:duration=1",
+                         "-c:v", "mpeg4", "-q:v", "10", p], timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        cfg = self.cfg(minExampleSec=0.5, guard={"checkEveryFrames": 10, "maxWallSecPerExample": 600, "maxMemMb": 100000,
+                                                 "maxDecodeFps": 240})
+        g = self.sa.Guard(cfg, lambda: False)
+        with self.assertRaisesRegex(self.sa.ClipError, "more frames"):
+            self.sa.analyse_video(p, cfg, ocr=False, guard=g)
+        self.assertEqual(g.n, int(2.0 * 240) + 1)  # stopped at the cap, counted before any frame was skipped
+        calls = []
+        g = self.sa.Guard(cfg, lambda: calls.append(1) or len(calls) > 1)
+        with self.assertRaisesRegex(self.sa.ClipError, "stream or recording"):
+            self.sa.analyse_video(p, cfg, ocr=False, guard=g)
+        self.assertEqual(g.n, 20)
+
+    def test_only_plain_video_containers_open(self):
+        """Codex RS verify: the demuxer comes from the extension, file protocol only, mov drefs off; a playlist, a
+        concat list or another container under a video name is refused and opens no other file."""
+        kw = self.sa.open_kw("C:/x/a.MOV")
+        self.assertEqual(kw, {"format": "mov", "options": {"protocol_whitelist": "file", "enable_drefs": "0"}})
+        self.assertEqual(self.sa.open_kw("a.webm")["format"], "matroska")
+        for bad in ("a.m3u8", "a.txt", "a.ffconcat", "a"):
+            with self.assertRaisesRegex(self.sa.ClipError, "only mp4"):
+                self.sa.open_kw(bad)
+        other = os.path.join(self.tmp, "other.mkv")
+        sentinel = os.path.join(self.tmp, "seg.ts")
+        hls = os.path.join(self.tmp, "list.mp4")
+        with open(hls, "w", encoding="ascii") as f:
+            f.write(f"#EXTM3U\n#EXT-X-TARGETDURATION:5\n#EXTINF:5,\n{sentinel}\n#EXT-X-ENDLIST\n")
+        cat = os.path.join(self.tmp, "cat.mkv")
+        with open(cat, "w", encoding="ascii") as f:
+            f.write(f"ffconcat version 1.0\nfile '{self.path}'\n")
+        mismatch = os.path.join(self.tmp, "really-mkv.mp4")
+        shutil.copyfile(self.path, mismatch)
+        for p in (hls, cat, mismatch):
+            with self.assertRaises(self.sa.ClipError, msg=p):
+                self.sa.probe_example(p, self.cfg())
+        self.assertFalse(os.path.exists(sentinel))
+        self.assertFalse(os.path.exists(other))
+        self.assertGreater(self.sa.probe_example(self.path, self.cfg()), 5.0)  # a real one still opens
 
     def test_run_style_rechecks_the_path_before_opening(self):
         import reel_style as rs  # noqa: PLC0415

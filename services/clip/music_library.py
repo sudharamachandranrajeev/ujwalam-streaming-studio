@@ -82,12 +82,12 @@ def _open_checked(path, folder):
 
 # ---------------------------------------------------------------- decode and analyse
 
-def decode(path, sr=SR, channels=2, max_sec=None):
+def decode(path, sr=SR, channels=2, max_sec=None, open_kw=None):
     """-> float32 array (n, channels) at sr, from any file PyAV/FFmpeg can read."""
     import av  # noqa: PLC0415
     np = _np()
     chunks = []
-    with av.open(path) as c:
+    with av.open(path, **(open_kw or {})) as c:  # open_kw: the reel style analyser's safe open (format, options)
         st = next((s for s in c.streams if s.type == "audio"), None)
         if st is None:
             raise ClipError(f"{os.path.basename(path)}: no sound")
@@ -210,14 +210,14 @@ def guess_mood(bpm, energy_level, centroid, dyn_db):
     return "edm" if centroid > 2200 else "phonk"
 
 
-def analyse(path, cfg, root=None):
+def analyse(path, cfg, root=None, open_kw=None):
     """Facts of one track. Raises ClipError when it cannot be read, is too short, or (root given) is not a plain file
     inside root."""
     np = _np()
     if root is not None:
         _open_checked(path, root)
     from scene_music import measure_lufs  # noqa: PLC0415 - BS.1770 integrated loudness at 48 kHz
-    mono = decode(path, SR, 1, max_sec=float(cfg["maxAnalyseSec"]))[:, 0]  # mono float32: bounded memory
+    mono = decode(path, SR, 1, max_sec=float(cfg["maxAnalyseSec"]), open_kw=open_kw)[:, 0]  # mono float32: bounded memory
     dur = len(mono) / SR
     if dur < float(cfg["minTrackSec"]):
         raise ClipError(f"{os.path.basename(path)}: shorter than {cfg['minTrackSec']:g} s")

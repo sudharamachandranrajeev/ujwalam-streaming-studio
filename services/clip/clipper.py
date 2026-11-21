@@ -708,6 +708,7 @@ def cmd_live_review(a):
                       if pieces_path and sinfo.get("has_audio") else (None, None))
         mus, sfxrec = (_with_sfx(wd, ex, tr, m["pieces"], xd, pk, mus) if pieces_path and sinfo.get("has_audio")
                        else (mus, None))  # FX3
+        style_skips = []
         for lid in wanted:
             try:
                 out_sec = None
@@ -716,7 +717,9 @@ def cmd_live_review(a):
                                           lim_live["maxSec"], ass, fdir, tr, thumb, ttl, mus, zoom=zoom, lut=lut)
                     out_sec = _pieces_out_sec(m, xd, thumb, lim_live["maxSec"])
                 else:
-                    name = rnd.render_variant(ffmpeg, c["file"], sinfo, c, by_id[lid], frame, encoder, wd)
+                    name = rnd.render_variant(ffmpeg, c["file"], sinfo, c, by_id[lid], frame, encoder, wd, lut=lut)
+                    if sty:  # RS4 (Codex RS verify): this layout cuts one piece of the save: only the colour fits
+                        style_skips.append(_style_skip_note(by_id[lid]))
                 files.append({"layout": lid, "file": name, "geometry": by_id[lid].get("geometry", "unverified"),
                               # validate's expected length: a re-cut clip is its pieces minus the cross-faded joins,
                               # not its first piece's start to its last piece's end
@@ -741,7 +744,8 @@ def cmd_live_review(a):
                          "score": c["score"], "labels": c["labels"], "reasons": c["reasons"],
                          **({"pieces": m["pieces"]} if pieces_path else {}), "retimed": bool(c.get("retimed")),
                          "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec,
-                         "title": tirec, "music": murec, "look": pk, "sfx": sfxrec, "style": strec, "captions": cinfo, "hook": hook, "files": files,
+                         "title": tirec, "music": murec, "look": pk, "sfx": sfxrec, "style": strec,
+                         **({"styleNotApplied": style_skips} if style_skips else {}), "captions": cinfo, "hook": hook, "files": files,
                          "errors": errors})
         _look_remember(ex, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
@@ -1158,6 +1162,17 @@ def _style_render_plan(sty, m, xd, vrec, wd, captions=False):
     if m.get("styleMusicEnergy") is not None:
         rec["musicEnergy"] = m["styleMusicEnergy"]
     return dict(m, pieces=ps), zoom, lut, rec
+
+
+STYLE_CANVAS_ONLY = "pace, joins, zoom pulses and slow motion"
+
+
+def _style_skip_note(layout):
+    """RS4 (Codex RS verify): a non-canvas layout (crop, fill, stack) renders one continuous piece of the save through
+    its own geometry, so it gets the style's colour only. -> the clip row's plain-word note for that layout."""
+    return {"layout": layout["id"], "kind": layout.get("kind"),
+            "note": f"style not applied: {layout['id']} ({layout.get('kind')} layout gets the colour only; "
+                    f"{STYLE_CANVAS_ONLY} need the canvas layout)"}
 
 
 def _style_cleanup(wd):
