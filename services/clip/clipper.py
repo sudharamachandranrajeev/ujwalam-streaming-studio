@@ -1113,7 +1113,9 @@ def _resume_row(a, wd, cid, old_rows):
     if not (getattr(a, "resume", False) and os.path.isfile(done) and os.path.getsize(done) > 0):
         return None
     kept = next((x for x in old_rows if x.get("id") == cid and x.get("files")), None)
-    if kept is None:
+    if kept is None or kept.get("fileStamp") != _file_stamp(done):
+        # Codex verify: only a row written for this very file (its size and mtime in ns) is trusted; an old row next
+        # to a newer file, or a row without a stamp, means the reel is rendered again
         return None
     print(f"montage {cid}: kept from the earlier run (--resume)")
     try:  # a stopped render's leftover must never replace the finished reel
@@ -1121,6 +1123,15 @@ def _resume_row(a, wd, cid, old_rows):
     except OSError:
         pass
     return dict(kept, resumed=True)
+
+
+def _file_stamp(path):
+    """Size and mtime (ns) of a finished reel file, stored in its row: the row belongs to exactly that file."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return {"size": st.st_size, "mtimeNs": st.st_mtime_ns}
 
 
 def _look_remember(ex, pk, track=None):
@@ -1519,6 +1530,9 @@ def cmd_montage(a):
             if getattr(a, "resume", False):
                 print(f"montage {cid}: a reel file without its row: rendered again (--resume)")
             os.remove(done)
+        # Codex verify: this reel's old row is dropped from render.json before it renders, so a stop at any point never
+        # leaves an old row next to a new file
+        _write_render(rows + [x for x in old_rows if x.get("id") != cid and x.get("id") not in {y["id"] for y in rows}])
         r, _ = _render_job(mk, encoder, wd, "montage-v.mp4.part", f"montage {cid}")
         _drop_fonts(wd)
         rti.cleanup(wd)
@@ -1562,7 +1576,7 @@ def cmd_montage(a):
                      "singleKills": m.get("singleKills"), "captions": cinfo, "hook": hook,
                      **({"story": m["story"]} if m.get("story") else {}),
                      **({"learning": exr["learning"]} if exr.get("learning") else {}),
-                     "files": files, "errors": errors})
+                     "files": files, "errors": errors, "fileStamp": _file_stamp(done) if files else None})
         _look_remember(exr, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
         # Codex verify (D411): each reel's row is saved (temp + rename) as soon as the reel is done, with the stored rows
         # of the reels not reached yet, so a stopped run never leaves a finished reel without its decisions

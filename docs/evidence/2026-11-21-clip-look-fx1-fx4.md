@@ -71,3 +71,8 @@ Mix level note: the limiter acts only on peaks above -4 dBFS, so a reel's game s
 `test_clip_pipeline` also now expects the reel end to be shortened by the cross fade, because `reel-transitions` is ON by default.
 Re-run (one file at a time): test_music_library 15, test_clip_pipeline 37, test_clip_look 15, test_clip_montage 35, test_clip_live_montage 6, test_clip_e2e 7, all pass.
 Accepted residuals: the check-then-open race in the user's own music folder; a crafted cache-key collision (same-size edit in the middle of the file plus a restored mtime_ns). Both are in D411.
+
+## Codex verify 2 (2026-11-21)
+- Each row carries `fileStamp` (size + mtime_ns of montage-v.mp4). `_resume_row` keeps a reel only when the stamp matches. The old row is removed from render.json before the reel renders.
+- check_interrupted_run in test_clip_pipeline now also covers: a stop after the new file is in place while the old row is present (re-rendered, not resumed); a fresh run over an earlier run stopped after its reels (the saved row matches the new file and resume keeps it); a row without a stamp (re-rendered). test_clip_look covers the unit case: a row without a stamp is not trusted.
+- Re-run (one file at a time): test_clip_pipeline 37, test_clip_montage 35, test_clip_live_montage 6, test_clip_e2e 7, test_clip_look 15, all pass.

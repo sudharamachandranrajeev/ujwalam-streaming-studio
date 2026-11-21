@@ -164,6 +164,8 @@ class CodexReviewTests(unittest.TestCase):
             open(os.path.join(d, "montage-v.mp4.part"), "wb").close()
             row = {"id": "M1", "files": [{"file": "montage-v.mp4"}], "look": {"music": "drop", "seed": 7},
                    "music": {"source": "folder", "track": "t1"}}
+            self.assertIsNone(clipper._resume_row(argparse.Namespace(resume=True), d, "M1", [row]), "no stamp: not trusted")
+            row["fileStamp"] = clipper._file_stamp(os.path.join(d, "montage-v.mp4"))
             a = argparse.Namespace(resume=True)
             kept = clipper._resume_row(a, d, "M1", [row])
             self.assertEqual(kept, dict(row, resumed=True), "the stored look, music and transition stay")

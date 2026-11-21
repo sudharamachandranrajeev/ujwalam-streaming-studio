@@ -537,6 +537,32 @@ class EndToEndTests(unittest.TestCase):
             self.assertFalse(row.get("resumed"), "no row: never kept with guessed decisions")
             self.assertTrue(row["files"])
             self.assertGreaterEqual(os.path.getmtime(mp4), before)
+            # stopped after a new file was renamed into place but before its row: the old row's stamp does not match
+            stamp = row["fileStamp"]
+            self.assertEqual(stamp, {"size": os.path.getsize(mp4), "mtimeNs": os.stat(mp4).st_mtime_ns})
+            with open(mp4, "ab") as f:  # stands in for the newer file of the stopped run
+                f.write(b"\0")
+            self.assertEqual(clipper.main(argv), 0)
+            row = next(c for c in cc.load_json(rpath)["clips"] if c["id"] == "W01")
+            self.assertFalse(row.get("resumed"), "an old row next to a newer file is never trusted")
+            # a fresh run (no --resume) over the previous run, stopped after its reels: the saved row is the new one
+            clipper.write_json_atomic = stop_after_the_reels
+            with self.assertRaises(KeyboardInterrupt):
+                clipper.main([x for x in argv if x != "--resume"])
+            clipper.write_json_atomic = real
+            row = next(c for c in cc.load_json(rpath)["clips"] if c["id"] == "W01")
+            self.assertEqual(row["fileStamp"], {"size": os.path.getsize(mp4), "mtimeNs": os.stat(mp4).st_mtime_ns})
+            self.assertEqual(clipper.main(argv), 0)
+            self.assertTrue(next(c for c in cc.load_json(rpath)["clips"] if c["id"] == "W01").get("resumed"),
+                            "the row the fresh run wrote for its own file is kept")
+            # a row without a stamp (older format) is not trusted
+            doc = cc.load_json(rpath)
+            for c in doc["clips"]:
+                c.pop("fileStamp", None)
+                c.pop("resumed", None)
+            real(rpath, doc)
+            self.assertEqual(clipper.main(argv), 0)
+            self.assertFalse(next(c for c in cc.load_json(rpath)["clips"] if c["id"] == "W01").get("resumed"))
         finally:
             clipper.write_json_atomic = real
             os.remove(vrec)
