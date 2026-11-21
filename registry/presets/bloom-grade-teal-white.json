@@ -1,0 +1,32 @@
+{
+  "id": "bloom-grade-teal-white",
+  "version": "1.0.0",
+  "function": "bloom-grade",
+  "functionVersion": "^1.0.0",
+  "name": "Teal-white bloom",
+  "params": {
+    "sigma": 14,
+    "glow": 0.3,
+    "saturation": 1.1,
+    "lut": "style"
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "none",
+    "intensity": "medium",
+    "mood": "electric",
+    "colourUse": "multi",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "bloom-grade-hot",
+    "letterbox-cinema"
+  ]
+}

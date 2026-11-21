@@ -1,0 +1,34 @@
+{
+  "id": "ragdoll-slowmo-half",
+  "version": "1.0.0",
+  "function": "ragdoll-slowmo",
+  "functionVersion": "^1.0.0",
+  "name": "Half-speed ragdoll",
+  "params": {
+    "factor": 0.5,
+    "sec": 0.5,
+    "catchUp": 2.0,
+    "zoom": 1.1,
+    "zoomInMs": 200,
+    "zoomOutMs": 300
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "drift",
+    "intensity": "high",
+    "mood": "electric",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "ragdoll-slowmo-gentle",
+    "speed-ramp-kill-slowmo"
+  ]
+}

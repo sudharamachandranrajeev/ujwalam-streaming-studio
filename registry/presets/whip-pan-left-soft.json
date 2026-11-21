@@ -1,0 +1,32 @@
+{
+  "id": "whip-pan-left-soft",
+  "version": "1.0.0",
+  "function": "whip-pan",
+  "functionVersion": "^1.0.0",
+  "name": "Soft whip left",
+  "params": {
+    "frames": 10,
+    "offset": 0.08,
+    "blur": 20,
+    "direction": -1
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "slide",
+    "intensity": "high",
+    "mood": "aggressive",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "whip-pan-right",
+    "scope-zoom-transition-punch"
+  ]
+}

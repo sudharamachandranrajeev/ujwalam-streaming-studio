@@ -1,0 +1,36 @@
+{
+  "id": "impact-flash-white",
+  "version": "1.0.0",
+  "function": "impact-flash",
+  "functionVersion": "^1.0.0",
+  "name": "White hit flash",
+  "params": {
+    "frames": 2,
+    "alpha": 0.5,
+    "colour": "white",
+    "pulseColour": "0xFF2E63",
+    "pulseAlpha": 0.12,
+    "pulseMs": 200,
+    "minGapSec": 0.34,
+    "maxPerSec": 3
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "burst",
+    "intensity": "high",
+    "mood": "electric",
+    "colourUse": "none",
+    "flashes": "medium"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "impact-flash-pink-pulse",
+    "rgb-split-glitch"
+  ]
+}

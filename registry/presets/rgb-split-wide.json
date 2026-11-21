@@ -1,0 +1,30 @@
+{
+  "id": "rgb-split-wide",
+  "version": "1.0.0",
+  "function": "rgb-split",
+  "functionVersion": "^1.0.0",
+  "name": "Wide split",
+  "params": {
+    "frames": 4,
+    "shift": 0.015
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "flicker",
+    "intensity": "medium",
+    "mood": "electric",
+    "colourUse": "multi",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "rgb-split-glitch",
+    "impact-flash-white"
+  ]
+}

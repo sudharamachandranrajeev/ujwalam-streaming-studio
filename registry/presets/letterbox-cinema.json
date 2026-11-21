@@ -1,0 +1,31 @@
+{
+  "id": "letterbox-cinema",
+  "version": "1.0.0",
+  "function": "letterbox",
+  "functionVersion": "^1.0.0",
+  "name": "Cinema bars",
+  "params": {
+    "bar": 0.1,
+    "inMs": 400,
+    "outMs": 300
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "slide",
+    "intensity": "low",
+    "mood": "calm",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "letterbox-thin",
+    "bloom-grade-teal-white"
+  ]
+}

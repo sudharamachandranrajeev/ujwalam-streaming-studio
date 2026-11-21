@@ -1,0 +1,30 @@
+{
+  "id": "rgb-split-glitch",
+  "version": "1.0.0",
+  "function": "rgb-split",
+  "functionVersion": "^1.0.0",
+  "name": "Glitch split",
+  "params": {
+    "frames": 6,
+    "shift": 0.008
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "flicker",
+    "intensity": "medium",
+    "mood": "electric",
+    "colourUse": "multi",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "rgb-split-wide",
+    "impact-flash-white"
+  ]
+}

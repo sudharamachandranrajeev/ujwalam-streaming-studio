@@ -1,0 +1,62 @@
+{
+  "id": "scope-zoom-transition",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Scope zoom transition (BD4)",
+  "description": "At a join after a scoped shot the picture pushes into the scope lens (zoom to `scale` over inFrames at the frame centre) and the next piece starts inside it, relaxing back to full frame over outFrames. One zoompan over the joined montage (shared with the ragdoll pulses). Not a flash: the brightness does not change. BeatDrop montages (D415), flag beatdrop; tunable per preset. Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scale": {
+          "type": "number",
+          "minimum": 1.2,
+          "maximum": 2.5
+        },
+        "inFrames": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 18
+        },
+        "outFrames": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 18
+        }
+      }
+    },
+    "defaults": {
+      "scale": 1.8,
+      "inFrames": 8,
+      "outFrames": 10
+    },
+    "safeRanges": {
+      "scale": [
+        1.2,
+        2.5
+      ],
+      "inFrames": [
+        4,
+        18
+      ],
+      "outFrames": [
+        4,
+        18
+      ]
+    }
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "themeTokens": [],
+  "durationMs": 600,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD4"
+}

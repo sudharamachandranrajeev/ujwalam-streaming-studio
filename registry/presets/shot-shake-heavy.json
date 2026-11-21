@@ -1,0 +1,31 @@
+{
+  "id": "shot-shake-heavy",
+  "version": "1.0.0",
+  "function": "shot-shake",
+  "functionVersion": "^1.0.0",
+  "name": "Heavy kill shake",
+  "params": {
+    "frames": 10,
+    "amplitude": 0.025,
+    "hz": 9
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "shake",
+    "intensity": "medium",
+    "mood": "aggressive",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "shot-shake-tight",
+    "impact-flash-white"
+  ]
+}

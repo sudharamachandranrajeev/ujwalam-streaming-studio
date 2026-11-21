@@ -183,6 +183,8 @@ LOCAL_FLAGS = "flags.local.json"
 FFMPEG_THREADS = 4
 
 EXIT_FLAG_OFF = 3
+EXIT_ON_AIR = 4  # a job stopped because a stream or recording started (or that could not be told): run it again later
+EXIT_NOT_STARTED = 5  # a job could not start its child safely (NO_JOB_RC): nothing written, run it again later
 
 
 class ClipError(Exception):
@@ -413,58 +415,132 @@ def lower_own_priority():
 
 
 STALLED_RC = -2  # run_tool(watch=...): the child wrote nothing for stall_sec and was stopped
+STOPPED_RC = -3  # run_tool(stop=...): stop() said stop (a stream or recording started); the child was stopped
+NO_JOB_RC = -4  # run_tool: Windows refused the child's kill-on-close job (or it could not resume); nothing was run
+_CREATE_SUSPENDED = 0x00000004
 
 
-def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=2.0, setup_sec=300.0):
+def _resume(process_handle):
+    """Resumes a process started with CREATE_SUSPENDED (all its threads; ntdll NtResumeProcess). -> True on success."""
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+    nt = ctypes.WinDLL("ntdll")
+    nt.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    nt.NtResumeProcess.restype = ctypes.c_long
+    return nt.NtResumeProcess(wintypes.HANDLE(int(process_handle))) == 0
+
+
+def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=2.0, setup_sec=300.0, stop=None):
     """Runs a child at below-normal priority; returns CompletedProcess (text, utf-8, errors replaced).
 
     watch + stall_sec (2026-11-12, a render hung for 30 min after a GPU driver reset): the child is stopped when the
     file `watch` (its output; relative to cwd) has not grown for stall_sec seconds; before its first byte the child
     gets max(stall_sec, setup_sec) (a long seek or filter set-up writes nothing yet). The result then has returncode
-    STALLED_RC and says so in stderr. timeout still raises subprocess.TimeoutExpired."""
-    if watch is None or not stall_sec:
-        return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
+    STALLED_RC and says so in stderr. timeout still raises subprocess.TimeoutExpired.
+
+    stop (2026-11-21, D415 review): a callable asked every poll_sec while the child runs; when it returns True the
+    child is killed and the result has returncode STOPPED_RC ("stopped: on air" in stderr). A caller that treats an
+    unknown live state as on air passes e.g. lambda: live() is not False.
+
+    Process tree (D415 review): every child runs in its own kill-on-close job on Windows, assigned while it is still
+    suspended (CREATE_SUSPENDED, then resumed), so nothing it starts escapes; every stop path ends the whole job. When
+    Windows refuses the job, the run runs nothing and returns NO_JOB_RC (guarded or not: there is no job-less path).
+    Elsewhere the child gets its own session and the group is killed, also after the child's normal exit, so no
+    descendant outlives run_tool. timeout: a child that finishes after the deadline counts as timed out."""
     import tempfile  # noqa: PLC0415
-    path = watch if os.path.isabs(watch) or not cwd else os.path.join(cwd, watch)
+    path = None if watch is None or not stall_sec else (watch if os.path.isabs(watch) or not cwd else os.path.join(cwd, watch))
     with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:  # files, not pipes: no pipe can fill and block
-        p = subprocess.Popen(argv, cwd=cwd, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL, **child_kwargs(**NO_WINDOW))
+        nt = os.name == "nt"
+        # Windows: no console, below-normal, suspended until the job holds it; elsewhere: its own session (group kill)
+        p = subprocess.Popen(argv, cwd=cwd, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL, start_new_session=not nt,
+                             **child_kwargs(creationflags=NO_WINDOW.get("creationflags", 0) | (_CREATE_SUSPENDED if nt else 0)))
+        job = None
+        if nt:
+            try:
+                job = kill_on_close_job(p._handle)
+            except OSError:
+                job = None
+            if job is None:
+                p.kill()
+                p.wait()
+                return subprocess.CompletedProcess(argv, NO_JOB_RC, "", "no process job (Windows refused it): not run")
+            if not _resume(p._handle):
+                end_job(job)
+                if p.poll() is None:
+                    p.kill()
+                p.wait()
+                return subprocess.CompletedProcess(argv, NO_JOB_RC, "", "the child could not be resumed: not run")
+
+        def kill_group():
+            if not nt:
+                import signal  # noqa: PLC0415
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)  # the session's group outlives its leader; ends what it left
+                except OSError:
+                    pass
+
+        def kill():
+            try:
+                end_job_members(job)
+            except OSError:
+                pass
+            kill_group()
+            if p.poll() is None:
+                p.kill()
+            p.wait()
         t0 = last = time.monotonic()
-        size, stalled, grew = -1, False, False
+        size, stalled, grew, stopped = -1, False, False, False
         try:
             while True:
+                wait = poll_sec if timeout is None else max(0.0, min(poll_sec, t0 + timeout - time.monotonic()))
                 try:
-                    p.wait(timeout=poll_sec)
+                    p.wait(timeout=wait)
+                    if timeout is not None and time.monotonic() - t0 > timeout:
+                        raise subprocess.TimeoutExpired(argv, timeout)  # finished after the deadline: timed out
                     break
                 except subprocess.TimeoutExpired:
-                    pass
+                    if p.poll() is not None and timeout is not None and time.monotonic() - t0 > timeout:
+                        raise
+                if stop is not None and stop() and p.poll() is None:
+                    stopped = True
+                    kill()
+                    break
                 now = time.monotonic()
-                try:
-                    s = os.path.getsize(path)
-                except OSError:
-                    s = -1
-                if s != size:
-                    grew = grew or size >= 0 or s > 0
-                    size, last = s, now
-                if now - last >= (stall_sec if grew else max(stall_sec, setup_sec)):
+                if path is not None:
+                    try:
+                        s = os.path.getsize(path)
+                    except OSError:
+                        s = -1
+                    if s != size:
+                        grew = grew or size >= 0 or s > 0
+                        size, last = s, now
+                if path is not None and now - last >= (stall_sec if grew else max(stall_sec, setup_sec)):
                     if p.poll() is not None:  # it ended between the wait and this check: its own exit code counts
                         break
                     stalled = True
-                    p.kill()
-                    p.wait()
+                    kill()
                     break
                 if timeout is not None and now - t0 >= timeout:
-                    p.kill()
-                    p.wait()
+                    kill()
                     raise subprocess.TimeoutExpired(argv, timeout)
         finally:
             if p.poll() is None:
-                p.kill()
-                p.wait()
+                kill()
+            try:
+                end_job(job)  # also ends anything the child left behind after it exited
+            except OSError:
+                pass
+            kill_group()
         fo.seek(0)
         fe.seek(0)
         out = fo.read().decode("utf-8", errors="replace")
         err = fe.read().decode("utf-8", errors="replace")
+    # a stream can start between the last look and the child's exit: one more look after it ended; on air (or unknown,
+    # the caller's stop() decides) = stopped, its output discarded (D415 review)
+    if not stopped and not stalled and stop is not None and stop():
+        stopped, out = True, ""
+    if stopped:
+        return subprocess.CompletedProcess(argv, STOPPED_RC, "", err + "\nstopped: on air")
     if stalled:
         return subprocess.CompletedProcess(argv, STALLED_RC, out,
                                            err + f"\nstalled: no output for {stall_sec:g} s; stopped")
@@ -472,14 +548,18 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
 
 
 def host_running(name="ujwalam-host.exe"):
-    """True when a ujwalam-host process runs (a live stream or soak may own the GPU). Windows only."""
+    """True when a ujwalam-host process runs (a live stream or soak may own the GPU). Windows only. Unknown (tasklist
+    could not run, exited nonzero, NO_JOB_RC, or wrote nothing but an error) counts as running: stay on the CPU. A
+    clean run that does not list the host is False."""
     if os.name != "nt":
         return False
     try:
         r = run_tool(["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH", "/FO", "CSV"], timeout=20)
     except (OSError, subprocess.SubprocessError):
         return True  # unknown: assume busy, stay on the CPU
-    return name.lower() in r.stdout.lower()
+    if r.returncode != 0 or (not (r.stdout or "").strip() and (r.stderr or "").strip()):
+        return True
+    return name.lower() in (r.stdout or "").lower()
 
 
 _SINK_LINE = re.compile(rb"\[host\] sink (\S+) (live|stopped|failed|dropped)\b")
@@ -649,9 +729,17 @@ def on_air(logs_dir=None, hosts=None):
     return result
 
 
+class NotStarted(ClipError):
+    """A child could not be started safely (run_tool NO_JOB_RC): the job ends "not started" (EXIT_NOT_STARTED),
+    nothing is written or swept; it runs again later."""
+
+
 def probe(ffprobe, path):
-    """ffprobe JSON (format + streams). Raises ClipError on failure."""
+    """ffprobe JSON (format + streams). Raises ClipError on failure; NotStarted when ffprobe could not be started
+    safely (NO_JOB_RC)."""
     r = run_tool([ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path], timeout=120)
+    if r.returncode == NO_JOB_RC:
+        raise NotStarted(f"ffprobe not started on {os.path.basename(path)}: {r.stderr.strip()[:200]}")
     if r.returncode != 0:
         raise ClipError(f"ffprobe failed on {os.path.basename(path)}: {r.stderr.strip()[:200]}")
     return json.loads(r.stdout)

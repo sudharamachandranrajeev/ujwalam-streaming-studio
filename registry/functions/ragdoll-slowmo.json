@@ -1,0 +1,92 @@
+{
+  "id": "ragdoll-slowmo",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Ragdoll slow motion (BD4)",
+  "description": "Slow motion on a kill from the kill frame on (the speed-ramp core function: `factor` for `sec`, then catch-up at `catchUp` until the piece is back on its own clock, so the kill frame stays on its beat) with a short zoom pulse (the zoom-pulse shape: up over zoomInMs, back over zoomOutMs). No brightness change. BeatDrop montages (D415), flag beatdrop; tunable per preset. Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "factor": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 0.9
+        },
+        "sec": {
+          "type": "number",
+          "minimum": 0.3,
+          "maximum": 1.0
+        },
+        "catchUp": {
+          "type": "number",
+          "minimum": 1.5,
+          "maximum": 2.0
+        },
+        "zoom": {
+          "type": "number",
+          "minimum": 1.0,
+          "maximum": 1.25
+        },
+        "zoomInMs": {
+          "type": "integer",
+          "minimum": 80,
+          "maximum": 550
+        },
+        "zoomOutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 350
+        }
+      }
+    },
+    "defaults": {
+      "factor": 0.5,
+      "sec": 0.5,
+      "catchUp": 2.0,
+      "zoom": 1.1,
+      "zoomInMs": 200,
+      "zoomOutMs": 300
+    },
+    "safeRanges": {
+      "factor": [
+        0.5,
+        0.9
+      ],
+      "sec": [
+        0.3,
+        1.0
+      ],
+      "catchUp": [
+        1.5,
+        2.0
+      ],
+      "zoom": [
+        1.0,
+        1.25
+      ],
+      "zoomInMs": [
+        80,
+        550
+      ],
+      "zoomOutMs": [
+        100,
+        350
+      ]
+    }
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "themeTokens": [],
+  "durationMs": 1500,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD4"
+}

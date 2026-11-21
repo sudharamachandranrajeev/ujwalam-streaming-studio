@@ -1,0 +1,31 @@
+{
+  "id": "letterbox-thin",
+  "version": "1.0.0",
+  "function": "letterbox",
+  "functionVersion": "^1.0.0",
+  "name": "Thin bars",
+  "params": {
+    "bar": 0.07,
+    "inMs": 300,
+    "outMs": 250
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "slide",
+    "intensity": "low",
+    "mood": "calm",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "letterbox-cinema",
+    "bloom-grade-teal-white"
+  ]
+}

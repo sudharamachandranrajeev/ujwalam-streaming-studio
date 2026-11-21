@@ -1,0 +1,52 @@
+{
+  "id": "rgb-split",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "RGB split (BD4)",
+  "description": "A short chromatic split on a hit: the red channel shifts left and blue right by `shift` of the frame width for `frames` frames (rgbashift on the joined montage). No brightness change. BeatDrop montages (D415), flag beatdrop; tunable per preset. Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 12
+        },
+        "shift": {
+          "type": "number",
+          "minimum": 0.002,
+          "maximum": 0.02
+        }
+      }
+    },
+    "defaults": {
+      "frames": 6,
+      "shift": 0.008
+    },
+    "safeRanges": {
+      "frames": [
+        3,
+        12
+      ],
+      "shift": [
+        0.002,
+        0.02
+      ]
+    }
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "themeTokens": [],
+  "durationMs": 200,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD4"
+}

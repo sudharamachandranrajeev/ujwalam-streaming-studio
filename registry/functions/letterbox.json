@@ -1,0 +1,62 @@
+{
+  "id": "letterbox",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Letterbox (BD4)",
+  "description": "Cinematic bars over the cold open, breakdowns and the outro: black bars of `bar` of the frame height slide in over inMs (under 600 ms) and out over outMs (under 400 ms). Darkens only the bar area, gradually. BeatDrop montages (D415), flag beatdrop; tunable per preset. Real footage UNVERIFIED.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bar": {
+          "type": "number",
+          "minimum": 0.06,
+          "maximum": 0.14
+        },
+        "inMs": {
+          "type": "integer",
+          "minimum": 150,
+          "maximum": 550
+        },
+        "outMs": {
+          "type": "integer",
+          "minimum": 120,
+          "maximum": 350
+        }
+      }
+    },
+    "defaults": {
+      "bar": 0.1,
+      "inMs": 400,
+      "outMs": 300
+    },
+    "safeRanges": {
+      "bar": [
+        0.06,
+        0.14
+      ],
+      "inMs": [
+        150,
+        550
+      ],
+      "outMs": [
+        120,
+        350
+      ]
+    }
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "themeTokens": [],
+  "durationMs": 550,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "BD4"
+}
