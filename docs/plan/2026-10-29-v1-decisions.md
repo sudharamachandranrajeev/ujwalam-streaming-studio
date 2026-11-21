@@ -2483,5 +2483,11 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
     Posting & growth > Auto-post then shows "Clear stuck posting lock" (one click, no confirm, D332). The click checks
     again that both files are the same ones with dead owners, removes the lock and then its claim, and asks for a pass.
     Nothing is removed automatically. A live claimant or a live lock holder is never cleared.
+  - Sixth Codex review: taking the lock refuses whenever ANY claim file for it exists, even with the lock file
+    absent. The clear runs in the in-process mutex. It re-verifies, then removes the lock only if it still has the
+    exact verified content (otherwise nothing else is removed), and removes the claim LAST. A stuck lock is also one
+    whose claim is dead and whose lock file is already gone. The click's id names both files as seen, so a click made
+    on an older view is refused. A claim holding only a number (7b5c7ec format) reads as { pid, start unknown }: pid
+    gone = dead, pid alive = alive.
   - Known item: the studio has no single-instance guard. A second studio's chain refuses through the lock
     (`sender-elsewhere`); it is not stopped from starting.

@@ -1970,7 +1970,7 @@ export function createStudioServer(opts) {
       // "Clear stuck posting lock": one click, no confirm (D332). Removes that exact lock and its claim only after checking
       // again that both are the same files and both owners are dead; otherwise refused and nothing is removed.
       if (typeof opts.dataDir !== 'string' || typeof body.id !== 'string' || body.id.length > 200 || Object.keys(body).some((k) => k !== 'id')) return json(res, 400, { error: 'bad-params' });
-      const r = clearStuckLock(opts.dataDir, body.id, opts.procStart ? { procStart: opts.procStart } : {});
+      const r = await clearStuckLock(opts.dataDir, body.id, opts.procStart ? { procStart: opts.procStart } : {});
       if (!r.cleared) return json(res, 409, { error: r.code });
       try { requestRunNow(opts.dataDir, now()); } catch { /* the next tick runs a pass anyway */ }
       return json(res, 200, { cleared: true });

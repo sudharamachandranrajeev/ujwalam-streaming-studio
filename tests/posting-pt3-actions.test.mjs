@@ -106,11 +106,11 @@ describe('D409-5 Clear stuck posting lock', () => {
     writeFileSync(`${f}.tok-9.claim`, JSON.stringify({ pid: 2 ** 30 - 1, start: 2000 }));
     assert.equal((await c.post('/ui/api/posts/auto/clear-lock', { id: 'tok-9', x: 1 })).status, 400);
     assert.equal((await c.post('/ui/api/posts/auto/clear-lock', { id: 'nope' })).json().error, 'changed');
-    const r = await c.post('/ui/api/posts/auto/clear-lock', { id: 'tok-9' });
+    const r = await c.post('/ui/api/posts/auto/clear-lock', { id: 'schedule.lock.tok-9.claim:tok-9' });
     assert.equal(r.status, 200, r.text);
     assert.ok(!existsSync(f) && !existsSync(`${f}.tok-9.claim`));
     assert.equal(existsSync(path.join(c.dataDir, 'posting', RUN_NOW_NAME)), true, 'a pass is asked for');
-    assert.equal((await c.post('/ui/api/posts/auto/clear-lock', { id: 'tok-9' })).json().error, 'not-stuck');
+    assert.equal((await c.post('/ui/api/posts/auto/clear-lock', { id: 'schedule.lock.tok-9.claim:tok-9' })).json().error, 'not-stuck');
     } finally { closeAll(c); }
   });
 });

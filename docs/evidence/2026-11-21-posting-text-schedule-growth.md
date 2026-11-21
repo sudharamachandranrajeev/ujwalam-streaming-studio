@@ -121,7 +121,22 @@ Runs (one file at a time, same rules, all exit 0): posting-auto-chain 15, postin
 studio-qml-posting 12, studio-ui-posting 8, studio-ui-posting-auto 8, studio-ui-posting-queue 6,
 studio-ui-posting-youtube 11.
 
+## Sixth Codex review (2026-11-21)
+
+| Item | Fix | Test |
+|---|---|---|
+| P1: two concurrent clears could remove a live lock | Acquire refuses while any claim for the lock exists, even with the lock absent. The clear takes the in-process mutex, compares the lock with the verified content before deleting it (stops otherwise), and removes the claim last. A dead claim with the lock already gone is also stuck. The click id names both files as seen. | posting-e2e D409-6: B sees lock + claim; A removes the lock; a sender attempt refuses (no lock created); B's clear refuses (`changed`), claim kept; a live lock with B's id is refused and untouched; the claim is cleared last; the next pass sends (mock). |
+| Numeric-only claim read as unknown forever | Parsed as { pid, start unknown }: pid gone = dead, pid alive = alive. | posting-e2e D409-5: both cases. |
+
+Runs (one file at a time, same rules, all exit 0): posting-e2e 58, posting-auto-chain 15, posting-pt3-actions 9,
+studio-qml-posting 12, studio-ui-posting-auto 8.
+
 ## UNVERIFIED
+
+- Sixth review: compare-before-delete is not atomic across processes (the mutex is per process). For a live lock to be
+  removed, between one studio's compare and its delete (a few microseconds), the other studio would have to remove the
+  lock, remove the claim, and a sender would have to create a new lock. Not reproduced and not proven impossible. Two
+  studios on one data folder is itself the unguarded case (no single-instance guard).
 
 - Fifth review: the other process's start time comes from one hidden PowerShell call (Windows only; elsewhere unknown,
   so never cleared). Its agreement with Node's `performance.timeOrigin` within 5 s is assumed, not measured. The

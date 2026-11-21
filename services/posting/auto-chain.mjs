@@ -50,7 +50,7 @@
 // channel read in that hold and the 60-min check. The studio's Upload button and `cli.mjs youtube upload` only queue.
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
@@ -146,47 +146,86 @@ function osProcStart(pid) {
 }
 /**
  * 'dead' | 'alive' | 'unknown' for a recorded owner { pid, start? }. Dead = the pid is gone, or the pid now belongs to a
- * process that started at another time (pid reused). A pid that is alive with no way to compare the start is 'unknown'.
+ * process that started at another time (pid reused). A live pid with no recorded start (an older claim that holds only
+ * a number) counts as alive; a live pid whose start cannot be read now is 'unknown'. Only 'dead' is ever cleared.
  */
 function ownerState(owner, procStart = osProcStart) {
   if (!owner || !Number.isInteger(owner.pid) || owner.pid <= 0) return 'unknown';
   if (!pidAlive(owner.pid)) return 'dead';
-  if (!Number.isFinite(owner.start)) return 'unknown';
+  if (!Number.isFinite(owner.start)) return 'alive';
   const now = owner.pid === process.pid ? MY_START : procStart(owner.pid);
   if (!Number.isFinite(now)) return 'unknown';
   return Math.abs(now - owner.start) > START_SLACK_MS ? 'dead' : 'alive';
 }
+/** A claim's owner: { pid, start } JSON, or (the 7b5c7ec format, never shipped) a bare pid number -> { pid, start: null }. */
+function parseClaim(raw) {
+  if (raw === null) return null;
+  const j = parseOr(raw);
+  if (Number.isInteger(j)) return { pid: j, start: null };
+  return j && typeof j === 'object' ? j : null;
+}
+const claimsOf = (f) => { try { const base = path.basename(f); return readdirSync(path.dirname(f)).filter((n) => n.startsWith(`${base}.`) && n.endsWith('.claim')).map((n) => path.join(path.dirname(f), n)); } catch { return []; } };
 /**
- * Fifth Codex review (D409): a stuck posting lock = the lock file AND the claim file naming it, both with provably dead
- * owners (a crash between the claim and the exclusive create). Never removed automatically: the notice offers one
- * click, "Clear stuck posting lock" (D332). -> null | { id (the lock's token), lockFile, claimFile }.
+ * Fifth/sixth Codex review (D409): a stuck posting lock = a claim file whose claimant is provably dead, and the lock it
+ * names either absent (the crash came after the old lock was removed) or held by a dead process (the crash came
+ * before). Never removed automatically: the notice offers one click, "Clear stuck posting lock" (D332).
+ * -> null | { id, lockFile, claimFile, lockRaw (null = absent), claimRaw }.
  */
 export function stuckLock(dataDir, { procStart = osProcStart } = {}) {
   const f = path.resolve(dataDir, 'posting', LOCK_NAME);
   const lockRaw = readRaw(f); const lock = lockRaw === null ? null : parseOr(lockRaw);
-  if (!lock || typeof lock.token !== 'string') return null;
-  const claimFile = claimFileOf(f, lock.token);
-  const claimRaw = readRaw(claimFile); const claim = claimRaw === null ? null : parseOr(claimRaw);
-  if (!claim) return null;
-  if (ownerState(claim, procStart) !== 'dead' || ownerState(lock, procStart) !== 'dead') return null;
-  return { id: lock.token, lockFile: f, claimFile, lockRaw, claimRaw };
+  for (const claimFile of claimsOf(f)) {
+    const claimRaw = readRaw(claimFile); const claim = parseClaim(claimRaw);
+    if (!claim || ownerState(claim, procStart) !== 'dead') continue;
+    if (lockRaw !== null) {
+      if (!lock || typeof lock.token !== 'string' || claimFileOf(f, lock.token) !== claimFile || ownerState(lock, procStart) !== 'dead') continue;
+    }
+    // The id names both files as seen: a click made on an older view (e.g. the lock was there) is refused as 'changed'.
+    return { id: `${path.basename(claimFile)}:${lockRaw === null ? 'no-lock' : lock.token}`, lockFile: f, claimFile, lockRaw, claimRaw };
+  }
+  return null;
 }
-/** The click: re-verifies that the stuck lock is still the same one (id) with dead owners, then removes exactly that
- *  lock file and then its claim. -> { cleared: true } | { cleared: false, code }. */
-export function clearStuckLock(dataDir, id, opts = {}) {
-  const s = stuckLock(dataDir, opts);
-  if (!s) return { cleared: false, code: 'not-stuck' };
-  if (s.id !== id) return { cleared: false, code: 'changed' };
-  // The lock first: while the claim stays, no other process can replace the lock (the claim path is blocked), so the
-  // file removed is the one verified. Then the claim, which names a lock that no longer exists.
-  if (readRaw(s.lockFile) !== s.lockRaw || readRaw(s.claimFile) !== s.claimRaw) return { cleared: false, code: 'changed' };
-  try { rmSync(s.lockFile); } catch { return { cleared: false, code: 'changed' }; }
-  try { rmSync(s.claimFile, { force: true }); } catch { /* a leftover claim names a lock that no longer exists */ }
-  return { cleared: true };
+/**
+ * The click: in the in-process mutex (never during this process's pass), re-verifies the same stuck lock (id) with dead
+ * owners, then removes the verified lock file (compare-before-delete: if it now differs or is gone, nothing else is
+ * removed) and the claim LAST. While the claim exists every acquire refuses, so no new lock can appear in between.
+ * -> { cleared: true } | { cleared: false, code }.
+ */
+export async function clearStuckLock(dataDir, id, opts = {}) {
+  const f = path.resolve(dataDir, 'posting', LOCK_NAME);
+  let endMutex;
+  try { endMutex = await takeMutex(f, opts.waitMs ?? 5000); } catch { return { cleared: false, code: 'busy' }; }
+  try {
+    const s = stuckLock(dataDir, opts);
+    if (!s) return { cleared: false, code: 'not-stuck' };
+    if (s.id !== id) return { cleared: false, code: 'changed' };
+    if (readRaw(s.claimFile) !== s.claimRaw) return { cleared: false, code: 'changed' };
+    if (s.lockRaw !== null) {
+      if (readRaw(s.lockFile) !== s.lockRaw) return { cleared: false, code: 'changed' };
+      try { rmSync(s.lockFile); } catch { return { cleared: false, code: 'changed' }; }
+    } else if (readRaw(s.lockFile) !== null) return { cleared: false, code: 'changed' };
+    if (readRaw(s.claimFile) !== s.claimRaw) return { cleared: false, code: 'changed' };
+    try { rmSync(s.claimFile); } catch { return { cleared: false, code: 'changed' }; }
+    return { cleared: true };
+  } finally { endMutex(); }
+}
+/** The in-process mutex per lock file (passes and the clear click). -> release function; throws code 'schedule-busy'. */
+async function takeMutex(f, waitMs) {
+  const waitStart = Date.now();
+  while (inProcess.has(f)) {
+    const left = waitMs - (Date.now() - waitStart);
+    if (left <= 0) throw Object.assign(new Error('schedule busy'), { code: 'schedule-busy' });
+    let t; await Promise.race([inProcess.get(f), new Promise((r) => { t = setTimeout(r, left); })]); clearTimeout(t);
+  }
+  let end; const mine = new Promise((r) => { end = r; }); inProcess.set(f, mine);
+  return () => { if (inProcess.get(f) === mine) inProcess.delete(f); end(); };
 }
 
 /** Exclusive create of the lock file; on an existing file, the dead-holder path or a refusal. -> true | throws. */
 function createLock(f, body) {
+  // Sixth Codex review: while ANY claim for this lock exists (another process is replacing a dead lock, or a crash left
+  // one), refuse, even when the lock file is absent.
+  if (claimsOf(f).length) throw refuse(f);
   try { writeFileSync(f, body, { flag: 'wx' }); return true; } catch (e) { if (e?.code !== 'EEXIST') throw refuse(f); }
   const raw = readRaw(f);
   const cur = raw === null ? null : parseOr(raw);
@@ -208,16 +247,10 @@ export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, maxHol
   const f = path.resolve(dataDir, 'posting', LOCK_NAME);
   mkdirSync(path.dirname(f), { recursive: true });
   // 1. In-process mutex.
-  const waitStart = Date.now();
-  while (inProcess.has(f)) {
-    const left = waitMs - (Date.now() - waitStart);
-    if (left <= 0) throw Object.assign(new Error('schedule busy'), { code: 'schedule-busy' });
-    let t; await Promise.race([inProcess.get(f), new Promise((r) => { t = setTimeout(r, left); })]); clearTimeout(t);
-  }
-  let endMutex; inProcess.set(f, new Promise((r) => { endMutex = r; }));
+  const endMutex = await takeMutex(f, waitMs);
   const token = `${process.pid}-${randomUUID()}`;
   // 2. The file guard against a second sender process.
-  try { createLock(f, JSON.stringify({ pid: process.pid, start: MY_START, token, at: Date.now() })); } catch (e) { inProcess.delete(f); endMutex(); throw e; }
+  try { createLock(f, JSON.stringify({ pid: process.pid, start: MY_START, token, at: Date.now() })); } catch (e) { endMutex(); throw e; }
   let lost = false;
   const stop = new AbortController();
   const mine = () => parseOr(readRaw(f))?.token === token;
@@ -236,7 +269,7 @@ export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, maxHol
     clearTimeout(capTimer);
     lost = true;
     release();
-    inProcess.delete(f); endMutex();
+    endMutex();
   }
 }
 
