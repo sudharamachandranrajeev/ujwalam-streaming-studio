@@ -63,7 +63,9 @@ def plan(pieces, xd, title_rec, cfg, seed):
     _, total = timeline(pieces, xd)
     if total < float(cfg["minReelSec"]):
         return None
-    intro_end = float(title_rec["end"]) if title_rec else float(cfg["introSec"])
+    # the intro ends with the name display (FX2: not with a corner tag, which stays the whole clip)
+    intro_end = (float(title_rec["end"]) if title_rec and title_rec.get("style") != "corner-tag"
+                 else float(cfg["introSec"]))
     intro_end = min(intro_end, total / 2.0)
     outro_start = total - float(cfg["outroSec"])
     outro = [round(outro_start, 3), round(total, 3)] if outro_start >= intro_end + 1.0 else None

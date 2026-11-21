@@ -424,8 +424,8 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     transition (RP1): {"xfade", "ms"} cross-fades each join (see crossfade_sec); None = hard cut.
     thumbnail (RP6): a bare PNG name in the working folder shown as the reel's first frame (one frame, 1/60 s); the
     sound starts one frame later.
-    title (RP4): reel_title.prepare() dict; for title.start..end the joined picture is replaced by a blurred, darkened
-    copy of itself carrying the title text, faded in and out (the sound is not touched).
+    title (FX2, D411; replaces the RP4 card over blur): reel_title.prepare() dict {ass, fontsdir}; the name display
+    burned over the joined picture with libass (the picture itself is never blurred or darkened; sound untouched).
     music (RP3): reel_music.prepare() dict; its WAV (as long as the reel, level and fades applied) is mixed under audio
     track 1 (the studio mix) with a sidechain duck keyed by that track; the other tracks are untouched."""
     ow, oh = int(frame["width"]), int(frame["height"])
@@ -472,19 +472,8 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         ins = "".join(f"[v{i}]" + "".join(f"[a{i}_{k}]" for k in range(audio_tracks)) for i in range(len(pieces)))
         outs = vlast + "".join(aj(k) for k in range(audio_tracks))
         parts.append(ins + f"concat=n={len(pieces)}:v=1:a={audio_tracks}{outs}")
-    if title:  # RP4: blurred, darkened copy of the reel with the title, faded in/out, over the reel for its window
-        s, e = float(title["start"]), float(title["end"])
-        fi, fo = title["fadeInMs"] / 1000.0, title["fadeOutMs"] / 1000.0
-        b = title["blur"]
-        parts.append("[vjoin]split=2[tmain][ttit]")
-        parts.append(f"[ttit]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS+{s:.3f}/TB,"
-                     f"gblur=sigma={float(b['sigma']):g}:steps={int(b['steps'])},"
-                     f"lutyuv=y=val*{title['darken']:g},"
-                     f"drawtext=fontfile={title['fontFile']}:textfile={title['textFile']}:expansion=none:"
-                     f"fontsize={title['size']}:fontcolor={title['colour']}:borderw={title['border']}:bordercolor=0x000000@0.85:"
-                     f"x={title['left']}+({title['safeWidth']}-text_w)/2:y=(h-text_h)/2,"
-                     f"format=yuva420p,fade=t=in:st={s:.3f}:d={fi:.3f}:alpha=1,fade=t=out:st={e - fo:.3f}:d={fo:.3f}:alpha=1[tov]")
-        parts.append(f"[tmain][tov]overlay=eof_action=pass:enable='between(t,{s:.3f},{e:.3f})'{vfinal}")
+    if title:  # FX2 (D411): the name display, an ASS file burned by libass over the joined picture (never blurred)
+        parts.append(f"[vjoin]subtitles={title['ass']}:fontsdir={title['fontsdir']}{vfinal}")
     if captions:
         parts.append(f"[vcat]subtitles={captions}" + (f":fontsdir={fontsdir}" if fontsdir else "")
                      + ("[vcap]" if thumbnail else "[vout]"))

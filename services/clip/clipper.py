@@ -78,6 +78,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import clip_captions as caps  # noqa: E402
+import clip_look as look  # noqa: E402
 import clip_publish as pub  # noqa: E402
 import clip_rank as rank  # noqa: E402
 import clip_render as rnd  # noqa: E402
@@ -683,10 +684,11 @@ def cmd_live_review(a):
             cinfo = ({"backend": "none", "status": "unavailable", "reason": "no audio"} if ex["cap_on"]
                      else {"backend": "none", "status": "off"})
         hook = m["hook"]
+        pk = _look_pick(ex, c["id"], os.path.basename(c["file"]))  # FX1: this clip's look
         tr = None if ass else ex["transition"]  # RP1: captions keep the hard cut
         xd = mont.crossfade_sec(m["pieces"], tr) if pieces_path else 0.0
         thumb, trec = _thumbnail(ffmpeg, c["file"], m, "live-clip", frame, wd, ex) if pieces_path else (None, None)
-        ttl, tirec = _title(wd, m["pieces"], xd, frame, ex) if pieces_path else (None, None)
+        ttl, tirec = _title(wd, m["pieces"], xd, frame, ex, pk) if pieces_path else (None, None)
         mus, murec = (_music(wd, m["pieces"], xd, tirec, ex, c["id"], os.path.basename(c["file"]))
                       if pieces_path and sinfo.get("has_audio") else (None, None))
         for lid in wanted:
@@ -720,7 +722,9 @@ def cmd_live_review(a):
                          "score": c["score"], "labels": c["labels"], "reasons": c["reasons"],
                          **({"pieces": m["pieces"]} if pieces_path else {}), "retimed": bool(c.get("retimed")),
                          "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec,
-                         "title": tirec, "music": murec, "captions": cinfo, "hook": hook, "files": files, "errors": errors})
+                         "title": tirec, "music": murec, "look": pk, "captions": cinfo, "hook": hook, "files": files,
+                         "errors": errors})
+        _look_remember(ex, pk if files else None)
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": "live-saves",
@@ -1045,11 +1049,14 @@ def _reel_extras(a, data_dir):
     th_on = rth.on(data_dir)
     ti_on = rti.on(data_dir)
     mu_on = rmu.on(data_dir)
+    lcfg = look.load_config() if look.on(data_dir) else None  # FX1 (D411): the clip look, picked per reel
     return {"hooks": rh.active(data_dir, hcfg), "hcfg": hcfg, "cap_on": cap_on, "ccfg": ccfg,
+            "look": ({"cfg": lcfg, "look": look.effective(data_dir, lcfg), "override": look.override_from_env(lcfg),
+                      "dataDir": data_dir, "history": look.load_history(data_dir)} if lcfg else None),
             "transition": rt.active(data_dir),  # RP1: None = hard cut (flag off, or the user chose Cut)
             "thumb": rth.load_config() if th_on else None,  # RP6: the start frame (flag reel-thumbnail)
             "brand": rth.brand() if th_on else None,
-            "title": rti.load_config() if ti_on else None,  # RP4: the title card (flag reel-title)
+            "title": rti.load_config() if ti_on else None,  # FX2: the name display (flag clip-look, or the retired reel-title)
             "tbrand": rth.brand() if ti_on else None,
             "music": rmu.load_config() if mu_on else None,  # RP3: the lofi beds (flag reel-music)
             "style": rcap.load_style(ccfg) if cap_on else None,
@@ -1070,12 +1077,41 @@ def _thumbnail(ffmpeg, src, reel, typ, frame, wd, ex, matches=None):
     return rec.get("file"), rec
 
 
-def _title(wd, pieces, xd, frame, ex):
-    """RP4: the title card of a reel -> (dict for render_argv(title=) or None, record for render.json or None). The
+def _look_pick(ex, *seed_parts):
+    """FX1 (D411): this reel's clip look {music, transitions, name, variant, seed}, or None (flag clip-look off)."""
+    lk = ex.get("look")
+    if not lk:
+        return None
+    return look.pick(lk["look"], seed_parts, lk["history"], lk["cfg"], lk["override"])
+
+
+def _look_remember(ex, pk, track=None):
+    """Adds a rendered reel's picks to <data>/clips/look-history.json (no repeat of the last picks)."""
+    lk = ex.get("look")
+    if lk and pk:
+        lk["history"] = look.remember(lk["dataDir"], pk, lk["cfg"], track=track, history=lk["history"])
+
+
+def _name_part(ex, pk):
+    """The clip look's name settings for reel_title.plan, None for the default, or False when the look has no name."""
+    if pk is None:
+        return None
+    if not pk.get("name"):
+        return False
+    nv = ex["look"]["look"]["name"]
+    return {"style": pk["name"], "variant": pk.get("variant"), "position": nv["position"], "colour": nv["colour"],
+            "sizePct": nv["sizePct"], "durationSec": nv["durationSec"]}
+
+
+def _title(wd, pieces, xd, frame, ex, pk=None):
+    """FX2: the name display of a reel -> (dict for render_argv(title=) or None, record for render.json or None). The
     record holds the brand, so like the thumbnail it stays in local app data."""
     if not ex.get("title"):
         return None, None
-    rec = rti.plan(pieces, xd, ex["title"], ex.get("tbrand"), frame, ex["safe"])
+    name = _name_part(ex, pk)
+    if name is False:
+        return None, None
+    rec = rti.plan(pieces, xd, ex["title"], ex.get("tbrand"), frame, ex["safe"], name)
     if rec is None:
         return None, None
     try:
@@ -1269,11 +1305,12 @@ def cmd_montage(a):
         typ = KIND_TYPE[cid[:1]]
         ass, fdir, cinfo = _caption_reel(ffmpeg, vrec, m["pieces"], frame, wd, ex, m["seconds"])
         exr = lmix.reel_choices(ex, mix, cid, vrec)  # RP5: this reel's transition/title/music (ex as is without a mix)
+        pk = _look_pick(exr, cid, os.path.basename(vrec))  # FX1: this reel's look
         # RP1: captions keep the hard cut (their timeline is the sum of the pieces); each cross-faded join shortens the reel
         tr = None if ass else exr["transition"]
         xd = mont.crossfade_sec(m["pieces"], tr)
         thumb, trec = _thumbnail(ffmpeg, vrec, m, typ, frame, wd, ex, matches)  # RP6
-        ttl, tirec = _title(wd, m["pieces"], xd, frame, exr)  # RP4
+        ttl, tirec = _title(wd, m["pieces"], xd, frame, exr, pk)  # FX2
         mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec))  # RP3
         def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ):
             return mont.render_argv(ffmpeg, vrec, m["pieces"], frame, rnd.ENCODERS[enc], rnd.AUDIO,
@@ -1326,6 +1363,7 @@ def cmd_montage(a):
         out_sec = _pieces_out_sec(m, xd, thumb, lim[typ]["maxSec"])
         rows.append({"id": cid, "start": 0.0, "end": out_sec, "score": m["score"], "labels": m["labels"],
                      "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec, "title": tirec, "music": murec,
+                     "look": pk,
                      "pieces": m["pieces"], "part": m.get("part"), "parts": m.get("parts"),
                      # the overlaps of a cross fade can take a reel planned at its shortest length below it
                      "trimmed": m.get("trimmed"), "belowMin": m.get("belowMin") or (out_sec < lim[typ]["minSec"]) or None, "kills": m.get("kills"), "streakKills": m.get("streakKills"),
@@ -1333,6 +1371,7 @@ def cmd_montage(a):
                      **({"story": m["story"]} if m.get("story") else {}),
                      **({"learning": exr["learning"]} if exr.get("learning") else {}),
                      "files": files, "errors": errors})
+        _look_remember(exr, pk if files else None)
     write_json_atomic(os.path.join(out, RENDER), {
         "tool": "clipper.montage", "toolVersion": TOOL_VERSION, "createdAt": _now(),
         "recording": os.path.basename(a.recording), "vRecording": os.path.basename(vrec), "encoder": encoder,
@@ -1439,6 +1478,9 @@ def cmd_recaption(a):
                     k += 1
                 shift = k * xd_old
                 rec["start"], rec["end"] = round(rec["start"] + shift, 3), round(rec["end"] + shift, 3)
+            if rec.get("style") == "corner-tag":  # FX2: the corner tag stays to the end of the (longer) hard-cut reel
+                rec["end"] = seconds
+            rec = rti.restyle(rec, cfg_t, rdoc["frame"], safe)  # FX2: an RP4 record becomes a kinetic name, no blur
             ttl, title_now = rti.prepare(wd, rec, cfg_t), rec
         except (OSError, ClipError, KeyError, TypeError, ValueError) as e:
             eprint(f"recaption {a.id}: the title card is not kept ({str(e)[-100:]})")
