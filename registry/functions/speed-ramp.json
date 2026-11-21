@@ -1,0 +1,31 @@
+{
+  "id": "speed-ramp",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "Speed ramp (RS2)",
+  "description": "Slow motion around a reel's moment: from just before the kill the piece plays at `factor` for `sec` seconds, then catches up at `catchUp` times speed until it is back on its own clock, so the piece keeps its length (captions, name, music and joins stay where they were). Picture by a setpts time map, sound by atempo on each part (kept in sync) or muted over the ramp (`audio`: mute); one ffmpeg run, the sound encoded once. Used by reel styles (D412) when the examples show a ramp (UNVERIFIED on real examples); tunable in Settings > Clips > Reel styles. No flash. Flag reel-styles.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "factor": { "type": "number", "minimum": 0.5, "maximum": 0.9 },
+        "sec": { "type": "number", "minimum": 0.3, "maximum": 1.5 },
+        "catchUp": { "type": "number", "minimum": 1.5, "maximum": 2.0 },
+        "audio": { "enum": ["sync", "mute"] }
+      }
+    },
+    "defaults": { "factor": 0.5, "sec": 0.6, "catchUp": 2.0, "audio": "sync" },
+    "safeRanges": { "factor": [0.5, 0.9], "sec": [0.3, 1.5], "catchUp": [1.5, 2.0] }
+  },
+  "canvases": ["V", "H"],
+  "themeTokens": [],
+  "durationMs": 3000,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "4.10"
+}

@@ -705,6 +705,11 @@ QtObject {
         if (cl.reason) tip += "\n" + cl.reason;
         if (cl.fix) tip += "\n" + cl.fix;
         if (last.reason) tip += "\nLast time: " + last.reason;
+        // RS4: the reel style the last clips used, and per layout what it could not change (plain words, in the tip:
+        // nothing on the bar moves)
+        const sty = last.styles || {};
+        if ((sty.names || []).length) tip += "\nReel style: " + sty.names.join(", ");
+        for (const n of (sty.notApplied || [])) tip += "\n" + n.charAt(0).toUpperCase() + n.slice(1);
         return tip;
     }
     // Questions open only on a window the user sees (the widget's rule); the tests ask with clips-ask instead.

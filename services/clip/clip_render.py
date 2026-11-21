@@ -89,11 +89,12 @@ def layout_graph(layout, iw, ih, ow, oh):
     raise ClipError(f"unknown layout kind {kind}")
 
 
-def render_argv(ffmpeg, src, start, dur, graph, encoder, out_name, has_audio, captions=None):
+def render_argv(ffmpeg, src, start, dur, graph, encoder, out_name, has_audio, captions=None, lut=None):
     """argv for one variant. captions: a bare ASS file name in the working folder, or None. Every audio track of the
     source is kept as its own track in source order (`-map 0:a`, track 1 = the studio mix); none is dropped."""
     tail = ",subtitles=" + captions if captions else ""
-    graph = graph.replace("[vout]", "[vpre]", 1) + f";[vpre]format=yuv420p{tail}[vout]"
+    colour = f"lut3d=file={lut}," if lut else ""  # RS4: the reel style's colour (a bare file name in the working folder)
+    graph = graph.replace("[vout]", "[vpre]", 1) + f";[vpre]{colour}format=yuv420p{tail}[vout]"
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(FFMPEG_THREADS), "-filter_threads", "2",
             "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", src]
     if not has_audio:
@@ -104,14 +105,14 @@ def render_argv(ffmpeg, src, start, dur, graph, encoder, out_name, has_audio, ca
     return argv
 
 
-def render_variant(ffmpeg, src, info, cand, layout, frame, encoder, workdir, captions=None, timeout=1800):
+def render_variant(ffmpeg, src, info, cand, layout, frame, encoder, workdir, captions=None, timeout=1800, lut=None):
     """Renders one variant into workdir/<layout id>.mp4 (written as .part, renamed on success)."""
     ow, oh = int(frame["width"]), int(frame["height"])
     graph = layout_graph(layout, info["width"], info["height"], ow, oh)
     name = f"{layout['id']}.mp4"
     part = name + ".part"
     dur = float(cand["end"]) - float(cand["start"])
-    argv = render_argv(ffmpeg, src, float(cand["start"]), dur, graph, encoder, part, info["has_audio"], captions)
+    argv = render_argv(ffmpeg, src, float(cand["start"]), dur, graph, encoder, part, info["has_audio"], captions, lut=lut)
     r = run_tool(argv, cwd=workdir, timeout=timeout)
     if r.returncode != 0:
         try:

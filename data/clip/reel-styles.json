@@ -1,0 +1,56 @@
+{
+  "$comment": "Reel styles library (plan docs/plan/2026-11-21-reel-styles-library.md, D412; user 2026-11-20: a style learned from example videos, applied to reels, impact plays and montages). Read by services/clip/style_analyse.py (RS1, measuring), services/clip/reel_style.py (RS2/RS4, mapping onto the D411 clip look and the render) and services/studio-ui/user-settings.mjs (RS3, Settings > Clips > Reel styles). Examples are analysed only: their path and sha256 are stored, never the video. The analysis is numbers only (no frames, no OCR text). Thresholds are the agent's proposal, tuned on synthetic fixtures (tests/py/test_style_analyse.py); UNVERIFIED on the user's examples until they arrive. Behind the flag reel-styles (on: the user asked for it).",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-21",
+  "flag": "reel-styles",
+  "styleVersion": 1,
+  "stylesDir": "clips/styles",
+  "maxExamples": 8,
+  "maxExampleSec": 90,
+  "maxExampleMB": 500,
+  "guard": { "$comment": "Codex RS review: checked during decode; on air (stream or recording started) stops the job", "checkEveryFrames": 90, "maxDecodeFps": 240, "maxAudioFramesPerSec": 400, "maxWallSecPerExample": 600, "maxMemMb": 1500 },
+  "minExampleSec": 3,
+  "nameMaxChars": 40,
+  "pathMaxChars": 400,
+  "reelTypes": ["reel", "impact", "montage"],
+  "analyse": {
+    "thumbWidth": 96,
+    "motionWidth": 192,
+    "maxFps": 60,
+    "cut": { "histHard": 0.30, "histGradual": 0.30, "gradualLagFrames": 8, "groupFrames": 6, "minShotSec": 0.2 },
+    "flash": { "lumaJump": 40, "window": 4 },
+    "whip": { "shiftPerFrame": 0.06 },
+    "zoom": { "minPulse": 0.05, "maxPulseSec": 1.2 },
+    "ramp": { "ratio": 2.0, "windowSec": 0.5, "minSpeed": 0.002 },
+    "text": { "stepSec": 0.5, "maxSamples": 120, "longSide": 640, "minScore": 0.5 },
+    "beatToleranceSec": 0.07,
+    "minAudioSec": 6
+  },
+  "map": {
+    "shotSec": { "min": 0.4, "max": 4.0 },
+    "hardShareForCuts": 0.5,
+    "beatShareForBeatCuts": 0.5,
+    "zoomScale": { "min": 1.03, "max": 1.25 },
+    "rampFactor": { "min": 0.5, "max": 0.9 },
+    "rampSec": { "min": 0.4, "max": 1.5 },
+    "lutStrength": { "min": 0, "max": 1, "default": 0.7 },
+    "lutCaps": { "shiftL": 12, "shiftAB": 15, "contrastMin": 0.8, "contrastMax": 1.25 },
+    "lutSize": 17,
+    "warmB": 4,
+    "transitionClasses": ["hard", "fade", "flash", "whip"],
+    "setMix": {
+      "punchy": { "fade": 0.0, "flash": 0.17, "whip": 0.5, "zoom": 0.33 },
+      "cinematic": { "fade": 0.4, "flash": 0.4, "whip": 0.2, "zoom": 0.0 },
+      "clean": { "fade": 1.0, "flash": 0.0, "whip": 0.0, "zoom": 0.0 }
+    },
+    "classXfade": { "fade": ["fade", "dissolve"], "flash": ["fadewhite"], "whip": ["slideleft", "smoothleft"] }
+  },
+  "tune": {
+    "shotSec": { "min": 0.4, "max": 4.0, "step": 0.1 },
+    "lutStrength": { "min": 0, "max": 1, "step": 0.05 },
+    "zoomScale": { "min": 1.0, "max": 1.25, "step": 0.01 },
+    "rampFactor": { "min": 0.5, "max": 1.0, "step": 0.05 },
+    "musicEnergy": { "min": 0, "max": 1, "step": 0.05 }
+  }
+}

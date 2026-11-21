@@ -828,3 +828,11 @@ test('D406: with the flag off no long job is queued', async () => {
     rc.stop();
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
+
+test('clipStyles: the reel styles a job used and the plain-word notes per layout, from render.json (RS4)', async () => {
+  const { clipStyles } = await import('../services/studio-ui/record-clips.mjs');
+  const rows = { clips: [{ style: { name: 'Warm' }, styleNotApplied: [{ layout: 'v-crop', note: 'style not applied: v-crop (crop)' }] }, { style: { name: 'Warm' } }, { style: null }] };
+  assert.deepEqual(clipStyles('o', { readJson: () => rows }), { names: ['Warm'], notApplied: ['style not applied: v-crop (crop)'] });
+  assert.equal(clipStyles('o', { readJson: () => ({ clips: [{ style: null }] }) }), null);
+  assert.equal(clipStyles('o', { readJson: () => { throw new Error('missing'); } }), null);
+});

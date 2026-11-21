@@ -59,12 +59,12 @@ describe('feature flags API', () => {
   before(async () => { c = await boot(); });
   after(() => c.srv.close());
 
-  test('list: every flag off by default (preview-edit on D330, reel-thumbnail on D368, outputs-panel on D389, transitions on D391, scene-builder on D390, download-manager on D403, delete-processed-recordings on D405, long-highlights-video on D406, clip-look, reel-transitions and reel-music on D411)', async () => {
+  test('list: every flag off by default (preview-edit on D330, reel-thumbnail on D368, outputs-panel on D389, transitions on D391, scene-builder on D390, download-manager on D403, delete-processed-recordings on D405, long-highlights-video on D406, clip-look, reel-transitions and reel-music on D411, reel-styles on D412)', async () => {
     const r = await get(c.port, c.a, '/ui/api/flags');
     assert.equal(r.status, 200);
     const flags = r.json().flags;
     assert.ok(flags.length >= 1);
-    const ON = ['preview-edit', 'reel-thumbnail', 'outputs-panel', 'transitions', 'scene-builder', 'download-manager', 'delete-processed-recordings', 'long-highlights-video', 'clip-look', 'reel-transitions', 'reel-music'];
+    const ON = ['preview-edit', 'reel-thumbnail', 'outputs-panel', 'transitions', 'scene-builder', 'download-manager', 'delete-processed-recordings', 'long-highlights-video', 'clip-look', 'reel-transitions', 'reel-music', 'reel-styles'];
     assert.deepEqual(flags.filter((f) => f.on !== ON.includes(f.id)).map((f) => f.id), []);
     assert.ok(flags.every((f) => typeof f.id === 'string' && typeof f.description === 'string'));
   });

@@ -217,6 +217,14 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     assert.equal(u.saved.clips.look.name.lock, null, 'unticking the locked style clears the lock');
   });
 
+  test('Settings > Clips: Reel styles opens without QML errors; the style per reel type and the mix are saved at Save (RS3, D412)', async () => {
+    const q = await probe(['settings-open', 'settings-page:Clips']);
+    assert.equal(q.saved, null, 'nothing saved by looking');
+    const p = await probe(['settings-open', 'settings-page:Clips', 'settings-reel-style:reel:fast-warm', 'settings-reel-style:montage:none',
+      'settings-reel-style-pool:calm:on', 'settings-save'], 9000);
+    assert.deepEqual(p.saved.clips.reelStyles, { byType: { reel: 'fast-warm', montage: null }, pool: ['calm'] });
+  });
+
   test('Settings > Clips: Record while live is a switch row with its explanation, on by default; off is saved at Save', async () => {
     const p = await probe(['settings-open', 'settings-page:Clips']);
     assert.deepEqual(p.s.settings.recordLive, { on: true, text: 'Record while live', visible: true,

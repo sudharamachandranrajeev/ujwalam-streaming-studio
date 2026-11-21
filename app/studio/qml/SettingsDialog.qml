@@ -182,6 +182,7 @@ Dialog {
             transKind: tr.kind || "",
             transMs: typeof tr.ms === "number" ? tr.ms : 0,
             look: info.look && info.look.look ? JSON.parse(JSON.stringify(info.look.look)) : null, // FX (D411) clip look
+            reelStyles: c.reelStyles ? JSON.parse(JSON.stringify(c.reelStyles)) : null, // RS3 (D412) style per reel type, mix
             recDir: f.recordings || "",
             clipDir: f.clips || "",
             theme: Theme.id,
@@ -223,6 +224,18 @@ Dialog {
         if (!on && draft.look[g].lock === id) setLook(g, "lock", null);
     }
 
+    // ---- reel styles (RS3, D412): the style per reel type and the styles that join the mix, in the draft ----
+    function setReelStyle(t, id) {
+        const d = Object.assign({}, draft), r = JSON.parse(JSON.stringify(d.reelStyles || {}));
+        r.byType = Object.assign({}, r.byType || {}); r.byType[t] = id === "" ? null : id;
+        d.reelStyles = r; draft = d;
+    }
+    function poolReelStyle(id, on) {
+        const d = Object.assign({}, draft), r = JSON.parse(JSON.stringify(d.reelStyles || {})), cur = r.pool || [];
+        r.pool = on ? cur.filter(x => x !== id).concat([id]) : cur.filter(x => x !== id);
+        d.reelStyles = r; draft = d;
+    }
+
     // ---- checks, changes and the body Save sends ----
     function reelProblems() {
         let bad = "";
@@ -239,7 +252,7 @@ Dialog {
         for (const k of ["recording", "live", "recordLive", "top3", "theme", "effects", "motion", "snap", "transKind"])
             if (d[k] !== s[k]) return true;
         if ((d.killsOn ? d.kills : -1) !== s.killsN) return true;
-        if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks) || !same(d.look, s.look)) return true;
+        if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks) || !same(d.look, s.look) || !same(d.reelStyles, s.reelStyles)) return true;
         if (transMsNow(d) !== (kindRange(d.transKind) ? s.transMs : 0)) return true;
         if (d.recDir.trim() !== s.recDir.trim() || d.clipDir.trim() !== s.clipDir.trim()) return true;
         for (const id in flagDraft) if ((flagStart[id] === true) !== flagDraft[id]) return true;
@@ -263,6 +276,7 @@ Dialog {
             if (d.transKind !== s.transKind || ms !== (kindRange(d.transKind) ? s.transMs : 0)) clips.reelTransition = { kind: d.transKind, ms: ms };
         }
         if (d.look && !same(d.look, s.look)) clips.look = d.look; // clip look: sent whole, only when changed
+        if (d.reelStyles && !same(d.reelStyles, s.reelStyles)) clips.reelStyles = d.reelStyles; // RS3: only when changed
         out.clips = clips;
         out.folders = { recordings: d.recDir.trim() || null, clips: d.clipDir.trim() || null };
         const ui = {};
@@ -941,6 +955,14 @@ Dialog {
             tickLook(p[1], p[2], on(p[3]));
             return true;
         case "settings-look-random": if (!draft.look) return false; setLook("", "randomise", on(p[1])); return true;
+        case "settings-reel-style": // settings-reel-style:<reel|impact|montage>:<style id or none>
+            if (!["reel", "impact", "montage"].includes(p[1]) || !p[2]) return false;
+            setReelStyle(p[1], p[2] === "none" ? "" : p[2]);
+            return true;
+        case "settings-reel-style-pool": // settings-reel-style-pool:<style id>:<on|off>
+            if (!p[1]) return false;
+            poolReelStyle(p[1], on(p[2]));
+            return true;
         case "settings-look-lock": // settings-look-lock:<group>:<id or none>
             if (!draft.look || !(p[2] === "none" || lookGroup(p[1]).options.some(o => o.id === p[2]))) return false;
             setLook(p[1], "lock", p[2] === "none" ? null : p[2]);

@@ -1,0 +1,32 @@
+{
+  "id": "speed-ramp-kill-slowmo",
+  "version": "1.0.0",
+  "function": "speed-ramp",
+  "functionVersion": "^1.0.0",
+  "name": "Kill slow-mo (half speed, sound in sync)",
+  "params": {
+    "factor": 0.5,
+    "sec": 0.6,
+    "catchUp": 2.0,
+    "audio": "sync"
+  },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": {
+    "motion": "drift",
+    "intensity": "high",
+    "mood": "electric",
+    "colourUse": "none",
+    "flashes": "none"
+  },
+  "canvases": [
+    "V",
+    "H"
+  ],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": [
+    "speed-ramp-smooth",
+    "zoom-pulse-kill-slam"
+  ]
+}

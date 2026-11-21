@@ -59,6 +59,7 @@ import { listStingerPresets, stingerTransition } from '../project/stinger-preset
 import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
+import { createReelStyles } from './reel-styles.mjs';
 import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
 import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
@@ -742,6 +743,10 @@ export function createStudioServer(opts) {
   let pollTimer = null;
   let lastSnapshot = null;
   let live = false;
+  // RS3 (D412) Settings > Clips > Reel styles: analysis and preview run hidden, off air, one at a time; a stream or
+  // recording that starts ends their process tree (outputs.status, the record-clips rule)
+  const reelStyles = typeof opts.dataDir === 'string' ? createReelStyles({ dataDir: opts.dataDir, clipRoot: opts.clipRoot ?? (process.env.UJWALAM_CLIP_ROOT || REPO_ROOT), tasks,
+    isLive: () => live === true, status: () => host.call('outputs.status', {}), flagOn: () => !!flags && flags.isOn('reel-styles') }) : null;
   const renamed = new Map(); // 'layer:<id>' | 'scene:<id>' -> new name, until the host reloads the project (D292)
   let lastImport = null; // { file, project, bases }: server side only, never sent to the page
   let previewSeen = null; // last host preview edit seq handled (null: not read yet)
@@ -814,7 +819,9 @@ export function createStudioServer(opts) {
         queued: Array.isArray(s.queued) ? s.queued.length : 0,
         asks: (Array.isArray(s.asks) ? s.asks : []).slice(0, 5).map((a) => ({ id: str(a.id, 160), name: str(a.name, 120), kind: str(a.kind, 16), minutes: Number.isFinite(a.minutes) ? a.minutes : null })),
         posting: (() => { try { return readQueueSummary(opts.dataDir, flags); } catch { return null; } })(),
-        last: l ? { name: str(l.name, 120), kind: str(l.kind, 16), result: str(l.result, 16), reason: str(l.reason, 200), clips: Number(l.clips) || 0, out: str(l.out, 400), folder: str(l.folder, 400) } : null };
+        last: l ? { name: str(l.name, 120), kind: str(l.kind, 16), result: str(l.result, 16), reason: str(l.reason, 200), clips: Number(l.clips) || 0, out: str(l.out, 400), folder: str(l.folder, 400),
+        // RS4: the reel styles the last clips used and what each layout could not take (plain words)
+        ...(l.styles && typeof l.styles === 'object' ? { styles: { names: (Array.isArray(l.styles.names) ? l.styles.names : []).slice(0, 5).map((x) => str(x, 40)).filter(Boolean), notApplied: (Array.isArray(l.styles.notApplied) ? l.styles.notApplied : []).slice(0, 5).map((x) => str(x, 160)).filter(Boolean) } } : {}) } : null };
     } catch { return base; }
   }
 
@@ -1555,6 +1562,7 @@ export function createStudioServer(opts) {
       if (!readinessOn()) return json(res, 404, { error: 'readiness-off' });
       try { return json(res, 200, publicReadiness(await readiness().run({ maxAgeMs: 0 }))); } catch { return json(res, 500, { error: 'readiness-failed' }); }
     }
+    if (req.method === 'GET' && route === '/ui/api/reel-styles') return reelStyles ? json(res, 200, await reelStyles.info()) : json(res, 404, { error: 'no-data-dir' }); // RS3
     if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir) } : { settings: null });
     if (req.method === 'GET' && route === '/ui/api/edits') return json(res, 200, history.state());
     if (req.method === 'GET' && route === '/ui/api/project/structure') return structureChoices(res);
@@ -1765,6 +1773,7 @@ export function createStudioServer(opts) {
       return json(res, 200, { ok: true, method: e.method, scene: e.scene, layer: e.layer, edits: history.state(), ...(saved ? { saved: 'pending' } : {}) });
     }
     if (route === '/ui/api/settings') return settingsRoute(res, body);
+    if (route === '/ui/api/reel-styles') { if (!reelStyles) return json(res, 404, { error: 'no-data-dir' }); const r = await reelStyles.run(body); return json(res, r.status, r.body); } // RS3
     if (route === '/ui/api/clips/answer') return clipAnswer(res, body);
     if (route === '/ui/api/tasks/stop') return stopTasks(res);
     if (route === '/ui/api/updates/apply') {
@@ -2462,6 +2471,7 @@ export function createStudioServer(opts) {
     },
     async close() {
       clearInterval(pollTimer);
+      reelStyles?.close(); // RS3: the preview folder in temp is emptied
       ytControlSvc?.close(); // D388: the YouTube chat readers and their timers
       stopDataWatch?.(); stopDataWatch = null;
       projectSync?.flush(); // write a pending layer edit now rather than lose it
