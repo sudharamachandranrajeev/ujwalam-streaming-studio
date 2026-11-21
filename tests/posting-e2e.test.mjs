@@ -847,21 +847,110 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     assert.equal(e.queue().items()[0].reason, 'schedule-read-incomplete');
   });
 
-  test('D409: while a Post now (public) is being sent, the chain starts no session; its time then counts as taken', async () => {
-    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true; const c = schedChain(e, g);
-    const q = e.queue();
-    q.add('pub'); q.patch('pub', { state: 'public-uploading', publishAt: iso(T0), pid: process.pid });
+  // ---- D409 second Codex review (2026-11-21) ----
+  test('D409: a saved session that expired: a fresh read and the 60-min check come right before the new session; a clash there stops it', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
+    const hand = FIRST + 20 * MIN;
+    // The channel changes between the check before the pass's resume and the restart of the expired session.
+    const fetchImpl = async (u, o) => {
+      const r = await g.fetchImpl(u, o);
+      if (String(u).includes('/session/') && r.status === 404 && !g.opt.channel.length) g.opt.channel = [vid('hand', 'private', iso(hand))];
+      return r;
+    };
+    const c = schedChain(e, g, { fetchImpl });
+    g.opt.chunkFailOnce = true; // the first chunk is refused: the session is kept for a resume
     await c.afterRun(e.runDir, IDLE);
-    assert.equal(g.count('init'), 0);
-    const it = e.queue().items().find((i) => i.id !== 'pub');
-    assert.equal(it.reason, 'schedule-busy'); assert.equal(it.attempts, 0);
-    // It went public 30 min later; the clip's slot must be an hour or more from that time.
-    q.patch('pub', { state: 'public-done', sentPublishAt: iso(T0 + 30 * MIN) });
-    q.patch(it.id, { publishAt: iso(T0 + 3 * HOUR) }); // 2.5 h after the public post: inside this test's 6 h gap
+    assert.ok(e.queue().items()[0].session); assert.equal(e.queue().items()[0].publishAt, iso(FIRST));
+    g.sessions.clear(); // the session expired on Google's side
+    const reads = g.count('channels');
     e.clock.t = T0 + 6 * MIN; await c.tick(IDLE);
-    const done = e.queue().items().find((i) => i.id === it.id);
-    assert.equal(done.state, 'done');
-    assert.ok(Math.abs(Date.parse(done.sentPublishAt) - (T0 + 30 * MIN)) >= 6 * HOUR, 'kept the gap from the public post');
+    assert.equal(g.count('channels'), reads + 2, 'read for the resume check, then again right before the new session');
+    assert.equal(g.count('init'), 1, 'no new session on the clashing time');
+    let it = e.queue().items()[0];
+    assert.equal(it.state, 'queued'); assert.equal(it.reason, 'schedule-clash'); assert.equal(it.publishAt, null);
+    e.clock.t += MIN; await c.tick(IDLE);
+    it = e.queue().items()[0];
+    assert.equal(it.state, 'done'); assert.equal(g.videos.length, 1);
+    assert.ok(Math.abs(Date.parse(it.sentPublishAt) - hand) >= 6 * HOUR, 'the new time keeps the gap from the hand-scheduled post');
+  });
+
+  test('D409: a live saved session for the same time resumes only after a complete read in this lock hold; a failed read keeps it waiting', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true; const c = schedChain(e, g);
+    g.opt.chunkFailOnce = true;
+    await c.afterRun(e.runDir, IDLE);
+    const reads = g.count('channels');
+    g.opt.channelError = 500;
+    e.clock.t = T0 + 6 * MIN; await c.tick(IDLE);
+    assert.equal(g.count('channels'), reads + 1); assert.equal(g.count('query'), 0, 'the session was not even touched');
+    assert.equal(e.queue().items()[0].reason, 'schedule-read-failed'); assert.equal(e.queue().items()[0].state, 'queued');
+    g.opt.channelError = null;
+    e.clock.t += 6 * MIN; await c.tick(IDLE);
+    assert.equal(g.count('channels'), reads + 2, 'read again in the new hold');
+    assert.equal(g.count('init'), 1, 'resumed, no second session'); assert.equal(e.queue().items()[0].state, 'done');
+  });
+
+  test('D409: a partial channel answer (video details missing) or a read past its deadline: nothing uploads, no attempt used', async () => {
+    let g = await fakeGoogle(); let e = setup([ROWS[0]]);
+    g.opt.channel = [vid('p1', 'public', null), vid('p2', 'private', iso(T0 + 3 * HOUR))];
+    const partial = async (u, o) => {
+      const r = await g.fetchImpl(u, o);
+      if (!String(u).includes('/youtube/v3/videos?') || (o?.method ?? 'GET') !== 'GET') return r;
+      const b = await r.json();
+      return new Response(JSON.stringify({ items: b.items.filter((v) => v.id !== 'p2') }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    await schedChain(e, g, { fetchImpl: partial }).afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0);
+    assert.equal(e.queue().items()[0].reason, 'schedule-read-incomplete'); assert.equal(e.queue().items()[0].attempts, 0);
+    assert.equal(e.queue().items()[0].publishAt, null, 'no time given on a partial read');
+    g = await fakeGoogle(); e = setup([ROWS[0]]);
+    const slow = (u, o) => (String(u).includes('/channels') ? new Promise((resolve, reject) => o?.signal?.addEventListener('abort', () => reject(new Error('aborted')))) : g.fetchImpl(u, o));
+    await schedChain(e, g, { fetchImpl: slow, readDeadlineMs: 50 }).afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0);
+    assert.equal(e.queue().items()[0].reason, 'schedule-read-incomplete'); assert.equal(e.queue().items()[0].attempts, 0);
+  });
+
+  test('D409: sendGated is the one upload gate: over budget nothing is sent; a quota answer is recorded for every pass', async () => {
+    const { sendGated } = await import('../services/posting/auto-chain.mjs');
+    const { exhaustedUntil } = await import('../services/posting/quota-budget.mjs');
+    const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
+    let sent = 0;
+    const blocked = await sendGated({ dataDir: d, budget: { reserveUpload: () => 'daily-cap-reached' }, send: async () => { sent++; } });
+    assert.deepEqual(blocked, { blocked: 'daily-cap-reached' }); assert.equal(sent, 0);
+    const quota = Object.assign(new Error('quota'), { code: 'quota-exceeded' });
+    await assert.rejects(sendGated({ dataDir: d, budget: { reserveUpload: () => null }, nowMs: () => T0, send: async () => { sent++; throw quota; } }), (e) => e === quota && Number.isFinite(e.exhaustedUntil));
+    assert.equal(sent, 1);
+    assert.equal(exhaustedUntil(d, T0), Date.parse('2026-11-10T08:00:00Z'), 'the wait until the next Pacific midnight is saved');
+    assert.deepEqual(await sendGated({ dataDir: d, budget: { reserveUpload: () => null }, send: async () => 'ok' }), { result: 'ok' });
+  });
+
+  test('D409: the schedule lock is taken over only when its holder is gone (process ended or heartbeat stopped)', async () => {
+    const { LOCK_NAME, withScheduleLock } = await import('../services/posting/auto-chain.mjs');
+    const d = mk(); mkdirSync(path.join(d, 'posting'), { recursive: true });
+    const f = path.join(d, 'posting', LOCK_NAME);
+    // A live holder (this process) that took the lock 20 minutes ago and still beats: never taken over.
+    writeFileSync(f, JSON.stringify({ pid: process.pid, token: 'other', at: Date.now() - 20 * 60e3, beat: Date.now() }));
+    await assert.rejects(withScheduleLock(d, async () => 'x', { waitMs: 150 }), { code: 'schedule-busy' });
+    // Its process ended: taken over at once.
+    writeFileSync(f, JSON.stringify({ pid: 2 ** 30, token: 'other', at: Date.now(), beat: Date.now() }));
+    assert.equal(await withScheduleLock(d, async () => 'won', { waitMs: 150 }), 'won');
+    // A live pid whose heartbeat stopped (file not refreshed for staleMs): taken over.
+    writeFileSync(f, JSON.stringify({ pid: process.pid, token: 'other', at: Date.now(), beat: Date.now() }));
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(await withScheduleLock(d, async () => 'won', { waitMs: 150, staleMs: 100 }), 'won');
+    // A holder that keeps beating holds past staleMs; a contender waits.
+    let release; const held = new Promise((r) => { release = r; });
+    const holder = withScheduleLock(d, () => held, { beatMs: 20 });
+    await new Promise((r) => setTimeout(r, 300));
+    await assert.rejects(withScheduleLock(d, async () => 'x', { waitMs: 150, staleMs: 100 }), { code: 'schedule-busy' });
+    release(); await holder;
+    // held() turns false once the file is no longer this hold's.
+    const lost = await withScheduleLock(d, async (hold) => {
+      const before = hold.held();
+      writeFileSync(f, JSON.stringify({ pid: process.pid, token: 'thief', at: Date.now(), beat: Date.now() }));
+      return [before, hold.held()];
+    }, { beatMs: 10000 });
+    assert.deepEqual(lost, [true, false]);
+    assert.ok(existsSync(f), 'the other holder\'s file is left alone');
   });
 
   test('D409: the schedule lock held elsewhere: the chain waits (no attempt, nothing sent)', async () => {

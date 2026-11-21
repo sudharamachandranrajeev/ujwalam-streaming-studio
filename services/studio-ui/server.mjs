@@ -38,10 +38,10 @@ import { QUEUE_NAME, createUploadQueue, requestRunNow, readQueueSummary, reasonT
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
 import { previewRules } from '../posting/preview.mjs';
 import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
-import { finishPublicNow, moveQueueItem, readAutoPostSettings, reservePublicNow, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, scheduleNextFree, schedulePreview } from '../posting/auto-settings.mjs';
+import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, scheduleNextFree, schedulePreview } from '../posting/auto-settings.mjs';
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
 import { SCHEDULE_FLAG } from '../posting/schedule.mjs';
-import { UploadError, checkPostStatus, uploadPost } from '../posting/youtube.mjs';
+import { UploadError, checkPostStatus } from '../posting/youtube.mjs';
 import { GROWTH_FLAG, DB_NAME as GROWTH_DB, collect as growthCollect, openStore as openGrowthStore, view as growthView } from '../analytics/index.mjs';
 import { MIX_FLAG, step as mixStep, undo as mixUndo, view as mixView, weeklyReport as mixReport } from '../learning/mix.mjs';
 import { AnalyticsError } from '../analytics/youtube.mjs';
@@ -426,7 +426,6 @@ export function createStudioServer(opts) {
   // reach the browser. opts.youtube = { auth, fetchImpl, outputsStatus } are test seams.
   let ytAuth = opts.youtube?.auth ?? null;
   const youtubeAuth = () => (ytAuth ??= createYoutubeAuth({ browserOpen: async () => { throw new Error('sign-in runs from the command line'); } }));
-  const uploading = new Set();
   // D375 Auto-post card: a fresh channel read for "Next posting times" at most every 10 minutes (quota), else the saved one.
   const CHANNEL_READ_EVERY_MS = 10 * 60 * 1000;
   // { at, promise } -> { channel } | { error }. The promise is stored before it is awaited, so requests that arrive while a
@@ -1886,18 +1885,22 @@ export function createStudioServer(opts) {
       if (!isUpload) {
         try { return json(res, 200, await checkPostStatus({ id: body.id, store: posting, auth: youtubeAuth(), fetchImpl: opts.youtube?.fetchImpl })); } catch (e) { return fail(e); }
       }
-      // The Upload click is the decision (D332): no typed phrase. Approved, not uploaded, nothing live (checked below).
+      // The Upload click is the decision (D332): no typed phrase. D409 (second Codex review, 2026-11-21): nothing is sent
+      // from here. No video goes up without a checked publish time, so the click puts the approved clip in the upload
+      // queue at the next free time (the one hard rule: an hour or more from any other post) and asks the auto-post chain
+      // for a pass at once. The chain is the only sender: one schedule-lock hold, a fresh channel read right before the
+      // session, the 60-min check and the upload budget gate (auto-chain.mjs sendGated). Refused while live or starting.
       if (v.status === 'uploaded') return json(res, 409, { error: 'already-uploaded', videoId: v.videoId });
       if (v.status !== 'approved') return json(res, 409, { error: 'not-approved' });
-      if (uploading.size) return json(res, 409, { error: 'upload-in-progress' });
-      uploading.add(body.id);
-      const ut = tasks.start({ title: 'Uploading a clip to YouTube (private)', kind: 'upload', note: 'Sending the video' });
-      try {
-        // Live is re-checked inside uploadPost just before the transfer; here a failed check also refuses (fail closed).
-        const r = await uploadPost({ id: body.id, store: posting, auth: youtubeAuth(), fetchImpl: opts.youtube?.fetchImpl, outputsStatus: async () => { try { return await ytOutputsStatus(); } catch { throw new UploadError('stream-active', 'could not confirm that nothing is live; upload refused'); } } });
-        ut.done();
-        return json(res, 200, { videoId: r.videoId, uploadStatus: r.uploadStatus, thumbnailOk: r.thumbnailOk, privacy: 'private' });
-      } catch (e) { ut.fail('The upload did not finish'); return fail(e); } finally { uploading.delete(body.id); }
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      if (!flags || !flags.isOn(AUTO_FLAG)) return json(res, 409, { error: 'auto-post-off' });
+      // A live (or unreadable) stream state refuses with the route's old code, 'stream-active' (fail closed).
+      const blocked = await liveBlock(streamOnly(ytOutputsStatus));
+      if (blocked) return json(res, 409, { error: 'stream-active', detail: blocked });
+      const r = scheduleNextFree(opts.dataDir, body.id, { nowMs: now() });
+      if (!r.ok) return json(res, 409, { error: r.code, text: r.text });
+      try { requestRunNow(opts.dataDir, now()); } catch { return json(res, 500, { error: 'save-failed' }); }
+      return json(res, 200, { queued: true, publishAt: r.item.publishAt, privacy: 'private', queue: readQueueSummary(opts.dataDir, flags) });
     }
     if (route === '/ui/api/growth/refresh') {
       // Reads the user's own numbers from YouTube (read only; nothing is posted or changed). One run at a time; a run within
@@ -1980,48 +1983,6 @@ export function createStudioServer(opts) {
       if (v.status !== 'approved') { const s = await posting.setStatus(body.id, 'approved'); if (typeof s === 'string') return json(res, POST_ERR[s] ?? 409, { error: s }); }
       const r = scheduleNextFree(opts.dataDir, body.id, { nowMs: now() });
       return r.ok ? json(res, 200, { ok: true, publishAt: r.item.publishAt, queue: readQueueSummary(opts.dataDir, flags) }) : json(res, 409, { error: r.code, text: r.text });
-    }
-    if (route === '/ui/api/posts/youtube/public-now') {
-      // PT3 "Post now (public)": one click uploads the approved clip as public at once (D332). Refused while live or
-      // starting (re-checked before the transfer too). Codex review 2026-11-21 (D409): in the chain's schedule lock, a
-      // fresh and complete channel read is checked against the hard 60-min gap (with the queue), and the post is
-      // recorded in the queue before it is sent, so the auto-post chain and this click never pass the same hour.
-      if (typeof opts.dataDir !== 'string' || typeof body.id !== 'string' || body.id.length > 64 || Object.keys(body).some((k) => k !== 'id')) return json(res, 400, { error: 'bad-params' });
-      const v = posting.get(body.id);
-      if (!v) return json(res, 404, { error: 'unknown-post' });
-      if (v.status === 'uploaded') return json(res, 409, { error: 'already-uploaded', videoId: v.videoId });
-      if (v.status !== 'approved') return json(res, 409, { error: 'not-approved' });
-      const blocked = await liveBlock(streamOnly(ytOutputsStatus));
-      if (blocked) return json(res, 409, { error: blocked === 'output-live' ? 'stream-live' : blocked });
-      if (uploading.size) return json(res, 409, { error: 'upload-in-progress' });
-      uploading.add(body.id);
-      const auth = youtubeAuth();
-      let resv;
-      try {
-        resv = await reservePublicNow({ dataDir: opts.dataDir, id: body.id, auth, fetchImpl: opts.youtube?.fetchImpl ?? fetch, nowMs: now(), videoBytes: posting.media(body.id, 'video')?.size ?? 0, lockOpts: opts.youtube?.lockOpts });
-      } catch { uploading.delete(body.id); return json(res, 502, { error: 'schedule-read-failed' }); }
-      if (!resv.ok) {
-        uploading.delete(body.id);
-        const st = resv.code === 'youtube-no-client' || resv.code === 'youtube-not-signed-in' || resv.code === 'schedule-scope-missing' ? 401 : resv.code === 'schedule-read-failed' ? 502 : 409;
-        return json(res, st, { error: resv.code, text: resv.text, ...(resv.at ? { at: resv.at } : {}) });
-      }
-      const ut = tasks.start({ title: 'Posting a clip to YouTube (public)', kind: 'upload', note: 'Sending the video' });
-      let sent = false; let videoId = null;
-      try {
-        const r = await uploadPost({ id: body.id, store: posting, auth, fetchImpl: opts.youtube?.fetchImpl, publicNow: true, outputsStatus: async () => { try { return await ytOutputsStatus(); } catch { throw new UploadError('stream-active', 'could not confirm that nothing is live; upload refused'); } } });
-        sent = true; videoId = r.videoId;
-        ut.done();
-        return json(res, 200, { videoId: r.videoId, uploadStatus: r.uploadStatus, thumbnailOk: r.thumbnailOk, privacy: 'public' });
-      } catch (e) {
-        ut.fail('The upload did not finish');
-        if (e instanceof UploadError) return json(res, YT_ERR[e.code] ?? 502, { error: e.code, detail: e.message.slice(0, 200) });
-        if (e?.code === 'oauth-no-client' || e?.code === 'oauth-reauth-needed') return json(res, 401, { error: e.code === 'oauth-no-client' ? 'youtube-no-client' : 'youtube-not-signed-in' });
-        return json(res, 502, { error: 'youtube-failed' });
-      } finally {
-        // The time it went public is recorded as taken (queue 'public-done'); a post not sent gives its hold back.
-        try { finishPublicNow(opts.dataDir, body.id, { ok: sent, videoId, nowMs: now(), prev: resv.prev }); } catch { /* the hold stays: fail closed */ }
-        uploading.delete(body.id);
-      }
     }
     if (route === '/ui/api/posts/queue/retry') {
       // D301 "Retry now": puts a failed (or waiting) item back in the upload queue at once; the chain's next tick uploads it.

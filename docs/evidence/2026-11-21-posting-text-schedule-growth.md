@@ -31,9 +31,8 @@ back with exit code 0 (off air). `npm run build:studio` ran before the QML tests
   the next Pacific day the upload bucket is tried again.
 - "Run auto-post now" is refused while a stream is live or starting, and the chain takes the request without waiting
   for its throttle.
-- "Schedule next free slot" queues the clip at least 1 h from every other post. "Post now (public)" sends
-  `privacyStatus: public` with no publishAt. It is refused within 60 min of another post and while live or starting.
-  `post.json` can never make a video public.
+- "Schedule next free slot" queues the clip at least 1 h from every other post. "Post now (public)" was removed in
+  the second Codex review (see below). Every upload carries a publishAt. `post.json` can never make a video public.
 - Text: a line that needs a missing fact is never used. The same clip always gets the same line. The last N lines are
   not repeated, and a title over the limit is left out. An older unedited draft is redrafted once. Edited and approved
   drafts are left as they are.
@@ -51,6 +50,16 @@ afterwards, one at a time (table below).
 | Quota fallback waited 6 h, did not recount earlier bucket uploads, and was extended by repeated answers | `exhaustedUntil` is the next Pacific midnight (saved). Under the fallback, the day's bucket uploads count 1,600 units each again. A repeated answer keeps `until` and uses no tries. | posting-pt2-hard-gap: midnight in both PST and PDT; blocked until then, then free; recount refuses the 7th; repeats do not extend. posting-e2e: no init before midnight, even with Run now, then it uploads. |
 | Redraft trusted only the new `editedByUser` marker | A legacy draft is redrafted only when its title, description, tags and hashtags exactly equal the old template rendered again with its stored values: the file name for finished videos, or candidates.json rank and date for clip variants. | posting-pt1-text: an edited title, an added note or changed tags are left untouched. A run-variant draft is rendered again, and one with no candidates.json is kept. |
 
+## Second Codex review (2026-11-21)
+
+| Item | Fix | Test |
+|---|---|---|
+| A. "Post now (public)" | Removed: the route, the button, `reservePublicNow`/`finishPublicNow` and the public states. The Upload button and CLI `youtube upload` now queue at the next free time and ask for a pass. `uploadVideo`/`uploadPost` refuse a missing publishAt (`publish-at-required`) before any request. | posting-pt3-actions: the route queues and makes no request; it is refused while live and with auto-post off; the public route and symbols are gone; undefined, null and '' are refused with no fetch; only the chain calls `uploadPost`. studio-ui-posting-youtube, posting-youtube-cli: queued, nothing sent. |
+| B. Expired session restarted without a fresh read | The whole pass runs in one lock hold. `uploadVideo` calls `beforeNewSession` before every new session: a full read, then the 60-min check, with the time taken after the read. One read serves one session. A resume needs a complete read in the same hold. | posting-e2e: an expired session meets a new hand-scheduled post (two reads, no new session, moved to a clear time); a resume waits through a failed read and touches no session. |
+| C. Malformed or partial read | Missing items, an id with no details or no privacy status count as incomplete and fail closed. | posting-auto-d375: five faults each reject. posting-e2e: a partial answer schedules nothing and uses no try. |
+| D. One upload gate | `sendGated` applies the budget and records quotaExceeded. The chain is the only caller. | posting-e2e: blocked means nothing is sent; a quota answer saves the wait until the next Pacific midnight. |
+| E. Lock takeover and read deadline | Heartbeat every 5 s. Takeover only if the pid is gone or the beat is older than 2 min. A 30 s read deadline aborts the request and counts as incomplete. | posting-e2e: a live holder is not taken over; a dead pid or a stopped beat is; a beating holder holds; `held()` turns false when the file is lost. posting-auto-d375: the deadline aborts; 3 deadlines fit in the lock lifetime. |
+
 Quota sum (worst case, shipped values, 10,000 units a day and a 100-unit read reserve). One channel read costs
 1 (channels.list) + 2 per page of 50 uploads (playlistItems.list + videos.list). With `maxPages` 40 that is 81 units
 at most. All 81 are reserved before the read and the unused part is given back. One read is made per upload session.
@@ -67,7 +76,7 @@ before.
 Test runs after the fixes (one file at a time, `UJWALAM_HEADLESS=1`, BelowNormal, temp `UJWALAM_DATA_ROOT`, live
 check exit 0):
 
-All 25 files PASS (exit 0): posting-auto-chain, posting-auto-d375, posting-auto, posting-backlog-order,
+All 25 files PASS (exit 0), again after the second review (plus learning-signals): posting-auto-chain, posting-auto-d375, posting-auto, posting-backlog-order,
 posting-custom-schedule, posting-e2e, posting-live-check, posting-oauth, posting-preview, posting-pt1-text,
 posting-pt2-hard-gap, posting-pt3-actions, posting-random-daily, posting-rules-in-data, posting-schedule,
 posting-uploads, posting-youtube-cli, posting-youtube, posting, studio-ui-posting-auto, studio-ui-posting-queue,
@@ -86,8 +95,9 @@ studio-ui-posting-youtube, studio-ui-posting, studio-qml-posting, studio-qml-pos
 
 - The real numbers of Google's separate upload allowance (100 a day, about 50 units per cover), and which error reason
   Google sends when it is used up.
-- That a public upload with no publishAt goes live at once on a real channel. This needs one real post, which needs the
-  user's yes.
+- Second review: a queued clip from the Upload button is sent only when auto-post is on and its rules allow uploads.
+  The lock takeover across two real processes (dead pid, stopped heartbeat) is tested with a fake pid in one process
+  only. The 30 s read deadline is not measured against the real channel.
 - Text quality on real clips: facts reach uploads.json only for clips published after this change, and older drafts
   get facts only where their uploads.json row has them.
 - The Posts window buttons have not been clicked in the running studio. Only the probe-driven QML tests ran.

@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PT3 (D408): "Run auto-post now" (refused while live or starting), and the per-clip actions "Schedule next free slot" and
-// "Post now (public)". Temp data dirs, fake host, fake auth and fake fetch only: nothing reaches Google.
+// "Upload now" (D409: queued at the next free time; "Post now (public)" was removed). Temp data dirs, fake host, fake auth and fake fetch only: nothing reaches Google.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { QUEUE_NAME, RUN_NOW_NAME, createPostChain, createUploadQueue, requestRunNow, withScheduleLock } from '../services/posting/auto-chain.mjs';
+import { QUEUE_NAME, RUN_NOW_NAME, createPostChain, createUploadQueue, requestRunNow } from '../services/posting/auto-chain.mjs';
 import { READONLY_SCOPE } from '../services/posting/oauth.mjs';
-import { slotClash, loadScheduleConfig, DEFAULT_SCHEDULE } from '../services/posting/schedule.mjs';
-import { publicNowClash, scheduleNextFree } from '../services/posting/auto-settings.mjs';
+import { scheduleNextFree } from '../services/posting/auto-settings.mjs';
 import { postId } from '../services/posting/index.mjs';
-import { uploadMetadata } from '../services/posting/youtube.mjs';
+import { uploadMetadata, uploadPost, uploadVideo } from '../services/posting/youtube.mjs';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 
@@ -160,111 +159,77 @@ describe('PT3 Schedule next free slot', () => {
   });
 });
 
-describe('PT3 Post now (public)', () => {
-  test('metadata: public only from the click, never with a publish time; private stays the default', () => {
-    assert.equal(uploadMetadata({ title: 't' }).status.privacyStatus, 'private');
-    assert.equal(uploadMetadata({ title: 't', privacy: 'public' }).status.privacyStatus, 'private', 'post.json never decides');
-    assert.equal(uploadMetadata({ title: 't' }, { publicNow: true }).status.privacyStatus, 'public');
-    assert.throws(() => uploadMetadata({ title: 't' }, { publicNow: true, publishAt: '2026-11-22T10:00:00Z' }), { code: 'bad-privacy' });
+describe('D409 Upload now: queued at the next free time; no video is ever sent without a publish time', () => {
+  const sentInit = (c) => c.calls.some((x) => x.url.includes('uploadType=resumable'));
+
+  test('the Upload click queues the approved clip at the next free time and asks for a pass; nothing is sent from the route', async () => {
+    const c = await boot();
+    assert.equal((await c.post('/ui/api/posts/youtube/upload', { id: c.id })).json().error, 'not-approved');
+    assert.equal((await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' })).status, 200);
+    c.queue.add('other'); c.queue.patch('other', { publishAt: new Date(T0 + 2 * HOUR).toISOString() });
+    const r = await c.post('/ui/api/posts/youtube/upload', { id: c.id });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json().queued, true); assert.equal(r.json().privacy, 'private');
+    const at = Date.parse(r.json().publishAt);
+    assert.ok(at > T0 && Math.abs(at - (T0 + 2 * HOUR)) >= HOUR, r.json().publishAt);
+    assert.equal(c.queue.get(c.id).state, 'queued'); assert.equal(c.queue.get(c.id).publishAt, r.json().publishAt);
+    assert.equal(existsSync(path.join(c.dataDir, 'posting', RUN_NOW_NAME)), true, 'a pass is asked for at once');
+    assert.equal(c.calls.length, 0, 'nothing reached YouTube from the route');
+    closeAll(c);
   });
 
-  test('refused for a draft, while live or starting, and within 60 min of another post; else uploads as public (fake fetch)', async () => {
-    let c = await boot();
-    assert.equal((await c.post('/ui/api/posts/youtube/public-now', { id: c.id })).json().error, 'not-approved');
-    assert.equal((await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' })).status, 200);
-    c.queue.add('other'); c.queue.patch('other', { publishAt: new Date(T0 + 50 * 60e3).toISOString() });
-    let r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 409); assert.equal(r.json().error, 'too-close');
-    assert.equal(publicNowClash(c.dataDir, c.id, { nowMs: T0 }), T0 + 50 * 60e3);
-    c.queue.patch('other', { publishAt: new Date(T0 + 61 * 60e3).toISOString() });
-    r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 200, r.text);
-    assert.deepEqual(r.json(), { videoId: 'VIDPUB', uploadStatus: 'uploaded', thumbnailOk: null, privacy: 'public' });
-    const init = c.calls.find((x) => x.url.includes('uploadType=resumable'));
-    assert.equal(JSON.parse(init.body).status.privacyStatus, 'public');
-    assert.equal(JSON.parse(init.body).status.publishAt, undefined);
-    closeAll(c);
+  test('the Upload click is refused while live or starting and with auto-post off (nothing queued, nothing sent)', async () => {
     for (const state of ['live', 'starting']) {
-      c = await boot({ sinks: [{ kind: 'stream', id: 'yt', state }] });
+      const c = await boot({ sinks: [{ kind: 'stream', id: 'yt', state }] });
       await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
-      r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-      assert.equal(r.status, 409, state); assert.equal(c.calls.length, 0);
+      const r = await c.post('/ui/api/posts/youtube/upload', { id: c.id });
+      assert.equal(r.status, 409, state); assert.equal(r.json().error, 'stream-active');
+      assert.equal(c.queue.get(c.id), null); assert.equal(c.calls.length, 0);
       closeAll(c);
     }
+    const off = await boot({ flags: { posting: true } });
+    await off.post('/ui/api/posts/status', { id: off.id, status: 'approved' });
+    assert.equal((await off.post('/ui/api/posts/youtube/upload', { id: off.id })).json().error, 'auto-post-off');
+    assert.equal(off.queue.get(off.id), null);
+    closeAll(off);
   });
 
-  // ---- Codex review 2026-11-21 (D409) ----
-  const sentInit = (c) => c.calls.some((x) => x.url.includes('uploadType=resumable'));
-  test('a fresh channel read right before: a post scheduled on YouTube 50 min from now refuses it, though nothing was saved', async () => {
-    const c = await boot();
-    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
-    assert.equal(c.queue.schedule(), null, 'no saved read at all');
-    c.channel.scheduled = [T0 + 50 * 60e3];
-    const r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 409, r.text); assert.equal(r.json().error, 'too-close'); assert.equal(r.json().at, new Date(T0 + 50 * 60e3).toISOString());
-    assert.ok(c.calls.some((x) => x.url.includes('/channels')), 'read the channel');
-    assert.equal(sentInit(c), false, 'nothing sent');
-    assert.equal(c.queue.get(c.id), null, 'no hold left behind');
-    closeAll(c);
-  });
-
-  test('a failed, scope-less or incomplete channel read refuses it (fail closed, nothing sent)', async () => {
-    let c = await boot();
-    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
-    c.channel.error = 500;
-    let r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 502); assert.equal(r.json().error, 'schedule-read-failed'); assert.equal(sentInit(c), false);
-    closeAll(c);
-    c = await boot();
-    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
-    c.channel.pages = 41; // the shipped maxPages is 40
-    r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 409); assert.equal(r.json().error, 'schedule-read-incomplete'); assert.equal(sentInit(c), false);
-    closeAll(c);
-  });
-
-  test('sent: recorded in the queue as a taken time; the chain and Schedule next free slot keep an hour from it', async () => {
+  test('"Post now (public)" is gone: the route answers no upload, the window has no button, no public state is left', async () => {
     const c = await boot();
     await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
     const r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 200, r.text);
-    const it = c.queue.get(c.id);
-    assert.equal(it.state, 'public-done'); assert.equal(it.sentPublishAt, new Date(T0).toISOString()); assert.equal(it.videoId, 'VIDPUB');
-    // A queued slot 30 min after it now clashes (the check right before a session) ...
-    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
-    assert.equal(slotClash({ item: { id: 'q', publishAt: new Date(T0 + 30 * 60e3).toISOString() }, items: c.queue.items(), cfg }), T0);
-    // ... and the next free slot is an hour or more away.
-    const s = scheduleNextFree(c.dataDir, 'other', { nowMs: T0 });
-    assert.ok(s.ok && Date.parse(s.item.publishAt) - T0 >= HOUR);
+    assert.notEqual(r.status, 200); assert.equal(sentInit(c), false); assert.equal(c.queue.get(c.id), null);
     closeAll(c);
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const qml = readFileSync(path.join(root, 'app', 'studio', 'qml', 'PostsWindow.qml'), 'utf8');
+    assert.ok(!/postsPublicNow|public-now|canPublicNow/.test(qml));
+    for (const f of ['auto-chain.mjs', 'auto-settings.mjs', 'youtube.mjs']) {
+      const src = readFileSync(path.join(root, 'services', 'posting', f), 'utf8');
+      assert.ok(!/reservePublicNow|finishPublicNow|public-uploading|public-done|publicNow/.test(src), f);
+    }
+    assert.ok(!/public-now|reservePublicNow/.test(readFileSync(path.join(root, 'services', 'studio-ui', 'server.mjs'), 'utf8')));
   });
 
-  test('one reservation: the schedule lock held by the chain refuses it; a chain upload running refuses it too', async () => {
-    const c = await boot();
-    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
-    let release; const held = new Promise((res) => { release = res; });
-    const holder = withScheduleLock(c.dataDir, () => held);
-    await new Promise((res) => setTimeout(res, 20));
-    let r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 409); assert.equal(r.json().error, 'schedule-busy'); assert.equal(sentInit(c), false);
-    release(); await holder;
-    c.queue.add('chainclip'); c.queue.patch('chainclip', { state: 'uploading', publishAt: new Date(T0 + 5 * HOUR).toISOString() });
-    r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 409); assert.equal(r.json().error, 'upload-in-progress'); assert.equal(sentInit(c), false);
-    closeAll(c);
-  });
-
-  test('a failed send gives the hold back (the clip can be tried again)', async () => {
-    const c = await boot();
-    await c.post('/ui/api/posts/status', { id: c.id, status: 'approved' });
-    c.channel.initFail = true; // the upload session start fails (500 from Google)
-    let r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.notEqual(r.status, 200);
-    const it = c.queue.get(c.id);
-    assert.equal(it.state, 'removed'); assert.equal(it.publishAt, null); assert.equal(it.reason, 'public-not-sent');
-    c.channel.initFail = false;
-    r = await c.post('/ui/api/posts/youtube/public-now', { id: c.id });
-    assert.equal(r.status, 200, r.text); assert.equal(c.queue.get(c.id).state, 'public-done');
-    closeAll(c);
+  test('uploadPost and uploadVideo refuse a missing publish time for every caller, before any request', async () => {
+    let fetched = 0;
+    const fetchImpl = async () => { fetched++; throw new Error('must not be called'); };
+    const store = { dir: () => { throw new Error('must not be read'); }, media: () => null };
+    const auth = { accessToken: async () => { throw new Error('must not ask for a token'); } };
+    for (const publishAt of [undefined, null, '']) {
+      await assert.rejects(uploadPost({ id: 'x', store, auth, fetchImpl, outputsStatus: async () => ({ sinks: [] }), publishAt }), { code: 'publish-at-required' });
+      await assert.rejects(uploadVideo({ post: { status: 'approved' }, sha256: 's', videoPath: 'none', accessToken: 't', ledger: {}, fetchImpl, outputsStatus: async () => ({ sinks: [] }), publishAt }), { code: 'publish-at-required' });
+    }
+    assert.equal(fetched, 0);
+    // The metadata is always private (no public option any more; post.json never decides).
+    assert.equal(uploadMetadata({ title: 't' }).status.privacyStatus, 'private');
+    assert.equal(uploadMetadata({ title: 't', privacy: 'public' }, { publicNow: true }).status.privacyStatus, 'private');
+    // Every caller: in services/, uploadPost is called only by the auto-post chain's gated send (sendGated).
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'services');
+    const callers = [];
+    const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith('.mjs') && /\buploadPost\(/.test(readFileSync(p, 'utf8'))) callers.push(path.relative(root, p).replaceAll('\\', '/')); } };
+    walk(root);
+    assert.deepEqual(callers.sort(), ['posting/auto-chain.mjs', 'posting/youtube.mjs']);
+    const chain = readFileSync(path.join(root, 'posting', 'auto-chain.mjs'), 'utf8');
+    assert.match(chain, /sendGated\(\{[^]*?send: \(\) => uploadPost\(\{[^}]*publishAt,/);
   });
 });

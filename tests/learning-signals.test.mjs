@@ -215,7 +215,7 @@ test('posting: a finished YouTube upload writes one "posted" row (session = the 
     assert.ok(typeof (await store.setStatus(id, 'approved')) === 'object');
     const res = (status, body, headers = {}) => ({ ok: status < 300, status, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, json: async () => body });
     const fetchImpl = async (url) => (String(url).includes('uploadType=resumable') ? res(200, {}, { location: 'https://upload.example/s1' }) : res(200, { id: 'VIDX', status: { uploadStatus: 'uploaded' } }));
-    await uploadPost({ id, store, auth: { accessToken: async () => 't' }, outputsStatus: async () => ({ sinks: [] }), fetchImpl });
+    await uploadPost({ id, store, auth: { accessToken: async () => 't' }, outputsStatus: async () => ({ sinks: [] }), fetchImpl, publishAt: '2030-01-01T00:00:00.000Z' }); // D409: a publish time is required
     const rows = rowsOf(dataDir, 'rec-h-20261110-200000');
     assert.deepEqual(rows.map((x) => [x.action, x.source, x.ref.post, x.ref.clipId, x.ref.target, x.ref.platform]), [['posted', 'posting', id, 'c01', 'youtube-shorts', 'youtube']]);
     // A store without a data folder (older callers) uploads as before and writes nothing.

@@ -83,6 +83,37 @@ describe('channel read: whole uploads list (D375, D409)', () => {
     const r = await readChannelSchedule({ accessToken: 'x', fetchImpl: f.fetchImpl, nowMs: T0, cfg });
     assert.equal(r.truncated, true); assert.equal(r.pages, 40);
   });
+
+  // ---- D409 second Codex review: a malformed or partial answer is incomplete (fail closed), never a partial success ----
+  test('missing playlist items, a missing video id, missing video details or a short details list: schedule-read-incomplete', async () => {
+    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
+    const faults = {
+      'no items list': (url, b) => (url.pathname.endsWith('/playlistItems') ? { nextPageToken: b.nextPageToken } : b),
+      'item without video id': (url, b) => (url.pathname.endsWith('/playlistItems') ? { ...b, items: [...b.items, { snippet: {} }] } : b),
+      'no details list': (url, b) => (url.pathname.endsWith('/videos') ? {} : b),
+      'one video missing': (url, b) => (url.pathname.endsWith('/videos') ? { items: b.items.slice(1) } : b),
+      'video without status': (url, b) => (url.pathname.endsWith('/videos') ? { items: b.items.map((v, k) => (k === 0 ? { id: v.id } : v)) } : b),
+    };
+    for (const [name, fault] of Object.entries(faults)) {
+      const f = fakeChannel(10);
+      const fetchImpl = async (u, o) => { const res = await f.fetchImpl(u, o); const b = await res.json(); const nb = fault(new URL(u), b); return { ...res, json: async () => nb }; };
+      await assert.rejects(readChannelSchedule({ accessToken: 'x', fetchImpl, nowMs: T0, cfg }), { code: 'schedule-read-incomplete' }, name);
+    }
+  });
+
+  test('a read past its deadline is incomplete and its requests are aborted', async () => {
+    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
+    let aborted = false;
+    const fetchImpl = (u, o) => new Promise((resolve) => {
+      o?.signal?.addEventListener('abort', () => { aborted = true; resolve({ ok: false, status: 0, json: async () => ({}) }); });
+    });
+    const t = Date.now();
+    await assert.rejects(readChannelSchedule({ accessToken: 'x', fetchImpl, nowMs: T0, cfg, deadlineMs: 50 }), { code: 'schedule-read-incomplete' });
+    assert.ok(Date.now() - t < 5000); assert.equal(aborted, true);
+    const { READ_DEADLINE_MS } = await import('../services/posting/schedule-read.mjs');
+    const { LOCK_STALE_MS } = await import('../services/posting/auto-chain.mjs');
+    assert.ok(READ_DEADLINE_MS * 3 <= LOCK_STALE_MS, 'the read deadline is well under the lock stale time');
+  });
 });
 
 describe('clips folder source (D375)', () => {

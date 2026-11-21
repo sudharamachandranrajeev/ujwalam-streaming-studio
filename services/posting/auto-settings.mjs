@@ -12,8 +12,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { AutoPostError, MAX_PER_DAY, NOTICE_TEXT, RULE_KINDS, rankerMinScore, rulesFileFor, userRulesFile, validateRules } from './auto-post.mjs';
-import { DEFAULT_SCHEDULE, HARD_GAP_MINUTES, HOUR_MS, PLACEMENTS, USER_LIMITS, ScheduleError, alignUp, checkUserSchedule, floorFrom, itemTimes, loadScheduleConfig, maxAheadMs, nextFreeSlots, savedChannelTimes, toIso, userScheduleFile } from './schedule.mjs';
-import { QUEUE_NAME, createUploadQueue, withScheduleLock } from './auto-chain.mjs';
+import { DEFAULT_SCHEDULE, HOUR_MS, PLACEMENTS, USER_LIMITS, ScheduleError, alignUp, checkUserSchedule, floorFrom, itemTimes, loadScheduleConfig, maxAheadMs, nextFreeSlots, savedChannelTimes, toIso, userScheduleFile } from './schedule.mjs';
+import { QUEUE_NAME, createUploadQueue } from './auto-chain.mjs';
 import { READONLY_SCOPE } from './oauth.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
 import { ensureScheduleSeed } from './schedule-seed.mjs';
@@ -319,66 +319,6 @@ export function scheduleNextFree(dataDir, id, { nowMs = Date.now() } = {}) {
   if (!cur) q.add(id);
   const item = q.patch(id, { state: 'queued', publishAt: toIso(t), slotAt: toIso(nowMs), reslot: null, movedByUser: true, reason: null, nextAt: null, ...(cur?.state === 'removed' ? { attempts: 0 } : {}) });
   return { ok: true, item };
-}
-
-/** PT3 "Post now (public)": the time of a scheduled or recent post within the hard gap of now, or null (free). */
-export function publicNowClash(dataDir, id, { nowMs = Date.now() } = {}) {
-  const gap = HARD_GAP_MINUTES * 60 * 1000;
-  const q = queueOf(dataDir);
-  const times = [...savedChannelTimes({ schedule: q.schedule() }, nowMs - gap), ...q.items().filter((i) => i.id !== id).flatMap(itemTimes)];
-  return times.find((x) => Number.isFinite(x) && Math.abs(x - nowMs) < gap) ?? null;
-}
-
-/**
- * PT3 "Post now (public)", Codex review 2026-11-21 (D409): the check and the reservation, in the chain's schedule lock.
- * Right before: a fresh, complete channel read (failed, quota-refused or truncated = refused, nothing sent); no clash
- * with any channel time or queue time within the gap of the window [now, now + estimated upload time] (estimate:
- * the video's bytes at half cfg.fallbackKbps); no other public post being sent. On success the post is recorded in the
- * queue as 'public-uploading' (publishAt = now), so the chain starts no new session until it ends and every planner
- * counts its time as taken. -> { ok: true, prev } | { ok: false, code, text, at? }.
- * opts: { dataDir, id, auth, fetchImpl, nowMs, videoBytes, lockOpts? }
- */
-export async function reservePublicNow({ dataDir, id, auth, fetchImpl = fetch, nowMs = Date.now(), videoBytes = 0, lockOpts }) {
-  const no = (code, text, at) => ({ ok: false, code, text, ...(at !== undefined ? { at: toIso(at) } : {}) });
-  let cfg;
-  try { cfg = scheduleConfigFor(dataDir); } catch { return no('schedule-config-bad', 'the schedule settings are not valid'); }
-  try {
-    return await withScheduleLock(dataDir, async () => {
-      const q = queueOf(dataDir);
-      const cur = q.get(id);
-      if (cur && cur.state !== 'removed' && cur.state !== 'failed') return no('in-queue', 'this clip is in the upload queue; remove it there first');
-      if (q.items().some((i) => i.state === 'public-uploading' || i.state === 'uploading')) return no('upload-in-progress', 'another upload is running; try again when it ends');
-      let read;
-      try { read = await readChannelForPreview({ dataDir, auth, fetchImpl, nowMs }); } catch (e) {
-        const code = e?.code === 'oauth-no-client' ? 'youtube-no-client' : e?.code === 'oauth-reauth-needed' ? 'youtube-not-signed-in' : String(e?.code ?? 'schedule-read-failed');
-        return no(code, 'could not read the scheduled posts on the channel just now; nothing was sent');
-      }
-      if (read.truncated) return no('schedule-read-incomplete', 'could not read every upload on the channel (raise maxPages); nothing was sent');
-      q.setSchedule({ channelLast: null, channelTimes: read.times.map(toIso), recentTimes: read.recent.map(toIso), count: read.times.length, scanned: null, truncated: false, readAt: toIso(nowMs) });
-      const gap = Math.max(HARD_GAP_MINUTES * 60 * 1000, cfg.intervalHours * HOUR_MS);
-      const kbps = Math.max(1, (cfg.fallbackKbps ?? 1000) / 2);
-      const est = Math.ceil((Math.max(0, videoBytes) * 8) / (kbps * 1000)) * 1000;
-      const times = [...read.times, ...read.recent, ...q.items().filter((i) => i.id !== id).flatMap(itemTimes)];
-      const hit = times.find((x) => Number.isFinite(x) && x > nowMs - gap && x < nowMs + est + gap);
-      if (hit !== undefined) return no('too-close', `another post is at ${toIso(hit)}, less than 60 min from this one`, hit);
-      const prev = cur ? { ...cur } : null;
-      if (!cur) q.add(id);
-      q.patch(id, { state: 'public-uploading', publishAt: toIso(nowMs), sentPublishAt: null, session: null, reason: null, nextAt: null, pid: process.pid });
-      return { ok: true, prev };
-    }, lockOpts);
-  } catch (e) {
-    if (e?.code === 'schedule-busy') return no('schedule-busy', 'another post is being scheduled right now; try again in a moment');
-    throw e;
-  }
-}
-
-/** Ends a "Post now (public)" reservation: sent -> 'public-done' with the time it went up as a taken time (both the
- *  start and the end stay taken); not sent -> the queue item goes back to what it was (or 'removed'). */
-export function finishPublicNow(dataDir, id, { ok, videoId = null, nowMs = Date.now(), prev = null }) {
-  const q = queueOf(dataDir);
-  if (ok) return q.patch(id, { state: 'public-done', videoId, sentPublishAt: toIso(nowMs), pid: null });
-  if (prev) return q.patch(id, { ...prev, pid: null });
-  return q.patch(id, { state: 'removed', publishAt: null, sentPublishAt: null, reason: 'public-not-sent', pid: null });
 }
 
 /** A fresh read of the channel's schedule for the card (read-only; needs the readonly sign-in scope). Its calls count

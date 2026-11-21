@@ -71,7 +71,7 @@ test('youtube signin: a missing OAuth client gives a clear one-line error, not a
   assert.match(errs[0], /no OAuth client set/);
 });
 
-test('youtube upload: end-to-end with a fully injected upload (no network, no host)', async () => {
+test('youtube upload (D409): queues the approved clip at the next free time for the studio queue; nothing is sent', async () => {
   const data = mk(); flagOn(data);
   const runDir = mk();
   mkdirSync(path.join(runDir, 'posts', 'c01', 'youtube-shorts'), { recursive: true });
@@ -100,8 +100,11 @@ test('youtube upload: end-to-end with a fully injected upload (no network, no ho
     },
   });
   assert.equal(r, 0, lines.join('|'));
-  assert.match(lines[0], /uploaded .* as VIDZZZ/);
-  assert.equal(createLedger(ledgerFile).get(sha, 'youtube-shorts').status, 'uploaded');
+  assert.match(lines[0], /queued .*; goes public \d{4}-/);
+  assert.equal(uploadedWith, null, 'no request at all');
+  assert.equal(createLedger(ledgerFile).get(sha, 'youtube-shorts').status, 'approved', 'not uploaded here');
+  const q = JSON.parse(readFileSync(path.join(data, 'posting', 'upload-queue.json'), 'utf8'));
+  assert.equal(q.items[id].state, 'queued'); assert.ok(Date.parse(q.items[id].publishAt) > Date.now());
 });
 
 test('youtube upload: unknown post id is a clear error, never touches the network', async () => {

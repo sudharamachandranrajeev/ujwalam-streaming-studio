@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Posts (flag posting; QML twin of the widget openPosts, plan Q4): the clip packages made after a stream. Edit the text,
 // Approve or Reject (local files only), open the package folder, see the auto-post mode and a read-only dry run of its
-// rules, the auto-upload queue state with "Retry now", and the private YouTube upload (Upload as private / Check
+// rules, the auto-upload queue state with "Retry now", and the private YouTube upload (Upload now: queued at the next free time / Check
 // status: one call at a time, the server re-checks that nothing is live). Its own window (Popup.Window).
 import QtQuick
 import QtQuick.Controls.Basic
@@ -34,11 +34,11 @@ Dialog {
     readonly property string queueState: post && post.queueState ? String(post.queueState) : ""
     readonly property bool isYoutube: post !== null && String(post.target || "").startsWith("youtube")
     readonly property bool uploaded: post !== null && post.status === "uploaded"
-    readonly property bool canUpload: !busy && !uploaded && signedIn && post !== null && post.status === "approved"
+    // D409: Upload queues the clip at the next free time and asks for an auto-post pass at once (nothing is sent from here).
+    readonly property bool canUpload: !busy && !uploaded && signedIn && post !== null && post.status === "approved" && (queueState === "" || queueState === "queued" || queueState === "removed")
     readonly property bool canCheck: !busy && uploaded
-    // PT3 (D408): per-clip "Schedule next free slot" (approves and queues at the next free time) and "Post now (public)".
+    // PT3 (D408): per-clip "Schedule next free slot" (approves and queues at the next free time). "Post now (public)" was removed (D409).
     readonly property bool canScheduleNext: !busy && !uploaded && post !== null && isYoutube && post.status !== "rejected" && (queueState === "" || queueState === "queued" || queueState === "removed")
-    readonly property bool canPublicNow: !busy && !uploaded && signedIn && post !== null && isYoutube && post.status === "approved" && (queueState === "" || queueState === "removed" || queueState === "failed")
     readonly property bool retryShown:queueState === "failed" || (queueState === "queued" && !!(post && post.queueReasonText))
 
     function show() {
@@ -90,7 +90,7 @@ Dialog {
         posts = list;
         if (post === null) selected = "";
         info = posts.length === 0 ? "No packages yet. Make them with services/posting/cli.mjs after a stream."
-             : posts.length + " package(s). Private drafts only; approving marks a package. Upload to YouTube is separate (Upload as private).";
+             : posts.length + " package(s). Private drafts only; approving marks a package. Upload to YouTube is separate (Upload now).";
         if (selected === keep && post !== null) fillForm();
     }
     function flagged(p) { return (p.limits && p.limits.ok === false) || (p.unresolved || []).length > 0 }
@@ -167,11 +167,11 @@ Dialog {
         if (upload ? !canUpload : !canCheck) return false;
         const g = gen;
         busy = true;
-        info = upload ? "Uploading... this can take a while. Keep this window open." : "Checking...";
+        info = upload ? "Queuing..." : "Checking...";
         Api.post(upload ? "ui/api/posts/youtube/upload" : "ui/api/posts/youtube/check", { id: selected }, (ok, r, err) => {
             // Always re-read (it clears busy); the outcome only shows in the window that asked.
             reload(g !== gen ? "" : !ok ? "Not done: " + err
-                 : upload ? "Uploaded as private video " + r.videoId + "."
+                 : upload ? "Queued: goes public " + when(r.publishAt) + ". It uploads as private now, when no stream is live."
                  : "Video " + r.videoId + ": " + (r.found === true ? "upload " + (r.uploadStatus || "?") + ", processing " + (r.processingStatus || "?") + ", privacy " + (r.privacyStatus || "?") : "not found"), true);
         });
         return true;
@@ -191,16 +191,6 @@ Dialog {
         busy = true;
         Api.post("ui/api/posts/schedule-next", { id: selected }, (ok, r, err) => {
             reload(g !== gen ? "" : ok ? "Scheduled: goes public " + when(r.publishAt) + ". It uploads as private first, when no stream is live." : "Not scheduled: " + err, true);
-        });
-        return true;
-    }
-    function publicNow() {
-        if (!canPublicNow) return false;
-        const g = gen;
-        busy = true;
-        info = "Posting as public... this can take a while. Keep this window open.";
-        Api.post("ui/api/posts/youtube/public-now", { id: selected }, (ok, r, err) => {
-            reload(g !== gen ? "" : ok ? "Posted as public video " + r.videoId + "." : "Not posted: " + err, true);
         });
         return true;
     }
@@ -239,7 +229,7 @@ Dialog {
                  formShown: post !== null, meta: metaText(post), limits: limitsText(post), title: titleField.text, desc: descText.text, tags: tagsField.text,
                  hashtags: hashField.text, ytShown: isYoutube, ytInfo: ytText(post), uploadEnabled: canUpload, checkEnabled: canCheck,
                  queueShown: queueState !== "", queueText: post ? queueText(post) : "", retryShown: retryShown, busy: busy,
-                 scheduleNextEnabled: canScheduleNext, publicNowEnabled: canPublicNow };
+                 scheduleNextEnabled: canScheduleNext };
     }
     function probeAction(a) {
         if (a === "posts-open") return show();
@@ -386,15 +376,14 @@ Dialog {
                     Line { objectName: "postsYtInfo"; text: dlg.ytText(dlg.post) }
                     Row {
                         spacing: 10
-                        UButton { objectName: "postsUpload"; text: "Upload as private"; enabled: dlg.canUpload; onClicked: dlg.youtube(true) }
+                        UButton { objectName: "postsUpload"; text: "Upload now (next free time)"; enabled: dlg.canUpload; onClicked: dlg.youtube(true) }
                         UButton { objectName: "postsCheck"; text: "Check status"; enabled: dlg.canCheck; onClicked: dlg.youtube(false) }
                     }
                     Row {
                         spacing: 10
                         UButton { objectName: "postsScheduleNext"; text: "Schedule next free slot"; enabled: dlg.canScheduleNext; onClicked: dlg.scheduleNext() }
-                        UButton { objectName: "postsPublicNow"; text: "Post now (public)"; enabled: dlg.canPublicNow; onClicked: dlg.publicNow() }
                     }
-                    Line { text: "Schedule next free slot approves the clip and gives it the next free time, at least an hour from any other post. Post now (public) puts it on YouTube for everyone at once."; color: Theme.c.muted }
+                    Line { text: "Schedule next free slot approves the clip and gives it the next free time, at least an hour from any other post. Upload now does the same for an approved clip and starts the upload at once; it goes public at that time."; color: Theme.c.muted }
                 }
             }
         }

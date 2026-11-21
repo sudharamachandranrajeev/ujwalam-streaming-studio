@@ -764,16 +764,17 @@
     $('post-yt-check').disabled = yt.busy || !uploaded;
   }
   function ytMsg(x) {
-    var m = { 'stream-active': 'A stream is live, or live state could not be confirmed. Upload refused.', 'not-approved': 'Approve the package first.', 'already-uploaded': 'Already uploaded.', 'upload-in-progress': 'Another upload is running.', 'youtube-not-signed-in': 'Not signed in. Run the signin command in a terminal.', 'youtube-no-client': 'No OAuth client set yet.', 'status-not-permitted': 'YouTube would not show the status with this sign-in. Check it in YouTube Studio.' };
+    var m = { 'stream-active': 'A stream is live, or live state could not be confirmed. Upload refused.', 'not-approved': 'Approve the package first.', 'already-uploaded': 'Already uploaded.', 'upload-in-progress': 'Another upload is running.', 'auto-post-off': 'Switch on auto-post first: uploads go through the auto-post queue.', 'stream-live': 'A stream is live. Try again after it ends.', 'no-free-slot': 'No free posting time in the days ahead.', 'not-movable': 'This clip is already uploading or uploaded.', 'youtube-not-signed-in': 'Not signed in. Run the signin command in a terminal.', 'youtube-no-client': 'No OAuth client set yet.', 'status-not-permitted': 'YouTube would not show the status with this sign-in. Check it in YouTube Studio.' };
     return m[x.message] || x.message || 'error';
   }
   function ytAction(kind) {
     var p = selPost(); if (!p || yt.busy) return;
     yt.busy = true; renderYt(p);
     var call = kind === 'upload' ? Api.ytUpload(p.id) : Api.ytCheck(p.id);
-    setText($('posts-text'), kind === 'upload' ? 'Uploading... this can take a while. Keep this window open.' : 'Checking...');
+    setText($('posts-text'), kind === 'upload' ? 'Queuing...' : 'Checking...');
     call.then(function (r) {
-      if (kind === 'upload') { setText($('posts-text'), 'Uploaded as private video ' + r.videoId + (r.uploadStatus ? ' (' + r.uploadStatus + ')' : '') + '.'); }
+      // D409: the click queues the clip at the next free time; the auto-post queue uploads it as private now.
+      if (kind === 'upload') { setText($('posts-text'), 'Queued: goes public ' + new Date(r.publishAt).toLocaleString() + '. It uploads as private now, when no stream is live.'); }
       else setText($('posts-text'), 'Video ' + r.videoId + ': ' + (r.found ? 'upload ' + (r.uploadStatus || '?') + ', processing ' + (r.processingStatus || '?') + ', privacy ' + (r.privacyStatus || '?') + (r.failureReason ? ', failure ' + r.failureReason : '') : 'not found yet') + '.');
     }).catch(function (x) { setText($('posts-text'), 'Not done: ' + ytMsg(x)); })
       .then(function () { yt.busy = false; return Api.posts().then(function (r) { ps.posts = r.posts || []; ps.queue = r.queue || null; renderPosts(); var q = selPost(); if (q) fillPost(q); }); })

@@ -2417,3 +2417,20 @@ As built from D408 and `docs/plan/2026-11-21-posting-text-schedule-growth.md`. E
   - Redraft: a draft from before the `editedByUser` marker is redrafted only if its text still exactly matches the old
     template, rendered again with its stored values (`legacyText` in `services/posting/index.mjs`). Any other draft,
     and one whose values cannot be found, is left as it is.
+- Second Codex review (2026-11-21). These replace the points above where they differ:
+  - "Post now (public)" is removed: the route, the Posts window button, `reservePublicNow`/`finishPublicNow` and the
+    `public-uploading`/`public-done` states. No code path sends a video without a publishAt: `uploadVideo` and
+    `uploadPost` refuse one with `publish-at-required` before any request.
+  - The Upload button and `youtube upload` (CLI) now queue the clip at the next free time and ask for a pass. The
+    auto-post chain is the only sender. With auto-post off the button is refused (`auto-post-off`), because nothing would
+    send the clip.
+  - One upload gate: every upload goes through `sendGated` (`auto-chain.mjs`). It applies the quota budget and records a
+    quotaExceeded answer.
+  - The whole chain pass runs in one lock hold. Before every new upload session, including the restart of an expired
+    one, the chain reads the channel fully and checks the 60-min gap in that hold, with the time taken after the read.
+    One read serves one new session. A saved session resumes only after a complete read in the same unreleased hold.
+  - A malformed or partial read answer (items missing, an id with no details, no privacy status) counts as incomplete
+    and fails closed: nothing is scheduled, the clip waits and no try is used. The read has a 30 s deadline
+    (`READ_DEADLINE_MS`). Past it the read is incomplete and the request is aborted.
+  - The lock holder writes a heartbeat every 5 s. Another holder takes the lock over only if the holder's process is gone
+    or the heartbeat is older than 2 min (`LOCK_STALE_MS`, at least 3 read deadlines). A pass that loses the lock stops.

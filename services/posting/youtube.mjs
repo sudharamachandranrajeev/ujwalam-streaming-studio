@@ -45,12 +45,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Builds the fixed snippet from a post.json entry. privacyStatus is hardcoded here, never from `post`.
  *  publishAt (RFC 3339 UTC, from the post-schedule queue slot, D310 proposed) makes YouTube publish the private video at
  *  that time; it is never read from post.json and only accepted as a valid future-looking ISO string ending in Z. */
-export function uploadMetadata(post, { publishAt = null, publicNow = false } = {}) {
-  // PT3 (D408): publicNow (only from the Posts window's "Post now (public)" click) is the one way to send 'public'; it
-  // never comes from post.json and never goes with a publish time.
-  if (publicNow !== false && publicNow !== true) throw new UploadError('bad-privacy', 'publicNow must be true or false');
-  if (publicNow && publishAt !== null) throw new UploadError('bad-privacy', 'a public upload has no publish time');
-  const status = { privacyStatus: publicNow ? 'public' : 'private', selfDeclaredMadeForKids: false };
+export function uploadMetadata(post, { publishAt = null } = {}) {
+  // D409 (second Codex review, 2026-11-21): "Post now (public)" was removed. Every video goes up private; uploadVideo
+  // refuses to send one without a publish time.
+  const status = { privacyStatus: 'private', selfDeclaredMadeForKids: false };
   if (publishAt !== null) {
     if (typeof publishAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(publishAt) || !Number.isFinite(Date.parse(publishAt))) {
       throw new UploadError('bad-publish-at', 'the scheduled publish time is not a valid UTC time');
@@ -211,6 +209,9 @@ export async function uploadVideo(opts) {
   const now = opts.now ?? (() => new Date().toISOString());
   const chunkSize = opts.chunkSize ?? DEFAULT_CHUNK;
 
+  // D409 (second Codex review, 2026-11-21): no code path sends a video without a publish time. Refused before anything
+  // is read or sent, whoever the caller is.
+  if (typeof opts.publishAt !== 'string' || !opts.publishAt) throw new UploadError('publish-at-required', 'every upload needs a checked publish time; nothing was sent');
   if (opts.post.status !== 'approved') throw new UploadError('not-approved', 'only approved packages can be uploaded');
   if (opts.post.source?.sha256 !== opts.sha256) throw new UploadError('video-changed', 'the video changed since it was approved');
   if (!checkLimits(opts.post, opts.limits).ok) throw new UploadError('over-limit', 'the post is over a platform limit');
@@ -222,8 +223,8 @@ export async function uploadVideo(opts) {
   if (isStreamLive(live)) throw new UploadError('stream-active', 'a stream sink is active; uploads never compete with a live stream');
 
   const bytes = statSync(opts.videoPath).size;
-  const publishAt = opts.publishAt ?? null;
-  const metadata = uploadMetadata(opts.post, { publishAt, publicNow: opts.publicNow === true });
+  const publishAt = opts.publishAt;
+  const metadata = uploadMetadata(opts.post, { publishAt });
   // post-schedule (D310 proposed): the publish time must still be minLeadMs ahead when a session starts or resumes, and
   // marginMs ahead before every chunk, so an upload never finishes with a passed time (YouTube would publish at once).
   const nowMs = opts.nowMs ?? (() => Date.now());
@@ -245,6 +246,9 @@ export async function uploadVideo(opts) {
     }
   }
   if (!sessionUrl) {
+    // D409: every NEW session (the first, or a restart after an expired one) is preceded by the caller's check (a fresh
+    // channel read and the 60-min rule, inside its schedule lock). It throws to stop; the lead check below runs after it.
+    if (typeof opts.beforeNewSession === 'function') await opts.beforeNewSession(publishAt);
     if (!ahead(publishAt, opts.minLeadMs ?? 0)) throw new UploadError('slot-passed', 'the planned public time is too close to start this upload');
     sessionUrl = await initiateSession(fetchImpl, opts.accessToken, metadata, bytes);
     sent = publishAt;
@@ -276,12 +280,14 @@ export async function uploadVideo(opts) {
 }
 
 /**
- * Shared by `cli.mjs youtube upload` and the studio Posts view: uploads one post package by id.
- * opts: { id, store (createPostStore), auth (createYoutubeAuth), outputsStatus, fetchImpl?, limits?, now? }
+ * Uploads one post package by id. D409: its only caller is the auto-post chain's gated send (auto-chain.mjs sendGated);
+ * the studio's Upload button and `cli.mjs youtube upload` queue the clip for it instead.
+ * opts: { id, store (createPostStore), auth (createYoutubeAuth), outputsStatus, publishAt (required), fetchImpl?, limits?, now? }
  * Persists the video id in the ledger entry (so the status check can find it later). Throws UploadError.
  */
 export async function uploadPost(opts) {
   const { id, store, auth } = opts;
+  if (typeof opts.publishAt !== 'string' || !opts.publishAt) throw new UploadError('publish-at-required', 'every upload needs a checked publish time; nothing was sent');
   const dir = store.dir(id);
   if (!dir) throw new UploadError('unknown-post', `unknown post id ${id}`);
   const post = JSON.parse(readFileSync(path.join(dir, 'post.json'), 'utf8'));
@@ -292,7 +298,7 @@ export async function uploadPost(opts) {
   const accessToken = await auth.accessToken();
   const r = await uploadVideo({
     post, sha256, videoPath: video.file, coverPath: cover?.file, accessToken,
-    ledger: store.ledger, limits: opts.limits ?? loadLimits(), outputsStatus: opts.outputsStatus, fetchImpl: opts.fetchImpl, now: opts.now, sessions: opts.sessions, publishAt: opts.publishAt ?? null, minLeadMs: opts.minLeadMs, marginMs: opts.marginMs, chunkDeadlineMs: opts.chunkDeadlineMs, fallbackBps: opts.fallbackBps, nowMs: opts.nowMs, beforeChunk: opts.beforeChunk, chunkSize: opts.chunkSize, publicNow: opts.publicNow === true,
+    ledger: store.ledger, limits: opts.limits ?? loadLimits(), outputsStatus: opts.outputsStatus, fetchImpl: opts.fetchImpl, now: opts.now, sessions: opts.sessions, publishAt: opts.publishAt, minLeadMs: opts.minLeadMs, marginMs: opts.marginMs, chunkDeadlineMs: opts.chunkDeadlineMs, fallbackBps: opts.fallbackBps, nowMs: opts.nowMs, beforeChunk: opts.beforeChunk, beforeNewSession: opts.beforeNewSession, chunkSize: opts.chunkSize,
     recordUploaded: async ({ videoId }) => { store.ledger.annotate(sha256, post.target, { videoId }); },
   });
   // LL2 (D338): a "posted" label row in the local learning store when the store knows the data folder. Never fails the upload.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// F7: Posts view YouTube private upload + status check (flag `posting`). Fake auth and fake fetch only: nothing here touches
+// F7: Posts view YouTube upload (D409: queued at the next free time, sent by the auto-post chain) + status check (flag `posting`). Fake auth and fake fetch only: nothing here touches
 // Google, a browser or Credential Manager. Checks the Upload click (no typed phrase, D332), live refusal (fail closed), approved-only,
 // no double upload, no token in any response, the status route, and the UI source rules.
 import assert from 'node:assert/strict';
@@ -60,10 +60,10 @@ function makePackage(dataDir) {
 
 const jsonRes = (status, body, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, json: async () => body });
 
-async function boot({ signedIn = true, sinks = [], outputsThrows = false, reauth = false } = {}) {
+async function boot({ signedIn = true, sinks = [], outputsThrows = false, reauth = false, autoPost = true } = {}) {
   const dataDir = mk();
   const pkg = makePackage(dataDir);
-  writeFileSync(path.join(dataDir, 'flags.local.json'), JSON.stringify({ flags: { posting: true } }));
+  writeFileSync(path.join(dataDir, 'flags.local.json'), JSON.stringify({ flags: { posting: true, 'auto-post': autoPost } }));
   const calls = [];
   const fetchImpl = async (url, o) => {
     calls.push({ url: String(url), method: o?.method, auth: o?.headers?.Authorization });
@@ -87,9 +87,11 @@ async function boot({ signedIn = true, sinks = [], outputsThrows = false, reauth
   const post = (route, body) => raw(port, { method: 'POST', url: route, body: JSON.stringify(body), headers: { cookie, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf } });
   const get = (url) => raw(port, { url, headers: { cookie } });
   const approve = async () => assert.equal((await post('/ui/api/posts/status', { id: pkg.id, status: 'approved' })).status, 200);
-  return { srv, port, post, get, approve, calls, ...pkg, store: createPostStore({ ledgerFile: pkg.ledgerFile }) };
+  return { srv, port, post, get, approve, calls, dataDir, ...pkg, store: createPostStore({ ledgerFile: pkg.ledgerFile }) };
 }
 const UP = '/ui/api/posts/youtube/upload';
+const queueItem = (c) => { try { return JSON.parse(readFileSync(path.join(c.dataDir, 'posting', 'upload-queue.json'), 'utf8')).items[c.id] ?? null; } catch { return null; } };
+const markUploaded = (c) => { c.store.ledger.setStatus(sha, 'youtube-shorts', 'uploaded', '2026-11-03T19:00:00.000Z'); c.store.ledger.annotate(sha, 'youtube-shorts', { videoId: 'VID123' }); };
 
 describe('youtube status route', () => {
   test('signed in / out, no token or secret in the answer', async () => {
@@ -132,41 +134,38 @@ describe('youtube upload route', () => {
         assert.equal(r.status, 409, JSON.stringify(opts)); assert.equal(r.json().error, 'stream-active');
         assert.equal(c.calls.length, 0);
         assert.equal(c.store.get(c.id).status, 'approved');
+        assert.equal(queueItem(c), null, 'nothing queued');
       } finally { c.srv.close(); }
     }
   });
 
-  test('happy path: private upload, video id returned and stored, no token leaks, second upload refused, edit locked', async () => {
+  test('D409 happy path: the click queues the clip at the next free time and asks for a pass; nothing is sent, no token in the answer', async () => {
     const c = await boot();
     try {
       await c.approve();
       const r = await c.post(UP, { id: c.id });
       assert.equal(r.status, 200, r.text);
-      assert.deepEqual(r.json(), { videoId: 'VID123', uploadStatus: 'uploaded', thumbnailOk: null, privacy: 'private' });
+      assert.equal(r.json().queued, true); assert.equal(r.json().privacy, 'private');
+      assert.ok(Date.parse(r.json().publishAt) > Date.now(), 'a publish time ahead');
       assert.ok(!r.text.includes(TOKEN));
-      const init = c.calls.find((x) => x.url.includes('uploadType=resumable'));
-      assert.equal(init.auth, `Bearer ${TOKEN}`);
-      const v = c.store.get(c.id);
-      assert.equal(v.status, 'uploaded'); assert.equal(v.videoId, 'VID123');
-      assert.ok(!(await c.get('/ui/api/posts')).text.includes(TOKEN));
-      // LL2 (D338): one "posted" label row in the local learning store of this data folder (session = the post's run)
-      const rows = readFileSync(path.join(path.dirname(path.dirname(c.ledgerFile)), 'learning-store', 'run', 'labels.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-      assert.deepEqual(rows.map((x) => [x.action, x.source, x.session, x.ref.post, x.ref.clipId]), [['posted', 'posting', 'run', c.id, 'c01']]);
+      assert.equal(c.calls.length, 0, 'nothing reached YouTube from the route');
+      const it = queueItem(c);
+      assert.equal(it.state, 'queued'); assert.equal(it.publishAt, r.json().publishAt);
+      assert.equal(c.store.get(c.id).status, 'approved', 'not uploaded by the route');
+      // Uploaded later (by the chain): a second click is refused.
+      markUploaded(c);
       const again = await c.post(UP, { id: c.id });
       assert.equal(again.status, 409); assert.equal(again.json().error, 'already-uploaded');
-      assert.equal(c.calls.filter((x) => x.url.includes('uploadType=resumable')).length, 1);
-      assert.equal((await c.post('/ui/api/posts/edit', { id: c.id, title: 'x' })).status, 409);
-      assert.equal((await c.post('/ui/api/posts/status', { id: c.id, status: 'draft' })).status, 409);
     } finally { c.srv.close(); }
   });
 
-  test('expired sign-in maps to youtube-not-signed-in (401), nothing uploaded', async () => {
-    const c = await boot({ reauth: true });
+  test('D409: with auto-post off the click is refused (nothing would send it); no sign-in is asked for', async () => {
+    const c = await boot({ autoPost: false, reauth: true });
     try {
       await c.approve();
       const r = await c.post(UP, { id: c.id });
-      assert.equal(r.status, 401); assert.equal(r.json().error, 'youtube-not-signed-in');
-      assert.equal(c.calls.length, 0);
+      assert.equal(r.status, 409); assert.equal(r.json().error, 'auto-post-off');
+      assert.equal(c.calls.length, 0); assert.equal(queueItem(c), null);
     } finally { c.srv.close(); }
   });
 });
@@ -178,7 +177,7 @@ describe('youtube check route', () => {
       await c.approve();
       let r = await c.post('/ui/api/posts/youtube/check', { id: c.id });
       assert.equal(r.status, 409); assert.equal(r.json().error, 'not-uploaded');
-      await c.post(UP, { id: c.id });
+      markUploaded(c); // D409: the auto-post chain uploads; here the ledger says it did
       r = await c.post('/ui/api/posts/youtube/check', { id: c.id });
       assert.equal(r.status, 200);
       assert.deepEqual(r.json(), { videoId: 'VID123', found: true, uploadStatus: 'processed', processingStatus: 'succeeded', privacyStatus: 'private', failureReason: null, rejectionReason: null });
