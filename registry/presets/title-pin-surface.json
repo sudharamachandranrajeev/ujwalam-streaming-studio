@@ -1,0 +1,15 @@
+{
+  "id": "title-pin-surface",
+  "version": "1.0.0",
+  "function": "title-pin",
+  "functionVersion": "^1.0.0",
+  "name": "Pinned to a flat surface",
+  "params": { "trackWidth": 480, "maxFrames": 900, "minPoints": 12, "minInlierRatio": 0.6, "maxErrPx": 3.0 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "drift", "intensity": "low", "mood": "neutral", "colourUse": "none", "flashes": "none" },
+  "canvases": ["V", "H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["title-extrude-codm", "hero-bw-push"]
+}

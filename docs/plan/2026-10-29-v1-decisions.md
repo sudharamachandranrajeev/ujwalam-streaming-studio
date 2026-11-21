@@ -2647,6 +2647,16 @@ Evidence: `docs/evidence/2026-11-21-beatdrop-bd3-bd4.md`. Plan: `docs/plan/2026-
    - **Round 6 (Codex verify of 53db411)**: the sweep needs positive evidence. It removes one of its own videos only when render.json names a different beatdrop video that exists, or a .part file when there is no render.json at all. Any other render.json removes nothing. The orphan sweep runs only after the render child has started. ffprobe (media_info) maps `NO_JOB_RC` to "not started", so clipper exits 5 and writes nothing. `host_running` treats an unknown tasklist result as running, so the work stays on the CPU.
    - **Video and record stay paired**: each render writes a new name, `beatdrop-<id>.mp4` (a hash of the plan, the music record and the time). render.json is written atomically pointing at it with its music record, and only then are the older videos removed (`beatdrop.sweep_videos`). Before each run, videos that render.json does not point at (crash orphans) are swept, so they are never published.
 
+## D416 — BeatDrop BD5 titles, pin, hero and credits as built (decided, 2026-11-21)
+
+Evidence: `docs/evidence/2026-11-21-beatdrop-bd5.md`. Plan: `docs/plan/2026-11-21-beatdrop-montages.md` sections 1, 3 and 5 (BD5).
+
+1. **Slots filled** by `services/clip/beatdrop_titles.py` after planning: title ("<brand> presents" on the title slot's first downbeat, the song title from the intro's last downbeat to the drop), hero (player name, `hero-bw` black and white with a slow push-in that eases back), credits (the music record's credit exactly as `montage_music.credit_text` gives it, then the data lines). Brand and player from `data/profile.local.json` at run time; a missing or placeholder value leaves its line out (logged).
+2. **Drawn in the one montage render**: an ASS file burned by libass after the BD4 effects, one event per output frame (10 ms edges map one-to-one onto 60 fps frames). Fonts only from the OFL set in data/fonts. Entrances under 600 ms, exits under 400 ms (checked on load and measured on the rendered frames).
+3. **Pin**: the title tracked onto a flat surface per covered piece (OpenCV corners, pyramidal Lucas-Kanade with forward-backward check, RANSAC homography, CPU, low resolution, frame budget, on-air check between frames). Low confidence, a decode short, the budget used up, or a moving effect (zoom, slide, shake, hero push) under the title gives the screen-space title and a plan log line.
+4. **Credits fit**: each credit line is wrapped to 92 % of the frame width (measured with the credit font's own advance widths through Pillow; a link is cut where it still fits), the size lowered only when the rows would pass 96 % of the height. Every character stays visible on H and V.
+5. **Cleanup**: one try/finally from the music bed through the render removes the bed, LUT, graph and title files on any error.
+6. Registry: `title-extrude`, `title-pin`, `hero-bw`, `credits-roll` with 5 presets. UNVERIFIED: real footage and replays, the look to the user, NVENC with titles.
 ## D417 — NCS song credit built from the file name (decided, 2026-11-21)
 
 The user said yes (2026-11-21): "build the song credit from the file names so these NCS songs can be auto-posted". Branch `claude/ncs-filename-credit`. Evidence: `docs/evidence/2026-11-21-ncs-filename-credit.md`.

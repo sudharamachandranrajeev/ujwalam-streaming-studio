@@ -6,11 +6,11 @@ mapped "cuts": shotSec, ratePerMin, beatShare) and builds a montage plan (data; 
 data/schemas/beatdrop-plan.schema.json):
 
 - cold open: calm pieces (third person, scope, any stretch with no kill or gunshot), cut on downbeats only, slowed;
-- a title slot over the intro's last bars (empty placeholder for BD5);
+- a title slot over the intro's last bars (filled by BD5, beatdrop_titles.fill);
 - the strongest kill exactly on the first drop; then kills and gunshots on beats, flicks/slides/jumps on off-beats
   (share from the style's beat share);
 - breakdowns: calm slow-motion pieces cut on downbeats, letterbox;
-- outro: a hero slot and a credits slot (placeholders for BD5) over calm slow pieces.
+- outro: a hero slot and a credits slot (filled by BD5, beatdrop_titles) over calm slow pieces.
 
 Retiming: every piece is a whole number of output frames (60 fps) between beat-grid frames, so joins never drift; an
 anchored piece's source window is placed so its kill/gunshot frame lands on its target beat's frame, at speed 1 or
@@ -332,7 +332,8 @@ class _Planner:
                "songStart": round(self.song0, 4), "total": round(total_f / self.fps, 4), "frames": total_f,
                "song": {"bpm": sm["bpm"], "period": period,
                         "firstDrop": round(drop - self.song0, 4) if self.first_drop is not None else None,
-                        "dropAt": round(drop - self.song0, 4), "beats": reel_beats},
+                        "dropAt": round(drop - self.song0, 4), "beats": reel_beats,
+                        "downbeats": [round(d - self.song0, 4) for d in downs if self.song0 <= d <= song_end]},
                "targets": self.tg, "slots": slots, "pieces": self.pieces, "effects": self.effects,
                "cuts": cuts, "log": self.log, "stats": stats(self.pieces, self.fps)}
         if self.missed:
@@ -511,9 +512,10 @@ def render_pieces(pl):
 
 
 def render_argv(pl, ffmpeg, src, frame, encoder_args, audio_args, music_wav, out_name, lut=None, audio_tracks=1,
-                threads=4, fx=True):
+                threads=4, fx=True, titles=None):
     """The one ffmpeg run of a plan: clip_montage.render_argv with beat-locked pieces, the bed (no sidechain: the game
-    is ducked per piece), the BD4 effects graph and the style's LUT (bloom-grade, lut3d once). One audio encode."""
+    is ducked per piece), the BD4 effects graph and the style's LUT (bloom-grade, lut3d once). One audio encode.
+    titles: beatdrop_titles.prepare() dict (BD5), burned by libass after the effects (render_argv title=)."""
     import clip_montage as mont  # noqa: PLC0415
     graph = bfx.graph(pl["effects"], frame, pl["fps"]) if fx else None
     bloom = next((e for e in pl["effects"] if e["fn"] == "bloom-grade"), None)
@@ -521,7 +523,7 @@ def render_argv(pl, ffmpeg, src, frame, encoder_args, audio_args, music_wav, out
     music = {"file": music_wav, "duck": None} if music_wav else None
     return mont.render_argv(ffmpeg, src, render_pieces(pl), frame, encoder_args, audio_args, 8, out_name,
                             threads=threads, audio_tracks=audio_tracks, max_sec=pl["total"], music=music, fx=graph,
-                            lut=use_lut)
+                            lut=use_lut, title=titles)
 
 
 def graph_from_file(argv, wd):
@@ -583,7 +585,7 @@ NOT_STARTED = "not started"  # a child could not be started safely (no process j
 
 def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame=None, style=None,
          seed_parts=(), live=on_air, audio_tracks=1, max_sec=None, lock_dir=None, cfg=None, measure=None, poll_sec=2.0,
-         render_json=None, write_render=None):
+         render_json=None, write_render=None, profile=None):
     """One BeatDrop montage, off air only, one heavy job at a time: the song (NCS library pick or the made-here bed),
     its song map, the plan (wd/beatdrop-plan.json; cut edges probed for brightness), the bed, the style's LUT and the
     one ffmpeg run (wd/beatdrop-<id>.mp4.part), then the flash check of the rendered file; only a file that passes
@@ -600,6 +602,9 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
     own files kept); when the job ends done or failed, write_render(res) writes render.json (atomically, pointing at
     the new video with its music record) and only then the older videos are swept. On air, only this run's own part
     file and probe file are removed.
+    BD5 (D416, cfg titles.on): the plan's title/hero/credits slots are filled (beatdrop_titles; brand and player name
+    from `profile`, default data/profile.local.json), the title is tracked onto the shot (same stop) and drawn in the
+    same render.
     A child that cannot be started safely (run_tool NO_JOB_RC): status "not started", handled like on air (no
     render.json write, no sweep, the previous record and video kept; the job runs again later).
     -> {"status" ("done" | "failed" | "stopped: on air" | "not started"), "reason", "plan", "music" (the record for render.json),
@@ -623,7 +628,7 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
                 # could not start a child; this run's own part file is kept
                 _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame,
                              style, seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec,
-                             started=lambda own: sweep_videos(wd, render_json, keep=own))
+                             started=lambda own: sweep_videos(wd, render_json, keep=own), profile=profile)
             except Exception as e:  # noqa: BLE001 - only the on-air stops are handled, the rest re-raised
                 from style_analyse import GuardStop  # noqa: PLC0415 - the song map's own live guard
                 if not isinstance(e, (OnAir, GuardStop, NotStarted)):
@@ -636,6 +641,9 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
                 else:
                     res.update(status=STOPPED_ON_AIR, reason="a stream or recording started (or that cannot be told)",
                                file=None)
+            finally:  # BD5: the titles' ASS (it holds the profile names), fonts and tracking file go on every path
+                import beatdrop_titles as bt  # noqa: PLC0415
+                bt.cleanup(wd)
             res.pop("part", None)
             if res["status"] not in (STOPPED_ON_AIR, NOT_STARTED) and write_render is not None:
                 write_render(res)
@@ -646,7 +654,7 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
 
 
 def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame, style,
-                 seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec, started=None):
+                 seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec, started=None, profile=None):
     import hashlib  # noqa: PLC0415
     import json  # noqa: PLC0415
     import time  # noqa: PLC0415
@@ -670,6 +678,17 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
     pl = plan(moments_doc, smap, cfg, style=style, max_sec=max_sec, luma=probe)
     probe.save()
     check()
+    tcfg = cfg.get("titles") or {}
+    titles_on = bool(tcfg.get("on"))
+    if titles_on:  # BD5 (D416): slots filled from the music record and the local profile, the title tracked
+        import beatdrop_titles as bt  # noqa: PLC0415
+        from clip_common import PROFILE_FILE  # noqa: PLC0415
+        gid = moments_doc.get("game") or "codm"
+        game = load_game(gid)
+        brand, player = bt.profile_names(profile or PROFILE_FILE, gid)
+        bt.fill(pl, res["music"], brand, player, cfg, game)
+        bt.pin(pl, recording, ffmpeg, wd, frame, cfg, stop=on)
+        check()
     res["plan"] = pl
     # a new name per render (plan, music record and the time): render.json points at it once it is written
     pid = hashlib.sha1(json.dumps([pl, res["music"], time.time_ns()], sort_keys=True, default=str)
@@ -678,27 +697,31 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
     part = os.path.join(wd, name + ".part")
     res["part"] = part
     write_json_atomic(os.path.join(wd, PLAN), pl)
-    wav = music_bed(wd, pl, song["path"], song["root"], cfg)
-    lut = None
-    if style and style.get("colour"):
-        import reel_style as rstyle  # noqa: PLC0415
-        ref = rstyle.clip_colour(recording, render_pieces(pl))
-        rstyle.write_lut(os.path.join(wd, rstyle.LUT_FILE), style["colour"], style["colour"]["strength"], ref)
-        lut = rstyle.LUT_FILE
-    r = None
-    if not on():
-        argv = render_argv(pl, ffmpeg, recording, frame, encoder_args, audio_args, wav, name + ".part",
-                           lut=lut, audio_tracks=audio_tracks)
-        argv = graph_from_file(argv, wd)
-        res["argv"] = argv
-        r = run_tool(argv, cwd=wd, watch=name + ".part", stall_sec=300, stop=on, poll_sec=poll_sec)
-        res["returncode"], res["stderr"] = r.returncode, (r.stderr or "")[-400:]
-    for f in (wav, lut, GRAPH):
-        if f:
-            try:
-                os.remove(os.path.join(wd, f))
-            except OSError:
-                pass
+    wav = lut = r = None
+    try:  # Codex BD5 review: the music bed, LUT, graph and title files go on any error before or during the render
+        wav = music_bed(wd, pl, song["path"], song["root"], cfg)
+        if style and style.get("colour"):
+            import reel_style as rstyle  # noqa: PLC0415
+            ref = rstyle.clip_colour(recording, render_pieces(pl))
+            lut = rstyle.LUT_FILE  # named first: a half-written LUT is removed too
+            rstyle.write_lut(os.path.join(wd, lut), style["colour"], style["colour"]["strength"], ref)
+        titles = bt.prepare(wd, pl, frame, cfg, game) if titles_on else None
+        if not on():
+            argv = render_argv(pl, ffmpeg, recording, frame, encoder_args, audio_args, wav, name + ".part",
+                               lut=lut, audio_tracks=audio_tracks, titles=titles)
+            argv = graph_from_file(argv, wd)
+            res["argv"] = argv
+            r = run_tool(argv, cwd=wd, watch=name + ".part", stall_sec=300, stop=on, poll_sec=poll_sec)
+            res["returncode"], res["stderr"] = r.returncode, (r.stderr or "")[-400:]
+    finally:
+        for f in (wav, lut, GRAPH):
+            if f:
+                try:
+                    os.remove(os.path.join(wd, f))
+                except OSError:
+                    pass
+        if titles_on:
+            bt.cleanup(wd)
     if r is None or r.returncode == STOPPED_RC:
         raise OnAir("on air during the render")
     _not_started(r)

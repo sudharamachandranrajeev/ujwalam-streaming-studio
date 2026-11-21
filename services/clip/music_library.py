@@ -512,12 +512,19 @@ def write_wav(path, x):
     np = _np()
     pcm = np.clip(np.rint(x * 32767.0), -32768, 32767).astype("<i2")
     tmp = path + ".part"
-    with wave.open(tmp, "wb") as w:
-        w.setnchannels(2)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes(pcm.tobytes())
-    os.replace(tmp, path)
+    try:
+        with wave.open(tmp, "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(SR)
+            w.writeframes(pcm.tobytes())
+        os.replace(tmp, path)
+    except BaseException:  # Codex BD5 verify: a failed write (disk full, stop) leaves no music.wav.part behind
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def prepare(wd, rec, track, cfg, duck):
