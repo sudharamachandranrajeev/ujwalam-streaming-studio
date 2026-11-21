@@ -401,6 +401,10 @@ LUMA_CACHE = "beatdrop-luma.json"
 PROBE_FILE = "beatdrop-probe.rgb"
 
 
+class NotStarted(ClipError):
+    """A child could not be started safely (run_tool NO_JOB_RC): the job ends "not started", nothing is written."""
+
+
 class OnAir(ClipError):
     """A stream or recording started (or that cannot be told) during a BeatDrop step: the whole job stops."""
 _LIN = [(c / 255 / 12.92) if c / 255 <= 0.04045 else ((c / 255 + 0.055) / 1.055) ** 2.4 for c in range(256)]
@@ -452,6 +456,7 @@ class LumaProbe:
                 pass
         if r.returncode == STOPPED_RC:
             raise OnAir("a stream or recording started during the brightness probe")
+        _not_started(r)
         if r.returncode != 0 or len(fr) < n:
             raise ClipError("beatdrop: the brightness probe of the recording failed: " + (r.stderr or "")[-200:])
         self.probes += 1
@@ -465,6 +470,12 @@ class LumaProbe:
         os.makedirs(os.path.dirname(self.cache), exist_ok=True)
         with open(self.cache, "w", encoding="utf-8") as f:
             json.dump({"key": self.key, "values": self.values}, f)
+
+
+def _not_started(r):
+    from clip_common import NO_JOB_RC  # noqa: PLC0415
+    if r.returncode == NO_JOB_RC:
+        raise NotStarted(r.stderr or "the child could not be started safely")
 
 
 def measure_flash(path, sample, fps=60, node=None, stop=None):
@@ -484,6 +495,7 @@ def measure_flash(path, sample, fps=60, node=None, stop=None):
     r = run_tool([node, "--input-type=module", "-e", js], timeout=1800, stop=stop)
     if r.returncode == STOPPED_RC:
         raise OnAir("a stream or recording started during the flash check")
+    _not_started(r)
     if r.returncode != 0:
         raise ClipError("the flash check failed: " + (r.stderr or "")[-200:])
     return json.loads(r.stdout.strip().splitlines()[-1])
@@ -570,6 +582,7 @@ def settings_of(data_dir):
 
 
 STOPPED_ON_AIR = "stopped: on air"
+NOT_STARTED = "not started"  # a child could not be started safely (no process job): nothing written, runs again later
 
 
 def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args, frame=None, style=None,
@@ -591,7 +604,9 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
     write_render(res) writes render.json (atomically, pointing at the new video with its music record) and only then
     the older videos are swept. A file render.json references is never deleted. On air, only this run's own part file
     and probe file are removed.
-    -> {"status" ("done" | "failed" | "stopped: on air"), "reason", "plan", "music" (the record for render.json),
+    A child that cannot be started safely (run_tool NO_JOB_RC): status "not started", handled like on air (no
+    render.json write, no sweep, the previous record and video kept; the job runs again later).
+    -> {"status" ("done" | "failed" | "stopped: on air" | "not started"), "reason", "plan", "music" (the record for render.json),
         "returncode", "stderr", "file", "argv", "flash"}."""
     from clip_common import HeavyJobLock  # noqa: PLC0415
     cfg = cfg or load_config()
@@ -613,15 +628,18 @@ def make(recording, moments_doc, wd, data_dir, ffmpeg, encoder_args, audio_args,
                              style, seed_parts, live, audio_tracks, max_sec, cfg, measure, poll_sec)
             except Exception as e:  # noqa: BLE001 - only the on-air stops are handled, the rest re-raised
                 from style_analyse import GuardStop  # noqa: PLC0415 - the song map's own live guard
-                if not isinstance(e, (OnAir, GuardStop)):
+                if not isinstance(e, (OnAir, GuardStop, NotStarted)):
                     raise
                 for f in (res.get("part"), os.path.join(wd, PROBE_FILE)):
                     if f:
                         _drop(f)
-                res.update(status=STOPPED_ON_AIR, reason="a stream or recording started (or that cannot be told)",
-                           file=None)
+                if isinstance(e, NotStarted):
+                    res.update(status=NOT_STARTED, reason=str(e), file=None)
+                else:
+                    res.update(status=STOPPED_ON_AIR, reason="a stream or recording started (or that cannot be told)",
+                               file=None)
             res.pop("part", None)
-            if res["status"] != STOPPED_ON_AIR and write_render is not None:
+            if res["status"] not in (STOPPED_ON_AIR, NOT_STARTED) and write_render is not None:
                 write_render(res)
                 refs = referenced(render_json)
                 sweep_videos(wd, None if refs is None else refs | ({res["file"]} if res["file"] else set()))
@@ -686,6 +704,7 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
                 pass
     if r is None or r.returncode == STOPPED_RC:
         raise OnAir("on air during the render")
+    _not_started(r)
     if r.returncode != 0 or not os.path.isfile(part):
         _drop(part)
         res.update(status="failed", reason=f"ffmpeg exited {r.returncode}")
@@ -694,7 +713,7 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
         check()
         m = (measure or (lambda f, stop: measure_flash(f, fl["sample"], pl["fps"], stop=stop)))(part, on)
         check()
-    except OnAir:
+    except (OnAir, NotStarted):
         raise
     except ClipError as e:
         m = None
@@ -719,19 +738,49 @@ VIDEO_NAME = re.compile(r"^beatdrop-[0-9a-f]{10,12}\.mp4(\.part)?$")  # 10 hex: 
 
 
 def referenced(render_json):
-    """The video names a BeatDrop render.json points at: an empty set when there is none yet; None when it exists but
-    cannot be read or is not a render document (fail closed: sweep_videos then removes nothing, D415 review)."""
-    if not render_json or not os.path.exists(render_json):
+    """The video names a BeatDrop render.json points at. An empty set only when there is no render.json yet
+    (FileNotFoundError). None (fail closed: sweep_videos then removes nothing, D415 review) for any other read error,
+    bad JSON, or a document that is not a full render.json as clipper's write_render writes it: tool
+    "clipper.beatdrop", musicRecords, a clips list of objects whose files is a list of objects with a string file,
+    and a beatdrop entry, if present, that is an object."""
+    import json  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+    if not render_json:
         return set()
     try:
-        doc = load_json(render_json)
-        clips = doc["clips"]
-        return {f["file"] for c in clips for f in c.get("files") or [] if f.get("file")}
-    except (ClipError, OSError, ValueError, KeyError, TypeError, AttributeError) as e:
-        import sys  # noqa: PLC0415
+        with open(render_json, encoding="utf-8") as f:
+            doc = json.load(f)
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError) as e:
         print(f"beatdrop: {os.path.basename(render_json)} is unreadable ({type(e).__name__}): no video is swept",
               file=sys.stderr)
         return None
+    refs = _render_refs(doc)
+    if refs is None:
+        print(f"beatdrop: {os.path.basename(render_json)} is not a BeatDrop render document: no video is swept",
+              file=sys.stderr)
+    return refs
+
+
+def _render_refs(doc):
+    if not isinstance(doc, dict) or doc.get("tool") != "clipper.beatdrop" or "musicRecords" not in doc:
+        return None
+    clips = doc.get("clips")
+    if not isinstance(clips, list) or ("beatdrop" in doc and not isinstance(doc["beatdrop"], dict)):
+        return None
+    refs = set()
+    for c in clips:
+        files = c.get("files") if isinstance(c, dict) else None
+        if not isinstance(files, list):
+            return None
+        for fe in files:
+            if not isinstance(fe, dict) or not isinstance(fe.get("file"), str) or not fe["file"]:
+                return None
+            refs.add(fe["file"])
+        if "beatdrop" in c and not isinstance(c["beatdrop"], dict):
+            return None
+    return refs
 
 
 def sweep_videos(wd, keep):

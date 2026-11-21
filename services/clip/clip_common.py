@@ -184,6 +184,7 @@ FFMPEG_THREADS = 4
 
 EXIT_FLAG_OFF = 3
 EXIT_ON_AIR = 4  # a job stopped because a stream or recording started (or that could not be told): run it again later
+EXIT_NOT_STARTED = 5  # a job could not start its child safely (NO_JOB_RC): nothing written, run it again later
 
 
 class ClipError(Exception):
@@ -415,7 +416,7 @@ def lower_own_priority():
 
 STALLED_RC = -2  # run_tool(watch=...): the child wrote nothing for stall_sec and was stopped
 STOPPED_RC = -3  # run_tool(stop=...): stop() said stop (a stream or recording started); the child was stopped
-NO_JOB_RC = -4  # run_tool(stop=...): Windows refused the child's kill-on-close job; nothing was run
+NO_JOB_RC = -4  # run_tool: Windows refused the child's kill-on-close job (or it could not resume); nothing was run
 _CREATE_SUSPENDED = 0x00000004
 
 
@@ -443,8 +444,9 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
 
     Process tree (D415 review): every child runs in its own kill-on-close job on Windows, assigned while it is still
     suspended (CREATE_SUSPENDED, then resumed), so nothing it starts escapes; every stop path ends the whole job. When
-    Windows refuses the job, a guarded run (stop given) runs nothing and returns NO_JOB_RC; an unguarded one runs
-    without it. Elsewhere the child gets its own session and the group is killed."""
+    Windows refuses the job, the run runs nothing and returns NO_JOB_RC (guarded or not: there is no job-less path).
+    Elsewhere the child gets its own session and the group is killed, also after the child's normal exit, so no
+    descendant outlives run_tool. timeout: a child that finishes after the deadline counts as timed out."""
     import tempfile  # noqa: PLC0415
     path = None if watch is None or not stall_sec else (watch if os.path.isabs(watch) or not cwd else os.path.join(cwd, watch))
     with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:  # files, not pipes: no pipe can fill and block
@@ -458,7 +460,7 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
                 job = kill_on_close_job(p._handle)
             except OSError:
                 job = None
-            if job is None and stop is not None:
+            if job is None:
                 p.kill()
                 p.wait()
                 return subprocess.CompletedProcess(argv, NO_JOB_RC, "", "no process job (Windows refused it): not run")
@@ -469,17 +471,20 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
                 p.wait()
                 return subprocess.CompletedProcess(argv, NO_JOB_RC, "", "the child could not be resumed: not run")
 
+        def kill_group():
+            if not nt:
+                import signal  # noqa: PLC0415
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)  # the session's group outlives its leader; ends what it left
+                except OSError:
+                    pass
+
         def kill():
             try:
                 end_job_members(job)
             except OSError:
                 pass
-            if not nt and p.poll() is None:
-                import signal  # noqa: PLC0415
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except OSError:
-                    pass
+            kill_group()
             if p.poll() is None:
                 p.kill()
             p.wait()
@@ -487,11 +492,15 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
         size, stalled, grew, stopped = -1, False, False, False
         try:
             while True:
+                wait = poll_sec if timeout is None else max(0.0, min(poll_sec, t0 + timeout - time.monotonic()))
                 try:
-                    p.wait(timeout=poll_sec)
+                    p.wait(timeout=wait)
+                    if timeout is not None and time.monotonic() - t0 > timeout:
+                        raise subprocess.TimeoutExpired(argv, timeout)  # finished after the deadline: timed out
                     break
                 except subprocess.TimeoutExpired:
-                    pass
+                    if p.poll() is not None and timeout is not None and time.monotonic() - t0 > timeout:
+                        raise
                 if stop is not None and stop() and p.poll() is None:
                     stopped = True
                     kill()
@@ -521,6 +530,7 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
                 end_job(job)  # also ends anything the child left behind after it exited
             except OSError:
                 pass
+            kill_group()
         fo.seek(0)
         fe.seek(0)
         out = fo.read().decode("utf-8", errors="replace")

@@ -158,3 +158,18 @@ Codex found the sweep pattern fixed. The other items:
 
 Runs (CPU, headless, BelowNormal, temp data root, live-check exit 0 first): StopGuardTests + PlannerTests 24 OK;
 test_render_watch 10 OK; test_clip_montage 35 OK. The rendered class was not run (the coordinator runs it): UNVERIFIED.
+
+## Codex verify of 629819c (2026-11-21), round 5
+
+Codex found VIDEO_NAME fixed. The other items:
+
+| Item | Fix | Test (tests/py/test_beatdrop.py) |
+|---|---|---|
+| 1 (P1) POSIX descendants outlived a normal exit; Windows unguarded runs had a job-less path | POSIX: the child's process group is killed in `finally` on every exit, a normal one included. Windows: a refused job means NO_JOB_RC for every run, guarded or not; nothing runs. Other run_tool callers check `returncode != 0` and so get a plain failed result with "not run" in stderr, never a hang | `test_posix_group_is_ended_after_a_normal_exit` (skipped on this Windows PC: UNVERIFIED on POSIX); `test_no_job_means_a_guarded_run_runs_nothing` (now also: the unguarded run returns NO_JOB_RC and leaves no marker) |
+| 2 (P1) referenced() too lenient | only FileNotFoundError is "no references" (empty set); any other OSError, bad JSON, or a document that is not this code's full render.json (tool `clipper.beatdrop`, `musicRecords`, a `clips` list of objects with a `files` list of objects with a string `file`, `beatdrop` an object if present) gives None and the sweep removes nothing (logged). A valid full render.json with no video still lets the old videos be swept | `test_sweep_matches_only_its_own_names` (a folder path, `{"clips": {}}`, missing markers, wrong tool, bad `beatdrop`, bad file entries, a list: nothing swept; a valid empty render: swept) |
+| 3 (P1) NO_JOB_RC became a failed render record | `NotStarted` raised for NO_JOB_RC from the probe, the render and the flash check; make() ends "not started" like on air: no render.json write, no second sweep, previous record and video kept; clipper exits `EXIT_NOT_STARTED` (5, run again later) | `test_a_child_that_cannot_start_safely_is_not_a_failed_render` |
+| 4 (P2) the wait could overrun the timeout | each wait is min(poll_sec, time left); a child that ends after the deadline raises TimeoutExpired, like subprocess.run | `test_timeout_is_kept_however_long_the_poll` (timeout 1 s with poll_sec 30: raised in under 2.8 s, guarded and unguarded) |
+
+Runs (CPU, headless, BelowNormal, temp data root, live-check exit 0 first): StopGuardTests + PlannerTests +
+test_render_watch 37 run, OK (1 POSIX skip); test_clip_montage 35 OK. Rendered class not run (the coordinator runs it):
+UNVERIFIED.

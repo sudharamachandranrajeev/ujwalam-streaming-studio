@@ -37,6 +37,13 @@ except ImportError:
 
 HAVE_TOOLS = bool(shutil.which("ffmpeg") and shutil.which("ffprobe") and shutil.which("node"))
 NOWIN = 0x08000000 if os.name == "nt" else 0
+
+
+def _render_doc(files):
+    """A render.json of the shape clipper's write_render writes (tool, musicRecords, beatdrop, clips)."""
+    return {"tool": "clipper.beatdrop", "toolVersion": "t", "musicRecords": 1,
+            "beatdrop": {"flag": "beatdrop", "version": 1, "status": "unverified"}, "failed": 0,
+            "clips": [{"id": "B1", "kind": "beatdrop", "files": [{"layout": "beatdrop-h", "file": f} for f in files]}]}
 FPS, W, H, SR = 60, 320, 180, 48000
 REC_SEC = 82.0
 CALM_END = 20.0
@@ -479,7 +486,7 @@ class StopGuardTests(unittest.TestCase):
                 open(os.path.join(tmp, n), "wb").close()
             render = os.path.join(tmp, "render.json")
             with open(render, "w", encoding="utf-8") as f:
-                json.dump({"clips": [{"files": [{"file": "beatdrop-aaaaaaaaaaaa.mp4"}]}]}, f)
+                json.dump(_render_doc(["beatdrop-aaaaaaaaaaaa.mp4"]), f)
             gone = beatdrop.sweep_videos(tmp, beatdrop.referenced(render))
             self.assertEqual(sorted(gone), ["beatdrop-bbbbbbbbbbbb.mp4.part", "beatdrop-cccccccccccc.mp4",
                                             "beatdrop-eeeeeeeeee.mp4"])
@@ -497,6 +504,24 @@ class StopGuardTests(unittest.TestCase):
                 json.dump({"no": "clips"}, f)
             self.assertIsNone(beatdrop.referenced(render), "not a render document: also fail closed")
             self.assertEqual(beatdrop.referenced(os.path.join(tmp, "missing.json")), set())
+            # review round 5, item 2: only "absent" is an empty set; any other read error or a document that is not
+            # this code's full render.json fails closed
+            self.assertIsNone(beatdrop.referenced(tmp), "a folder, not a file: OSError other than absent")
+            for bad in ({"clips": {}}, {"tool": "clipper.beatdrop", "musicRecords": 1, "clips": {}},
+                        {"tool": "clipper.beatdrop", "clips": []},
+                        {"tool": "other", "musicRecords": 1, "clips": []},
+                        dict(_render_doc([]), beatdrop="x"),
+                        {"tool": "clipper.beatdrop", "musicRecords": 1, "clips": [{"files": [{"file": 3}]}]},
+                        {"tool": "clipper.beatdrop", "musicRecords": 1, "clips": [{"id": "B1"}]}, []):
+                with open(render, "w", encoding="utf-8") as f:
+                    json.dump(bad, f)
+                self.assertIsNone(beatdrop.referenced(render), bad)
+                self.assertEqual(beatdrop.sweep_videos(tmp, beatdrop.referenced(render)), [])
+            self.assertTrue(os.path.exists(os.path.join(tmp, "beatdrop-dddddddddddd.mp4")))
+            with open(render, "w", encoding="utf-8") as f:
+                json.dump(_render_doc([]), f)  # a valid full render.json with no video: the old one is swept
+            self.assertEqual(sorted(beatdrop.sweep_videos(tmp, beatdrop.referenced(render))),
+                             ["beatdrop-aaaaaaaaaaaa.mp4", "beatdrop-dddddddddddd.mp4"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -546,6 +571,87 @@ class StopGuardTests(unittest.TestCase):
             cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos = saved
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_a_child_that_cannot_start_safely_is_not_a_failed_render(self):
+        # review round 5, item 3: NO_JOB_RC -> "not started": no render.json write, no second sweep, nothing removed
+        import beatdrop  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdns-")
+        calls = {"write": 0, "sweeps": 0}
+
+        class Lock:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_locked(res, *a, **k):
+            beatdrop._not_started(subprocess.CompletedProcess([], cc.NO_JOB_RC, "", "no process job: not run"))
+        real_sweep = beatdrop.sweep_videos
+
+        def sweep(wd, keep):
+            calls["sweeps"] += 1
+            return real_sweep(wd, keep)
+        saved = (cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos)
+        try:
+            old = os.path.join(tmp, "beatdrop-aaaaaaaaaaaa.mp4")
+            open(old, "wb").close()
+            render = os.path.join(tmp, "render.json")
+            with open(render, "w", encoding="utf-8") as f:
+                json.dump(_render_doc(["beatdrop-aaaaaaaaaaaa.mp4"]), f)
+            before = open(render, encoding="utf-8").read()
+            cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos = Lock, fake_locked, sweep
+
+            def write(r):
+                calls["write"] += 1
+            res = beatdrop.make("rec.mkv", {}, tmp, tmp, "ffmpeg", [], [], live=lambda: False,
+                                render_json=render, write_render=write)
+            self.assertEqual(res["status"], beatdrop.NOT_STARTED)
+            self.assertEqual(calls, {"write": 0, "sweeps": 1}, "only the orphan sweep before the run")
+            self.assertTrue(os.path.exists(old))
+            self.assertEqual(open(render, encoding="utf-8").read(), before)
+        finally:
+            cc.HeavyJobLock, beatdrop._make_locked, beatdrop.sweep_videos = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_timeout_is_kept_however_long_the_poll(self):
+        # review round 5, item 4: the wait is capped by the deadline (a long poll_sec does not stretch the timeout)
+        import time  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        t = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            cc.run_tool([sys.executable, "-c", "import time; time.sleep(3)"], timeout=1, poll_sec=30)
+        self.assertLess(time.monotonic() - t, 2.8)
+        with self.assertRaises(subprocess.TimeoutExpired):  # unguarded runs keep it too
+            cc.run_tool([sys.executable, "-c", "import time; time.sleep(3)"], timeout=1, poll_sec=30, stop=lambda: False)
+
+    @unittest.skipIf(os.name == "nt", "process groups: POSIX")
+    def test_posix_group_is_ended_after_a_normal_exit(self):
+        # review round 5, item 1: a descendant left behind by a child that exits normally is ended with the group
+        import time  # noqa: PLC0415
+        import clip_common as cc  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="ujw-bdpg-")
+        try:
+            pidf = os.path.join(tmp, "g.pid")
+            code = ("import subprocess, sys; "
+                    f"g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], creationflags={NOWIN}); "
+                    f"open({pidf!r}, 'w').write(str(g.pid))")
+            self.assertEqual(cc.run_tool([sys.executable, "-c", code]).returncode, 0)
+            with open(pidf, encoding="utf-8") as f:
+                gpid = int(f.read())
+            time.sleep(0.5)
+            try:
+                os.waitpid(gpid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            with self.assertRaises(OSError):
+                os.kill(gpid, 0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     @unittest.skipUnless(os.name == "nt", "kill-on-close job is Windows")
     def test_unguarded_child_is_in_the_job_from_its_start(self):
         # review round 4, item 1 a/b: no watch, no stop: the child is still in the job (assigned while suspended),
@@ -583,8 +689,9 @@ class StopGuardTests(unittest.TestCase):
             self.assertEqual(r.returncode, cc.NO_JOB_RC)
             self.assertFalse(os.path.exists(mark), "nothing ran")
             r = cc.run_tool([sys.executable, "-c", code])
-            self.assertEqual(r.returncode, 0, "an unguarded run still runs without the job")
-            self.assertTrue(os.path.exists(mark))
+            self.assertEqual(r.returncode, cc.NO_JOB_RC, "review round 5: no job-less path, unguarded runs too")
+            self.assertIn("not run", r.stderr)
+            self.assertFalse(os.path.exists(mark))
         finally:
             cc.kill_on_close_job = saved
             shutil.rmtree(tmp, ignore_errors=True)

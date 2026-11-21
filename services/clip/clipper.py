@@ -99,7 +99,7 @@ import learning_mix as lmix  # noqa: E402
 import match_gate as mg  # noqa: E402
 import music_library as mlib  # noqa: E402
 from clip_common import (  # noqa: E402
-    CLIP_DATA, EXIT_FLAG_OFF, EXIT_ON_AIR, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
+    CLIP_DATA, EXIT_FLAG_OFF, EXIT_NOT_STARTED, EXIT_ON_AIR, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
     end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
     load_json, lower_own_priority, match_gate_settings, media_info, on_air, progress_line, resolve_data_dir, run_tool,
     write_json_atomic,
@@ -1993,6 +1993,9 @@ def cmd_beatdrop(a):
     if res["status"] == bd.STOPPED_ON_AIR:  # nothing written to render.json: the job runs again once off air
         eprint(f"beatdrop B1: {bd.STOPPED_ON_AIR} ({res['reason']})")
         return EXIT_ON_AIR
+    if res["status"] == bd.NOT_STARTED:  # nothing written either: the previous record and video stay; runs again later
+        eprint(f"beatdrop B1: {bd.NOT_STARTED} ({res['reason']})")
+        return EXIT_NOT_STARTED
     pl = res["plan"]
     if not res["file"]:
         eprint(f"beatdrop B1: FAILED: {res['reason']}")
