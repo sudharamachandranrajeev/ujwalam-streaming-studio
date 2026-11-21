@@ -509,7 +509,8 @@ export function createPostChain(opts) {
   // LU2: the rules reload when the file changes; a broken file keeps the last good rules (notice in the task area).
   const rulesSrc = opts.rulesSource ?? createRulesSource({ dataDir, explicit: opts.rulesFile, report: createDataNotifier({ dataDir, writeTask: writeTaskFile, log }) });
   const scheduleOn = () => flags.isOn(SCHEDULE_FLAG);
-  const outputsStatus = streamOnly(async () => { if (!latest) throw new Error('no output status yet'); return latest; });
+  const allOutputs = async () => { if (!latest) throw new Error('no output status yet'); return latest; };
+  const outputsStatus = streamOnly(allOutputs);
   // D375 daily budget: uploads per day and quota units, persisted; every API read goes through apiFetch and is counted.
   // opts.quotaFile (tests): another quota data file than data/posting/quota.json.
   const budget = opts.budget ?? createQuotaBudget({ dataDir, nowMs, ...(opts.quotaFile ? { quota: () => loadQuota(dataDir, opts.quotaFile, { nowMs: nowMs() }) } : {}) });
@@ -877,6 +878,8 @@ export function createPostChain(opts) {
 
   /** D375: package the clips folder's videos that have no package yet (every SCAN_EVERY_MS). Never fails the pass. */
   async function scanFolder(profile) {
+    // Codex verify (D414): the scan reads and hashes videos; never while streaming or recording (unknown = on air)
+    if (await liveBlock(allOutputs)) return 0;
     try {
       const { rows } = scanClipsFolder({ dataDir, folder: opts.clipsFolder ?? clipsFolder(dataDir), ...(opts.probeSeconds ? { probeSeconds: opts.probeSeconds } : {}) });
       if (!rows.length) return 0;

@@ -31,15 +31,26 @@ export function ffprobeSeconds(file) {
   return r.status === 0 && Number.isFinite(v) && v > 0 ? Number(v.toFixed(3)) : null;
 }
 
-/** clip_publish.py video_binding: size + SHA-256 of the first and last MiB of the video, or null. */
+/**
+ * clip_publish.py video_binding: size + SHA-256 of the first and last MiB of the video, or null. Codex verify: cached by
+ * path + size + mtime_ns, so each file is hashed once while it stays the same.
+ */
 const BIND_BYTES = 1 << 20;
+const bindCache = new Map();
 export function videoBinding(file) {
   let fd;
   try {
     fd = openSync(file, 'r');
-    const size = fstatSync(fd).size;
+    const st = fstatSync(fd, { bigint: true });
+    const key = `${path.resolve(file).toLowerCase()}|${st.size}|${st.mtimeNs}`;
+    const hit = bindCache.get(key);
+    if (hit) return hit;
+    const size = Number(st.size);
     const part = (at) => { const buf = Buffer.alloc(Math.min(BIND_BYTES, size - at)); readSync(fd, buf, 0, buf.length, at); return createHash('sha256').update(buf).digest('hex'); };
-    return { size, head: part(0), tail: part(Math.max(0, size - BIND_BYTES)) };
+    const v = Object.freeze({ size, head: part(0), tail: part(Math.max(0, size - BIND_BYTES)) });
+    if (bindCache.size > 5000) bindCache.clear();
+    bindCache.set(key, v);
+    return v;
   } catch { return null; } finally { if (fd !== undefined) closeSync(fd); }
 }
 /**
@@ -62,20 +73,24 @@ export function musicSidecar(file) {
 }
 
 /**
- * Codex verify (D414): the music record for an existing uploads.json row and its file. The row is trusted only while
- * its video binding (clip_publish.py video_binding, written with the row) matches the file. A row whose binding does
- * not match, or that has none while the file is newer than the provenance start, is ignored: the sidecar decides, and
- * no valid sidecar is unknown (held). A row with no binding on an older file keeps its record (legacy rule after).
+ * Codex verify (D414): an existing uploads.json row with its music fields (music, montageMusic) taken only from a trusted
+ * source. The row is trusted only while its video binding (clip_publish.py video_binding, written with the row)
+ * matches the file. A row whose binding does not match, or that has none while the file is newer than the provenance
+ * start, contributes no music at all: the sidecar decides, and no valid sidecar is unknown (held). A row with no
+ * binding on an older file keeps its fields (the legacy rule follows in posting).
  */
-export function trustedMusic(row, file, sinceMs) {
-  const fromSidecar = () => musicSidecar(file) ?? { source: 'unknown' };
+export function trustedRow(row, file, sinceMs) {
+  const { music, montageMusic, ...rest } = row;
+  const fromSidecar = () => ({ ...rest, music: musicSidecar(file) ?? { source: 'unknown' } });
+  const keep = () => ({ ...rest, ...(music !== undefined ? { music } : {}), ...(montageMusic !== undefined ? { montageMusic } : {}) });
   if (isPlain(row.video)) {
     const v = videoBinding(file);
-    return v && v.size === row.video.size && v.head === row.video.head && v.tail === row.video.tail ? row.music : fromSidecar();
+    return v && v.size === row.video.size && v.head === row.video.head && v.tail === row.video.tail ? keep() : fromSidecar();
   }
   const t = clipTimeMs(file);
   if (Number.isFinite(sinceMs) && (t === null || Math.floor(t) > sinceMs)) return fromSidecar();
-  return row.music === undefined ? musicSidecar(file) ?? undefined : row.music;
+  if (music === undefined && montageMusic === undefined) { const sc = musicSidecar(file); return sc ? { ...rest, music: sc } : rest; }
+  return keep();
 }
 
 export function scanClipsFolder({ dataDir, folder = clipsFolder(dataDir), probeSeconds = ffprobeSeconds } = {}) {
@@ -95,7 +110,7 @@ export function scanClipsFolder({ dataDir, folder = clipsFolder(dataDir), probeS
       if (!m) { if (name.toLowerCase().endsWith('.mp4')) unknown++; continue; }
       if (!realFile(file)) continue;
       const row = byPath.get(norm(file)) ?? byName.get(name.toLowerCase());
-      if (row) { const { music: _m, ...rest } = row; const mu = trustedMusic(row, file, since); rows.push({ ...rest, file, ...(mu !== undefined ? { music: mu } : {}) }); continue; }
+      if (row) { rows.push({ ...trustedRow(row, file, since), file }); continue; }
       // D414 (Codex BD review): the music record the publish step wrote next to the video; none = unknown (a montage
       // with unknown music is not posted, services/posting/post-text.mjs musicOf)
       const music = musicSidecar(file);

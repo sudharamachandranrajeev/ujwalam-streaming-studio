@@ -11,6 +11,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createPostStore, loadLimits, packageUploads } from '../services/posting/index.mjs';
+import { createPostChain } from '../services/posting/auto-chain.mjs';
 import { PROVENANCE_FILE, creditMissing, legacyMadeHere, musicCredit, musicOf, readProvenanceSince } from '../services/posting/post-text.mjs';
 import { MUSIC_SIDECAR, scanClipsFolder, videoBinding } from '../services/posting/clips-source.mjs';
 import { uploadVideo } from '../services/posting/youtube.mjs';
@@ -245,6 +246,64 @@ describe('posting', () => {
     // a row whose binding matches keeps its record
     writeFileSync(up, JSON.stringify({ version: 1, files: [{ ...doc2.files[0], video: videoBinding(moved) }] }));
     assert.deepEqual(scanClipsFolder({ dataDir: e.dataDir, folder: path.dirname(day), probeSeconds: () => 40 }).rows[0].music, { source: 'none' });
+  });
+
+  test('Codex verify: a replaced video never inherits the row\'s old credit (music and montageMusic only from a trusted source)', async () => {
+    const OTHER = { artist: 'Beta Artist', title: 'Second Song', line: 'Music provided by NoCopyrightSounds', link: '' };
+    const run = async (replace) => {
+      const e = setup([{ name: 'codm_montage_20261121-150000_kills-5_01_v.mp4', montageMusic: { library: 'ncs', trackId: 'a'.repeat(16), credit: CREDIT },
+        music: { source: 'ncs', trackId: 'a'.repeat(16), credit: CREDIT } }]);
+      const up = path.join(e.dataDir, 'clips', 'uploads.json');
+      const doc = JSON.parse(readFileSync(up, 'utf8'));
+      const file = doc.files[0].file;
+      doc.files[0].video = videoBinding(file);
+      writeFileSync(up, JSON.stringify(doc));
+      replace(file);
+      return packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: {}, ffmpeg: process.execPath });
+    };
+    const swap = (file, bytes, music) => {
+      writeFileSync(file, Buffer.from(bytes.repeat(8)));
+      if (music) writeFileSync(`${file}${MUSIC_SIDECAR}`, JSON.stringify({ version: 1, music, video: videoBinding(file) }));
+    };
+    // folder-music bytes (sidecar says user-folder): render only, never the old credit
+    const a = await run((f) => swap(f, 'folder music montage', { source: 'user-folder', track: 'x' }));
+    assert.deepEqual([a.packaged.length, a.skipped.map((s) => s.reason)], [0, ['render-only']]);
+    // no sidecar at all: unknown, held
+    const b = await run((f) => swap(f, 'some other montage', null));
+    assert.deepEqual([b.packaged.length, b.skipped.map((s) => s.reason)], [0, ['music-unknown']]);
+    // another library track without its own credit: held until that track's credit is present
+    const c = await run((f) => swap(f, 'another ncs montage', { source: 'ncs', trackId: 'b'.repeat(16), credit: null }));
+    assert.deepEqual([c.packaged.length, c.skipped.map((s) => s.reason)], [0, ['music-credit-missing']]);
+    // with its own credit: posted with that credit, not the old one
+    const d = await run((f) => swap(f, 'another ncs montage', { source: 'ncs', trackId: 'b'.repeat(16), credit: OTHER }));
+    assert.equal(d.packaged.length, 1, JSON.stringify(d.skipped));
+    const post = JSON.parse(readFileSync(path.join(d.packaged[0].dir, 'post.json'), 'utf8'));
+    assert.match(post.description, /Beta Artist - Second Song/);
+    assert.doesNotMatch(post.description, /Alpha Artist/);
+    assert.equal(post.source.music.trackId, 'b'.repeat(16));
+  });
+
+  test('Codex verify: bindings are cached by path + size + mtime_ns; the auto-post folder scan waits while streaming or recording', async () => {
+    const d = mk(); const f = path.join(d, 'v.mp4');
+    writeFileSync(f, Buffer.from('x'.repeat(5000)));
+    const v1 = videoBinding(f);
+    assert.equal(videoBinding(f), v1, 'same object: hashed once');
+    writeFileSync(f, Buffer.from('y'.repeat(6000)));
+    assert.notEqual(videoBinding(f).head, v1.head, 'changed file: hashed again');
+    const dataDir = mk(); const clips = mk();
+    mkdirSync(path.join(clips, '2026-11-21'));
+    writeFileSync(path.join(clips, '2026-11-21', 'codm_short_20261121-160000_triple-kill_01_v.mp4'), 'x');
+    let scans = 0;
+    const chain = createPostChain({ dataDir, flags: { isOn: () => true }, rulesSource: { get: () => ({ rules: [{ id: 'r' }] }) }, clipsFolder: clips,
+      probeSeconds: () => 10, scanEveryMs: 0, tickEveryMs: 0, profileFile: path.join(dataDir, 'none.json'),
+      packageImpl: async () => ({ packaged: [], skipped: [] }), packageUploadsImpl: async () => { scans++; return { packaged: [], skipped: [] }; } });
+    const rec = { sinks: [{ id: 'yt', kind: 'stream', state: 'stopped' }, { id: 'rec', kind: 'record', state: 'active' }] };
+    await chain.tick(rec).catch(() => {});
+    assert.equal(scans, 0, 'recording: no scan');
+    await chain.tick({ sinks: [{ id: 'yt', kind: 'stream', state: 'active' }] }).catch(() => {});
+    assert.equal(scans, 0, 'streaming: no scan');
+    await chain.tick({ sinks: [{ id: 'yt', kind: 'stream', state: 'stopped' }, { id: 'rec', kind: 'record', state: 'stopped' }] }).catch(() => {});
+    assert.equal(scans, 1, 'idle: scanned');
   });
 
   test('Codex verify: the legacy pass covers only clips older than the provenance start, written once and never moved', async () => {

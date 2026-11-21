@@ -114,6 +114,17 @@ Codex verify of 6c3664f: items 1, 2, 4, 5 and 6 fixed. Two were left:
 
 Re-run, one file at a time, CPU only: posting-e2e 61 (its fixture rows now carry the binding, as the publisher writes it), posting-uploads 12, posting 18, posting-auto-d375 51, posting-auto-chain 15, posting-backlog-order 5, posting-preview 12, analytics 12, learning-signals 10, learning_mix 9. All passed.
 
+## Third Codex verify fixes (2026-11-21, D414 item 9)
+
+Codex verify of 529f3ad: lock fixed. Two left:
+
+| Finding | Fix | Test (result) |
+|---|---|---|
+| P1 old `montageMusic` survived the binding check | `trustedRow` drops every music field of an untrusted row; the sidecar alone decides | `tests/montage-music.test.mjs` "a replaced video never inherits the row's old credit": row with a credited NCS track, video replaced by folder-music bytes = render-only; no sidecar = music-unknown; another library track without credit = music-credit-missing; with its own credit = posted with that credit only (pass) |
+| P2 scan hashed before the live check | auto-chain scanFolder returns before the scan while a stream or recording is active or the state is unknown; `videoBinding` cache by path + size + mtime_ns | same file: "bindings are cached ...": same file gives the cached result, a changed file is hashed again; a chain tick while recording or streaming does not scan, an idle tick does (pass, 14/14 in file) |
+
+Re-run, one file at a time, CPU only: posting-e2e 61, posting-uploads 12, posting 18, posting-auto-chain 15, posting-auto-d375 51, posting-auto 14, posting-pt3-actions 9, posting-custom-schedule 15, posting-preview 12, posting-backlog-order 5, studio-ui-posting-auto 8, analytics 12. All passed. The Posts view preview scan (on the user's click) still hashes without a live check.
+
 Residual (accepted, D414): the data folder is the user's own; whoever can write it can rewrite a video and its sidecar together.
 
 Still UNVERIFIED: the Montage music card does not yet show the "file changed, check the credit" note (it shows the credit as incomplete). The legacy rule has not run against the user's real clips folder.
