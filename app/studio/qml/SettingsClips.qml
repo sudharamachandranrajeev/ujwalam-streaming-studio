@@ -645,7 +645,8 @@ Column {
             text: cp.mm ? cp.mm.folder : ""
             onTextEdited: cp.box.setMontage("folder", text)
         }
-        Row {
+        Flow {  // wraps on a narrow window so nothing is cut off
+            width: parent.width
             spacing: Theme.sp.s
             UCombo {
                 objectName: "montageMusicMode"
@@ -667,7 +668,6 @@ Column {
             }
             USpin {
                 objectName: "montageMusicAvoid"
-                anchors.verticalCenter: parent.verticalCenter
                 label: "Not again for"
                 enabled: !!cp.mm && cp.mm.on && cp.mm.mode === "random"
                 from: ((cp.box.info.montageMusic || {}).avoidLast || {}).min || 0

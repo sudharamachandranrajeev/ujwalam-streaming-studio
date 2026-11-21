@@ -7,6 +7,7 @@ and is skipped without them; it writes only to a temp folder outside the reposit
 Run: python -I -m unittest discover -s tests/py -t tests/py
 """
 
+import importlib.util
 import json
 import os
 import shutil
@@ -34,6 +35,7 @@ TARGETS = cc.load_config("targets")
 LAYOUTS = cc.load_config("layouts")
 UTC0 = datetime(2026, 11, 3, 7, 0, 0, tzinfo=timezone.utc)
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+HAVE_NP = importlib.util.find_spec("numpy") is not None  # montage renders make sounds and music with numpy (FX3, D411)
 
 
 def _write(path, text):
@@ -363,7 +365,7 @@ class ValidateTests(unittest.TestCase):
         self.assertFalse(r["ok"])
 
 
-@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not on PATH")
+@unittest.skipUnless(HAVE_FFMPEG and HAVE_NP, "needs ffmpeg/ffprobe and numpy")
 class EndToEndTests(unittest.TestCase):
     """Generated 12 s 640x360 source with a tone burst; one hotkey marker; CPU encoder (libopenh264)."""
 
@@ -413,7 +415,10 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(len(days), 1)
         self.assertRegex(days[0], r"^2026-11-0[23]$")
         day = os.path.join(clips, days[0])
-        got = sorted(os.listdir(day))
+        files = os.listdir(day)
+        got = sorted(n for n in files if n.endswith(".mp4"))
+        for n in got:
+            self.assertIn(n + ".music.json", files, "every published video has its music sidecar (D414)")
         self.assertEqual(len(got), 3)
         for n in got:
             self.assertRegex(n, r"^codm_short_2026110[23]-\d{6}_[a-z0-9-]+_01_v-(full-crop|game-facecam|blurred-fill)\.mp4$")

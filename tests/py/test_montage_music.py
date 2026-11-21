@@ -6,6 +6,7 @@ keyed by the track's identity (a changed file loses its typed credit and is mark
 tags read through the safe open. Files here are small stand-ins (each with its own bytes) made in a temp folder; tags
 are passed in, so no audio is decoded."""
 
+import importlib.util
 import os
 import shutil
 import sys
@@ -167,6 +168,7 @@ class MontageMusicTests(unittest.TestCase):
         with self.assertRaises(mm.ClipError):
             mm.pick(self.data, self.folder, {"on": True, "folder": self.folder}, ["x"], self.cfg, live=lambda: True)
 
+    @unittest.skipUnless(importlib.util.find_spec("av") is not None, "needs PyAV (the shipped runtime has it)")
     def test_tags_read_through_the_safe_open(self):
         """Only the named demuxers: a playlist, a text file or a broken song gives no tags, never another file."""
         self.assertEqual(mm.read_tags(os.path.join(self.folder, "notes.txt")), {})

@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_FLAGS_FILE, loadDefinitions } from '../services/flags/index.mjs';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 
@@ -59,12 +60,12 @@ describe('feature flags API', () => {
   before(async () => { c = await boot(); });
   after(() => c.srv.close());
 
-  test('list: every flag off by default (preview-edit on D330, reel-thumbnail on D368, outputs-panel on D389, transitions on D391, scene-builder on D390, download-manager on D403, delete-processed-recordings on D405, long-highlights-video on D406, clip-look, reel-transitions and reel-music on D411, reel-styles on D412)', async () => {
+  test('list: every flag off by default, except the ones a decision turned on (data/flags.json onBy)', async () => {
     const r = await get(c.port, c.a, '/ui/api/flags');
     assert.equal(r.status, 200);
     const flags = r.json().flags;
     assert.ok(flags.length >= 1);
-    const ON = ['preview-edit', 'reel-thumbnail', 'outputs-panel', 'transitions', 'scene-builder', 'download-manager', 'delete-processed-recordings', 'long-highlights-video', 'clip-look', 'reel-transitions', 'reel-music', 'reel-styles'];
+    const ON = loadDefinitions(DEFAULT_FLAGS_FILE).filter((d) => d.onBy).map((d) => d.id);
     assert.deepEqual(flags.filter((f) => f.on !== ON.includes(f.id)).map((f) => f.id), []);
     assert.ok(flags.every((f) => typeof f.id === 'string' && typeof f.description === 'string'));
   });

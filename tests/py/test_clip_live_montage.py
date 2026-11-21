@@ -7,6 +7,7 @@ publishes both. A montage that cannot be made keeps the shorts and the exit code
 Generated media only (lavfi, 12 s), fixture detector hits (two own kills and a VICTORY, as test_clip_pipeline's montage
 case), placeholder data. The end-to-end cases need ffmpeg and ffprobe on PATH and are skipped without them; they write
 only to a temp folder outside the repository."""
+import importlib.util
 import io
 import json
 import os
@@ -25,6 +26,7 @@ import clip_common as cc  # noqa: E402
 import clipper  # noqa: E402
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+HAVE_NP = importlib.util.find_spec("numpy") is not None  # montage renders make sounds and music with numpy (FX3, D411)
 START = "2026-11-03T07:00:00Z"
 HITS = ({"t": 3.0, "detector": "M5", "signal": True}, {"t": 5.0, "detector": "M5", "signal": True},
         {"t": 9.0, "detector": "W1", "label": "VICTORY", "signal": True, "tEnd": 10.0, "banner": "match"})
@@ -83,7 +85,7 @@ class SkipTests(unittest.TestCase):
             self.assertEqual(st, {"status": "failed", "reason": "no detector hits for the stream's recording"})
 
 
-@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not on PATH")
+@unittest.skipUnless(HAVE_FFMPEG and HAVE_NP, "needs ffmpeg/ffprobe and numpy")
 class LiveMontageEndToEnd(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

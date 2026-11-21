@@ -119,3 +119,14 @@ noKillMarginSec before the anchor are that kill's own burst. Fixed, each with a 
 | 1 (P1) live starts between the last poll and the child's exit | `run_tool(stop=)` checks once more after the exit; stop = `STOPPED_RC`, output discarded | `test_stream_starting_as_the_child_exits_discards_it` (poll 30 s, child ends at once) |
 | 2 (P1) probes and flash check unguarded | each brightness probe and the node flash check run through `run_tool` with the job's stop; `live()` is checked between steps; any stop = `stopped: on air`, exit 4, nothing published | `test_stream_during_probes_or_flash_check_stops_the_job` (on air from the 5th look onward, which falls in the planning steps; and on air during the flash check) |
 | 3 (P1) rerender replaced the video before render.json | a new name per render `beatdrop-<id>.mp4`; render.json is written atomically pointing at it, then older videos are removed; orphans not in render.json are swept before a run | `test_rerender_new_name_then_old_removed_and_orphans_swept` (second clipper run plus a planted orphan: only the new video is left, render.json points at it with the NCS record) |
+
+### Round 2 test runs (after merging claude/alpha0-d1, flag `beatdrop` with `"onBy": "D415"`)
+
+- Node, CPU, headless, temp data root: flags 10 pass, studio-qml-shell 5 pass, studio-ui-flags-feedback 16 pass,
+  live-updates 27 pass.
+- tests/py/test_beatdrop.py on the final code: 20 of 21 ran clean (planner, stop guard including the exit race, music
+  choice, BD4 flash: densest impact flash 2/s, unspaced control 4/s). The rendered class did not run: its shared
+  `clipper.py beatdrop` render passed 900 s and timed out in setUpClass. A diagnostic run of the same render was
+  stopped by the tool because the PC ran low on memory. The render had started after 15 s (probes done, part file
+  growing slowly). UNVERIFIED: the rendered-class tests on the final code. An earlier run of that class on this round's
+  code (before the GuardStop handling and the test fixes) passed setUp and 11 of 13 tests; the 2 errors are fixed.
