@@ -288,6 +288,8 @@ def _same_render(old, src, name):
         return old["source"] == name
     try:
         return video_binding(old["file"]) == video_binding(src)
+    except FileNotFoundError:
+        return False  # gone: cannot be compared; a retake must not be blocked by it (BeatDrop never published before BD7c)
     except OSError:
         return True  # unreadable: never published twice
 
