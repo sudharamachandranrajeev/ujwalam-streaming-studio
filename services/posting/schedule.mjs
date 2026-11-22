@@ -144,7 +144,7 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
     marginMinutes: num('marginMinutes', 1, 4 * 60),
     chunkDeadlineSeconds: num('chunkDeadlineSeconds', 1, 3600),
     fallbackKbps: num('fallbackKbps', 64, 1000000),
-    maxPages: Math.floor(num('maxPages', 1, 100)),
+    maxPages: Math.floor(num('maxPages', 1, 400)), // 400 x 50 = 20000 uploads (2026-11-22: the user's channel has > 2000)
     pageSize: Math.floor(num('pageSize', 1, 50)),
     maxAheadDays: num('maxAheadDays', 1, 3650),
     lookbackDays: num('lookbackDays', 1, 3650),

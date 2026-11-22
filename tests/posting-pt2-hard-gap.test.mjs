@@ -98,10 +98,10 @@ describe('PT2 posts a day up to 24 everywhere', () => {
 });
 
 describe('PT2 quota: the upload bucket by default, the unit sum after quotaExceeded', () => {
-  test('bucket by default: 24 a day fit (gap), covers cost 50 units each; the line says which model', () => {
+  test('bucket by default: 21 a day fit ((10000 - 100) / (50 + 401 read units), D430), covers cost 50 units each; the line says which model', () => {
     const d = mk();
     const q = loadQuota(d, undefined, { nowMs: NOW });
-    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.perUploadUnits], ['upload-bucket', 24, 100, 50]);
+    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.perUploadUnits], ['upload-bucket', 21, 100, 50]);
     assert.match(q.modelText, /up to 100 a day/);
     assert.equal(quotaFallback(d, NOW), null);
   });
@@ -111,8 +111,9 @@ describe('PT2 quota: the upload bucket by default, the unit sum after quotaExcee
     const s = recordQuotaExceeded(d, NOW);
     assert.equal(s.model, 'unit-sum');
     const q = loadQuota(d, undefined, { nowMs: NOW });
-    // (10000 - 100) / (1650 + 81 read units a session) = 5 (Codex review 2026-11-21: a channel read before each upload)
-    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.readUnitsPerUpload], ['unit-sum', 5, null, 81]);
+    // (10000 - 100) / (1650 + 401 read units a session) = 4 (Codex review 2026-11-21: a channel read before each upload;
+    // D430: 200 pages)
+    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.readUnitsPerUpload], ['unit-sum', 4, null, 401]);
     assert.match(q.modelText, /used up/);
     assert.equal(loadQuota(d, undefined, { nowMs: NOW + 24 * HOUR }).model, 'unit-sum', 'the next day still counts the old way');
     assert.equal(loadQuota(d, undefined, { nowMs: NOW + 48 * HOUR }).model, 'upload-bucket', 'then the bucket is tried again');

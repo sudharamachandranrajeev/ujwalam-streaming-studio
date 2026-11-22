@@ -810,7 +810,7 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     assert.equal(g.videos.length, 0); assert.equal(it.state, 'queued'); assert.equal(it.reason, 'quota-exceeded'); assert.equal(it.attempts, 0);
     assert.ok(Date.parse(it.nextAt) > T0, 'waits');
     const q = loadQuota(e.dataDir, undefined, { nowMs: T0 });
-    assert.equal(q.model, 'unit-sum'); assert.equal(q.uploadsPerDayFit, 5); assert.match(q.modelText, /used up/);
+    assert.equal(q.model, 'unit-sum'); assert.equal(q.uploadsPerDayFit, 4); // (10000 - 100) / (1650 + 401), D430 assert.match(q.modelText, /used up/);
     const notice = JSON.parse(readFileSync(path.join(tasksDir(e.dataDir), 'auto-post-notice.json'), 'utf8'));
     assert.match(notice.title, /upload quota is used up/);
     assert.match(readQueueSummary(e.dataDir, null, T0).message, /quota is used up for today/);

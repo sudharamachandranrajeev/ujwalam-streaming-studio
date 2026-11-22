@@ -43,7 +43,9 @@ const msOf = (v) => { const t = typeof v === 'string' ? Date.parse(v) : NaN; ret
 /** D409 (second Codex review): one read, every page's request AND its body, must end within this time, well under the
  *  sender lock's hold cap (auto-chain.mjs LOCK_MAX_HOLD_MS). Past it the read is incomplete (fail closed) and its
  *  requests are aborted. */
-export const READ_DEADLINE_MS = 30 * 1000;
+// 2026-11-22: 30 s became 5 min with maxPages 200 (the user's channel has more than 2000 uploads; 40 pages took most of
+// 30 s). Still far under LOCK_MAX_HOLD_MS (60 min).
+export const READ_DEADLINE_MS = 5 * 60 * 1000;
 const incomplete = (what) => new ScheduleError('schedule-read-incomplete', `the channel answer was incomplete (${what})`);
 
 /** opts.deadlineMs (default READ_DEADLINE_MS): hard deadline on the whole read.

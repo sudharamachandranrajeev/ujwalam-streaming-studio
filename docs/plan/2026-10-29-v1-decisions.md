@@ -2910,3 +2910,18 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    stored tracks are reused with the tick alone (only new ones need the runtime).
 8. **UNVERIFIED**: musical quality for the user; YouTube Content ID on generated tracks; the Settings switch and the
    folder picker on screen and in the packaged app; generation while the studio is merely open.
+
+## D430 — The channel read covers the user's whole channel again (decided, 2026-11-22)
+
+1. **Cause**: nothing had uploaded since 2026-11-22 05:38. Six approved clips waited with `schedule-read-incomplete`:
+   the last channel read scanned 2000 uploads (40 pages of 50) and was cut off (`truncated: true`). The user's channel
+   has more than 2000 uploads, so the D409 whole-channel read could never finish and every upload failed closed, as
+   designed. 251 more clips are drafts behind them.
+2. **Change**: shipped `maxPages` 40 -> 200 (10000 uploads); the setting's upper bound 100 -> 400; the read deadline
+   30 s -> 5 min (`READ_DEADLINE_MS`; 40 pages already took most of 30 s; still far under the 60 min sender lock hold).
+   The fail-closed rule is unchanged: a channel past maxPages x pageSize still uploads nothing.
+3. **Quota**: a read reserves 1 + 2 x maxPages = 401 units (unused units are given back); uploads use their own bucket
+   of 100 a day. The unit sum now fits (10000 - 100) / (50 + 401) = 21 uploads a day in the bucket model (was 24,
+   capped by the 1 h gap) and 4 in the quotaExceeded fallback (was 5). The user's rules allow 6 a day.
+4. **Needs**: a new Setup for the installed app (the deadline is code, the page count is shipped data).
+   UNVERIFIED: the real read time on the user's channel at 200 pages; the channel's real upload count.

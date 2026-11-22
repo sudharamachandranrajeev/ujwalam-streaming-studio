@@ -60,12 +60,15 @@ describe('channel read: whole uploads list (D375, D409)', () => {
   // Codex review 2026-11-21 (D409): no lookback ends the scan any more; every page is read to its end.
   test('every page is read to the end: a channel within maxPages is complete; cost 1 + 2 per page', async () => {
     const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
-    assert.equal(cfg.maxPages * cfg.pageSize, 2000);
-    const f = fakeChannel(1990);
+    // 2026-11-22 (D430): 200 pages of 50 (the user's channel has more than 2000 uploads)
+    assert.equal(cfg.maxPages * cfg.pageSize, 10000);
+    const n = cfg.maxPages * cfg.pageSize - 10;
+    const f = fakeChannel(n);
     const r = await readChannelSchedule({ accessToken: 'x', fetchImpl: f.fetchImpl, nowMs: T0, cfg });
     assert.equal(r.truncated, false); assert.equal(r.reachedLookback, undefined);
-    assert.equal(r.pages, 40); assert.equal(f.calls.playlist, 40); assert.equal(f.calls.videos, 40); assert.equal(r.scanned, 1990);
-    assert.equal(f.calls.channels + f.calls.playlist + f.calls.videos, 1 + 2 * 40, 'quota units of one read');
+    const P = cfg.maxPages;
+    assert.equal(r.pages, P); assert.equal(f.calls.playlist, P); assert.equal(f.calls.videos, P); assert.equal(r.scanned, n);
+    assert.equal(f.calls.channels + f.calls.playlist + f.calls.videos, 1 + 2 * P, 'quota units of one read');
     assert.deepEqual(r.times.map(iso), [T0 + 5 * HOUR, T0 + 30 * HOUR, T0 + 3 * DAY].map(iso));
   });
 
@@ -80,9 +83,9 @@ describe('channel read: whole uploads list (D375, D409)', () => {
 
   test('more uploads than maxPages x pageSize: truncated (incomplete), the caller fails closed', async () => {
     const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
-    const f = fakeChannel(2500);
+    const f = fakeChannel(cfg.maxPages * cfg.pageSize + 500);
     const r = await readChannelSchedule({ accessToken: 'x', fetchImpl: f.fetchImpl, nowMs: T0, cfg });
-    assert.equal(r.truncated, true); assert.equal(r.pages, 40);
+    assert.equal(r.truncated, true); assert.equal(r.pages, cfg.maxPages);
   });
 
   // ---- D409 second Codex review: a malformed or partial answer is incomplete (fail closed), never a partial success ----
@@ -210,8 +213,10 @@ describe('auto-post card settings (auto-settings.mjs)', () => {
   test('defaults: upload on, every kind, the ranker floor, as many a day as the quota fits, 1 h gap, 60 days, random-daily 3-6 a day 09:00-23:00 90 min (D403)', () => {
     const d = defaultCard(mk());
     const q = loadQuota(mk());
-    // PT2 (D408): the upload bucket (100 a day, 50 units each for the cover) capped by the 24 the hour gap allows.
-    assert.equal(q.model, 'upload-bucket'); assert.equal(q.uploadsPerDayFit, 24); assert.equal(q.uploadsCap, 100); assert.equal(q.perUploadUnits, 50);
+    // PT2 (D408): the upload bucket (100 a day, 50 units each for the cover) capped by the 24 the hour gap allows; with a
+    // whole-channel read of up to 401 units before each upload (D409, D430: 200 pages) the unit sum fits
+    // (10000 - 100) / (50 + 401) = 21.
+    assert.equal(q.model, 'upload-bucket'); assert.equal(q.uploadsPerDayFit, 21); assert.equal(q.uploadsCap, 100); assert.equal(q.perUploadUnits, 50);
     assert.deepEqual(d, { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore(), maxPerDay: q.uploadsPerDayFit, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000, ...RD });
     assert.ok(RULE_KINDS.includes('impact-play'));
   });
@@ -497,7 +502,7 @@ describe('Codex review: delete race, slot re-check, daily budget', () => {
     writeFileSync(unitSum, JSON.stringify({ model: 'unit-sum', quotaUnitsPerDay: 10000, insertUnits: 1600, thumbnailUnits: 50, readReserveUnits: 100 }));
     const q = loadQuota(dataDir, unitSum);
     assert.equal(q.uploadsPerDayFit, 0); assert.equal(q.quotaUnitsPerDay, 1000);
-    assert.equal(defaultCard(dataDir).maxPerDay, 6, 'bucket model: (1000 - 100) / (50 covers + 81 for the channel read before each upload, D409)');
+    assert.equal(defaultCard(dataDir).maxPerDay, 1, 'bucket model: (1000 - 100) / (50 covers + 401 for the channel read before each upload, D409, D430)');
   });
 });
 
