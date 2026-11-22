@@ -197,22 +197,33 @@ def clear_attempts(wd):
             shutil.rmtree(p, ignore_errors=True)
 
 
-def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, batch_pieces, render_job, run_tool, encoders, audio):
+def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, batch_pieces, render_job, run_tool, encoders,
+           audio, overlay=None, overlay_failed=None):
     """Renders the segments into wd/long-h.mp4. render_job(mk_argv, encoder, wd, part, what) -> (CompletedProcess,
     encoder) (clipper._render_job: stall watch, CPU retry). The parts and their list live in a per-attempt folder that
-    is removed in finally (and by the next start, after a kill). -> (ok, expected seconds, error or None)."""
+    is removed in finally (and by the next start, after a kill). overlay (LV1a, D421): overlay(chunk, first number,
+    folder) -> (ass name or None, fonts dir or None), burned over that batch; a batch that fails with it is rendered
+    once more without it (overlay_failed(batch index, stderr) is told), so an overlay never stops the video.
+    -> (ok, expected seconds, error or None)."""
     clear_attempts(wd)
     adir = tempfile.mkdtemp(prefix=ATTEMPT_PREFIX, dir=wd)
     try:
-        parts, expected = [], 0.0
+        parts, expected, first = [], 0.0, 1
         for i, chunk in enumerate(batches(segs, batch_pieces)):
             name = f"part-{i:03d}.mp4"
             pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
+            ass, fd = overlay(chunk, first, adir) if overlay else (None, None)
+            first += len(chunk)
 
-            def mk(enc, pieces=pieces, name=name):
+            def mk(enc, pieces=pieces, name=name, ass=ass, fd=fd):
                 return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], audio, fade_ms, name + ".part",
-                                        audio_tracks=audio_tracks, transition=tr)
+                                        audio_tracks=audio_tracks, transition=tr, captions=ass, fontsdir=fd)
             r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
+            if r.returncode != 0 and ass:
+                if overlay_failed:
+                    overlay_failed(i, r.stderr)
+                r, encoder = render_job(lambda enc, mk=mk: mk(enc, ass=None, fd=None), encoder, adir, name + ".part",
+                                        f"long video part {i + 1} without captions")
             if r.returncode != 0:
                 return False, 0.0, f"part {i + 1} did not render: {r.stderr.strip()[-200:]}"
             os.replace(os.path.join(adir, name + ".part"), os.path.join(adir, name))

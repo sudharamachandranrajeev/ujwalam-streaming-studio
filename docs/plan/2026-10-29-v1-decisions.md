@@ -2665,3 +2665,26 @@ The user said yes (2026-11-21): "build the song credit from the file names so th
 2. **Credit text is data** (`data/clip/montage-music.json` `ncsFilename.template`): `Music: <Artist> - <Title> [NCS Release]` / `Music provided by NoCopyrightSounds` / `Watch: https://youtu.be/<id>`. The wording is UNVERIFIED against NCS's published usage policy (the repo only quotes "credit artist and song in the description").
 3. **Provenance**: the render record, upload row and `<video>.music.json` sidecar carry source `ncs-filename` with the parsed fields. Posting treats it as a credited library song: the gate requires the credit in the description exactly as printed, and the link must be `https://youtu.be/` + an 11-char id. The credit is re-read from the file name when the render record is made, never from the stored record. A user-edited credit becomes a plain `ncs` record again.
 4. **Setting**: on by default, a data switch (`ncsFilename.enabled`), no feature flag (the user asked for it; no UI needed). Off: every name is own music, as before.
+
+## D421 — LV1a: word-by-word captions and chapter cards on the long highlights video (decided, 2026-11-22)
+
+Plan: `docs/plan/2026-11-21-beatdrop-montages.md` LV1 (user-approved option order BD → LV1 → RR1). Evidence:
+`docs/evidence/2026-11-22-lv1a-long-video-teaching.md`.
+
+1. **Captions word by word**: the long video shows what was said, the word being spoken in the brand accent
+   (`reel-title.json` `themeAccent`). Word times come from the same local speech to text as the reel captions
+   (whisper.cpp full-JSON token offsets; faster-whisper `word_timestamps`), with their model, preset, font and
+   confidence rule. A segment whose text was edited no longer matches its word times and is shown as plain cards.
+2. **Chapter cards**: a numbered card at the start of each moment, in plain words ("3 kills", "streak · 5 kills",
+   "won match"). It enters in 350 ms and leaves in 250 ms (overlay rule), stays inside its moment, and is left out
+   when the moment is too short for it. Numbers count every moment, so a left-out card leaves a gap in the numbers.
+3. **One ASS per render batch**, burned with the caption font through `clip_montage.render_argv(captions=)`. The
+   batches are still joined without re-encoding.
+4. **No speech model** (or the studio found it damaged): chapter cards only. A caption failure never stops the video.
+5. **Flag** `long-video-teaching`, on by default (user-requested). Sizes and timings are data
+   (`long-video.json` `teaching`, the agent's proposal).
+6. Callout cards and movement paths (rest of LV1) are not in LV1a. UNVERIFIED: word timing on real stream speech
+   (whisper.cpp token times are approximate), the look on a real long video.
+7. **After the Codex review (2026-11-22)**: a caption start exactly on a join belongs to the next piece, and a shown
+   caption ends where the next shown one starts. Both also apply to the reel captions (D411 retime). A batch whose
+   overlay fails to burn is rendered again without it.
