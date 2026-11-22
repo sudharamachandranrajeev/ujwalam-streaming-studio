@@ -221,13 +221,14 @@ def clear_attempts(wd):
 
 
 def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, batch_pieces, render_job, run_tool, encoders,
-           audio, overlay=None, overlay_failed=None):
+           audio, overlay=None, overlay_failed=None, gain_db=None):
     """Renders the segments into wd/long-h.mp4. render_job(mk_argv, encoder, wd, part, what) -> (CompletedProcess,
     encoder) (clipper._render_job: stall watch, CPU retry). The parts and their list live in a per-attempt folder that
     is removed in finally (and by the next start, after a kill). overlay (LV1a/LV1b, D421/D422): overlay(chunk, first
     number, folder) -> {"ass", "fontsdir", "fx"} (each may be None): the ASS burned over that batch, fx a render_argv
     graph fragment ([fxin] -> [fxout], the callout cards); a batch that fails with it is rendered once more without it
-    (overlay_failed(batch index, stderr) is told), so an overlay never stops the video.
+    (overlay_failed(batch index, stderr) is told), so an overlay never stops the video. gain_db (D440): the one loudness
+    gain of the whole video (batch_parts + clip_loudness), the same in every batch.
     -> (ok, expected seconds, error or None)."""
     clear_attempts(wd)
     adir = tempfile.mkdtemp(prefix=ATTEMPT_PREFIX, dir=wd)
@@ -242,7 +243,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
             def mk(enc, pieces=pieces, name=name, ov=ov):
                 return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], audio, fade_ms, name + ".part",
                                         audio_tracks=audio_tracks, transition=tr, captions=ov.get("ass"),
-                                        fontsdir=ov.get("fontsdir"), fx=ov.get("fx"))
+                                        fontsdir=ov.get("fontsdir"), fx=ov.get("fx"), gain_db=gain_db)
             r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
             if r.returncode != 0 and (ov.get("ass") or ov.get("fx")):
                 if overlay_failed:
@@ -263,6 +264,20 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
         return True, round(expected, 3), None
     finally:
         shutil.rmtree(adir, ignore_errors=True)
+
+def batch_parts(ffmpeg, src, segs, frame, enc_args, audio, fade_ms, tr, batch_pieces, audio_tracks):
+    """D440: [(argv builder(gain), seconds)] per batch, as render() cuts them (no overlay: the sound is the same), for
+    the loudness pre-pass of the whole video."""
+    out = []
+    for chunk in batches(segs, batch_pieces):
+        pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
+
+        def b(gain, pieces=pieces):
+            return mont.render_argv(ffmpeg, src, pieces, frame, enc_args, audio, fade_ms, "probe.mp4",
+                                    audio_tracks=audio_tracks, transition=tr, gain_db=gain)
+        out.append((b, video_seconds(pieces, tr)))
+    return out
+
 
 def duration_ok(actual, expected):
     """Each batch can round a piece by a frame and the copy join by a few audio frames: 2 s or 0.5 %, the larger."""

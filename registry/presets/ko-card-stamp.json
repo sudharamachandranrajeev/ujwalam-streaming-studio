@@ -1,0 +1,15 @@
+{
+  "id": "ko-card-stamp",
+  "version": "1.0.0",
+  "function": "ko-card",
+  "functionVersion": "^1.0.0",
+  "name": "Stamped box",
+  "params": { "anim": "stamp", "inMs": 360, "outMs": 250, "startScale": 260, "angle": -8 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "slam", "intensity": "medium", "mood": "playful", "colourUse": "tokens", "flashes": "none" },
+  "canvases": ["H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["ko-card-slam"]
+}

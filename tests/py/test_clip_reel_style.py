@@ -156,7 +156,7 @@ class ClipperStyleTests(unittest.TestCase):
         src = inspect.getsource(self.cl)
         self.assertIn('_style_pick(ex, "live-clip"', src)
         self.assertIn("or sty is not None)", src)
-        self.assertIn("ttl, mus, zoom=zoom, lut=lut)", src)
+        self.assertIn("ttl, mus, zoom=zoom, lut=lut,", src)
         self.cl._style_cleanup(self.tmp)
 
     def test_non_canvas_live_layouts_get_the_colour_and_a_plain_note(self):

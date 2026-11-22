@@ -32,6 +32,9 @@ test('defaults: every style ticked, randomise on, -20 dB, music 8 dB under the g
   assert.deepEqual([d.defaults.music.underGameDb, d.defaults.music.voiceDuckDb, d.defaults.music.fadeInSec, d.defaults.music.fadeOutSec,
     d.defaults.music.fadeCurve], [8, 8, 1.5, 1.5, 's-curve']);
   assert.equal(JSON.stringify(d.defaults).includes('blur'), false);
+  assert.deepEqual(d.defaults.cards.styles, ['slam', 'slash', 'glitch', 'zoom-punch', 'stamp']); // D439
+  assert.equal(d.defaults.music.loudnessLufs, -14); // D440
+  assert.equal(d.loudness.source, 'user 2026-11-22');
 });
 
 test('free music pack (D427): ticked by default, offered, and packReady follows the download marker', () => withDir((d) => {

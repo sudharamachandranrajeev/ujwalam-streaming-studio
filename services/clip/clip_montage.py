@@ -492,7 +492,7 @@ def zoom_expr(z):
 
 def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, out_name, threads=4, audio_tracks=1, max_sec=None,
                 captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None,
-                fx=None, layout=None):
+                fx=None, layout=None, gain_db=None):
     """One ffmpeg run: each piece is its own input (-ss/-t, exact because it is re-encoded), scaled into the frame,
     audio faded in and out by fade_ms (no pop at a hard cut), then concatenated. Every audio track of the source
     (audio_tracks) is kept as its own track, in source order (track 1 = the studio mix); none is dropped or remixed.
@@ -520,8 +520,13 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     joined picture after zoom and lut. Pieces and calls without these keys render exactly as before.
     layout (BD7, D418): {"layout" (a data/clip/layouts.json entry), "iw", "ih" (the source size)} frames each piece
     with clip_render.layout_chain (the V clips' own crop/fill/stack/canvas graphs) instead of the fit-and-pad scale;
-    None = as before."""
+    None = as before.
+    gain_db (D440, clip_loudness.py): one fixed gain on audio track 1 (the studio mix, with its music and join sounds)
+    ahead of the true-peak limiter, which a track without music then gets too; None = as before. Still one audio
+    encode."""
     ow, oh = int(frame["width"]), int(frame["height"])
+    vol = f"volume={float(gain_db):.2f}dB," if gain_db is not None else ""
+    limit = f"aresample=192000,alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1,aresample=48000"
     fd = fade_ms / 1000.0
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(threads), "-filter_threads", "2"]
     for p in pieces:
@@ -571,8 +576,10 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     bed_only = music if (not audio_tracks and music and music.get("file") and music.get("duck") is None) else None
     music = music if audio_tracks else None
 
-    def aj(k):  # the joined track k; track 1 goes through the RP3 music mix first
-        return "[amus0]" if music and k == 0 else f"[{alast}{k}]"
+    def aj(k):  # the joined track k; track 1 goes through the RP3 music mix (or D440 the gain and limiter) first
+        if k == 0 and music:
+            return "[amus0]"
+        return "[aloud0]" if k == 0 and vol else f"[{alast}{k}]"
     if xd:  # RP1: each join overlaps the pieces by xd seconds (picture xfade, audio acrossfade per track)
         n, acc = len(pieces), 0.0
         for i in range(1, n):
@@ -630,8 +637,9 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         # -4 dBFS (AAC can add ~2 dB on harsh peaks; a slow release keeps the limiter from adding distortion), run 4x
         # oversampled so it catches true (between-sample) peaks:
         # the AAC encode stays under -1 dBTP. Still one audio encode.
-        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,aresample=192000,"
-                     f"alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1,aresample=48000[{alast}0]")
+        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,{vol}{limit}[{alast}0]")
+    elif vol and audio_tracks:  # D440: no music, but the gain and the same limiter on track 1
+        parts.append(f"[aloud0]{vol}{limit}[{alast}0]")
     if bed_only:
         mi = len(pieces) + (1 if thumbnail else 0)
         argv += ["-i", bed_only["file"]]
@@ -642,8 +650,7 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
             ins.append(f"[{mi + 1}:a]aresample=48000[msfx]")
             mixin.append("[msfx]")
         parts += ins
-        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,aresample=192000,"
-                     f"alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1,aresample=48000"
+        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,{vol}{limit}"
                      + (",adelay=delays=800S:all=1" if thumbnail else "") + "[aout0]")
     n_audio = audio_tracks or (1 if bed_only else 0)
     maps = ["-map", "[vout]"] + [x for k in range(n_audio) for x in ("-map", f"[aout{k}]")]

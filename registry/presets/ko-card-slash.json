@@ -1,0 +1,15 @@
+{
+  "id": "ko-card-slash",
+  "version": "1.0.0",
+  "function": "ko-card",
+  "functionVersion": "^1.0.0",
+  "name": "Slash wipe reveal",
+  "params": { "anim": "slash", "inMs": 380, "outMs": 300, "skew": -0.25 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "slide", "intensity": "medium", "mood": "electric", "colourUse": "tokens", "flashes": "none" },
+  "canvases": ["H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["ko-card-glitch"]
+}

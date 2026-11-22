@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""LV1a (D421): word-by-word captions and chapter cards on the long highlights video (services/clip/long_teaching.py,
+"""LV1a (D421): word-by-word captions and moment cards (K.O. cards since D439) on the long highlights video (services/clip/long_teaching.py,
 reel_captions word highlight, clip_captions word times). Synthetic data only: no real speech, no real footage. Word
 timing on real stream speech and the look on a real long video are UNVERIFIED."""
 
@@ -143,33 +143,36 @@ class Chapters(unittest.TestCase):
     def test_timing_rule_is_checked(self):
         t = lv.load_config()["teaching"]
         lt.check(t)
-        for k, v in (("entranceMs", 600), ("exitMs", 400), ("sec", 0.5)):
-            bad = json.loads(json.dumps(t))
-            bad["chapters"][k] = v
-            with self.assertRaises(cc.ClipError):
-                lt.check(bad)
+        bad = json.loads(json.dumps(t))
+        bad["koCards"]["sec"] = 0.5  # shorter than any entrance + exit
+        with self.assertRaises(cc.ClipError):
+            lt.check(bad)
+        bad = json.loads(json.dumps(t))
+        bad["koCards"]["words"] = bad["koCards"]["words"][:-1]  # no rule for any moment at the end
+        with self.assertRaises(cc.ClipError):
+            lt.check(bad)
 
-    def test_cards_numbered_and_inside_each_moment(self):
+    def test_cards_unnumbered_and_inside_each_moment(self):
+        """D439: no moment number; the word says what happened; the card stays after the cross fade in."""
         ctx = _ctx()
         chunk = [{"start": 10.0, "end": 30.0, "kills": 2, "kinds": ["kills"]},
                  {"start": 50.0, "end": 51.0, "kills": 1, "kinds": ["kills"]},  # too short for a card
                  {"start": 90.0, "end": 100.0, "kills": 0, "kinds": ["win"]}]
         xd = 0.25
+        picked = []
         styles, ev = lt.chapter_events(chunk, 13, xd, {"width": 1920, "height": 1080}, ctx["tcfg"], ctx["style"],
-                                       ctx["accent"])
-        self.assertTrue(styles[0].startswith("Style: Chapter,"))
-        self.assertEqual(len(ev), 2)
-        self.assertIn("}13{", ev[0])
-        self.assertIn("2 kills", ev[0])
-        self.assertIn("}15{", ev[1])  # numbering counts the skipped moment
-        self.assertIn("won match", ev[1])
-        starts = lt.piece_starts(chunk, xd)
-        self.assertEqual(starts, [0.0, 19.75, 20.5])
-        # after the cross fade in (Codex): never over the moment before
-        self.assertTrue(ev[0].startswith(f"Dialogue: 1,{caps._ts(0.0)},{caps._ts(ctx['tcfg']['chapters']['sec'])},"))
-        self.assertTrue(ev[1].startswith(f"Dialogue: 1,{caps._ts(20.75)},"))
-        ch = ctx["tcfg"]["chapters"]
-        self.assertIn(f"\\fad({ch['entranceMs']},{ch['exitMs']})", ev[0])
+                                       ctx["accent"], seed="s", picked=picked)
+        self.assertTrue(styles[0].startswith("Style: KOWord,"))
+        self.assertEqual(len(picked), 2)
+        words = [e.rsplit("}", 1)[-1] for e in ev]
+        self.assertIn("DOUBLE K.O.", words)
+        self.assertIn("WON", words)
+        self.assertIn("won match", words)
+        for n in ("13", "14", "15"):
+            self.assertNotIn(n, words)
+        self.assertEqual(lt.piece_starts(chunk, xd), [0.0, 19.75, 20.5])
+        firsts = sorted({e.split(",")[1] for e in ev})
+        self.assertEqual(firsts, [caps._ts(0.0), caps._ts(20.75)])  # after the cross fade in (Codex)
 
     def test_chapters_burn_without_captions(self):
         ctx = _ctx()
@@ -179,12 +182,12 @@ class Chapters(unittest.TestCase):
                                              ctx)
             self.assertEqual((ass, fd), (rcap.ASS_NAME, rcap.FONT_SUBDIR))
             self.assertEqual((info["status"], info["chapters"], info["cards"]), ("off", 1, 0))
+            self.assertEqual(len(info["cardStyles"]), 1)
             with open(os.path.join(d, ass), encoding="utf-8") as f:
                 text = f.read()
-            self.assertIn("Style: Chapter,", text)
-            self.assertLess(text.index("Style: Chapter,"), text.index("[Events]"))
+            self.assertIn("Style: KOWord,", text)
+            self.assertLess(text.index("Style: KOWord,"), text.index("[Events]"))
             self.assertTrue(os.path.isfile(os.path.join(d, fd, ctx["style"]["fontFile"])))
-
     def test_any_caption_error_leaves_the_cards(self):
         # Codex D421: a model load error (any exception) never stops the video
         ctx = _ctx(ccfg=dict(rcap.load_config()))

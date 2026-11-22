@@ -5,7 +5,7 @@
   "checked": "2026-11-22",
   "levelSource": "D437 (2026-11-22): levelDb default -16 -> -20 and the music now plays underGameDb (8) under the reel's own game mix, never louder than levelDb. Measured on 11 reels made 2026-11-22: game mix -27 to -38 LUFS where no music played, music at -16 LUFS 11 to 22 LU louder (docs/evidence/2026-11-22-reel-music-level-fades.md). voiceDuckDb: extra lowering while someone speaks (Silero VAD). fadeInSec/fadeOutSec/fadeCurve: the start fade-out and end fade-in (s-curve, 1.5 s; sources in D437).",
   "flag": "clip-look",
-  "historyN": { "music": 1, "transitions": 1, "name": 1, "track": 3 },
+  "historyN": { "music": 1, "transitions": 1, "name": 1, "track": 3, "cards": 2 },
   "historyKeep": 20,
   "groups": {
     "music": {
@@ -31,6 +31,17 @@
         { "id": "corner-tag", "label": "Corner tag", "about": "A small badge with your name in a corner, the whole clip.", "weight": 1 },
         { "id": "kinetic", "label": "Kinetic text reveal", "about": "Big letters pop in one by one in the upper third, no box.", "weight": 1 }
       ]
+    },
+    "cards": {
+      "$comment": "D439 K.O. cards on the long highlights video (not a per-reel pick): each moment draws one of the ticked animations (registry preset ko-card-<id>), seeded by the recording, never the same as the last two while another tick is free (historyN.cards). No ticks = no cards. Read by services/clip/long_teaching.py.",
+      "ticks": "styles",
+      "options": [
+        { "id": "slam", "label": "Slam in", "about": "The word drops in big, overshoots and shakes a little.", "weight": 1 },
+        { "id": "slash", "label": "Slash wipe", "about": "A slanted word is wiped on with an accent bar under it.", "weight": 1 },
+        { "id": "glitch", "label": "Glitch split", "about": "Two coloured copies slide together into the word.", "weight": 1 },
+        { "id": "zoom-punch", "label": "Zoom punch", "about": "The word punches in from small and blurred.", "weight": 1 },
+        { "id": "stamp", "label": "Stamp", "about": "A tilted accent box is stamped down with the word on it.", "weight": 1 }
+      ]
     }
   },
   "sources": [
@@ -44,15 +55,25 @@
   "voiceDuckDb": { "min": 0, "max": 20 },
   "fadeSec": { "min": 0.1, "max": 4 },
   "fadeCurves": ["s-curve", "equal-power", "exponential", "linear"],
+  "loudnessLufs": { "min": -24, "max": -9 },
+  "loudness": {
+    "$comment": "D440 (user 2026-11-22 said yes): every finished reel, montage and long video is raised (or lowered) to music.loudnessLufs integrated (default -14, YouTube's playback level: it turns loud videos down but never quiet ones up). One fixed gain ahead of the existing true-peak limiter (-4 dBFS, 4x oversampled), measured by an audio-only pre-pass of the same mix (passes: the mix as it is, then the gain checked through the limiter and corrected by the measured slope). A mix whose peaks are far above its average can not reach the target under the limiter: the record says how close it got. Not a riding AGC. A failed pre-pass renders as before. music.loudnessLufs null = leave the level as it is. Read by services/clip/clip_loudness.py.",
+    "source": "user 2026-11-22",
+    "toleranceLu": 1.0,
+    "minGainDb": -20,
+    "maxGainDb": 30,
+    "passes": 3
+  },
   "sizePct": { "min": 60, "max": 160 },
   "durationSec": { "min": 1, "max": 4 },
   "folderMaxChars": 400,
   "defaults": {
     "randomise": true,
     "music": { "modes": ["intro-outro", "drop", "full-bed"], "sources": ["folder", "pack", "ai"], "folder": "", "levelDb": -20,
-               "underGameDb": 8, "voiceDuckDb": 8, "fadeInSec": 1.5, "fadeOutSec": 1.5, "fadeCurve": "s-curve", "lock": null },
+               "underGameDb": 8, "voiceDuckDb": 8, "fadeInSec": 1.5, "fadeOutSec": 1.5, "fadeCurve": "s-curve", "loudnessLufs": -14, "lock": null },
     "transitions": { "styles": ["punchy", "cinematic", "clean"], "sfx": true, "beatSync": true, "lock": null },
     "name": { "styles": ["lower-third", "corner-tag", "kinetic"], "position": "auto", "colour": "theme", "sizePct": 100,
-              "durationSec": 2.0, "logo": true, "lock": null }
+              "durationSec": 2.0, "logo": true, "lock": null },
+    "cards": { "styles": ["slam", "slash", "glitch", "zoom-punch", "stamp"] }
   }
 }

@@ -1,0 +1,15 @@
+{
+  "id": "ko-card-zoom-punch",
+  "version": "1.0.0",
+  "function": "ko-card",
+  "functionVersion": "^1.0.0",
+  "name": "Zoom punch",
+  "params": { "anim": "zoom", "inMs": 400, "outMs": 320, "startScale": 40, "overshoot": 118, "blur": 6 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "burst", "intensity": "high", "mood": "aggressive", "colourUse": "tokens", "flashes": "none" },
+  "canvases": ["H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["ko-card-slam"]
+}

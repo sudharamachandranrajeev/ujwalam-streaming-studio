@@ -719,10 +719,11 @@ def cmd_live_review(a):
         style_skips = []
         for lid in wanted:
             try:
-                out_sec = None
+                out_sec, lo = None, {}
                 if pieces_path and by_id[lid].get("kind") == "canvas":
                     name = _render_pieces(ffmpeg, c["file"], m["pieces"], frame, encoder, wd, lid, sinfo, fade_ms,
-                                          lim_live["maxSec"], ass, fdir, tr, thumb, ttl, mus, zoom=zoom, lut=lut)
+                                          lim_live["maxSec"], ass, fdir, tr, thumb, ttl, mus, zoom=zoom, lut=lut,
+                                          loud=ex.get("loud"), loud_out=lo)
                     out_sec = _pieces_out_sec(m, xd, thumb, lim_live["maxSec"])
                 else:
                     name = rnd.render_variant(ffmpeg, c["file"], sinfo, c, by_id[lid], frame, encoder, wd, lut=lut)
@@ -733,6 +734,7 @@ def cmd_live_review(a):
                               # not its first piece's start to its last piece's end
                               **({"outSec": out_sec} if out_sec is not None else {}),
                               "sourceAudioTracks": sinfo.get("audio_tracks"),
+                              **({"loudness": lo["loudness"]} if lo.get("loudness") else {}),
                               **({"thumbnail": True} if thumb and pieces_path and by_id[lid].get("kind") == "canvas" else {})})
                 if by_id[lid].get("kind") == "canvas" and hook.get("score") is None:
                     hook = _hook_score(ffmpeg, wd, name, m if pieces_path else dict(m, pieces=[
@@ -904,18 +906,47 @@ def _render_job(mk_argv, encoder, wd, part, what):
     return r, encoder
 
 
+def _loud_plan(wd, mk_gain, tgt, parts=None):
+    """D440: (gain dB or None, record) for one render from the audio-only pre-pass (clip_loudness.plan). mk_gain(gain)
+    -> the render argv; parts: [(argv builder(gain), seconds)] instead (the long video's batches). Never raises: a
+    failed pre-pass renders as before."""
+    import clip_loudness as cl  # noqa: PLC0415
+    try:
+        cfg = cl.load_cfg()
+        build = (lambda g: [(b(g), s) for b, s in parts]) if parts else (lambda g: [(mk_gain(g), 1.0)])
+        return cl.plan(build, rnd.run_tool, wd, tgt, cfg)
+    except Exception as e:  # noqa: BLE001
+        return None, {"target": tgt, "status": "failed", "reason": f"{type(e).__name__}: {str(e)[-160:]}"}
+
+
+def _loud_check(ffmpeg, path, rec, what):
+    """D440 measure-after: the rendered file's loudness and true peak into the record (status ok, or missed when it is
+    more than toleranceLu off the target or above -1 dBTP: the limiter could not let the mix reach it)."""
+    import clip_loudness as cl  # noqa: PLC0415
+    if not rec or rec.get("status") != "planned":
+        return rec
+    try:
+        res = cl.check(ffmpeg, path, rec["target"], cl.load_cfg())
+    except Exception as e:  # noqa: BLE001
+        return dict(rec, status="unchecked", reason=f"{type(e).__name__}: {str(e)[-160:]}")
+    print(f"{what}: loudness {res['lufs']} LUFS (target {rec['target']:g}, gain {rec['gainDb']:+.1f} dB), "
+          f"true peak {res['truePeak']} dBTP{'' if res['ok'] else ' - MISSED'}")
+    return dict(rec, after=res, status="ok" if res["ok"] else "missed")
+
+
 def _render_pieces(ffmpeg, src, pieces, frame, encoder, wd, lid, sinfo, fade_ms, max_sec, ass=None, fdir=None,
-                   transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None):
+                   transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None, loud=None, loud_out=None):
     """A canvas layout rendered from pieces (teaser + clip) with optional captions, the RP1 transition, the RP6
     start frame and the RP4 title card -> '<layout>.mp4'."""
     import clip_montage as mont  # noqa: PLC0415
     name = f"{lid}.mp4"
-    def mk(enc):
+    def mk(enc, gain=None):
         return mont.render_argv(ffmpeg, src, pieces, frame, rnd.ENCODERS[enc], rnd.AUDIO, fade_ms, name + ".part",
                                 audio_tracks=max(1, int(sinfo.get("audio_tracks") or 1)) if sinfo.get("has_audio") else 0,
                                 max_sec=max_sec, captions=ass, fontsdir=fdir, transition=transition, thumbnail=thumbnail,
-                                title=title, music=music, zoom=zoom, lut=lut)
-    r, _ = _render_job(mk, encoder, wd, name + ".part", f"render {lid}")
+                                title=title, music=music, zoom=zoom, lut=lut, gain_db=gain)
+    gain, lrec = _loud_plan(wd, lambda g: mk(encoder, g), loud) if sinfo.get("has_audio") else (None, None)  # D440
+    r, _ = _render_job(lambda enc: mk(enc, gain), encoder, wd, name + ".part", f"render {lid}")
     if r.returncode != 0:
         try:
             os.remove(os.path.join(wd, name + ".part"))
@@ -923,6 +954,8 @@ def _render_pieces(ffmpeg, src, pieces, frame, encoder, wd, lid, sinfo, fade_ms,
             pass
         raise ClipError(f"render {lid} failed: {r.stderr.strip()[-300:]}")
     os.replace(os.path.join(wd, name + ".part"), os.path.join(wd, name))
+    if loud_out is not None:
+        loud_out["loudness"] = _loud_check(ffmpeg, os.path.join(wd, name), lrec, f"render {lid}")
     return name
 
 
@@ -1034,7 +1067,7 @@ def _long_video_steps(a, lv, out):
         summ = {}
     ctx = lt.context(data_dir, cfg, getattr(a, "whisper_bin", None), getattr(a, "whisper_model", None),
                      pack=_gate_pack(a), layout=summ.get("layout"), rec_size=(info.get("width"), info.get("height")),
-                     game=summ.get("game"))
+                     game=summ.get("game"), seed=os.path.basename(rec))
     infos = []
 
     def overlay(chunk, first, adir):
@@ -1050,10 +1083,17 @@ def _long_video_steps(a, lv, out):
     def overlay_failed(i, stderr):  # the batch was rendered again without its overlay: nothing of it is on screen
         infos[i] = dict(infos[i], status="failed", cards=0, chapters=0, callouts=0, paths=0,
                         reason=f"burning the overlay failed: {(stderr or '').strip()[-120:]}")
-    ok, expected, err = lv.render(ffmpeg, rec, p["segments"], frame, rnd.pick_encoder(a.encoder), wd, tracks,
+    # D440: one loudness gain for the whole video from an audio-only pre-pass of every batch
+    enc0 = rnd.pick_encoder(a.encoder)
+    gain, lrec = _loud_plan(wd, None, _loud_target(data_dir), parts=lv.batch_parts(
+        ffmpeg, rec, p["segments"], frame, rnd.ENCODERS[enc0], rnd.AUDIO, int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"],
+        tracks))
+    ok, expected, err = lv.render(ffmpeg, rec, p["segments"], frame, enc0, wd, tracks,
                                   int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"], _render_job, rnd.run_tool,
                                   rnd.ENCODERS, rnd.AUDIO, overlay=overlay if ctx else None,
-                                  overlay_failed=overlay_failed)
+                                  overlay_failed=overlay_failed, gain_db=gain)
+    if ok:
+        lrec = _loud_check(ffmpeg, os.path.join(wd, lv.FILE), lrec, "long video")
     teach = lt.merge_info(infos if ctx else [])
     files, errors = [], []
     if ok:
@@ -1068,9 +1108,11 @@ def _long_video_steps(a, lv, out):
         "flash": "no flash effect: cross fade or cut only", "failed": 0 if ok else 1,
         "clips": [{"id": lv.CLIP_ID, "start": 0.0, "end": expected, "score": round(sum(g["score"] for g in p["segments"]), 3),
                    "labels": [], "kills": kills, "pieces": p["segments"], "dropped": p["dropped"],
-                   "captions": teach["captions"], "chapters": teach["chapters"], "callouts": teach["callouts"],
+                   "captions": teach["captions"], "chapters": teach["chapters"],
+                   "cardStyles": teach.get("cardStyles", []), "callouts": teach["callouts"],
                    "paths": teach["paths"],
                    "music": None,  # D414: the long video adds no music (the stream's own sound only)
+                   "loudness": lrec,
                    "files": files, "errors": errors}]})
     if not ok:
         return {"status": "failed", "reason": err[:200]}
@@ -1108,6 +1150,11 @@ KIND_TYPE = {"M": "montage", "W": "match-reel", "I": "impact-play", "L": "live-c
 
 # ---------------------------------------------------------------- ED1 hook and ED2 captions (D352, D353)
 
+def _loud_target(data_dir):
+    import clip_loudness as cl  # noqa: PLC0415
+    return cl.target(data_dir)
+
+
 def _reel_extras(a, data_dir):
     """The payoff-first hook settings (flag reel-hook + Settings > Clips) and the burned-in caption settings (flag
     reel-captions) for one run."""
@@ -1136,6 +1183,7 @@ def _reel_extras(a, data_dir):
             "tbrand": rth.brand() if ti_on else None,
             "music": rmu.load_config() if mu_on else None,  # RP3 beds and the FX4 duck + fallback (flag reel-music)
             "style": rcap.load_style(ccfg) if cap_on else None,
+            "loud": _loud_target(data_dir),  # D440: the loudness target of finished reels (None = as recorded)
             "safe": caps.safe_area(load_config("targets", getattr(a, "targets", None))),
             "opts": {"whisper_bin": getattr(a, "whisper_bin", None),
                      "whisper_model": rcap.model_path(data_dir, ccfg, getattr(a, "whisper_model", None))}}
@@ -1712,11 +1760,12 @@ def cmd_montage(a):
         mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec), pk=pk, mplan=mplan,
                             ffmpeg=ffmpeg, src=vrec)  # RP3/FX4, D437
         mus, sfxrec = _with_sfx(wd, exr, tr, m["pieces"], xd, pk, mus)  # FX3
-        def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ):
+        def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ, gain=None):
             return mont.render_argv(ffmpeg, vrec, m["pieces"], frame, rnd.ENCODERS[enc], rnd.AUDIO,
                                     int(cfg["audioFadeMs"]), "montage-v.mp4.part",
                                     audio_tracks=max(1, vinfo["audio_tracks"]), max_sec=lim[typ]["maxSec"], captions=ass,
-                                    fontsdir=fdir, transition=tr, thumbnail=thumb, title=ttl, music=mus, zoom=zoom, lut=lut)
+                                    fontsdir=fdir, transition=tr, thumbnail=thumb, title=ttl, music=mus, zoom=zoom, lut=lut,
+                                    gain_db=gain)
         if os.path.isfile(done):
             # Codex verify (D411): a finished file with no stored row (the run stopped between the file and its row)
             # is never kept with guessed decisions: it is rendered again with this run's decisions
@@ -1726,7 +1775,9 @@ def cmd_montage(a):
         # Codex verify: this reel's old row is dropped from render.json before it renders, so a stop at any point never
         # leaves an old row next to a new file
         _write_render(rows + [x for x in old_rows if x.get("id") != cid and x.get("id") not in {y["id"] for y in rows}])
-        r, _ = _render_job(mk, encoder, wd, "montage-v.mp4.part", f"montage {cid}")
+        gain, lrec = _loud_plan(wd, lambda g, mk=mk: mk(encoder, gain=g), ex.get("loud"))  # D440 audio-only pre-pass
+        r, _ = _render_job(lambda enc, mk=mk, gain=gain: mk(enc, gain=gain), encoder, wd, "montage-v.mp4.part",
+                           f"montage {cid}")
         _drop_fonts(wd)
         rti.cleanup(wd)
         rmu.cleanup(wd)
@@ -1737,6 +1788,7 @@ def cmd_montage(a):
         if r.returncode == 0:
             if os.path.isfile(os.path.join(wd, "montage-v.mp4.part")):
                 os.replace(os.path.join(wd, "montage-v.mp4.part"), done)
+            lrec = _loud_check(ffmpeg, done, lrec, f"montage {cid}")  # D440 measure-after
             hook = _hook_score(ffmpeg, wd, "montage-v.mp4", m, typ, ex)
             line = _hook_line(cid, hook)
             if line:
@@ -1763,7 +1815,7 @@ def cmd_montage(a):
         out_sec = _pieces_out_sec(m, xd, thumb, lim[typ]["maxSec"])
         rows.append({"id": cid, "start": 0.0, "end": out_sec, "score": m["score"], "labels": m["labels"],
                      "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec, "title": tirec, "music": murec,
-                     "look": pk, "sfx": sfxrec, "style": strec,
+                     "look": pk, "sfx": sfxrec, "style": strec, "loudness": lrec,
                      "pieces": m["pieces"], "part": m.get("part"), "parts": m.get("parts"),
                      # the overlaps of a cross fade can take a reel planned at its shortest length below it
                      "trimmed": m.get("trimmed"), "belowMin": m.get("belowMin") or (out_sec < lim[typ]["minSec"]) or None, "kills": m.get("kills"), "streakKills": m.get("streakKills"),
@@ -1931,12 +1983,14 @@ def cmd_recaption(a):
                 mus = dict(mus or {}, sfx=f)
         except (OSError, ValueError) as e:
             eprint(f"recaption {a.id}: the join sounds are not kept ({str(e)[-100:]})")
-    argv = mont.render_argv(ffmpeg, src, pieces, rdoc["frame"], rnd.ENCODERS[rnd.pick_encoder(a.encoder)], rnd.AUDIO,
-                            fade, name + ".part",
-                            audio_tracks=max(1, int(sinfo.get("audio_tracks") or 1)) if sinfo.get("has_audio") else 0,
-                            max_sec=max_sec, captions=ass, fontsdir=fdir, transition=tr_now, thumbnail=thumb, title=ttl,
-                            music=mus)
-    r = rnd.run_tool(argv, cwd=wd, timeout=1800)
+    def mk(gain=None):
+        return mont.render_argv(ffmpeg, src, pieces, rdoc["frame"], rnd.ENCODERS[rnd.pick_encoder(a.encoder)], rnd.AUDIO,
+                                fade, name + ".part",
+                                audio_tracks=max(1, int(sinfo.get("audio_tracks") or 1)) if sinfo.get("has_audio") else 0,
+                                max_sec=max_sec, captions=ass, fontsdir=fdir, transition=tr_now, thumbnail=thumb, title=ttl,
+                                music=mus, gain_db=gain)
+    gain, lrec = _loud_plan(wd, mk, _loud_target(data_dir)) if sinfo.get("has_audio") else (None, None)  # D440
+    r = rnd.run_tool(mk(gain), cwd=wd, timeout=1800)
     _drop_fonts(wd)
     rti.cleanup(wd)
     rmu.cleanup(wd)
@@ -1948,6 +2002,8 @@ def cmd_recaption(a):
             pass
         raise ClipError(f"recaption {a.id} failed: {r.stderr.strip()[-300:]}")
     os.replace(os.path.join(wd, name + ".part"), os.path.join(wd, name))
+    if lrec:
+        row["loudness"] = _loud_check(ffmpeg, os.path.join(wd, name), lrec, f"recaption {a.id}")
     row["captions"] = dict(row.get("captions") or {}, **rcap.summary(tr, n), status="ok", burned=bool(n),
                            transcript=rcap.TRANSCRIPT, recaptionedAt=_now())
     write_json_atomic(rpath, rdoc)

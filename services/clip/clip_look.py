@@ -37,13 +37,15 @@ FLAG = "clip-look"
 HISTORY_FILE = os.path.join("clips", "look-history.json")
 ENV_OVERRIDE = "UJWALAM_CLIP_LOOK"
 GROUPS = ("music", "transitions", "name")
+CARDS = "cards"  # D439: the long video's K.O. card styles; validated and merged like a group, never picked per reel
+ALL_GROUPS = GROUPS + (CARDS,)
 KINETIC_VARIANTS = ("scale-punch", "slice-in")
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 def load_config(path=None):
     cfg = load_json(path or LOOK_FILE)
-    for g in GROUPS:
+    for g in ALL_GROUPS:
         ids = [o["id"] for o in cfg["groups"][g]["options"]]
         if len(set(ids)) != len(ids) or any(float(o["weight"]) <= 0 for o in cfg["groups"][g]["options"]):
             raise ClipError(f"look.json: group {g} has a repeated id or a weight <= 0")
@@ -83,15 +85,16 @@ def look_problems(v, cfg=None):
         return ["clips.look must be an object"]
     out = []
     for k in v:
-        if k not in ("randomise",) + GROUPS:
+        if k not in ("randomise",) + ALL_GROUPS:
             out.append(f"unknown clips.look setting {k}")
     if "randomise" in v and not isinstance(v["randomise"], bool):
         out.append("clips.look.randomise must be true or false")
     keys = {"music": ("modes", "sources", "folder", "levelDb", "lock", "packOffered", "aiOffered", "aiRuntime",
-                      "underGameDb", "voiceDuckDb", "fadeInSec", "fadeOutSec", "fadeCurve"),
+                      "underGameDb", "voiceDuckDb", "fadeInSec", "fadeOutSec", "fadeCurve", "loudnessLufs"),
             "transitions": ("styles", "sfx", "beatSync", "lock"),
-            "name": ("styles", "position", "colour", "sizePct", "durationSec", "logo", "lock")}
-    for g in GROUPS:
+            "name": ("styles", "position", "colour", "sizePct", "durationSec", "logo", "lock"),
+            CARDS: ("styles",)}
+    for g in ALL_GROUPS:
         if g not in v:
             continue
         gv, w = v[g], f"clips.look.{g}"
@@ -118,6 +121,8 @@ def look_problems(v, cfg=None):
     for k, r in (("underGameDb", "underGameDb"), ("voiceDuckDb", "voiceDuckDb"), ("fadeInSec", "fadeSec"), ("fadeOutSec", "fadeSec")):
         if k in m:  # D437
             out += _range(m[k], cfg[r], f"clips.look.music.{k}")
+    if "loudnessLufs" in m and m["loudnessLufs"] is not None:  # D440: null = leave the level as it is
+        out += _range(m["loudnessLufs"], cfg["loudnessLufs"], "clips.look.music.loudnessLufs")
     if "fadeCurve" in m and m["fadeCurve"] not in cfg["fadeCurves"]:
         out.append(f"clips.look.music.fadeCurve must be one of {', '.join(cfg['fadeCurves'])}")
     if "aiRuntime" in m and not ai_runtime_ok(m["aiRuntime"]):
@@ -153,7 +158,7 @@ def merge(cfg, v):
     if isinstance(v, dict) and not look_problems(v, cfg):
         if "randomise" in v:
             out["randomise"] = v["randomise"]
-        for g in GROUPS:
+        for g in ALL_GROUPS:
             out[g].update(copy.deepcopy(v.get(g) or {}))
     return out
 

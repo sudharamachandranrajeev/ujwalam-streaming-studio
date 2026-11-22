@@ -43,6 +43,17 @@ CASES = [
       "clips.look.music.fadeInSec must be from 0.1 to 4", "clips.look.music.fadeOutSec must be from 0.1 to 4",
       "clips.look.music.fadeCurve must be one of s-curve, equal-power, exponential, linear"]),
     ({"music": {"fadeInSec": "1.5"}}, ["clips.look.music.fadeInSec must be from 0.1 to 4"]),
+    # D439 K.O. card styles, D440 loudness target
+    ({"cards": {"styles": []}}, []),
+    ({"cards": {"styles": ["slam", "stamp"]}, "music": {"loudnessLufs": -14}}, []),
+    ({"music": {"loudnessLufs": None}}, []),
+    ({"cards": {"styles": ["slam", "slam"]}},
+     ["clips.look.cards.styles must be a list of slam, slash, glitch, zoom-punch, stamp (each once)"]),
+    ({"cards": {"styles": ["wobble"], "lock": "slam"}},
+     ["unknown clips.look.cards setting lock",
+      "clips.look.cards.styles must be a list of slam, slash, glitch, zoom-punch, stamp (each once)"]),
+    ({"music": {"loudnessLufs": -6}}, ["clips.look.music.loudnessLufs must be from -24 to -9"]),
+    ({"music": {"loudnessLufs": "-14"}}, ["clips.look.music.loudnessLufs must be from -24 to -9"]),
 ]
 
 

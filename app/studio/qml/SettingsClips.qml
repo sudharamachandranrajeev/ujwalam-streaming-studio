@@ -333,7 +333,28 @@ Column {
                 }
             }
         }
-        Words { text: "Music settings"; font.weight: Font.DemiBold }
+        // D439: the K.O. cards of the long highlights video (clips.look.cards.styles; no tick = no cards)
+        Words { text: "Moment cards on the long video"; font.weight: Font.DemiBold }
+        Words {
+            objectName: "lookCardsHint"
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: Theme.c.muted
+            text: "At the start of each moment of the long highlights video a big word says what happened (K.O., DOUBLE K.O., STREAK, WON). Each moment gets one of the animations you tick, mixed so the same one never shows twice in a row. Untick all of them to show no cards. Changes the next long video; a video already made stays as it is."
+        }
+        Repeater {
+            model: cp.box.lookGroup("cards").options
+            delegate: USwitch {
+                required property var modelData
+                readonly property var ticked: cp.d.look && cp.d.look.cards ? (cp.d.look.cards.styles || []) : []
+                objectName: "lookTick_cards_" + modelData.id
+                width: parent.width
+                text: modelData.label
+                hint: modelData.about
+                checked: ticked.includes(modelData.id)
+                onToggled: cp.box.tickLook("cards", modelData.id, checked)
+            }
+        }        Words { text: "Music settings"; font.weight: Font.DemiBold }
         USwitch {
             objectName: "lookMusicPack"
             readonly property var srcs: cp.d.look ? (cp.d.look.music.sources || []) : []
@@ -491,7 +512,36 @@ Column {
             color: Theme.c.muted
             text: "Fade out: after the name at the start, the music stays full until the name ends, then fades out over this time. Fade in: the end music starts this much earlier and rises to full, so the full ending is never cut short. Long fades on a short clip are shortened so they fit."
         }
-        Words { text: "Transition settings"; font.weight: Font.DemiBold }
+        // D440: the loudness every finished reel, montage and long video is set to (clips.look.music.loudnessLufs)
+        USwitch {
+            objectName: "lookLoudnessOn"
+            width: parent.width
+            text: "Even out the loudness of finished videos"
+            hint: "On: each reel, montage and long video is turned up (or down) to the level below, measured over the whole video. Off: the sound stays as recorded (often very quiet)."
+            checked: !!cp.d.look && cp.d.look.music.loudnessLufs !== null && cp.d.look.music.loudnessLufs !== undefined
+            onToggled: cp.box.setLook("music", "loudnessLufs", checked ? -14 : null)
+        }
+        Row {
+            spacing: Theme.sp.s
+            visible: !!cp.d.look && cp.d.look.music.loudnessLufs !== null && cp.d.look.music.loudnessLufs !== undefined
+            Words { text: "Loudness"; anchors.verticalCenter: parent.verticalCenter }
+            USpin {
+                objectName: "lookLoudness"
+                label: "Loudness of finished videos"
+                from: ((cp.box.info.look || {}).loudnessLufs || {}).min || -24
+                to: ((cp.box.info.look || {}).loudnessLufs || {}).max || -9
+                suffix: " LUFS"
+                value: cp.d.look && typeof cp.d.look.music.loudnessLufs === "number" ? cp.d.look.music.loudnessLufs : -14
+                onValueModified: cp.box.setLook("music", "loudnessLufs", value)
+            }
+        }
+        Words {
+            objectName: "lookLoudnessHint"
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: Theme.c.muted
+            text: "-14 is YouTube's playback level: YouTube turns louder videos down but never turns quiet ones up, so a quiet video stays quiet. Higher numbers are louder. What could break: the louder the target, the harder gunfire and other peaks are squeezed by the limiter, which can sound flat or pumping; the check after each video is written to its record."
+        }        Words { text: "Transition settings"; font.weight: Font.DemiBold }
         USwitch {
             objectName: "lookSfx"
             width: parent.width

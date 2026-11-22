@@ -1,0 +1,15 @@
+{
+  "id": "ko-card-glitch",
+  "version": "1.0.0",
+  "function": "ko-card",
+  "functionVersion": "^1.0.0",
+  "name": "Glitch split that snaps together",
+  "params": { "anim": "glitch", "inMs": 450, "outMs": 300, "splitPx": 26 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "stepped", "intensity": "medium", "mood": "electric", "colourUse": "tokens", "flashes": "none" },
+  "canvases": ["H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["ko-card-slash"]
+}

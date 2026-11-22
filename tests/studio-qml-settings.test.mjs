@@ -230,6 +230,20 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     assert.deepEqual([s.underGameDb, s.voiceDuckDb, s.fadeInSec, s.fadeOutSec, s.fadeCurve], [10, 0, 2.5, 0.8, 'equal-power']);
   });
 
+  test('Settings > Clips: K.O. card styles and the loudness target show their defaults and are saved at Save (D439, D440)', async () => {
+    const q = await probe(['settings-open', 'settings-page:Clips']);
+    const l = q.s.settings.look;
+    assert.deepEqual(l.cards.styles, ['slam', 'slash', 'glitch', 'zoom-punch', 'stamp']);
+    assert.equal(l.music.loudnessLufs, -14);
+    assert.equal(q.saved, null, 'nothing saved by looking');
+    const p = await probe(['settings-open', 'settings-page:Clips', 'settings-look-tick:cards:glitch:off', 'settings-look-tick:cards:slash:off',
+      'settings-look-music:loudnessLufs:-16', 'settings-save'], 9000);
+    assert.deepEqual(p.saved.clips.look.cards.styles, ['slam', 'zoom-punch', 'stamp']);
+    assert.equal(p.saved.clips.look.music.loudnessLufs, -16);
+    const o = await probe(['settings-open', 'settings-page:Clips', 'settings-look-music:loudnessLufs:off', 'settings-save'], 9000);
+    assert.equal(o.saved.clips.look.music.loudnessLufs, null);
+  });
+
   test('Settings > Clips: Reel styles opens without QML errors; the style per reel type and the mix are saved at Save (RS3, D412)', async () => {
     const q = await probe(['settings-open', 'settings-page:Clips']);
     assert.equal(q.saved, null, 'nothing saved by looking');

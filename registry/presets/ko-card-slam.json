@@ -1,0 +1,15 @@
+{
+  "id": "ko-card-slam",
+  "version": "1.0.0",
+  "function": "ko-card",
+  "functionVersion": "^1.0.0",
+  "name": "Slam in with a shake",
+  "params": { "anim": "slam", "inMs": 420, "outMs": 300, "startScale": 220, "overshoot": 92, "shakeDeg": 3 },
+  "themeOverrides": {},
+  "family": "clipping",
+  "tags": { "motion": "slam", "intensity": "high", "mood": "aggressive", "colourUse": "tokens", "flashes": "none" },
+  "canvases": ["H"],
+  "parity": "none",
+  "status": "in-progress",
+  "similar": ["ko-card-stamp", "ko-card-zoom-punch"]
+}

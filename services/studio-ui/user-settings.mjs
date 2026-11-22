@@ -205,16 +205,18 @@ export function reelTransitionInfo(dataDir) {
 // cases: tests/fixtures/clip-look-cases.json). Any part may be left out; the rest keeps its default (data/clip/look.json).
 export const CLIP_LOOK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'clip', 'look.json');
 export const LOOK_GROUPS = Object.freeze(['music', 'transitions', 'name']);
+// D439: the long video's K.O. card styles: checked and merged like a group, never a per-reel pick (clip_look.py CARDS)
+const LOOK_ALL = Object.freeze([...LOOK_GROUPS, 'cards']);
 const LOOK_KEYS = Object.freeze({ music: ['modes', 'sources', 'folder', 'levelDb', 'lock', 'packOffered', 'aiOffered', 'aiRuntime',
-  'underGameDb', 'voiceDuckDb', 'fadeInSec', 'fadeOutSec', 'fadeCurve'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
-  name: ['styles', 'position', 'colour', 'sizePct', 'durationSec', 'logo', 'lock'] });
+  'underGameDb', 'voiceDuckDb', 'fadeInSec', 'fadeOutSec', 'fadeCurve', 'loudnessLufs'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
+  name: ['styles', 'position', 'colour', 'sizePct', 'durationSec', 'logo', 'lock'], cards: ['styles'] });
 let lookCache = null;
 /** data/clip/look.json, or null when unreadable. */
 export function lookDefaults(file = CLIP_LOOK_FILE) {
   if (file === CLIP_LOOK_FILE && lookCache) return lookCache;
   try {
     const j = JSON.parse(readFileSync(file, 'utf8'));
-    if (!LOOK_GROUPS.every((g) => Array.isArray(j.groups?.[g]?.options) && j.defaults?.[g])) return null;
+    if (!LOOK_ALL.every((g) => Array.isArray(j.groups?.[g]?.options) && j.defaults?.[g])) return null;
     if (file === CLIP_LOOK_FILE) lookCache = j;
     return j;
   } catch { return null; }
@@ -233,9 +235,9 @@ export function lookProblems(v, d = lookDefaults()) {
   if (!d) return ['the clip look is not available (data/clip/look.json is missing)'];
   if (!plainObj(v)) return ['clips.look must be an object'];
   const out = [];
-  for (const k of Object.keys(v)) if (k !== 'randomise' && !LOOK_GROUPS.includes(k)) out.push(`unknown clips.look setting ${k}`);
+  for (const k of Object.keys(v)) if (k !== 'randomise' && !LOOK_ALL.includes(k)) out.push(`unknown clips.look setting ${k}`);
   if ('randomise' in v && typeof v.randomise !== 'boolean') out.push('clips.look.randomise must be true or false');
-  for (const g of LOOK_GROUPS) {
+  for (const g of LOOK_ALL) {
     if (!(g in v)) continue;
     const gv = v[g]; const w = `clips.look.${g}`;
     if (!plainObj(gv)) { out.push(`${w} must be an object`); continue; }
@@ -252,6 +254,7 @@ export function lookProblems(v, d = lookDefaults()) {
   for (const [k, r] of [['underGameDb', 'underGameDb'], ['voiceDuckDb', 'voiceDuckDb'], ['fadeInSec', 'fadeSec'], ['fadeOutSec', 'fadeSec']]) {
     if (k in m) out.push(...lookRange(m[k], d[r], `clips.look.music.${k}`)); // D437
   }
+  if ('loudnessLufs' in m && m.loudnessLufs !== null) out.push(...lookRange(m.loudnessLufs, d.loudnessLufs, 'clips.look.music.loudnessLufs')); // D440: null = as it is
   if ('fadeCurve' in m && !d.fadeCurves.includes(m.fadeCurve)) out.push(`clips.look.music.fadeCurve must be one of ${d.fadeCurves.join(', ')}`);
   if ('aiRuntime' in m && !aiRuntimeOk(m.aiRuntime)) out.push('clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters');
   for (const b of ['packOffered', 'aiOffered']) if (b in m && typeof m[b] !== 'boolean') out.push(`clips.look.music.${b} must be true or false`);
@@ -295,7 +298,7 @@ function mergeLook(cur, patch) {
   if (patch === undefined) return cur ?? null;
   const out = structuredClone(cur ?? {});
   if ('randomise' in patch) out.randomise = patch.randomise;
-  for (const g of LOOK_GROUPS) if (patch[g]) out[g] = { ...(out[g] ?? {}), ...structuredClone(patch[g]) };
+  for (const g of LOOK_ALL) if (patch[g]) out[g] = { ...(out[g] ?? {}), ...structuredClone(patch[g]) };
   if (Array.isArray(patch.music?.sources)) Object.assign(out.music, { packOffered: true, aiOffered: true }); // D427/D429: chosen with both on offer
   return Object.keys(out).length ? out : null;
 }
@@ -307,9 +310,9 @@ export function lookInfo(dataDir) {
   const mine = readSettings(dataDir).clips.look ?? {};
   const look = structuredClone(d.defaults);
   if ('randomise' in mine) look.randomise = mine.randomise;
-  for (const g of LOOK_GROUPS) Object.assign(look[g], mine[g] ?? {});
+  for (const g of LOOK_ALL) Object.assign(look[g], mine[g] ?? {});
   return { flag: d.flag, groups: d.groups, sources: d.sources, positions: d.positions, levelDb: d.levelDb, sizePct: d.sizePct,
-    durationSec: d.durationSec, underGameDb: d.underGameDb, voiceDuckDb: d.voiceDuckDb, fadeSec: d.fadeSec, fadeCurves: d.fadeCurves, defaults: d.defaults, look, packReady: musicPackReady(dataDir), aiReady: musicAiReady(look.music.aiRuntime) };
+    durationSec: d.durationSec, underGameDb: d.underGameDb, voiceDuckDb: d.voiceDuckDb, fadeSec: d.fadeSec, fadeCurves: d.fadeCurves, loudnessLufs: d.loudnessLufs, defaults: d.defaults, look, packReady: musicPackReady(dataDir), aiReady: musicAiReady(look.music.aiRuntime) };
 }
 /**
  * FX6 (D429): true when the ACE-Step runtime folder (env UJWALAM_ACESTEP_RUNTIME, else the setting

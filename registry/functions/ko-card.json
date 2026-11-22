@@ -1,0 +1,37 @@
+{
+  "id": "ko-card",
+  "version": "1.0.0",
+  "category": "ai-clipping",
+  "family": "clipping",
+  "name": "K.O. moment card (long video, D439)",
+  "description": "A big word at the start of each moment of the long highlights video that says what happened (K.O., DOUBLE K.O., STREAK, WON ... from the wording table in data/clip/long-video.json teaching.koCards), with a small plain-words line under it. No moment number. Drawn into the batch's ASS file (libass) in the caption font, white with the brand accent (title.json themeAccent). One animation per moment, picked from the styles ticked in Settings > Clips (clips.look.cards.styles) by a seeded weighted pick with no repeat of the last two. anim picks the movement: slam (scale overshoot + small shake), slash (wipe reveal + accent bar), glitch (split copies that snap together), zoom (punch in from small with blur), stamp (tilted box stamped down). Enters under 600 ms, leaves under 400 ms; no flashing (alpha and scale moves only, one card per moment).",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "anim": { "enum": ["slam", "slash", "glitch", "zoom", "stamp"] },
+        "inMs": { "type": "integer", "minimum": 150, "maximum": 590 },
+        "outMs": { "type": "integer", "minimum": 100, "maximum": 390 },
+        "startScale": { "type": "integer", "minimum": 20, "maximum": 300 },
+        "overshoot": { "type": "integer", "minimum": 80, "maximum": 130 },
+        "shakeDeg": { "type": "number", "minimum": 0, "maximum": 6 },
+        "skew": { "type": "number", "minimum": -0.5, "maximum": 0.5 },
+        "splitPx": { "type": "integer", "minimum": 0, "maximum": 60 },
+        "blur": { "type": "number", "minimum": 0, "maximum": 10 },
+        "angle": { "type": "number", "minimum": -15, "maximum": 15 }
+      }
+    },
+    "defaults": { "anim": "slam", "inMs": 420, "outMs": 300, "startScale": 200, "overshoot": 92, "shakeDeg": 0, "skew": 0, "splitPx": 0, "blur": 0, "angle": 0 },
+    "safeRanges": { "inMs": [150, 590], "outMs": [100, 390], "startScale": [20, 300], "overshoot": [80, 130], "shakeDeg": [0, 6], "skew": [-0.5, 0.5], "splitPx": [0, 60], "blur": [0, 10], "angle": [-15, 15] }
+  },
+  "canvases": ["H"],
+  "themeTokens": [],
+  "durationMs": 2400,
+  "maxConcurrent": 1,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "post-render",
+  "planSection": "LV1"
+}

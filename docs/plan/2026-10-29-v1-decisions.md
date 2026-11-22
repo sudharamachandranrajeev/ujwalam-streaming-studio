@@ -3081,3 +3081,51 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    no callout. A moment of unknown family keeps the old behaviour.
 4. **Open**: a Battle Royale kill callout needs a measured Battle Royale region (the user pointed at the BR kill
    counter and kill banner, 2026-11-22); the BR footage scan is collecting them.
+
+## D439 — K.O. cards replace the numbered chapter card on the long video (decided, 2026-11-22)
+
+1. **User request (2026-11-22)**: "need more intelligent K.O. with animation, no number required, create a multiple
+   animation set so that Ujwalam can randomise the effect at each section rather than the same one everywhere."
+2. **Change**: the D421 chapter card ("1 / 1 kill") becomes a K.O. card. No moment number. A big word from a wording
+   table in data (`data/clip/long-video.json` `teaching.koCards.words`, first rule that fits: WON, RAMPAGE at 5+
+   kills, STREAK, QUAD / TRIPLE / DOUBLE K.O., K.O., HIGHLIGHT) and, where the rule says so, the plain-words line
+   under it ("streak · 5 kills", "2 kills · won match"). The wording table is the agent's proposal, not approved
+   wording.
+3. **Animation set**: core function `ko-card` (registry) with five presets `ko-card-slam`, `-slash`, `-glitch`,
+   `-zoom-punch`, `-stamp` (data; params clamped to the manifest's safeRanges). Drawn into the batch's existing ASS
+   file (libass, `\t`, `\move`, `\fscx/\fscy`, `\alpha`, `\clip`, `\frz`, `\fax`, `\blur`), caption font, white with
+   the brand accent (title.json `themeAccent`). Every move sits inside the entrance (each preset under 600 ms) or the
+   exit (under 400 ms); `long_teaching.check` refuses a preset that breaks it. Alpha and scale moves only, one card per
+   moment: no flash (measured with the fx test analyser on a burn of all five).
+4. **Pick**: per moment, a weighted pick among the styles ticked in Settings > Clips (`clips.look.cards.styles`,
+   weights in `look.json` `groups.cards`), seeded by the recording's file name, never one of the last two while
+   another is free (settled Pools rule). The sequence runs over the whole video, so batches continue it and a
+   re-render draws the same styles. No ticks = no cards. The styles drawn are listed in render.json (`cardStyles`).
+5. **Scope**: the numbered card was only on the long video; reels and montages had none, so nothing changes there.
+6. **Open / UNVERIFIED**: the look on a real long video by eye; the word width is estimated (0.34 x size per
+   character) for the slash wipe and the safe-margin clamp.
+
+## D440 — Finished reels, montages and long videos at -14 LUFS (decided, 2026-11-22)
+
+1. **User said yes (2026-11-22)**: raise every finished reel, montage and long video to -14 LUFS integrated
+   (YouTube's playback level: it turns loud videos down, never quiet ones up). Reels measured about -29 LUFS (game
+   sound -27 to -38 LUFS, D437).
+2. **Change**: `clip_montage.render_argv(gain_db=)` puts one fixed `volume` gain on audio track 1 ahead of the
+   existing true-peak limiter (-4 dBFS, 4x oversampled, D411); a track without music now gets the same limiter when a
+   gain is set. Not a riding AGC. Still one audio encode; the other tracks are untouched.
+3. **Gain**: `clip_loudness.plan` runs the same filter graph audio-only (picture chains dropped, ebur128 to the null
+   muxer): pass 1 the mix as it is, then up to `passes - 1` checks of the gain through the limiter, each step by the
+   measured slope (the limiter takes a growing share as the gain rises). Long video: one gain for the whole video,
+   pooled from every batch. Gain limits -20 to +30 dB (data). A failed pre-pass renders as before (never blocks).
+4. **Measure-after**: `clip_loudness.check` (ffmpeg ebur128) writes `loudness` {target, gainDb, measuredBefore,
+   passes, after {lufs, truePeak, ok}, status ok|missed} into the render record; ok = within 1 LU of the target and
+   true peak at or under -1 dBTP.
+5. **Setting**: Settings > Clips > Clip look: "Even out the loudness of finished videos" and the target (-24 to -9,
+   default -14, source "user 2026-11-22"; `clips.look.music.loudnessLufs`, null = as recorded). Node and Python share
+   the checks (tests/fixtures/clip-look-cases.json).
+6. **Found while building**: ffmpeg `alimiter` run at 192 kHz behaves badly on dense loud bursts with a big gain
+   (a synthetic white-noise burst at +14 dB came out quieter than at +9 dB); on real reels the gain/loudness curve was
+   monotonic. A mix whose peaks sit far above its average cannot reach -14 under a -4 dBFS ceiling: the record says
+   "missed" and how close it got.
+7. **BeatDrop** (own audio target) and single short clips (clip_render) are left as they are (reported in the
+   evidence file).

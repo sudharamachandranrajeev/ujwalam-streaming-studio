@@ -14,11 +14,28 @@
   "defaultTransition": { "kind": "fade", "xfade": "fade", "ms": 250 },
   "batchPieces": 12,
   "teaching": {
-    "$comment": "LV1a (D421): word-by-word captions and numbered chapter cards on the long video, read by services/clip/long_teaching.py. Flag long-video-teaching (on by default, user-requested). The speech to text and caption font are the reel captions' (data/clip/reel-captions.json and its preset); these sizes are for the 1920x1080 frame. Chapter animation stays under the overlay rule (enter under 600 ms, leave under 400 ms). Sizes and timings are the agent's proposal, tunable here.",
+    "$comment": "LV1a (D421): word-by-word captions and moment cards (numbered until D439, K.O. cards since) on the long video, read by services/clip/long_teaching.py. Flag long-video-teaching (on by default, user-requested). The speech to text and caption font are the reel captions' (data/clip/reel-captions.json and its preset); these sizes are for the 1920x1080 frame. Card animation stays under the overlay rule (enter under 600 ms, leave under 400 ms). Sizes and timings are the agent's proposal, tunable here.",
     "flag": "long-video-teaching",
     "safe": { "left": 96, "right": 96, "top": 64, "bottom": 72 },
     "captions": { "on": true, "sizePx": 54, "maxCharsPerLine": 42, "maxWordsPerCard": 12, "maxLines": 2, "liftPx": 0 },
-    "chapters": { "sec": 2.6, "entranceMs": 350, "exitMs": 250, "slidePx": 48, "numberPx": 72, "labelPx": 40, "boxPadPx": 14 },
+    "koCards": {
+      "$comment": "D439 (user 2026-11-22: 'need more intelligent K.O. with animation, no number required, create a multiple animation set so that Ujwalam can randomise the effect at each section'): replaces the numbered chapter card (D421). At the start of each moment a big word says what happened (words: the first rule that fits the moment wins; minKills / kills / streak / win; detail true adds the plain-words line under it, like '3 kills · won match'). The animation is a registry preset ko-card-<style> (registry/presets), one per moment, picked from the ticked styles (Settings > Clips, clips.look.cards.styles; look.json groups.cards weights, historyN.cards = 2) with a seeded RNG (the recording's name), so a re-render draws the same. at: the word's centre, fractions of the frame, kept inside safe. Every preset enters under 600 ms and leaves under 400 ms. The wording table, sizes and place are the agent's proposal, tunable here.",
+      "status": "proposed",
+      "sec": 2.4,
+      "at": { "x": 0.5, "y": 0.24 },
+      "wordPx": 124, "detailPx": 40, "gapPx": 14, "outlinePx": 6, "shadowPx": 3, "boxPadPx": 18,
+      "words": [
+        { "when": { "win": true }, "text": "WON", "detail": true },
+        { "when": { "minKills": 5 }, "text": "RAMPAGE", "detail": true },
+        { "when": { "streak": true }, "text": "STREAK", "detail": true },
+        { "when": { "kills": 4 }, "text": "QUAD K.O.", "detail": false },
+        { "when": { "kills": 3 }, "text": "TRIPLE K.O.", "detail": false },
+        { "when": { "kills": 2 }, "text": "DOUBLE K.O.", "detail": false },
+        { "when": { "kills": 1 }, "text": "K.O.", "detail": false },
+        { "when": {}, "text": "HIGHLIGHT", "detail": true }
+      ],
+      "wordsSource": "agent proposal 2026-11-22 (D439), not approved wording"
+    },
     "callouts": {
       "$comment": "LV1b (D422): a little after each medal, the kill feed (the game pack's detector M5, region killfeed, verified regions only) cropped from the picture, enlarged by scale, framed in an accent border with a darker halo; at = the card's top centre (fractions of the frame), kept inside safe. It pops in and out (0 ms). The MP kill feed region is used for every moment: on a BR moment it shows the wrong area (UNVERIFIED on real footage). Values are the agent's proposal, tunable here.",
       "on": true, "detector": "M5", "roi": "killfeed",
