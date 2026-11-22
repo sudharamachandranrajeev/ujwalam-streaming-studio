@@ -249,9 +249,11 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                 newest = next((t for t in reversed(takes) if t.get("file") in live), None)
                 if newest is None:
                     continue
-                if all(k in newest for k in ("file", "kind", "label", "seconds")):  # a whole published row only
-                    entries.append(_upload_entry(newest, run, rdoc, game))  # add_uploads keeps a row already listed
-                sup.update({o["file"]: newest["file"] for o in takes if o is not newest and o.get("file")})
+                # every take is listed (add_uploads keeps a row already listed), so an earlier take whose first uploads
+                # write failed is still marked superseded; the newest one is cleared of any earlier mark
+                entries += [_upload_entry(t, run, rdoc, game) for t in takes
+                            if all(k in t for k in ("file", "kind", "label", "seconds"))]  # whole published rows only
+                sup.update({o["file"]: newest["file"] for o in takes if o.get("file")})
         if entries or sup:
             add_uploads(data_dir, entries, sup)
     return rows
@@ -331,7 +333,7 @@ def uploads_lock(data_dir, wait_sec=10.0):
 def _take_stale(lock):
     """Removes a lock older than the limit. Only the holder of <lock>.takeover (created exclusively) checks and removes,
     so no writer can remove a lock another writer has just taken. A takeover file older than the limit (its process died
-    in those few milliseconds) is removed. -> True only when the lock was removed or is gone: try to take it again."""
+    in those few milliseconds) is removed. -> True only when this call removed the lock: try to take it again at once."""
     guard = lock + ".takeover"
     try:
         os.close(os.open(guard, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
@@ -347,9 +349,7 @@ def _take_stale(lock):
             return False
         os.remove(lock)
         return True
-    except FileNotFoundError:
-        return True
-    except OSError:
+    except OSError:  # gone (the caller waits and tries again) or cannot be removed
         return False
     finally:
         try:
@@ -376,7 +376,11 @@ def add_uploads(data_dir, rows, superseded=None):
         sup = superseded or {}
         for x in files:  # BD7c: earlier BeatDrop takes; posting never packages or sends a superseded video
             new = sup.get(x.get("file"))
-            if new is not None and new != x.get("file"):
+            if new is None:
+                continue
+            if new == x.get("file"):
+                x.pop("supersededBy", None)  # the newest take (again, after a newer one was removed)
+            else:
                 x["supersededBy"] = new
         os.makedirs(os.path.dirname(p), exist_ok=True)
         write_json_atomic(p, {**doc, "$comment": "Finished clips in the clips folder and where each was posted (posted: "

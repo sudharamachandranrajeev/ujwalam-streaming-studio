@@ -531,7 +531,7 @@ export function withUploadsLock(file, fn) {
 
 /** Removes a lock older than the limit. Only the holder of <lock>.takeover (created exclusively) checks and removes, so
  *  no writer can remove a lock another writer has just taken. A takeover file older than the limit (its process died in
- *  those few milliseconds) is removed. Returns true only when the lock was removed or is gone: try to take it again. */
+ *  those few milliseconds) is removed. Returns true only when this call removed the lock: try to take it again at once. */
 function takeStaleLock(lock) {
   const guard = `${lock}.takeover`;
   try { closeSync(openSync(guard, 'wx')); } catch {
@@ -542,8 +542,8 @@ function takeStaleLock(lock) {
     if (Date.now() - statSync(lock).mtimeMs <= UPLOADS_LOCK_STALE_MS) return false;
     rmSync(lock);
     return true;
-  } catch (e) {
-    return e?.code === 'ENOENT';
+  } catch {
+    return false; // gone (the caller waits and tries again) or cannot be removed
   } finally {
     rmSync(guard, { force: true });
   }
