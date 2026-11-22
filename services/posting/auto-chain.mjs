@@ -49,7 +49,7 @@
 // gate + quotaExceeded record) inside one schedule-lock hold per pass; every new session is preceded by a complete
 // channel read in that hold and the 60-min check. The studio's Upload button and `cli.mjs youtube upload` only queue.
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -508,22 +508,42 @@ const UPLOADS_LOCK_STALE_MS = 30_000; // services/clip/clip_publish.py uploads_l
 const UPLOADS_LOCK_WAIT_MS = 10_000;
 
 /** Codex BD7c: one writer of uploads.json at a time across processes (clip_publish.py add_uploads and this file):
- *  <uploads.json>.lock created exclusively around one synchronous read-change-write; taken over when older than
- *  UPLOADS_LOCK_STALE_MS. Busy past UPLOADS_LOCK_WAIT_MS: throws (the caller's step is retried; nothing written). */
+ *  <uploads.json>.lock created exclusively with this writer's token around one synchronous read-change-write (well
+ *  under a second); taken over when older than UPLOADS_LOCK_STALE_MS (takeStaleLock); released only while it still holds
+ *  this writer's token. Busy past UPLOADS_LOCK_WAIT_MS: throws (nothing written). */
 export function withUploadsLock(file, fn) {
   const lock = `${file}.lock`;
   mkdirSync(path.dirname(lock), { recursive: true });
+  const token = `${process.pid}-${randomBytes(8).toString('hex')}`;
   const end = Date.now() + UPLOADS_LOCK_WAIT_MS;
   const nap = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
-    try { closeSync(openSync(lock, 'wx')); break; } catch (e) {
+    try { writeFileSync(lock, token, { flag: 'wx' }); break; } catch (e) {
       if (e?.code !== 'EEXIST') throw e;
-      try { if (Date.now() - statSync(lock).mtimeMs > UPLOADS_LOCK_STALE_MS) { rmSync(lock, { force: true }); continue; } } catch { continue; }
+      if (takeStaleLock(lock)) continue;
       if (Date.now() > end) throw new Error('uploads.json is busy (another writer)');
       Atomics.wait(nap, 0, 0, 50);
     }
   }
-  try { return fn(); } finally { rmSync(lock, { force: true }); }
+  try { return fn(); } finally {
+    try { if (readFileSync(lock, 'utf8') === token) rmSync(lock, { force: true }); } catch { /* gone */ }
+  }
+}
+
+/** A lock older than the limit is moved aside (a rename: one contender wins) and removed; when the moved file turns out
+ *  to be fresh (another writer had just taken the lock), it is moved back. Returns true: try to take the lock again. */
+function takeStaleLock(lock) {
+  const aside = `${lock}.${randomBytes(6).toString('hex')}.stale`;
+  try {
+    if (Date.now() - statSync(lock).mtimeMs <= UPLOADS_LOCK_STALE_MS) return false;
+    renameSync(lock, aside);
+  } catch { return true; } // gone or moved by another writer meanwhile
+  try {
+    // its owner keeps it: a hard link fails when a third writer took the lock meanwhile (a rename would replace it)
+    if (Date.now() - statSync(aside).mtimeMs <= UPLOADS_LOCK_STALE_MS) linkSync(aside, lock);
+  } catch { /* the third writer's lock stays */ }
+  rmSync(aside, { force: true });
+  return true;
 }
 
 // ---------------------------------------------------------------- the chain

@@ -189,6 +189,10 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         done.setdefault((r.get("id"), r.get("layout")), []).append(r)
     rows, counters = [], {}
     tool = rdoc.get("tool") or ""
+    # Codex BD7c: a name a listed video had (since removed) is never given to a new one; uploads.json would match the new
+    # video to the old row and its posted record
+    listed = {os.path.normcase(os.path.abspath(r["file"])) for r in prev_all if isinstance(r.get("file"), str)}
+    listed |= _listed_uploads(data_dir)
     for c, f, kind, when, label, canvas in name_rows(rdoc, game, layouts_by_id, det_weights, rec_start_local):
         if not passed.get((c["id"], f["file"])):
             continue
@@ -205,7 +209,8 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         day = os.path.join(to, names.day_folder(when))
         os.makedirs(day, exist_ok=True)
         start_nn = counters.get((kind, canvas), 0) + 1
-        name, nn = names.free_name(lambda n: os.path.exists(os.path.join(day, n)),
+        name, nn = names.free_name(lambda n: os.path.exists(os.path.join(day, n))
+                                   or os.path.normcase(os.path.abspath(os.path.join(day, n))) in listed,
                                    lambda n: names.clip_name(game, kind, when, label, n, canvas), start_nn)
         counters[(kind, canvas)] = nn
         how = _link_or_copy(src, os.path.join(day, name))
@@ -227,7 +232,8 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                      **({"choices": lmix.choices_record(c, (c.get("learning") or {}).get("mixAt"))}
                         if tool.startswith("clipper.montage") else {})})
     run = run_name or os.path.basename(os.path.normpath(work))
-    write_json_atomic(prev_path, {"tool": "clipper.publish", "to": to, "files": prev + rows})
+    # Codex BD7c: rows of gone files are kept (a later retake still supersedes them); `prev` (existing files) decides what is published again
+    write_json_atomic(prev_path, {"tool": "clipper.publish", "to": to, "files": prev_all + rows})
     if data_dir:
         entries = [_upload_entry(r, run, rdoc, game) for r in rows]
         sup = {}
@@ -249,6 +255,17 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         if entries or sup:
             add_uploads(data_dir, entries, sup)
     return rows
+
+
+def _listed_uploads(data_dir):
+    """The (normalised) paths uploads.json lists; empty when it is missing or unreadable (add_uploads then refuses)."""
+    try:
+        doc = load_json(os.path.join(data_dir, UPLOADS)) if data_dir else {}
+    except (ClipError, OSError):
+        return set()
+    files = doc.get("files") if isinstance(doc, dict) else None
+    return {os.path.normcase(os.path.abspath(x["file"])) for x in files or []
+            if isinstance(x, dict) and isinstance(x.get("file"), str)}
 
 
 def _upload_entry(r, run, rdoc, game):
@@ -278,22 +295,24 @@ UPLOADS_LOCK_STALE_SEC = 30.0  # services/posting/auto-chain.mjs withUploadsLock
 @contextlib.contextmanager
 def uploads_lock(data_dir, wait_sec=10.0):
     """Codex BD7c: one writer of uploads.json at a time across processes (this publish step and posting's markPosted):
-    <uploads.json>.lock created exclusively, held only around one read-change-write, taken over when older than
-    UPLOADS_LOCK_STALE_SEC (a writer that died). Busy past wait_sec: ClipError, nothing written."""
+    <uploads.json>.lock created exclusively with this writer's token, held only around one read-change-write (well under
+    a second), taken over when older than UPLOADS_LOCK_STALE_SEC (a writer that died; _take_stale). Released only while
+    it still holds this writer's token. Busy past wait_sec: ClipError, nothing written."""
     lock = os.path.join(data_dir, UPLOADS) + ".lock"
     os.makedirs(os.path.dirname(lock), exist_ok=True)
+    token = f"{os.getpid()}-{os.urandom(8).hex()}"
     end = time.monotonic() + wait_sec
     while True:
         try:
-            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, token.encode())
+            finally:
+                os.close(fd)
             break
         except FileExistsError:
-            try:
-                if time.time() - os.path.getmtime(lock) > UPLOADS_LOCK_STALE_SEC:
-                    os.remove(lock)
-                    continue
-            except OSError:
-                continue  # removed meanwhile: try again at once
+            if _take_stale(lock):
+                continue
             if time.monotonic() > end:
                 raise ClipError("the finished-video list (uploads.json) is busy; publish again later") from None
             time.sleep(0.05)
@@ -301,23 +320,49 @@ def uploads_lock(data_dir, wait_sec=10.0):
         yield
     finally:
         try:
-            os.remove(lock)
+            with open(lock, encoding="utf-8") as fh:
+                mine = fh.read() == token
+            if mine:
+                os.remove(lock)
         except OSError:
             pass
+
+
+def _take_stale(lock):
+    """A lock older than the limit is moved aside (a rename: one contender wins) and removed; when the moved file turns
+    out to be fresh (another writer had just taken the lock), it is moved back. -> True: try to take the lock again."""
+    try:
+        if time.time() - os.path.getmtime(lock) <= UPLOADS_LOCK_STALE_SEC:
+            return False
+        aside = f"{lock}.{os.urandom(6).hex()}.stale"
+        os.rename(lock, aside)
+    except OSError:
+        return True  # gone or moved by another writer meanwhile
+    try:
+        if time.time() - os.path.getmtime(aside) <= UPLOADS_LOCK_STALE_SEC:
+            os.link(aside, lock)  # its owner keeps it: a hard link fails when a third writer took the lock meanwhile
+    except OSError:
+        pass  # the third writer's lock stays
+    try:
+        os.remove(aside)
+    except OSError:
+        pass
+    return True
 
 
 def add_uploads(data_dir, rows, superseded=None):
     p = os.path.join(data_dir, UPLOADS)
     with uploads_lock(data_dir):
         try:
-            doc = load_json(p) if os.path.isfile(p) else {}
+            doc = load_json(p) if os.path.isfile(p) else {"files": []}
         except ClipError:
             # Codex BD7c: an unreadable list is never replaced by a new one (its posted records would be lost and every
             # clip posted again); the clips-folder scan still finds the published videos with their music sidecars
             raise ClipError("the finished-video list (uploads.json) cannot be read; it was not changed") from None
-        if not isinstance(doc, dict) or not isinstance(doc.get("files", []), list):
+        if not isinstance(doc, dict) or not isinstance(doc.get("files"), list) \
+                or not all(isinstance(x, dict) for x in doc["files"]):
             raise ClipError("the finished-video list (uploads.json) has an unknown shape; it was not changed")
-        files = [x for x in doc.get("files") or [] if isinstance(x, dict)]
+        files = list(doc["files"])
         have = {x.get("file") for x in files}
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         files += [{**r, "addedAt": now} for r in rows if r["file"] not in have and not have.add(r["file"])]
@@ -327,9 +372,9 @@ def add_uploads(data_dir, rows, superseded=None):
             if new is not None and new != x.get("file"):
                 x["supersededBy"] = new
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        write_json_atomic(p, {"$comment": "Finished clips in the clips folder and where each was posted (posted: "
-                                          "[{target, at, id}]). Written by clipper.py publish; read by the studio.",
-                              "version": 1, "files": files})
+        write_json_atomic(p, {**doc, "$comment": "Finished clips in the clips folder and where each was posted (posted: "
+                                                 "[{target, at, id}]). Written by clipper.py publish; read by the studio.",
+                              "version": doc.get("version", 1), "files": files})
 
 def is_replay_save(path):
     return bool(REPLAY_RE.match(os.path.basename(path))) and os.path.basename(os.path.dirname(path)).lower() == "replay"

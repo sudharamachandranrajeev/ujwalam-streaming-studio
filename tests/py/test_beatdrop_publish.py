@@ -107,6 +107,14 @@ class Publish(unittest.TestCase):
         self.assertEqual(by[first[0]["file"]].get("supersededBy"), third[0]["file"])
         self.assertIn(third[0]["file"], by)
         self.assertNotIn("supersededBy", by[third[0]["file"]])
+        # an earlier take whose published file was removed is still superseded by the next take (its package must not post)
+        os.remove(third[0]["file"])
+        fourth = render("beatdrop-d.mp4", {"source": "made-here", "seed": 3}, b"fourth")
+        by = {u["file"]: u for u in uploads()}
+        self.assertEqual(by[third[0]["file"]].get("supersededBy"), fourth[0]["file"])
+        with open(os.path.join(work, pub.PUBLISHED), encoding="utf-8") as fh:
+            self.assertIn(third[0]["file"], [r["file"] for r in json.load(fh)["files"]])  # its row is kept
+
     def test_a_row_from_before_bd7c_without_source_is_the_same_render(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
