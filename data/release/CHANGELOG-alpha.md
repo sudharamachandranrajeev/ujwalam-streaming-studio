@@ -2,6 +2,13 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.40 — 2026-11-22
+
+- Settings no longer freezes the window. Opening it built every page and every button shadow at once (about 11 s measured); pages are now made when first shown and shadows when first on screen (well under 1 s). The download list no longer rebuilds every row each second, and the status check no longer redraws panels when nothing changed.
+- When the window does stall for a quarter second or more, the log now says how long and what ran, so the next freeze can be traced.
+- Top bar: every action keeps its words. My clips, Review reads and BeatDrop are one Clips menu. Icon buttons centre their icon.
+- Auto-post card: the "uploads a day fit" number now counts the channel read before each upload, as the sender does (21 a day, not 24).
+
 ## 0.1.0-alpha.39 — 2026-11-22
 
 - Auto-post: uploads run again. Before each upload Ujwalam reads the channel to keep new posts an hour away from scheduled ones; it stopped after 2000 videos, so on a bigger channel it waited forever. It now reads up to 10000.

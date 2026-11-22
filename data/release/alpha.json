@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 39,
+  "current": 40,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -50,6 +50,7 @@
     { "n": 36, "date": "2026-11-21", "title": "Auto-post fixed, custom posting times, rules in the app, recordings cleaned up, one-file Setup" },
     { "n": 37, "date": "2026-11-22", "title": "Long video teaching, BeatDrop montages, Top 5 countdown reel, clip look, posting text" },
     { "n": 38, "date": "2026-11-22", "title": "Top bar fits its buttons, Help icon, Review reads pictures" },
-    { "n": 39, "date": "2026-11-22", "title": "Auto-post runs again on big channels; free music pack; music made on this PC" }
+    { "n": 39, "date": "2026-11-22", "title": "Auto-post runs again on big channels; free music pack; music made on this PC" },
+    { "n": 40, "date": "2026-11-22", "title": "Settings opens fast, labelled top bar, Clips menu" }
   ]
 }
