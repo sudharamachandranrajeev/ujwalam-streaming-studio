@@ -145,6 +145,16 @@ describe('posting', () => {
     return { dataDir, ledgerFile: path.join(dataDir, 'posting', 'ledger.json') };
   }
 
+  test('BD7c: a superseded montage (an earlier BeatDrop take) is not packaged; its retake is', async () => {
+    const e = setup([
+      { name: 'codm_montage_20261121-100000_kills-5_01_h.mp4', music: { source: 'generated' }, supersededBy: 'x' },
+      { name: 'codm_montage_20261121-100000_kills-5_02_h.mp4', music: { source: 'generated' } },
+    ]);
+    const r = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: {}, ffmpeg: process.execPath });
+    assert.deepEqual(r.packaged.map((p) => path.basename(p.file)), ['codm_montage_20261121-100000_kills-5_02_h.mp4'], JSON.stringify(r.skipped));
+    assert.equal(r.skipped.find((s) => s.file.includes('_01_')).reason, 'superseded');
+  });
+
   test('packaging adds the credit; no credit and other songs are not packaged; approve and upload check again', async () => {
     const e = setup([
       { name: 'codm_montage_20261121-100000_kills-5_01_v.mp4', montageMusic: { library: 'ncs', trackId: 'a'.repeat(16), credit: CREDIT } },

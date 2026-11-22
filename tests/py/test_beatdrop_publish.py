@@ -61,7 +61,7 @@ class Publish(unittest.TestCase):
         self.assertTrue(all(os.path.isfile(u["file"] + pub.MUSIC_SIDECAR) for u in ups))
         self.assertEqual(sorted(os.path.basename(u["file"]).split(".")[0][-1] for u in ups), ["h", "v"])
 
-    def test_a_retake_replaces_the_unposted_copy_and_a_posted_one_gets_a_new_file(self):
+    def test_a_retake_is_a_new_video_and_supersedes_the_earlier_ones(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         work, data, to = (os.path.join(tmp.name, x) for x in ("run/beatdrop", "data", "clips"))
@@ -83,68 +83,21 @@ class Publish(unittest.TestCase):
         first = render("beatdrop-a.mp4", {"source": "made-here", "seed": 1}, b"first take")
         self.assertEqual(len(first), 1)
         self.assertEqual(render("beatdrop-a.mp4", {"source": "made-here", "seed": 1}, b"first take"), [])  # same render
-        # retake, not yet posted: the same published file now holds the new bytes, music record and binding
-        self.assertEqual(render("beatdrop-b.mp4", {"source": "folder", "track": "x.mp3"}, b"second take!"), [])
-        ups = uploads()
-        self.assertEqual(len(ups), 1)
+        # a retake: a new video beside it; the published bytes of the first are never touched; the first is superseded
+        second = render("beatdrop-b.mp4", {"source": "folder", "track": "x.mp3"}, b"second take!")
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(second[0]["file"], first[0]["file"])
         with open(first[0]["file"], "rb") as fh:
-            self.assertEqual(fh.read(), b"second take!")
-        self.assertEqual(ups[0]["music"], {"source": "user-folder", "track": "x.mp3"})
-        self.assertEqual(ups[0]["video"]["size"], len(b"second take!"))
-        with open(first[0]["file"] + pub.MUSIC_SIDECAR, encoding="utf-8") as fh:
-            self.assertEqual(json.load(fh)["music"]["source"], "user-folder")
-        # being uploaded right now (a queue item of these bytes with state uploading): the retake is a new video
-        import hashlib  # noqa: PLC0415
-        sha = hashlib.sha256(b"second take!").hexdigest()[:16]
-        os.makedirs(os.path.join(data, "posting"))
-        with open(os.path.join(data, pub.UPLOAD_QUEUE), "w", encoding="utf-8") as fh:
-            json.dump({"version": 1, "items": {f"{sha}.youtube-shorts": {"id": f"{sha}.youtube-shorts", "state": "uploading"}}}, fh)
+            self.assertEqual(fh.read(), b"first take")
+        by = {u["file"]: u for u in uploads()}
+        self.assertEqual(by[first[0]["file"]]["supersededBy"], second[0]["file"])
+        self.assertNotIn("supersededBy", by[second[0]["file"]])
+        self.assertEqual(by[second[0]["file"]]["music"], {"source": "user-folder", "track": "x.mp3"})
+        # a third take supersedes both earlier ones (each points at the newest)
         third = render("beatdrop-c.mp4", {"source": "made-here", "seed": 2}, b"third")
-        self.assertEqual(len(third), 1)
-        self.assertNotEqual(third[0]["file"], first[0]["file"])
-        with open(first[0]["file"], "rb") as fh:
-            self.assertEqual(fh.read(), b"second take!")  # the bytes in flight were not touched
-        self.assertEqual(len(uploads()), 2)
-        # posted: the next retake of that file is a new video too
-        doc = {"version": 1, "files": [dict(u, posted=[{"platform": "youtube", "videoId": "V1"}]) for u in uploads()]}
-        with open(os.path.join(data, pub.UPLOADS), "w", encoding="utf-8") as fh:
-            json.dump(doc, fh)
-        os.remove(os.path.join(data, pub.UPLOAD_QUEUE))
-        fourth = render("beatdrop-d.mp4", {"source": "made-here", "seed": 3}, b"fourth")
-        self.assertEqual(len(fourth), 1)
-        self.assertEqual(len(uploads()), 3)
-        # no uploads list at all: unknown, so a new file (never an overwrite)
-        os.remove(os.path.join(data, pub.UPLOADS))
-        self.assertEqual(len(render("beatdrop-e.mp4", {"source": "made-here", "seed": 4}, b"fifth")), 1)
-
-    def test_sent_or_unknown_posting_state_counts_as_sent(self):
-        import hashlib  # noqa: PLC0415
-        with tempfile.TemporaryDirectory() as tmp:
-            f = os.path.join(tmp, "v.mp4")
-            with open(f, "wb") as fh:
-                fh.write(b"bytes")
-            sha = hashlib.sha256(b"bytes").hexdigest()
-            os.makedirs(os.path.join(tmp, "posting"))
-
-            def state(rel, doc):
-                for r in (pub.UPLOAD_QUEUE, pub.POST_LEDGER):
-                    if os.path.exists(os.path.join(tmp, r)):
-                        os.remove(os.path.join(tmp, r))
-                if doc is not None:
-                    with open(os.path.join(tmp, rel), "w", encoding="utf-8") as fh:
-                        fh.write(doc if isinstance(doc, str) else json.dumps(doc))
-                return pub._uploading(tmp, f)
-            q = lambda st, **kw: {"items": {"a": {"id": f"{sha[:16]}.youtube-shorts", "state": st, **kw}}}  # noqa: E731
-            self.assertFalse(state(pub.UPLOAD_QUEUE, None))
-            self.assertFalse(state(pub.UPLOAD_QUEUE, q("queued")))
-            self.assertFalse(state(pub.UPLOAD_QUEUE, q("failed")))
-            self.assertTrue(state(pub.UPLOAD_QUEUE, q("done")))  # uploaded; uploads.json not marked yet (crash)
-            self.assertTrue(state(pub.UPLOAD_QUEUE, q("queued", session={"url": "x"})))
-            self.assertTrue(state(pub.UPLOAD_QUEUE, {"items": None}))  # wrong shape: unknown
-            self.assertTrue(state(pub.UPLOAD_QUEUE, "{not json"))
-            self.assertTrue(state(pub.POST_LEDGER, {"entries": {"k": {"sha256": sha, "status": "uploaded"}}}))
-            self.assertFalse(state(pub.POST_LEDGER, {"entries": {"k": {"sha256": sha, "status": "draft"}}}))
-
+        by = {u["file"]: u for u in uploads()}
+        self.assertEqual({by[x[0]["file"]].get("supersededBy") for x in (first, second)}, {third[0]["file"]})
+        self.assertEqual(len(by), 3)
     def test_a_row_from_before_bd7c_without_source_is_the_same_render(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

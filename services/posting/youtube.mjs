@@ -254,6 +254,17 @@ async function setThumbnail(fetchImpl, accessToken, videoId, coverPath, net = {}
   } catch { return false; }
 }
 
+/** true when uploads.json marks the package's clips-folder file superseded (clip_publish.py supersede_uploads); null
+ *  when the list exists but cannot be read (the caller waits and tries again, never sends blind); else false. */
+export function supersededSource(dataDir, source) {
+  if (typeof source?.file !== 'string') return false;
+  let doc;
+  try { doc = JSON.parse(readFileSync(path.join(dataDir, 'clips', 'uploads.json'), 'utf8')); } catch (e) { return e?.code === 'ENOENT' ? false : null; }
+  if (!Array.isArray(doc?.files)) return null;
+  const want = path.resolve(source.file).toLowerCase();
+  return doc.files.some((r) => r && typeof r.file === 'string' && path.resolve(r.file).toLowerCase() === want && r.supersededBy !== undefined);
+}
+
 /** True when source.file (the clips-folder video a package came from) still exists and its bytes differ from source.sha256. */
 export async function sourceReplaced(source) {
   const file = typeof source?.file === 'string' && path.isAbsolute(source.file) ? source.file : null;
@@ -371,6 +382,10 @@ export async function uploadPost(opts) {
   if (!video) throw new UploadError('video-missing', 'the video file is missing or was tampered with');
   const cover = store.media(id, 'cover');
   const sha256 = post.source.sha256;
+  // BD7c: a package made before a BeatDrop retake is never sent once uploads.json marks its clip superseded
+  const sup = typeof store.dataDir === 'string' ? supersededSource(store.dataDir, post.source) : false;
+  if (sup === true) throw new UploadError('superseded', 'the clip was made again; the newer version is posted instead; nothing was sent');
+  if (sup === null) throw new UploadError('uploads-unreadable', 'the finished-video list could not be read; tried again later; nothing was sent');
   const accessToken = await auth.accessToken();
   const r = await uploadVideo({
     post, sha256, videoPath: video.file, coverPath: cover?.file, accessToken,

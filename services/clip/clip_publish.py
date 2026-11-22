@@ -180,8 +180,10 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         prev = [r for r in (load_json(prev_path).get("files") or []) if os.path.isfile(r.get("file", ""))]             if os.path.isfile(prev_path) else []
     except ClipError:
         prev = []
-    done = {(r.get("id"), r.get("layout")): r for r in prev}
-    rows, counters = [], {}
+    done = {}
+    for r in prev:
+        done.setdefault((r.get("id"), r.get("layout")), []).append(r)
+    rows, counters, supersede = [], {}, []
     tool = rdoc.get("tool") or ""
     for c, f, kind, when, label, canvas in name_rows(rdoc, game, layouts_by_id, det_weights, rec_start_local):
         if not passed.get((c["id"], f["file"])):
@@ -189,17 +191,12 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         src = os.path.join(work, "clips", c["id"], f["file"])
         if not os.path.isfile(src):
             continue
-        old = done.get((c["id"], f["layout"]))
-        if old is not None:
-            # BD7c: a BeatDrop retake is a new render (new file name) under the same id and layout. Not yet posted: it
-            # replaces the published copy in place (as recaption does). Already posted: it is published as a new video.
-            # Codex BD7c verify: a row without a source (written before BD7c) is the same render; replaced only when its
-            # uploads row is found, not posted and not being uploaded right now; anything unknown gets a new file.
-            if tool != "clipper.beatdrop" or old.get("source") in (None, f["file"]):
-                continue
-            up = upload_row(data_dir, old["file"])
-            if up is not None and not up.get("posted") and not _uploading(data_dir, old["file"]):
-                _replace_published(old, src, c, label, rdoc, data_dir)
+        olds = done.get((c["id"], f["layout"])) or []
+        if olds:
+            # BD7c: a BeatDrop retake is a new render (new file name) under the same id and layout. It is published as a
+            # new video (published bytes are never replaced, so nothing races an upload) and the earlier ones are marked
+            # superseded in uploads.json. Any other tool: the id and layout are published once.
+            if tool != "clipper.beatdrop" or any(_same_render(o, src, f["file"]) for o in olds):
                 continue
         day = os.path.join(to, names.day_folder(when))
         os.makedirs(day, exist_ok=True)
@@ -225,8 +222,10 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                      # RP5 (D373): the edit choices a reel was made with, so its results can be linked to them
                      **({"choices": lmix.choices_record(c, (c.get("learning") or {}).get("mixAt"))}
                         if tool.startswith("clipper.montage") else {})})
+        if olds:
+            supersede.append(([o["file"] for o in olds], rows[-1]["file"]))
     run = run_name or os.path.basename(os.path.normpath(work))
-    write_json_atomic(prev_path, {"tool": "clipper.publish", "to": to, "files": prev + rows})  # prev rows updated in place
+    write_json_atomic(prev_path, {"tool": "clipper.publish", "to": to, "files": prev + rows})
     if data_dir and rows:
         add_uploads(data_dir, [{**{k: r[k] for k in ("file", "kind", "label", "seconds")}, "run": run,
                                 "recording": rdoc.get("recording"), "posted": [], "game": game,
@@ -235,96 +234,39 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                                 **({"music": r["music"]} if r.get("music") else {}),
                                 **({"video": r["video"]} if r.get("video") else {}),
                                 **({"choices": r["choices"]} if r.get("choices") else {})} for r in rows])
+    for olds, new_file in supersede:  # after the retake's own row is in the list
+        supersede_uploads(data_dir, olds, new_file)
     return rows
 
 
-def upload_row(data_dir, file):
-    """The uploads.json row of a published file, or None (no data folder, no list, or not in it)."""
+def _same_render(old, src, name):
+    """True when the published row `old` holds this render: its source name matches, or (a row written before BD7c,
+    without a source) its published file has the same size and first and last MiB as `src`."""
+    if old.get("source") is not None:
+        return old["source"] == name
+    try:
+        return video_binding(old["file"]) == video_binding(src)
+    except OSError:
+        return True  # unreadable: never published twice
+
+
+def supersede_uploads(data_dir, olds, new_file):
+    """BD7c: the earlier BeatDrop renders `olds` (published files) get supersededBy = the retake's file in uploads.json;
+    posting never packages or sends a superseded video (services/posting). A posted one keeps its posted record."""
     p = os.path.join(data_dir, UPLOADS) if data_dir else None
-    try:
-        doc = load_json(p) if p and os.path.isfile(p) else {}
-    except ClipError:
-        return None
-    return next((x for x in doc.get("files") or [] if isinstance(x, dict) and x.get("file") == file), None)
-
-
-UPLOAD_QUEUE = os.path.join("posting", "upload-queue.json")  # services/posting/auto-chain.mjs QUEUE_NAME
-POST_LEDGER = os.path.join("posting", "ledger.json")  # services/posting/index.mjs LEDGER_NAME
-
-
-def _uploading(data_dir, file):
-    """True when posting may have sent this file's bytes: an upload-queue item of them uploading, done or holding a
-    resumable session, or a ledger entry of them marked uploaded (uploads.json can lag behind both after a crash).
-    Anything that cannot be told (unreadable file, a queue or ledger of the wrong shape) counts as sent: never replaced."""
-    try:
-        h = hashlib.sha256()
-        with open(file, "rb") as fh:
-            for block in iter(lambda: fh.read(1 << 20), b""):
-                h.update(block)
-    except OSError:
-        return True
-    sha = h.hexdigest()
-    for rel, field in ((UPLOAD_QUEUE, "items"), (POST_LEDGER, "entries")):
-        p = os.path.join(data_dir, rel)
-        if not os.path.isfile(p):
-            continue
-        try:
-            doc = load_json(p)
-        except ClipError:
-            return True
-        rows = doc.get(field) if isinstance(doc, dict) else None
-        if not isinstance(rows, dict):
-            return True
-        for it in rows.values():
-            if not isinstance(it, dict):
-                return True
-            if field == "items" and str(it.get("id", "")).startswith(sha[:16] + ".") \
-                    and (it.get("state") in ("uploading", "done") or it.get("session")):  # postId: <sha 16>.<target>
-                return True
-            if field == "entries" and it.get("sha256") == sha and it.get("status") == "uploaded":
-                return True
-    return False
-
-
-def _replace_published(old, src, c, label, rdoc, data_dir):
-    """BD7c: the published copy `old` (a published.json row, updated in place) gets the bytes of `src`, a new music
-    sidecar and video binding; its uploads.json row (when there is one) gets the new record, length, label and facts."""
-    tmp = old["file"] + ".part"
-    try:
-        os.remove(tmp)
-    except OSError:
-        pass
-    _link_or_copy(src, tmp)
-    os.replace(tmp, old["file"])
-    prov = music_provenance(c, bool(rdoc.get("musicRecords")))
-    try:
-        os.remove(old["file"] + MUSIC_SIDECAR)  # never a sidecar of the earlier render next to the new bytes
-    except OSError:
-        pass
-    write_music_sidecar(old["file"], prov)
-    try:
-        vbind = video_binding(old["file"])
-    except OSError:
-        vbind = None
-    fields = {"label": label, "seconds": round(float(c["end"]) - float(c["start"]), 3), "music": prov, "video": vbind,
-              "facts": rt.facts(c) or None}
-    old.update(source=os.path.basename(src), **{k: v for k, v in fields.items() if v is not None})
-    for k in [k for k, v in fields.items() if v is None]:
-        old.pop(k, None)
-    p = os.path.join(data_dir, UPLOADS) if data_dir else None
-    if not p or not os.path.isfile(p):
+    if not p or not os.path.isfile(p) or not olds:
         return
     try:
         doc = load_json(p)
     except ClipError:
         return
-    for x in doc.get("files") or []:
-        if isinstance(x, dict) and x.get("file") == old["file"]:
-            x.update({k: v for k, v in fields.items() if v is not None})
-            for k in [k for k, v in fields.items() if v is None]:
-                x.pop(k, None)  # a missing record is unknown to posting (held): never the earlier render's record
-    write_json_atomic(p, doc)
-
+    hit = False
+    for x in doc.get("files") or [] if isinstance(doc, dict) else []:
+        if isinstance(x, dict) and x.get("file") in olds and x.get("file") != new_file:
+            x["supersededBy"] = new_file
+            hit = True
+    if hit:
+        write_json_atomic(p, doc)
 
 def add_uploads(data_dir, rows):
     p = os.path.join(data_dir, UPLOADS)

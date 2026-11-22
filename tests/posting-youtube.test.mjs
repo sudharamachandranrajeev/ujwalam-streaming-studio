@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // P16b step 2 tests: services/posting/youtube.mjs. No test touches Google -- fetchImpl is always a fake here.
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { createLedger, sha256File } from '../services/posting/index.mjs';
-import { sourceReplaced, uploadMetadata, uploadVideo, UploadError } from '../services/posting/youtube.mjs';
+import { sourceReplaced, supersededSource, uploadMetadata, uploadPost, uploadVideo, UploadError } from '../services/posting/youtube.mjs';
 
 // D409: every upload needs a publish time (uploadVideo refuses one without).
 const PUB = '2030-01-01T00:00:00.000Z';
@@ -127,6 +127,25 @@ test('uploadVideo: refuses a package whose clips-folder source was replaced (BD7
   assert.equal(await sourceReplaced({ sha256: sha, file: path.join(path.dirname(src), 'moved-away.mp4') }), false); // tidy moved it
   assert.equal(await sourceReplaced({ sha256: sha }), false); // an older package without a source file
   assert.equal(await sourceReplaced({ sha256: sha, file: src }), true);
+});
+
+test('uploadPost: a package whose clip uploads.json marks superseded (BD7c retake) is never sent; an unreadable list waits', async () => {
+  const video = tmpVideo(16);
+  const dir = path.dirname(video);
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), 'uj-yt-data-'));
+  mkdirSync(path.join(dataDir, 'clips'));
+  const clip = path.join(dataDir, 'clip_a_h.mp4');
+  writeFileSync(path.join(dir, 'post.json'), JSON.stringify(basePost('a'.repeat(64), { source: { sha256: 'a'.repeat(64), clipId: 'c1', file: clip } })));
+  const store = { dataDir, dir: () => dir, media: (_id, kind) => (kind === 'video' ? { file: video } : null) };
+  const auth = { accessToken: async () => { throw new Error('must not get a token'); } };
+  const list = (files) => writeFileSync(path.join(dataDir, 'clips', 'uploads.json'), typeof files === 'string' ? files : JSON.stringify({ version: 1, files }));
+  list([{ file: clip, posted: [], supersededBy: path.join(dataDir, 'clip_b_h.mp4') }]);
+  await assert.rejects(uploadPost({ id: 'p', store, auth, publishAt: PUB }), (e) => e.code === 'superseded');
+  list('{broken');
+  await assert.rejects(uploadPost({ id: 'p', store, auth, publishAt: PUB }), (e) => e.code === 'uploads-unreadable');
+  list([{ file: clip, posted: [] }]);
+  assert.equal(supersededSource(dataDir, { file: clip }), false);
+  assert.equal(supersededSource(dataDir, {}), false); // a package without a source file
 });
 
 test('uploadVideo: refuses an already-uploaded post (never upload the same video twice)', async () => {
