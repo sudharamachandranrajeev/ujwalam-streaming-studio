@@ -2709,3 +2709,26 @@ Evidence: `docs/evidence/2026-11-22-beatdrop-bd7b-studio.md`. Plan: `docs/plan/2
    recording was deleted and its retake buttons are off; the route refuses with `no-source`. One retake request waits
    at a time (a second click before the queue takes it is refused, never written over the first). The plan's retake
    history is shown once, inside the engine's summary.
+
+## D421 — LV1a: word-by-word captions and chapter cards on the long highlights video (decided, 2026-11-22)
+
+Plan: `docs/plan/2026-11-21-beatdrop-montages.md` LV1 (user-approved option order BD → LV1 → RR1). Evidence:
+`docs/evidence/2026-11-22-lv1a-long-video-teaching.md`.
+
+1. **Captions word by word**: the long video shows what was said, the word being spoken in the brand accent
+   (`reel-title.json` `themeAccent`). Word times come from the same local speech to text as the reel captions
+   (whisper.cpp full-JSON token offsets; faster-whisper `word_timestamps`), with their model, preset, font and
+   confidence rule. A segment whose text was edited no longer matches its word times and is shown as plain cards.
+2. **Chapter cards**: a numbered card at the start of each moment, in plain words ("3 kills", "streak · 5 kills",
+   "won match"). It enters in 350 ms and leaves in 250 ms (overlay rule), stays inside its moment, and is left out
+   when the moment is too short for it. Numbers count every moment, so a left-out card leaves a gap in the numbers.
+3. **One ASS per render batch**, burned with the caption font through `clip_montage.render_argv(captions=)`. The
+   batches are still joined without re-encoding.
+4. **No speech model** (or the studio found it damaged): chapter cards only. A caption failure never stops the video.
+5. **Flag** `long-video-teaching`, on by default (user-requested). Sizes and timings are data
+   (`long-video.json` `teaching`, the agent's proposal).
+6. Callout cards and movement paths (rest of LV1) are not in LV1a. UNVERIFIED: word timing on real stream speech
+   (whisper.cpp token times are approximate), the look on a real long video.
+7. **After the Codex review (2026-11-22)**: a caption start exactly on a join belongs to the next piece, and a shown
+   caption ends where the next shown one starts. Both also apply to the reel captions (D411 retime). A batch whose
+   overlay fails to burn is rendered again without it.

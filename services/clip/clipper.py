@@ -1018,9 +1018,23 @@ def _long_video_steps(a, lv, out):
     os.makedirs(wd, exist_ok=True)
     frame = cfg["frame"]
     tracks = max(1, int(info.get("audio_tracks") or 1))
+    import long_teaching as lt  # noqa: PLC0415 - LV1a (D421): word captions and chapter cards (flag long-video-teaching)
+    ctx = lt.context(data_dir, cfg, getattr(a, "whisper_bin", None), getattr(a, "whisper_model", None))
+    infos = []
+
+    def overlay(chunk, first, adir):
+        ass, fd, inf = lt.batch_overlay(ffmpeg, rec, chunk, first, tr, frame, adir, ctx)
+        infos.append(inf)
+        return ass, fd
+
+    def overlay_failed(i, stderr):  # the batch was rendered again without its overlay: nothing of it is on screen
+        infos[i] = dict(infos[i], status="failed", cards=0, chapters=0,
+                        reason=f"burning the overlay failed: {(stderr or '').strip()[-120:]}")
     ok, expected, err = lv.render(ffmpeg, rec, p["segments"], frame, rnd.pick_encoder(a.encoder), wd, tracks,
                                   int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"], _render_job, rnd.run_tool,
-                                  rnd.ENCODERS, rnd.AUDIO)
+                                  rnd.ENCODERS, rnd.AUDIO, overlay=overlay if ctx else None,
+                                  overlay_failed=overlay_failed)
+    teach = lt.merge_info(infos) if ctx else {"captions": {"backend": "none", "status": "off"}, "chapters": 0}
     files, errors = [], []
     if ok:
         files.append({"layout": lv.LAYOUT, "file": lv.FILE, "geometry": "canvas", "sourceAudioTracks": tracks})
@@ -1034,7 +1048,7 @@ def _long_video_steps(a, lv, out):
         "flash": "no flash effect: cross fade or cut only", "failed": 0 if ok else 1,
         "clips": [{"id": lv.CLIP_ID, "start": 0.0, "end": expected, "score": round(sum(g["score"] for g in p["segments"]), 3),
                    "labels": [], "kills": kills, "pieces": p["segments"], "dropped": p["dropped"],
-                   "captions": {"backend": "none", "status": "off"},
+                   "captions": teach["captions"], "chapters": teach["chapters"],
                    "music": None,  # D414: the long video adds no music (the stream's own sound only)
                    "files": files, "errors": errors}]})
     if not ok:
@@ -1055,7 +1069,8 @@ def _long_video_steps(a, lv, out):
     write_json_atomic(os.path.join(out, REPORT), {
         "tool": lv.TOOL, "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": os.path.basename(rec),
         "files": 1, "failed": 0 if res["ok"] else 1,
-        "results": [{"id": lv.CLIP_ID, "layout": lv.LAYOUT, "file": lv.FILE, "geometry": "canvas", "captions": "off", **res}]})
+        "results": [{"id": lv.CLIP_ID, "layout": lv.LAYOUT, "file": lv.FILE, "geometry": "canvas",
+                     "captions": teach["captions"]["status"], **res}]})
     if not res["ok"]:
         return {"status": "failed", "reason": f"the long video failed its check: {'; '.join(res['issues'])[:160]}"}
     published = 0
@@ -1063,7 +1078,8 @@ def _long_video_steps(a, lv, out):
         sub = argparse.Namespace(**{**vars(a), "out": out})
         published = len(_publish(sub, out, run_name=os.path.basename(a.out), rec_start=rec))
     return {"status": "made", "reason": f"{p['seconds'] / 60:.1f} minutes from {len(p['segments'])} moment(s)",
-            "seconds": expected, "segments": len(p["segments"]), "dropped": p["dropped"], "published": published}
+            "seconds": expected, "segments": len(p["segments"]), "dropped": p["dropped"], "published": published,
+            "teaching": teach}
 
 
 KIND_TYPE = {"M": "montage", "W": "match-reel", "I": "impact-play", "L": "live-clip"}  # clip id prefix -> reel type (CL1)

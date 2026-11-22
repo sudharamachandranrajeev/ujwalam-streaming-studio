@@ -12,5 +12,12 @@
   "score": { "perKill": 1.0, "streakBonus": 3.0, "win": 5.0 },
   "winResults": ["VICTORY"],
   "defaultTransition": { "kind": "fade", "xfade": "fade", "ms": 250 },
-  "batchPieces": 12
+  "batchPieces": 12,
+  "teaching": {
+    "$comment": "LV1a (D421): word-by-word captions and numbered chapter cards on the long video, read by services/clip/long_teaching.py. Flag long-video-teaching (on by default, user-requested). The speech to text and caption font are the reel captions' (data/clip/reel-captions.json and its preset); these sizes are for the 1920x1080 frame. Chapter animation stays under the overlay rule (enter under 600 ms, leave under 400 ms). Sizes and timings are the agent's proposal, tunable here.",
+    "flag": "long-video-teaching",
+    "safe": { "left": 96, "right": 96, "top": 64, "bottom": 72 },
+    "captions": { "on": true, "sizePx": 54, "maxCharsPerLine": 42, "maxWordsPerCard": 12, "maxLines": 2, "liftPx": 0 },
+    "chapters": { "sec": 2.6, "entranceMs": 350, "exitMs": 250, "slidePx": 48, "numberPx": 72, "labelPx": 40, "boxPadPx": 14 }
+  }
 }

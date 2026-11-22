@@ -190,6 +190,10 @@ def mark(segments, cfg, codepoints, duration=None):
             hidden = f"shorter than {min_len:g} s"
         row["show"] = hidden is None
         row["hidden"] = hidden
+        ws = [{"start": round(float(x["start"]), 3), "end": round(min(float(x["end"]), b), 3), "text": x["text"]}
+              for x in s.get("words") or [] if float(x["start"]) < b]
+        if ws:  # LV1 (D421): word times for the word-by-word captions
+            row["words"] = ws
         miss = missing_scripts(row["text"], codepoints)
         if miss:
             row["fontMissing"] = miss
@@ -197,9 +201,10 @@ def mark(segments, cfg, codepoints, duration=None):
     return out
 
 
-def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=None, transcribe=None):
+def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=None, transcribe=None, words=False):
     """Transcribes the reel's pieces -> (transcript dict or None, info). Writes workdir/transcript.json when there is
-    any segment. transcribe: injected for tests (backend, wav, opts) -> (segments, info)."""
+    any segment. transcribe: injected for tests (backend, wav, opts) -> (segments, info). words (LV1, D421): ask the
+    speech to text for word times too."""
     transcribe = transcribe or caps.transcribe
     with tempfile.TemporaryDirectory(dir=workdir) as td:
         wav = os.path.join(td, "reel.wav")
@@ -207,7 +212,7 @@ def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=Non
         if r.returncode != 0 or not os.path.isfile(wav):
             return None, {"backend": cfg["backend"], "status": "unavailable", "reason": "audio extract failed"}
         segs, info = transcribe(cfg["backend"], wav, dict(opts, multilingual=bool(cfg.get("multilingual")),
-                                                          full_json=True, language=cfg.get("language")))
+                                                          full_json=True, language=cfg.get("language"), words=words))
     if info.get("status") != "ok":
         return None, info
     cps = font_codepoints(os.path.join(FONTS_DIR, style["fontFile"]))
@@ -233,10 +238,13 @@ def retime(doc, src_pieces, out_pieces, xd):
     if len(src) != len(out):
         raise ValueError("retime: the reel's pieces changed in number")
 
-    def where(t):
+    def where(t, start=False):
+        # a time exactly on a join: an end belongs to the piece before it, a start to the piece after it (Codex D421:
+        # else a word starting at the join is drawn a cross fade late)
         acc = 0.0
         for i, (a, b) in enumerate(src):
-            if t <= acc + (b - a) + 1e-9 or i == len(src) - 1:
+            edge = acc + (b - a)
+            if (t < edge - 1e-9 if start else t <= edge + 1e-9) or i == len(src) - 1:
                 return i, a + max(0.0, t - acc)
             acc += b - a
         return len(src) - 1, src[-1][1]
@@ -250,13 +258,34 @@ def retime(doc, src_pieces, out_pieces, xd):
         a, b = out[i]
         return starts[i] + min(max(rt, a), b) - a
 
+    def move(x0, x1):
+        i, ra = where(float(x0), start=True)
+        j, rb = where(float(x1))
+        return round(to_out(i, ra), 3), round(to_out(j, rb), 3)  # over a join: it ends in the next piece
+
     rows = []
     for s in doc.get("segments") or []:
-        i, ra = where(float(s["start"]))
-        j, rb = where(float(s["end"]))
-        a, b = round(to_out(i, ra), 3), round(to_out(j, rb), 3)  # over a join: it ends in the next piece
+        a, b = move(s["start"], s["end"])
         if b - a > 0.05:
-            rows.append(dict(s, start=a, end=b))
+            row = dict(s, start=a, end=b)
+            if s.get("words"):  # LV1 (D421): each word moved the same way, kept inside its segment
+                ws = []
+                for x in s["words"]:
+                    wa, wb = move(x["start"], x["end"])
+                    wa, wb = max(a, wa), min(b, wb)
+                    if wb > wa:
+                        ws.append(dict(x, start=wa, end=wb))
+                row["words"] = ws
+            rows.append(row)
+    # a start moved back over a cross fade never overlaps the caption shown before it (Codex); hidden rows (low
+    # confidence, a missing glyph) are never drawn, so they cut nothing short
+    vis = [r for r in rows if r.get("show") and not r.get("fontMissing")]
+    for cur, nxt_row in zip(vis, vis[1:]):
+        nxt = nxt_row["start"]
+        if cur["end"] > nxt:
+            cur["end"] = nxt
+            if cur.get("words"):
+                cur["words"] = [dict(x, end=min(x["end"], nxt)) for x in cur["words"] if x["start"] < nxt]
     return dict(doc, segments=rows, timeline="output", joinSec=round(float(xd), 3))
 
 
@@ -279,8 +308,61 @@ def cards(text, max_words, max_chars, max_lines):
     return out
 
 
-def to_ass(transcript, frame, safe, style, duration=None):
-    """ASS script of the shown segments that the font can draw. -> (text, cards burned)."""
+def word_cards(words, max_words, max_chars, max_lines):
+    """LV1 (D421): words -> cards, each a list of lines, each line a list of word indexes: at most max_words words and
+    max_lines lines of at most max_chars per card (a longer single word stays whole on its own line)."""
+    cards_, lines, cur, n = [], [], [], 0
+    for i, w in enumerate(words):
+        width = sum(len(words[k]["text"]) + 1 for k in cur) + len(w["text"])
+        if cur and width > int(max_chars):
+            lines.append(cur)
+            cur = []
+        if n >= int(max_words) or len(lines) >= int(max_lines):
+            if cur:
+                lines.append(cur)
+            cards_.append(lines)
+            lines, cur, n = [], [], 0
+        cur.append(i)
+        n += 1
+    if cur:
+        lines.append(cur)
+    if lines:
+        cards_.append(lines)
+    return cards_
+
+
+def _words_match(seg):
+    """The word times belong to the text as it is (an edited segment keeps its text, not its old word times)."""
+    ws = seg.get("words") or []
+    return bool(ws) and " ".join(w["text"] for w in ws).split() == str(seg.get("text", "")).split()
+
+
+def _highlight_events(seg, a, b, style, accent):
+    """One event per word: the whole card, the current word in the accent colour, until the next word starts."""
+    ws = [w for w in seg["words"] if float(w["start"]) < b]
+    ev = []
+    cards = word_cards(ws, style["maxWordsPerCard"], style["maxCharsPerLine"], style["maxLines"])
+    for ci, card in enumerate(cards):
+        idx = [k for line in card for k in line]
+        c_end = min(b, float(ws[idx[-1]]["end"]))
+        if ci + 1 < len(cards):  # never two cards at once (a word moved back over a cross fade starts earlier, Codex)
+            c_end = min(c_end, float(ws[cards[ci + 1][0][0]]["start"]))
+        for pos, k in enumerate(idx):
+            t0 = max(a, float(ws[k]["start"]))
+            t1 = float(ws[idx[pos + 1]]["start"]) if pos + 1 < len(idx) else c_end
+            t1 = min(t1, b)
+            if t1 - t0 < 0.02:
+                continue
+            text = "\\N".join(" ".join(
+                (f"{{\\1c{accent}}}{caps.ass_escape(ws[j]['text'])}{{\\r}}" if j == k else caps.ass_escape(ws[j]["text"]))
+                for j in line) for line in card)
+            ev.append(f"Dialogue: 0,{caps._ts(t0)},{caps._ts(t1)},Reel,,0,0,0,,{text}")
+    return ev
+
+
+def to_ass(transcript, frame, safe, style, duration=None, highlight=None):
+    """ASS script of the shown segments that the font can draw. -> (text, cards burned). highlight (LV1, D421): a
+    #RRGGBB accent: a segment with word times that match its text is shown word by word, the current word in it."""
     w, h = int(frame["width"]), int(frame["height"])
     bold = -1 if style.get("bold") else 0
     head = [
@@ -302,6 +384,12 @@ def to_ass(transcript, frame, safe, style, duration=None):
         a, b = float(s["start"]), float(s["end"])
         if duration is not None:
             b = min(b, float(duration))
+        if highlight and b > a and _words_match(s):
+            hv = _highlight_events(s, a, b, style, _ass_colour(highlight))
+            if hv:
+                ev += hv
+                n += 1
+                continue
         cs = cards(caps.ass_escape(str(s.get("text", ""))), style["maxWordsPerCard"], style["maxCharsPerLine"],
                    style["maxLines"])
         if b <= a or not cs:
@@ -328,11 +416,17 @@ def refresh_hidden(transcript, style):
     return transcript
 
 
-def write_ass(transcript, frame, safe, style, workdir, duration=None):
+def write_ass(transcript, frame, safe, style, workdir, duration=None, highlight=None, extra=None):
     """Writes captions.ass and copies the preset's font into workdir/fonts. -> (ass name, fonts dir name, cards) or
-    (None, None, 0) when no card is left to burn."""
-    text, n = to_ass(refresh_hidden(transcript, style), frame, safe, style, duration)
-    if not n:
+    (None, None, 0) when nothing is left to burn. LV1 (D421): highlight as in to_ass; extra = (style lines, event
+    lines) added to the same script (the long video's chapter cards), burned even with no caption."""
+    text, n = to_ass(refresh_hidden(transcript, style), frame, safe, style, duration, highlight)
+    if extra and extra[1]:
+        head, _, events = text.partition("[Events]")
+        styles_end = head.rstrip("\n")
+        text = styles_end + "\n" + "\n".join(extra[0]) + "\n\n[Events]" + events.rstrip("\n") + "\n" + \
+            "\n".join(extra[1]) + "\n"
+    elif not n:
         return None, None, 0
     with open(os.path.join(workdir, ASS_NAME), "w", encoding="utf-8", newline="\n") as f:
         f.write(text)

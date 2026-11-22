@@ -54,6 +54,30 @@ def _token_confidence(seg):
     return round(sum(ps) / len(ps), 4) if ps else None
 
 
+def _token_words(seg):
+    """LV1 (D421): the words of a whisper.cpp segment from its full-JSON tokens (offsets in ms). A token whose text
+    starts with a space starts a new word; any other token continues the word before it (sub-word pieces and bytes
+    of one letter). Special tokens are left out. -> [{start, end, text}] in seconds, or None without token times."""
+    words = []
+    for t in seg.get("tokens") or []:
+        if not isinstance(t, dict):
+            continue
+        text = str(t.get("text", ""))
+        if not text or text.startswith("[_"):
+            continue
+        try:
+            a, b = float(t["offsets"]["from"]) / 1000.0, float(t["offsets"]["to"]) / 1000.0
+        except (KeyError, TypeError, ValueError):
+            return None
+        if words and not text[:1].isspace():
+            words[-1]["text"] += text
+            words[-1]["end"] = max(words[-1]["end"], b)
+        else:
+            words.append({"start": a, "end": max(a, b), "text": text})
+    out = [dict(w, text=w["text"].strip()) for w in words if w["text"].strip()]
+    return out or None
+
+
 def parse_whisper_cpp_json(j):
     out = []
     for seg in j.get("transcription", []) if isinstance(j, dict) else []:
@@ -68,6 +92,9 @@ def parse_whisper_cpp_json(j):
             conf = _token_confidence(seg)
             if conf is not None:  # ED2 (D353): only with the full JSON (-ojf); short clips ignore it
                 row["confidence"] = conf
+            words = _token_words(seg)
+            if words:  # LV1 (D421): word times, for the word-by-word captions
+                row["words"] = words
             out.append(row)
     return out
 
@@ -116,9 +143,19 @@ def transcribe(backend, wav, opts):
         # ED2 (D353): task is always "transcribe" (never translate); multilingual (opts, reel captions) detects the
         # language per segment for the mixed Malayalam and English speech. Text is kept in the script the model wrote.
         kw = {"multilingual": True} if opts.get("multilingual") else {}
-        segs, info = m.transcribe(wav, language=opts.get("language"), vad_filter=True, task="transcribe", **kw)
-        out = [{"start": float(s.start), "end": float(s.end), "text": s.text.strip(),
-                "confidence": segment_confidence(s.avg_logprob, s.no_speech_prob)} for s in segs if s.text.strip()]
+        segs, info = m.transcribe(wav, language=opts.get("language"), vad_filter=True, task="transcribe",
+                                  word_timestamps=bool(opts.get("words")), **kw)
+        out = []
+        for s in segs:
+            if not s.text.strip():
+                continue
+            row = {"start": float(s.start), "end": float(s.end), "text": s.text.strip(),
+                   "confidence": segment_confidence(s.avg_logprob, s.no_speech_prob)}
+            words = [{"start": float(w.start), "end": float(w.end), "text": w.word.strip()}
+                     for w in (getattr(s, "words", None) or []) if w.word.strip()]
+            if words:  # LV1 (D421)
+                row["words"] = words
+            out.append(row)
         return out, {"backend": backend, "status": "ok", "segments": len(out),
                      "language": getattr(info, "language", None)}
     raise ClipError(f"unknown captions backend {backend}")
