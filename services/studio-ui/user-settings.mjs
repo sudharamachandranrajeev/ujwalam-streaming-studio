@@ -205,7 +205,8 @@ export function reelTransitionInfo(dataDir) {
 // cases: tests/fixtures/clip-look-cases.json). Any part may be left out; the rest keeps its default (data/clip/look.json).
 export const CLIP_LOOK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'clip', 'look.json');
 export const LOOK_GROUPS = Object.freeze(['music', 'transitions', 'name']);
-const LOOK_KEYS = Object.freeze({ music: ['modes', 'sources', 'folder', 'levelDb', 'lock', 'packOffered', 'aiOffered', 'aiRuntime'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
+const LOOK_KEYS = Object.freeze({ music: ['modes', 'sources', 'folder', 'levelDb', 'lock', 'packOffered', 'aiOffered', 'aiRuntime',
+  'underGameDb', 'voiceDuckDb', 'fadeInSec', 'fadeOutSec', 'fadeCurve'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
   name: ['styles', 'position', 'colour', 'sizePct', 'durationSec', 'logo', 'lock'] });
 let lookCache = null;
 /** data/clip/look.json, or null when unreadable. */
@@ -248,6 +249,10 @@ export function lookProblems(v, d = lookDefaults()) {
   if ('sources' in m) out.push(...lookTicks(m.sources, d.sources.map((s) => s.id), 'clips.look.music.sources'));
   if ('folder' in m && (typeof m.folder !== 'string' || m.folder.length > d.folderMaxChars || /[\x00-\x1f]/.test(m.folder))) out.push(`clips.look.music.folder must be a folder path up to ${d.folderMaxChars} characters`);
   if ('levelDb' in m) out.push(...lookRange(m.levelDb, d.levelDb, 'clips.look.music.levelDb'));
+  for (const [k, r] of [['underGameDb', 'underGameDb'], ['voiceDuckDb', 'voiceDuckDb'], ['fadeInSec', 'fadeSec'], ['fadeOutSec', 'fadeSec']]) {
+    if (k in m) out.push(...lookRange(m[k], d[r], `clips.look.music.${k}`)); // D437
+  }
+  if ('fadeCurve' in m && !d.fadeCurves.includes(m.fadeCurve)) out.push(`clips.look.music.fadeCurve must be one of ${d.fadeCurves.join(', ')}`);
   if ('aiRuntime' in m && !aiRuntimeOk(m.aiRuntime)) out.push('clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters');
   for (const b of ['packOffered', 'aiOffered']) if (b in m && typeof m[b] !== 'boolean') out.push(`clips.look.music.${b} must be true or false`);
   const n = plainObj(v.name) ? v.name : {};
@@ -304,7 +309,7 @@ export function lookInfo(dataDir) {
   if ('randomise' in mine) look.randomise = mine.randomise;
   for (const g of LOOK_GROUPS) Object.assign(look[g], mine[g] ?? {});
   return { flag: d.flag, groups: d.groups, sources: d.sources, positions: d.positions, levelDb: d.levelDb, sizePct: d.sizePct,
-    durationSec: d.durationSec, defaults: d.defaults, look, packReady: musicPackReady(dataDir), aiReady: musicAiReady(look.music.aiRuntime) };
+    durationSec: d.durationSec, underGameDb: d.underGameDb, voiceDuckDb: d.voiceDuckDb, fadeSec: d.fadeSec, fadeCurves: d.fadeCurves, defaults: d.defaults, look, packReady: musicPackReady(dataDir), aiReady: musicAiReady(look.music.aiRuntime) };
 }
 /**
  * FX6 (D429): true when the ACE-Step runtime folder (env UJWALAM_ACESTEP_RUNTIME, else the setting

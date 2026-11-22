@@ -87,7 +87,8 @@ def look_problems(v, cfg=None):
             out.append(f"unknown clips.look setting {k}")
     if "randomise" in v and not isinstance(v["randomise"], bool):
         out.append("clips.look.randomise must be true or false")
-    keys = {"music": ("modes", "sources", "folder", "levelDb", "lock", "packOffered", "aiOffered", "aiRuntime"),
+    keys = {"music": ("modes", "sources", "folder", "levelDb", "lock", "packOffered", "aiOffered", "aiRuntime",
+                      "underGameDb", "voiceDuckDb", "fadeInSec", "fadeOutSec", "fadeCurve"),
             "transitions": ("styles", "sfx", "beatSync", "lock"),
             "name": ("styles", "position", "colour", "sizePct", "durationSec", "logo", "lock")}
     for g in GROUPS:
@@ -114,6 +115,11 @@ def look_problems(v, cfg=None):
         out.append(f"clips.look.music.folder must be a folder path up to {cfg['folderMaxChars']} characters")
     if "levelDb" in m:
         out += _range(m["levelDb"], cfg["levelDb"], "clips.look.music.levelDb")
+    for k, r in (("underGameDb", "underGameDb"), ("voiceDuckDb", "voiceDuckDb"), ("fadeInSec", "fadeSec"), ("fadeOutSec", "fadeSec")):
+        if k in m:  # D437
+            out += _range(m[k], cfg[r], f"clips.look.music.{k}")
+    if "fadeCurve" in m and m["fadeCurve"] not in cfg["fadeCurves"]:
+        out.append(f"clips.look.music.fadeCurve must be one of {', '.join(cfg['fadeCurves'])}")
     if "aiRuntime" in m and not ai_runtime_ok(m["aiRuntime"]):
         out.append("clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters")
     for b in ("packOffered", "aiOffered"):

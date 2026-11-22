@@ -2,6 +2,10 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.42 — 2026-11-22
+
+- Clip music: the music is now set 8 dB under each clip's own game sound (measured per clip), never louder than your music level (new default -20 dB). It also turns down 8 dB more while someone talks in the game, with smooth 0.2 s / 0.3 s ramps. The start music stays full until the name ends and then fades out; the end music fades in earlier so its full ending is not cut short. Fades use a smooth S-curve, 1.5 s, by default. Settings > Clips > Clip look has Music under the game, Quieter when someone talks, Fade in, Fade out and Fade shape, each with what it does.
+
 ## 0.1.0-alpha.41 — 2026-11-22
 
 - Auto-post: up to 100 uploads a day, YouTube's own limit. The new "Hourly slots, a year ahead" schedule fills every hour (12:00, 13:00 ...) from today up to a year ahead, then the quarter past (12:15 ...), then the half hour, keeping each post 15 minutes from any other. It always counts from today. Slot minutes, the gap, how far ahead and how long one channel read is reused are on the Auto-post card, each with what it does and what it could break. Your saved schedule stays as it is until you pick the new one.

@@ -79,6 +79,15 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(rec["intro"], [0.0, 4.5], "the start bed never takes more than half the reel")
         self.assertIsNone(rec["outro"], "no room for an end bed after the start bed")
 
+    def test_fade_shape(self):  # D437: new beds fade on an s-curve; a record from before keeps straight ramps
+        self.assertEqual(rm.plan([piece(10, 40)], 0.0, None, CFG, 7)["fade"], "s-curve")
+        s = rm._fade([1.0] * 100, 1000, 100, 0, "s-curve")
+        lin = rm._fade([1.0] * 100, 1000, 100, 0, "linear")
+        self.assertEqual((s[0], lin[0]), (0.0, 0.0))
+        self.assertLess(s[10], lin[10])
+        self.assertGreater(s[90], lin[90])
+        self.assertAlmostEqual(lin[50], 0.5)
+
     def test_seed_is_stable_and_per_reel(self):
         self.assertEqual(rm.seed_for("M01", "a.mkv"), rm.seed_for("M01", "a.mkv"))
         self.assertNotEqual(rm.seed_for("M01", "a.mkv"), rm.seed_for("M02", "a.mkv"))

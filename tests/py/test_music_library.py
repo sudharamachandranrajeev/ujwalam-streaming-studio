@@ -178,6 +178,69 @@ class LibraryTests(unittest.TestCase):
         reel = {"medals": [{"t": 13.0, "w": 2.0}, {"t": 2.0, "w": 1.0}], "peaks": [1.0]}
         self.assertEqual(self.ml.strongest_reel_time(reel, ps, 0.0), 9.0)
 
+    def test_fade_curves(self):  # D437
+        import numpy as np
+        for c in self.ml.FADE_CURVES:
+            g = self.ml.fade_gain(480, c, True)
+            self.assertEqual(len(g), 480)
+            self.assertAlmostEqual(g[0], 0.0, places=9, msg=c)
+            self.assertAlmostEqual(g[-1], 1.0, places=9, msg=c)
+            self.assertTrue(bool(np.all(np.diff(g) >= -1e-12)), c + " rises")
+            o = self.ml.fade_gain(480, c, False)
+            self.assertTrue(bool(np.allclose(o, g[::-1])), c + " fade-out mirrors")
+        s, lin = self.ml.fade_gain(101, "s-curve"), self.ml.fade_gain(101, "linear")
+        self.assertLess(s[10], lin[10], "s-curve starts slower than a straight line")
+        self.assertGreater(s[90], lin[90], "and ends slower")
+        self.assertGreater(self.ml.fade_gain(101, "equal-power")[50], 0.7)
+        self.assertLess(self.ml.fade_gain(101, "exponential")[50], 0.05)
+        self.assertEqual(len(self.ml.fade_gain(0)), 0)
+        with self.assertRaises(cc.ClipError):
+            self.ml.fade_gain(10, "bounce")
+
+    def test_fade_placement(self):  # D437: full until the title ends, then the fade; the end fades in earlier
+        h = dict(self.by["hype"], duration=120.0)
+        ps = [{"start": 0.0, "end": 15.0, "kills": 1}, {"start": 20.0, "end": 35.0, "kills": 2}]
+        f = {"inSec": 1.5, "outSec": 1.5, "curve": "s-curve"}
+        io = self.ml.plan(h, "intro-outro", ps, 0.0, 8.0, 3.0, -20, self.cfg, fades=f)
+        a, b = io["segments"]
+        self.assertGreaterEqual(a["len"] - a["fadeOut"], 3.0 - 1e-3, "full level until the title ends")
+        self.assertAlmostEqual(a["fadeOut"], 1.5, places=3)
+        self.assertAlmostEqual(b["fadeIn"], 1.5, places=3)
+        self.assertAlmostEqual(b["at"] + b["fadeIn"], 30.0 - self.cfg["bed"]["outroSec"], places=3, msg="the full end keeps its length")
+        self.assertAlmostEqual(b["at"] + b["len"], 30.0, places=3, msg="nothing past the reel")
+        self.assertLessEqual(a["at"] + a["len"], b["at"] + 1e-3, "the two parts never overlap")
+        self.assertEqual(io["fadeCurve"], "s-curve")
+        # long fades on a short reel share the room between the full parts
+        short = [{"start": 0.0, "end": 9.0, "kills": 1}]
+        f4 = {"inSec": 4.0, "outSec": 4.0, "curve": "linear"}
+        s1, s2 = self.ml.plan(h, "intro-outro", short, 0.0, 4.0, 2.0, -20, self.cfg, fades=f4)["segments"]
+        self.assertLessEqual(s1["at"] + s1["len"], s2["at"] + 1e-3)
+        self.assertAlmostEqual(s2["at"] + s2["len"], 9.0, places=3)
+        early = dict(h, drop=0.5)  # Codex review: little lead-in before the drop, so the fade-in is shortened
+        e2 = self.ml.plan(early, "intro-outro", ps, 0.0, 8.0, 3.0, -20, self.cfg, fades=f)["segments"][1]
+        self.assertAlmostEqual(e2["fadeIn"], 0.5, places=3)
+        self.assertAlmostEqual(e2["from"] + e2["fadeIn"], 0.5, places=3, msg="the full end starts on the drop")
+        self.assertAlmostEqual(e2["at"] + e2["len"], 30.0, places=3)
+        for mode in ("drop", "full-bed"):
+            s = self.ml.plan(h, mode, ps, 0.0, 8.0, None, -20, self.cfg, fades=f4)["segments"][0]
+            self.assertLessEqual(s["at"] + s["len"], 30.0 + 1e-3, mode)
+            self.assertLessEqual(s["fadeOut"], s["len"] / 2.0 + 1e-3, mode)
+
+    def test_level_under_the_game_and_voice_envelope(self):  # D437
+        import numpy as np
+        self.assertEqual(self.ml.target_lufs(-20, -30.0, 8), -38.0)
+        self.assertEqual(self.ml.target_lufs(-20, -6.0, 8), -20.0, "never louder than the user's level")
+        self.assertEqual(self.ml.target_lufs(-20, None, 8), -20.0, "no measurement: the user's level")
+        sr = self.ml.SR
+        env = self.ml.voice_envelope(4 * sr, [(1.0, 2.0)], 8.0, 0.2, 0.3)
+        self.assertAlmostEqual(float(env[int(1.5 * sr)]), 10 ** (-8 / 20), places=6)
+        self.assertEqual(float(env[int(0.5 * sr)]), 1.0)
+        self.assertEqual(float(env[int(3.0 * sr)]), 1.0)
+        self.assertTrue(1.0 > float(env[int(0.9 * sr)]) > 10 ** (-8 / 20), "a smooth ramp before speech")
+        self.assertTrue(1.0 > float(env[int(2.15 * sr)]) > 10 ** (-8 / 20), "a smooth ramp after speech")
+        self.assertTrue(bool(np.all(self.ml.voice_envelope(sr, [(0.1, 0.5)], 0, 0.2, 0.3) == 1.0)), "0 dB = off")
+        self.assertTrue(bool(np.all(self.ml.voice_envelope(sr, [], 8, 0.2, 0.3) == 1.0)))
+
     @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg missing")
     def test_bed_level_measured_by_ffmpeg(self):
         ps = [{"start": 0.0, "end": 10.0, "kills": 1}]

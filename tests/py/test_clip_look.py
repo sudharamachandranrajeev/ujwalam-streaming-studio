@@ -36,6 +36,13 @@ CASES = [
     ({"name": {"sizePct": 100.5}}, ["clips.look.name.sizePct must be from 60 to 160"]),
     ({"name": {"durationSec": 2.5, "colour": "#FF3B5C", "styles": ["kinetic"]}}, []),
     ({"name": {"blur": True}}, ["unknown clips.look.name setting blur"]),
+    # D437: music under the game, voice duck, fades
+    ({"music": {"underGameDb": 8, "voiceDuckDb": 0, "fadeInSec": 0.1, "fadeOutSec": 4, "fadeCurve": "exponential"}}, []),
+    ({"music": {"underGameDb": 21, "voiceDuckDb": -1, "fadeInSec": 0, "fadeOutSec": 4.5, "fadeCurve": "bounce"}},
+     ["clips.look.music.underGameDb must be from 0 to 20", "clips.look.music.voiceDuckDb must be from 0 to 20",
+      "clips.look.music.fadeInSec must be from 0.1 to 4", "clips.look.music.fadeOutSec must be from 0.1 to 4",
+      "clips.look.music.fadeCurve must be one of s-curve, equal-power, exponential, linear"]),
+    ({"music": {"fadeInSec": "1.5"}}, ["clips.look.music.fadeInSec must be from 0.1 to 4"]),
 ]
 
 

@@ -711,7 +711,8 @@ def cmd_live_review(a):
         ass, fdir, cinfo = _caption_ass(tdoc, cinfo, src_pieces, m["pieces"], xd, frame, wd, ex)
         thumb, trec = _thumbnail(ffmpeg, c["file"], m, "live-clip", frame, wd, ex) if pieces_path else (None, None)
         ttl, tirec = _title(wd, m["pieces"], xd, frame, ex, pk) if pieces_path else (None, None)
-        mus, murec = (_music(wd, m["pieces"], xd, tirec, ex, c["id"], os.path.basename(c["file"]), pk=pk, mplan=mplan)
+        mus, murec = (_music(wd, m["pieces"], xd, tirec, ex, c["id"], os.path.basename(c["file"]), pk=pk, mplan=mplan,
+                             ffmpeg=ffmpeg, src=c["file"])
                       if pieces_path and sinfo.get("has_audio") else (None, None))
         mus, sfxrec = (_with_sfx(wd, ex, tr, m["pieces"], xd, pk, mus) if pieces_path and sinfo.get("has_audio")
                        else (mus, None))  # FX3
@@ -1391,7 +1392,8 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
         name_end = rti.timeline(pieces, xd)[0] + float(lk["look"]["name"]["durationSec"])
 
     def mk(ps):
-        return mlib.plan(track, pk["music"], ps, xd, mlib.strongest_reel_time(reel, ps, xd), name_end, mv["levelDb"], mcfg)
+        return mlib.plan(track, pk["music"], ps, xd, mlib.strongest_reel_time(reel, ps, xd), name_end, mv["levelDb"], mcfg,
+                         fades=mlib.fades_of(mv, mcfg))
     rec = mk(pieces)
     shifts = []
     if tr and lk["look"]["transitions"].get("beatSync") and pk["music"] != "drop":
@@ -1407,16 +1409,41 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
                     "record": dict(record, **origin, score=sc, target=target, beatShifts=shifts, beats=len(rec["beats"]))}
 
 
-def _music(wd, pieces, xd, title_rec, ex, *seed_parts, pk=None, mplan=None):
+def _music_level(ffmpeg, src, pieces, xd, wd, mv, mcfg):
+    """D437: (target LUFS, voice duck dict or None, record) of a folder/pack/AI track: the game mix of this reel is
+    measured once (music_voice), the music set underGameDb under it (never louder than the user's level), and the
+    speech times found for the voice duck. Any failure: the user's level and no voice duck (the old rules)."""
+    import music_voice as mvo  # noqa: PLC0415
+    lv, vc = mcfg["bed"]["level"], mcfg["bed"]["voice"]
+    under = float(mv.get("underGameDb", lv["underGameDb"]))
+    depth = float(mv.get("voiceDuckDb", vc["depthDb"]))
+    if not ffmpeg or not src:
+        return float(mv["levelDb"]), None, {"gameLufs": None, "speech": "not measured"}
+    m = mvo.measure(ffmpeg, src, pieces, xd, wd, vc, want_speech=depth > 0)
+    tgt = mlib.target_lufs(mv["levelDb"], m["gameLufs"], under)
+    voice = ({"spans": m["spans"], "depthDb": depth, "attackSec": float(vc["attackSec"]), "releaseSec": float(vc["releaseSec"])}
+             if depth > 0 and m.get("spans") else None)
+    rec = {"gameLufs": m["gameLufs"], "underGameDb": under, "targetLufs": tgt, "voiceDuckDb": depth if voice else 0,
+           "speech": m["speech"], "speechSpans": len(m["spans"] or []), "speechSec": round(sum(b - a for a, b in m["spans"] or []), 2)}
+    return tgt, voice, rec
+
+
+def _music(wd, pieces, xd, title_rec, ex, *seed_parts, pk=None, mplan=None, ffmpeg=None, src=None):
     """RP3/FX4: the music bed of a reel -> (dict for render_argv(music=) or None, record for render.json or None). With
     the clip look: no music when the look has none; a matched track of the user's folder (mplan); else the made-here
-    bed as the last fallback."""
+    bed as the last fallback. D437: a matched track is set under this reel's game mix and lowered while someone speaks
+    (ffmpeg + src given)."""
     if pk is not None and not pk.get("music"):
         return None, None
     if mplan:
         try:
-            return (mlib.prepare(wd, mplan["rec"], mplan["track"], ex["look"]["mlcfg"], ex["music"]["duck"]),
-                    mplan["record"])
+            mcfg = ex["look"]["mlcfg"]
+            tgt, voice, lrec = _music_level(ffmpeg, src, pieces, xd, wd, ex["look"]["look"]["music"], mcfg)
+            rec = dict(mplan["rec"], targetLufs=tgt)
+            return (mlib.prepare(wd, rec, mplan["track"], mcfg, ex["music"]["duck"], voice),
+                    dict(mplan["record"], targetLufs=tgt, level=lrec,
+                         voiceSpans=[list(s) for s in voice["spans"]] if voice else None,
+                         voiceDuck={k: voice[k] for k in ("depthDb", "attackSec", "releaseSec")} if voice else None))
         except Exception as e:  # noqa: BLE001 - a track that fails to decode falls back to the made-here bed
             eprint(f"music: the track is not used ({type(e).__name__}: {str(e)[-120:]}); the made-here bed is used")
             rmu.cleanup(wd)
@@ -1682,7 +1709,8 @@ def cmd_montage(a):
         ass, fdir, cinfo = _caption_ass(tdoc, cinfo, src_pieces, m["pieces"], xd, frame, wd, ex)
         thumb, trec = _thumbnail(ffmpeg, vrec, m, typ, frame, wd, ex, matches)  # RP6
         ttl, tirec = _title(wd, m["pieces"], xd, frame, exr, pk)  # FX2
-        mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec), pk=pk, mplan=mplan)  # RP3/FX4
+        mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec), pk=pk, mplan=mplan,
+                            ffmpeg=ffmpeg, src=vrec)  # RP3/FX4, D437
         mus, sfxrec = _with_sfx(wd, exr, tr, m["pieces"], xd, pk, mus)  # FX3
         def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ):
             return mont.render_argv(ffmpeg, vrec, m["pieces"], frame, rnd.ENCODERS[enc], rnd.AUDIO,
@@ -1806,7 +1834,9 @@ def _recaption_music(data_dir, wd, row, pieces, xd, rid):
             else:
                 why = f"the {kind} track is gone"
             if track is not None:
-                mus = mlib.prepare(wd, mrec, track, mcfg, cfg_m["duck"])
+                vd = mrec.get("voiceDuck")  # D437: the same level and voice duck as the first render
+                voice = dict(vd, spans=mrec["voiceSpans"]) if isinstance(vd, dict) and mrec.get("voiceSpans") else None
+                mus = mlib.prepare(wd, mrec, track, mcfg, cfg_m["duck"], voice)
                 # Codex review: a pack record is made again from the checked track that was rendered, never kept
                 return mus, (dict(mrec, **pack_record(track)) if kind == "pack"
                              else dict(mrec, **mgen.record(track)) if kind == "generated" else None)

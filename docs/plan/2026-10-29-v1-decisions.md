@@ -3032,3 +3032,38 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    picture, already in the live stream; YouTube sets no flash limit.
 3. **Unchanged**: the flash-safety rule (at most 3 flashes/s) still binds every effect Ujwalam adds (stream effects,
    clip FX) and the reels already checked (countdown, BeatDrop).
+
+## D437 — Reel music: set under the game, quieter while someone talks, curved fades (user, 2026-11-22)
+
+1. **Question** (user, 2026-11-22): the default music level says -16 dB, yet music is still loud in places; music
+   should drop where people speak in the game; the start fade-out and end fade-in are too abrupt; pick the fade curve
+   viewers like best and make it a setting.
+2. **Measured** (docs/evidence/2026-11-22-reel-music-level-fades.md): on 11 reels made that day the game mix where no
+   music played was -27 to -38 LUFS; the music, normalised to -16 LUFS on its own, sat 11 to 22 LU above the game. The
+   existing game duck (threshold 0.05, about -26 dBFS) seldom acted, since the game peaks near -22 dBFS. So -16 was not
+   correct for these recordings: the level was absolute, not tied to the game.
+3. **Decision**:
+   - Music level is now set per reel from its own game mix: the music's integrated loudness is `underGameDb` (default
+     8 dB) under the game's, measured before the render, and never louder than the user's `levelDb` (shipped default
+     -16 -> -20). Sources for the gap: guides put background music 10 dB or more under speech
+     (cursa.app "Audio basics for video editing"; wistia.com "Video background music volume": no exact formula);
+     8 dB keeps music audible in a game clip where the game itself is the foreground, not a narrator. No measurement:
+     the user's level alone (the old rule).
+   - Voice duck: the music goes `voiceDuckDb` (default 8 dB, 0 = off) lower while a voice is heard, 0.2 s attack and
+     0.3 s release on the fade curve. Speech times from Silero VAD (the onnx model shipped inside faster-whisper,
+     already in the runtime; CPU; nothing installed or downloaded). Any failure: no voice duck, render goes on with the
+     game duck. Kept: the game sidechain duck.
+   - Fades: new curves `s-curve` (default), `equal-power`, `exponential` (even dB steps), `linear` (old). Default
+     length 1.5 s in and out. Sources: Audacity manual (manual.audacityteam.org/man/adjustable_fade.html,
+     .../fade_and_crossfade.html): S-curve gives "a smoother, more musical sounding fade" than linear; equal-power is
+     meant for crossfades; KDE discussion (discuss.kde.org/t/40291): linear rarely sounds smooth. No controlled
+     listening study was found; this is expert and tool-default consensus.
+   - Placement: the start music stays full until the name/title ends, then fades out after it; the end music starts
+     `fadeInSec` earlier and rises to full, so its full 4 s is never shortened. When both fades do not fit between the
+     two full parts they are shortened in proportion; nothing plays past the reel. The made-here synth bed uses the
+     s-curve too. BeatDrop is unchanged.
+   - Settings > Clips > Clip look: Music level (kept), Music under the game, Quieter when someone talks, Fade in, Fade
+     out, Fade shape. Saved settings without the new keys load with the defaults; a saved `levelDb` stays as it is.
+4. **Not done (needs the user)**: the game mix itself is quiet (-27 to -38 LUFS; YouTube normalises down to about
+   -14, never up). Raising the game mix (loudness normalisation of track 1) would make reels louder overall; that
+   changes the main audio and is left for the user to decide.

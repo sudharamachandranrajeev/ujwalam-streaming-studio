@@ -971,6 +971,10 @@ Dialog {
             tickLook(p[1], p[2], on(p[3]));
             return true;
         case "settings-look-random": if (!draft.look) return false; setLook("", "randomise", on(p[1])); return true;
+        case "settings-look-music": // settings-look-music:<levelDb|underGameDb|voiceDuckDb|fadeInSec|fadeOutSec|fadeCurve>:<value> (D437)
+            if (!draft.look || !["levelDb", "underGameDb", "voiceDuckDb", "fadeInSec", "fadeOutSec", "fadeCurve"].includes(p[1])) return false;
+            setLook("music", p[1], p[1] === "fadeCurve" ? p[2] : parseFloat(p[2]));
+            return true;
         case "settings-montage": // settings-montage:<on|mode|avoidLast|fixedTrack>:<value> (D414; the folder is typed, not probed)
             if (!draft.montageMusic) return false;
             if (p[1] === "on") { setMontage("on", on(p[2])); return true }

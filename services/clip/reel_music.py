@@ -71,7 +71,7 @@ def plan(pieces, xd, title_rec, cfg, seed):
     outro = [round(outro_start, 3), round(total, 3)] if outro_start >= intro_end + 1.0 else None
     rng = random.Random(seed)
     prog = rng.choice(cfg["progressions"])
-    return {"seed": seed, "total": round(total, 3), "intro": [0.0, round(intro_end, 3)], "outro": outro,
+    return {"seed": seed, "total": round(total, 3), "intro": [0.0, round(intro_end, 3)], "outro": outro, "fade": "s-curve",
             "bpm": rng.randint(int(cfg["bpm"]["min"]), int(cfg["bpm"]["max"])), "key": rng.choice(cfg["keys"]),
             "progression": prog["id"]}
 
@@ -169,13 +169,16 @@ def _segment(seconds, rec, cfg, rng):
     return buf
 
 
-def _fade(seg, sr, fin_ms, fout_ms):
+def _fade(seg, sr, fin_ms, fout_ms, curve="s-curve"):
     n = len(seg)
     fi, fo = int(fin_ms / 1000.0 * sr), int(fout_ms / 1000.0 * sr)
+    # D437: s-curve (half a cosine), slow at both ends; a bed planned before D437 (no "fade" in its record) keeps its
+    # straight ramps, so recaption renders it as it was
+    shape = (lambda x: 0.5 - 0.5 * math.cos(math.pi * x)) if curve == "s-curve" else (lambda x: x)
     for i in range(min(fi, n)):
-        seg[i] *= i / fi
+        seg[i] *= shape(i / fi)
     for i in range(min(fo, n)):
-        seg[n - 1 - i] *= i / fo
+        seg[n - 1 - i] *= shape(i / fo)
     return seg
 
 
@@ -193,11 +196,11 @@ def synth(rec, cfg, path):
     rng = random.Random(rec["seed"])
     a, b = rec["intro"]
     if b > a:
-        seg = _fade(_segment(b - a, rec, cfg, rng), sr, cfg["introFadeInMs"], cfg["introFadeOutMs"])
+        seg = _fade(_segment(b - a, rec, cfg, rng), sr, cfg["introFadeInMs"], cfg["introFadeOutMs"], rec.get("fade", "linear"))
         _add(out, int(a * sr), _normalise(seg, float(cfg["gainDb"])))
     if rec.get("outro"):
         a, b = rec["outro"]
-        seg = _fade(_segment(b - a, rec, cfg, rng), sr, cfg["outroFadeInMs"], cfg["outroFadeOutMs"])
+        seg = _fade(_segment(b - a, rec, cfg, rng), sr, cfg["outroFadeInMs"], cfg["outroFadeOutMs"], rec.get("fade", "linear"))
         _add(out, int(a * sr), _normalise(seg, float(cfg["gainDb"])))
     pcm = array.array("h", (max(-32767, min(32767, int(v * 32767))) for v in out for _ in (0, 1)))
     tmp = path + ".part"

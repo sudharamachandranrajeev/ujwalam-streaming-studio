@@ -22,13 +22,15 @@ test('the shared cases give the same problems as the Python check', () => {
   assert.deepEqual(lookProblems({ name: { durationSec: 5 } }), ['clips.look.name.durationSec must be from 1 to 4']);
 });
 
-test('defaults: every style ticked, randomise on, -16 dB, no blur option', () => {
+test('defaults: every style ticked, randomise on, -20 dB, music 8 dB under the game, s-curve fades, no blur option', () => {
   const d = lookDefaults();
   assert.equal(d.defaults.randomise, true);
   assert.deepEqual(d.defaults.music.modes, ['intro-outro', 'drop', 'full-bed']);
   assert.deepEqual(d.defaults.transitions.styles, ['punchy', 'cinematic', 'clean']);
   assert.deepEqual(d.defaults.name.styles, ['lower-third', 'corner-tag', 'kinetic']);
-  assert.equal(d.defaults.music.levelDb, -16);
+  assert.equal(d.defaults.music.levelDb, -20);
+  assert.deepEqual([d.defaults.music.underGameDb, d.defaults.music.voiceDuckDb, d.defaults.music.fadeInSec, d.defaults.music.fadeOutSec,
+    d.defaults.music.fadeCurve], [8, 8, 1.5, 1.5, 's-curve']);
   assert.equal(JSON.stringify(d.defaults).includes('blur'), false);
 });
 

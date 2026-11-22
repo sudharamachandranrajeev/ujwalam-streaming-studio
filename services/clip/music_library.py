@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """FX4 music library (D411, plan docs/plan/2026-11-21-clip-music-name-transitions.md 3.4): tracks from the user's own
 music folder, analysed once off air with PyAV + numpy, matched to each reel by energy and mood, and laid under the reel
-as one WAV in one of three modes (intro-outro, drop, full-bed) at the user's level (default -16 LUFS integrated, of the
-music where it plays). No network: nothing is downloaded here. FX5 (D427): the free music pack the user downloads in
+as one WAV in one of three modes (intro-outro, drop, full-bed) under this reel's game mix (D437: underGameDb under its measured
+loudness, never louder than the user's level, default -20 LUFS integrated of the music where it plays), lower again
+while someone speaks, with curved fades. No network: nothing is downloaded here. FX5 (D427): the free music pack the user downloads in
 Settings > Downloads (item music-pack, <data>/music/pack) is a second library with its own file; only tracks listed in
 the pack's manifest, present in the pack folder and recorded in the download's marker count, and each carries its
 credit (artist, title, licence, track page) from the manifest. Local AI music is FX6, later. Data:
@@ -556,32 +557,85 @@ def strongest_reel_time(reel, pieces, xd):
     return round(total / 2.0, 3)
 
 
-def plan(track, mode, pieces, xd, strongest, title_end, level_db, cfg=None):
+FADE_CURVES = ("s-curve", "equal-power", "exponential", "linear")
+
+
+def fade_gain(n, curve="s-curve", fade_in=True):
+    """n gain values for a fade (D437). fade_in: 0 -> 1, else 1 -> 0; the first and last values are the exact ends.
+    s-curve: half a cosine, slow at both ends (Audacity's manual: smoother and more musical than linear);
+    equal-power: sine, holds the level longest; exponential: even steps in dB (-60 dB to 0), so it sounds even to the
+    ear; linear: straight line (the old ramps)."""
+    np = _np()
+    if n <= 0:
+        return np.zeros(0)
+    if n == 1:
+        return np.ones(1) if fade_in else np.zeros(1)
+    x = np.linspace(0.0, 1.0, n)
+    if curve == "linear":
+        g = x
+    elif curve == "equal-power":
+        g = np.sin(0.5 * np.pi * x)
+    elif curve == "exponential":
+        g = (10.0 ** (-3.0 * (1.0 - x)) - 1e-3) / (1.0 - 1e-3)
+    elif curve == "s-curve":
+        g = 0.5 - 0.5 * np.cos(np.pi * x)
+    else:
+        raise ClipError(f"fade curve {curve} is not known")
+    return g if fade_in else g[::-1].copy()
+
+
+def fades_of(look_music, cfg=None):
+    """The user's fade settings (clips.look.music) with the shipped defaults for any that are missing."""
+    cfg = cfg or load_config()
+    d = cfg["bed"]["fades"]
+    m = look_music or {}
+    curve = m.get("fadeCurve") if m.get("fadeCurve") in FADE_CURVES else d["curve"]
+    return {"inSec": float(m.get("fadeInSec", d["inSec"])), "outSec": float(m.get("fadeOutSec", d["outSec"])), "curve": curve}
+
+
+def plan(track, mode, pieces, xd, strongest, title_end, level_db, cfg=None, fades=None):
     """Where the track plays under the reel -> {mode, total, segments: [{at, from, len, fadeIn, fadeOut}], beats, levelDb,
-    track id/name/bpm}. Segment: reel time `at`, track time `from`, length; beats: reel times of the track's beats."""
+    fadeCurve, track id/name/bpm}. Segment: reel time `at`, track time `from`, length; beats: reel times of the track's
+    beats. D437: the start music stays full until the title ends and then fades out over fades.outSec; the end music
+    fades in over fades.inSec before its full-level part (so the full end is never shortened); the two fades share the
+    room between them, and nothing plays past the reel."""
     cfg = cfg or load_config()
     bd = cfg["bed"]
+    fades = fades or fades_of(None, cfg)
+    f_in, f_out = max(0.0, float(fades["inSec"])), max(0.0, float(fades["outSec"]))
     total = sum(float(p["end"]) - float(p["start"]) for p in pieces) - (len(pieces) - 1) * xd
     dur, bpm, off = float(track["duration"]), float(track["bpm"]), float(track["beatOffset"])
     beat = 60.0 / bpm
     segs = []
+    end_fade = max(float(bd["endFadeSec"]), f_out)
     if mode == "intro-outro":
         intro = max(float(bd["introMinSec"]), float(title_end or 0.0))
         intro = min(intro, total / 2.0)
         n_beats = max(1, int(intro / beat))
         intro = min(intro, n_beats * beat) if n_beats * beat >= float(bd["introMinSec"]) else intro
-        segs.append({"at": 0.0, "from": off, "len": intro, "fadeIn": float(bd["startFadeSec"]), "fadeOut": float(bd["introFadeOutSec"])})
+        intro = max(intro, float(title_end or 0.0)) if float(title_end or 0.0) <= total / 2.0 else intro  # full until the title ends
         osec = float(bd["outroSec"])
-        if total - osec >= intro + 1.0:
-            src = min(float(track["drop"]), max(0.0, dur - osec))
-            segs.append({"at": total - osec, "from": src, "len": osec, "fadeIn": float(bd["outroFadeInSec"]), "fadeOut": float(bd["endFadeSec"])})
+        outro = total - osec >= intro + 1.0
+        room = (total - osec - intro) if outro else (total - intro)
+        fo, fi = f_out, (f_in if outro else 0.0)
+        if fo + fi > room:  # the fades share the room between the full parts
+            k = room / (fo + fi)
+            fo, fi = fo * k, fi * k
+        segs.append({"at": 0.0, "from": off, "len": intro + fo, "fadeIn": float(bd["startFadeSec"]), "fadeOut": fo})
+        if outro:
+            full_src = min(float(track["drop"]), max(0.0, dur - osec))
+            fi = min(fi, full_src)  # Codex review: the full part still starts on the drop when the track has little lead-in
+            src = full_src - fi
+            segs.append({"at": total - osec - fi, "from": src, "len": osec + fi, "fadeIn": fi,
+                         "fadeOut": min(end_fade, osec)})
     elif mode == "drop":
         r0 = max(0.0, strongest - float(track["drop"]))
         src = float(track["drop"]) - (strongest - r0)
+        lead = min(f_in, max(float(bd["dropLeadFadeSec"]), strongest - r0)) if r0 > 0 else float(bd["startFadeSec"])
         segs.append({"at": r0, "from": src, "len": total - r0,  # a short track loops (render), never silence
-                     "fadeIn": float(bd["dropLeadFadeSec"]) if r0 > 0 else float(bd["startFadeSec"]), "fadeOut": float(bd["endFadeSec"])})
+                     "fadeIn": lead, "fadeOut": min(end_fade, (total - r0) / 2.0)})
     elif mode == "full-bed":
-        segs.append({"at": 0.0, "from": off, "len": total, "fadeIn": float(bd["startFadeSec"]), "fadeOut": float(bd["endFadeSec"])})
+        segs.append({"at": 0.0, "from": off, "len": total, "fadeIn": float(bd["startFadeSec"]), "fadeOut": min(end_fade, total / 2.0)})
     else:
         raise ClipError(f"music mode {mode} is not known")
     beats = []
@@ -591,7 +645,8 @@ def plan(track, mode, pieces, xd, strongest, title_end, level_db, cfg=None):
         while t < s["from"] + s["len"]:
             beats.append(round(s["at"] + (t - s["from"]), 3))
             t += beat
-    out = {"mode": mode, "total": round(total, 3), "levelDb": float(level_db), "track": track["id"], "name": track.get("name"),
+    out = {"mode": mode, "total": round(total, 3), "levelDb": float(level_db), "fadeCurve": fades["curve"],
+           "track": track["id"], "name": track.get("name"),
            "bpm": bpm, "segments": [{k: round(v, 3) for k, v in s.items()} for s in segs], "beats": beats}
     if any(s["from"] + s["len"] > dur - 0.01 for s in segs):  # Codex review: loop whole bars, crossfaded on a beat
         bar = 4.0 * beat
@@ -601,9 +656,42 @@ def plan(track, mode, pieces, xd, strongest, title_end, level_db, cfg=None):
     return out
 
 
-def render(rec, track, cfg=None):
-    """The bed as float stereo (n, 2) at 48 kHz, as long as the reel, at rec.levelDb integrated LUFS (of the music
-    where it plays; silence between the segments is gated out), peaks under the ceiling."""
+def target_lufs(level_db, game_lufs, under_db):
+    """D437: the music's integrated loudness: under_db below the game mix of this reel (measured), never louder than
+    the user's level. No game measurement: the user's level alone (the old rule)."""
+    if game_lufs is None or under_db is None:
+        return float(level_db)
+    return round(min(float(level_db), float(game_lufs) - float(under_db)), 2)
+
+
+def voice_envelope(n, spans, depth_db, attack_sec, release_sec, curve="s-curve"):
+    """(n,) gain for the bed at 48 kHz: depth_db lower while someone speaks (spans in reel seconds), reached over
+    attack_sec before each span starts and left over release_sec after it ends, on the fade curve. depth 0 or no
+    spans: all ones."""
+    np = _np()
+    duck = np.zeros(n)
+    if not spans or float(depth_db) <= 0 or n <= 0:
+        return np.ones(n)
+    att, rel = max(1, int(attack_sec * SR)), max(1, int(release_sec * SR))
+    up, down = fade_gain(att, curve, True), fade_gain(rel, curve, False)
+    for a, b in spans:
+        ia, ib = int(round(float(a) * SR)), int(round(float(b) * SR))
+        ia, ib = max(0, min(n, ia)), max(0, min(n, ib))
+        if ib <= ia:
+            continue
+        duck[ia:ib] = 1.0
+        s0 = max(0, ia - att)
+        duck[s0:ia] = np.maximum(duck[s0:ia], up[att - (ia - s0):])
+        e1 = min(n, ib + rel)
+        duck[ib:e1] = np.maximum(duck[ib:e1], down[:e1 - ib])
+    return 10.0 ** (-float(depth_db) * duck / 20.0)
+
+
+def render(rec, track, cfg=None, voice=None):
+    """The bed as float stereo (n, 2) at 48 kHz, as long as the reel, at rec.targetLufs (else rec.levelDb) integrated
+    LUFS (of the music where it plays; silence between the segments is gated out), peaks under the ceiling. Fades on
+    rec.fadeCurve (D437). voice: {"spans", "depthDb", "attackSec", "releaseSec"} lowers the bed while someone speaks,
+    after the level is set (so the duck is extra)."""
     np = _np()
     from scene_music import normalise  # noqa: PLC0415
     cfg = cfg or load_config()
@@ -622,13 +710,17 @@ def render(rec, track, cfg=None):
             continue
         seg = seg[:ln]
         fi, fo = min(ln, int(s["fadeIn"] * SR)), min(ln, int(s["fadeOut"] * SR))
+        curve = rec.get("fadeCurve") or "linear"  # a plan from before D437 keeps its straight ramps
         if fi > 0:
-            seg[:fi] *= np.linspace(0.0, 1.0, fi)[:, None]
+            seg[:fi] *= fade_gain(fi, curve, True)[:, None]
         if fo > 0:
-            seg[-fo:] *= np.linspace(1.0, 0.0, fo)[:, None]
+            seg[-fo:] *= fade_gain(fo, curve, False)[:, None]
         out[a:a + ln] += seg
     if float(np.abs(out).max(initial=0.0)) > 0:
-        out = normalise(out, float(rec["levelDb"]), float(cfg["bed"]["peakCeilingDb"]))
+        out = normalise(out, float(rec.get("targetLufs", rec["levelDb"])), float(cfg["bed"]["peakCeilingDb"]))
+    if voice and voice.get("spans"):
+        out *= voice_envelope(len(out), voice["spans"], voice["depthDb"], voice["attackSec"], voice["releaseSec"],
+                              rec.get("fadeCurve") or "s-curve")[:, None]
     return out
 
 
@@ -673,7 +765,7 @@ def write_wav(path, x):
         raise
 
 
-def prepare(wd, rec, track, cfg, duck):
+def prepare(wd, rec, track, cfg, duck, voice=None):
     """Writes wd/music.wav -> the dict clip_montage.render_argv(music=) takes."""
-    write_wav(os.path.join(wd, WAV), render(rec, track, cfg))
+    write_wav(os.path.join(wd, WAV), render(rec, track, cfg, voice))
     return {"file": WAV, "duck": duck}

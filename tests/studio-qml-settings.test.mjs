@@ -212,9 +212,22 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     assert.deepEqual(l.transitions.styles, ['cinematic', 'clean']);
     assert.equal(l.name.lock, 'corner-tag');
     assert.deepEqual(l.music.modes, ['intro-outro', 'full-bed']);
-    assert.equal(l.music.levelDb, -16);
+    assert.equal(l.music.levelDb, -20);
+    assert.equal(l.music.underGameDb, 8);
+    assert.equal(l.music.fadeCurve, 's-curve');
     const u = await probe(['settings-open', 'settings-page:Clips', 'settings-look-lock:name:kinetic', 'settings-look-tick:name:kinetic:off', 'settings-save'], 9000);
     assert.equal(u.saved.clips.look.name.lock, null, 'unticking the locked style clears the lock');
+  });
+
+  test('Settings > Clips: music under the game, voice duck and fades show their defaults and are saved at Save (D437)', async () => {
+    const q = await probe(['settings-open', 'settings-page:Clips']);
+    const m = q.s.settings.look.music;
+    assert.deepEqual([m.levelDb, m.underGameDb, m.voiceDuckDb, m.fadeInSec, m.fadeOutSec, m.fadeCurve], [-20, 8, 8, 1.5, 1.5, 's-curve']);
+    assert.equal(q.saved, null, 'nothing saved by looking');
+    const p = await probe(['settings-open', 'settings-page:Clips', 'settings-look-music:underGameDb:10', 'settings-look-music:voiceDuckDb:0',
+      'settings-look-music:fadeInSec:2.5', 'settings-look-music:fadeOutSec:0.8', 'settings-look-music:fadeCurve:equal-power', 'settings-save'], 9000);
+    const s = p.saved.clips.look.music;
+    assert.deepEqual([s.underGameDb, s.voiceDuckDb, s.fadeInSec, s.fadeOutSec, s.fadeCurve], [10, 0, 2.5, 0.8, 'equal-power']);
   });
 
   test('Settings > Clips: Reel styles opens without QML errors; the style per reel type and the mix are saved at Save (RS3, D412)', async () => {

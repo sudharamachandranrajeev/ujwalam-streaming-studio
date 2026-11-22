@@ -399,9 +399,97 @@ Column {
                 from: ((cp.box.info.look || {}).levelDb || {}).min || -24
                 to: ((cp.box.info.look || {}).levelDb || {}).max || -10
                 suffix: " dB"
-                value: cp.d.look ? cp.d.look.music.levelDb : -16
+                value: cp.d.look ? cp.d.look.music.levelDb : -20
                 onValueModified: cp.box.setLook("music", "levelDb", value)
             }
+        }
+        Words {
+            objectName: "lookMusicLevelHint"
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: Theme.c.muted
+            text: "The loudest the music may ever be. Lower is quieter. Above -16 dB the music can cover the game; -20 dB is the safe start."
+        }
+        // D437: the music under the game, the voice duck and the fades (clips.look.music)
+        Row {
+            spacing: Theme.sp.s
+            Words { text: "Music under the game"; anchors.verticalCenter: parent.verticalCenter }
+            USpin {
+                objectName: "lookMusicUnderGame"
+                label: "Music under the game"
+                from: ((cp.box.info.look || {}).underGameDb || {}).min || 0
+                to: ((cp.box.info.look || {}).underGameDb || {}).max || 20
+                suffix: " dB"
+                value: cp.d.look && cp.d.look.music.underGameDb !== undefined ? cp.d.look.music.underGameDb : 8
+                onValueModified: cp.box.setLook("music", "underGameDb", value)
+            }
+        }
+        Words {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: Theme.c.muted
+            text: "Each clip's game sound is measured and the music is set this much quieter than it. Higher keeps the game clearer; 0 makes the music as loud as the game and can cover it."
+        }
+        Row {
+            spacing: Theme.sp.s
+            Words { text: "Quieter when someone talks"; anchors.verticalCenter: parent.verticalCenter }
+            USpin {
+                objectName: "lookVoiceDuck"
+                label: "Quieter when someone talks"
+                from: ((cp.box.info.look || {}).voiceDuckDb || {}).min || 0
+                to: ((cp.box.info.look || {}).voiceDuckDb || {}).max || 20
+                suffix: " dB"
+                value: cp.d.look && cp.d.look.music.voiceDuckDb !== undefined ? cp.d.look.music.voiceDuckDb : 8
+                onValueModified: cp.box.setLook("music", "voiceDuckDb", value)
+            }
+        }
+        Words {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: Theme.c.muted
+            text: "Turns the music down this much more while a voice is heard in the game sound, then back up. 0 turns it off. Very high values can make the music pump on and off."
+        }
+        Row {
+            spacing: Theme.sp.s
+            Words { text: "Fade in"; anchors.verticalCenter: parent.verticalCenter }
+            USpin {
+                objectName: "lookFadeIn"
+                label: "Music fade in"
+                from: Math.round((((cp.box.info.look || {}).fadeSec || {}).min || 0.1) * 10)
+                to: Math.round((((cp.box.info.look || {}).fadeSec || {}).max || 4) * 10)
+                textFromValue: (v) => (v / 10).toFixed(1) + " s"
+                valueFromText: (t) => Math.round((parseFloat(String(t).replace(/[^0-9.]/g, "")) || 0) * 10)
+                value: Math.round((cp.d.look && cp.d.look.music.fadeInSec !== undefined ? cp.d.look.music.fadeInSec : 1.5) * 10)
+                onValueModified: cp.box.setLook("music", "fadeInSec", value / 10)
+            }
+            Words { text: "Fade out"; anchors.verticalCenter: parent.verticalCenter }
+            USpin {
+                objectName: "lookFadeOut"
+                label: "Music fade out"
+                from: Math.round((((cp.box.info.look || {}).fadeSec || {}).min || 0.1) * 10)
+                to: Math.round((((cp.box.info.look || {}).fadeSec || {}).max || 4) * 10)
+                textFromValue: (v) => (v / 10).toFixed(1) + " s"
+                valueFromText: (t) => Math.round((parseFloat(String(t).replace(/[^0-9.]/g, "")) || 0) * 10)
+                value: Math.round((cp.d.look && cp.d.look.music.fadeOutSec !== undefined ? cp.d.look.music.fadeOutSec : 1.5) * 10)
+                onValueModified: cp.box.setLook("music", "fadeOutSec", value / 10)
+            }
+        }
+        UCombo {
+            objectName: "lookFadeCurve"
+            width: Math.min(parent.width, 520)
+            label: "Fade shape"
+            model: [{ value: "s-curve", text: "Smooth S-curve (slow start and end, recommended)" },
+                    { value: "equal-power", text: "Equal power (stays loud longer, then drops)" },
+                    { value: "exponential", text: "Even to the ear (steady steps in loudness)" },
+                    { value: "linear", text: "Straight line (the old, more abrupt fade)" }]
+            currentIndex: Math.max(0, model.findIndex(m => m.value === (cp.d.look && cp.d.look.music.fadeCurve ? cp.d.look.music.fadeCurve : "s-curve")))
+            onChose: (v) => cp.box.setLook("music", "fadeCurve", v)
+        }
+        Words {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: Theme.c.muted
+            text: "Fade out: after the name at the start, the music stays full until the name ends, then fades out over this time. Fade in: the end music starts this much earlier and rises to full, so the full ending is never cut short. Long fades on a short clip are shortened so they fit."
         }
         Words { text: "Transition settings"; font.weight: Font.DemiBold }
         USwitch {
