@@ -607,7 +607,11 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   const readRetake = () => {
     let r = null;
     try { r = JSON.parse(readFileSync(path.join(stateDir, RETAKE_FILE), 'utf8')); } catch { return; }
-    try { rmSync(path.join(stateDir, RETAKE_FILE), { force: true }); } catch { /* read again next tick */ }
+    // Codex BD7b: the request file goes only after the job is in status.json (the review route, another process,
+    // reads either one as busy), so the card never sees a gap and says the take is done
+    try { takeRetake(r); } finally { try { rmSync(path.join(stateDir, RETAKE_FILE), { force: true }); } catch { /* read again next tick */ } }
+  };
+  const takeRetake = (r) => {
     if (halted || !beatdropOnSafe() || !(Number(r?.atMs) >= createdAt)) return;
     const runs = knownRuns(dataDir);
     let pieces = 0;
