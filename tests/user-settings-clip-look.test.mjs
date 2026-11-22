@@ -4,7 +4,7 @@
 // tests/fixtures/clip-look-cases.json (tests/py/test_clip_look.py). Also the one-clip choice of "Make clips?".
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,37 @@ test('defaults: every style ticked, randomise on, -16 dB, no blur option', () =>
   assert.deepEqual(d.defaults.name.styles, ['lower-third', 'corner-tag', 'kinetic']);
   assert.equal(d.defaults.music.levelDb, -16);
   assert.equal(JSON.stringify(d.defaults).includes('blur'), false);
+});
+
+test('free music pack (D427): ticked by default, offered, and packReady follows the download marker', () => withDir((d) => {
+  const def = lookDefaults();
+  assert.deepEqual(def.defaults.music.sources, ['folder', 'pack']);
+  assert.equal(def.sources.find((s) => s.id === 'pack').available, true);
+  assert.equal(lookInfo(d).packReady, false);
+  const pk = JSON.parse(readFileSync(path.join(here, '..', 'data', 'clip', 'music-library.json'), 'utf8')).pack;
+  const dir = path.join(d, ...pk.folder.split('/'));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, pk.marker), '{"files":{}}');
+  assert.equal(lookInfo(d).packReady, true);
+}));
+
+test('free music pack (D427): saved sources get the pack once; a later untick stays off', () => withDir((d) => {
+  writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ clips: { look: { music: { sources: ['folder'] } } } }));
+  assert.deepEqual(readSettings(d).clips.look.music, { sources: ['folder', 'pack'], packOffered: true });
+  assert.deepEqual(lookInfo(d).look.music.sources, ['folder', 'pack']);
+  writeSettings(d, { clips: { look: { transitions: { sfx: false } } } }); // any save stores the move
+  assert.equal(JSON.parse(readFileSync(path.join(d, 'settings.json'), 'utf8')).clips.look.music.packOffered, true);
+  writeSettings(d, { clips: { look: { music: { sources: ['folder'] } } } });
+  assert.deepEqual(readSettings(d).clips.look.music.sources, ['folder'], 'unticked by the user: stays off');
+  assert.deepEqual(lookProblems({ music: { packOffered: 'yes' } }), ['clips.look.music.packOffered must be true or false']);
+}));
+
+test('free music pack (D427): shared cases with the Python side, validated first, then moved', () => {
+  const cases = JSON.parse(readFileSync(path.join(here, 'fixtures', 'clip-look-pack-migration.json'), 'utf8'));
+  for (const [stored, want] of cases) withDir((d) => {
+    if (stored !== null) writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ clips: { look: stored } }));
+    assert.deepEqual(lookInfo(d).look.music.sources, want, JSON.stringify(stored));
+  });
 });
 
 test('round trip: saved group by group, read back, a bad stored value reads as the defaults', () => withDir((d) => {

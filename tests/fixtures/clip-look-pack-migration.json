@@ -1,0 +1,8 @@
+[
+  [{"music": {"sources": ["folder"]}}, ["folder", "pack"]],
+  [{"music": {"sources": ["folder"], "packOffered": true}}, ["folder"]],
+  [{"music": {"sources": ["unknown"]}}, ["folder", "pack"]],
+  [{"music": {"sources": []}}, ["pack"]],
+  [{"music": {"sources": ["pack", "folder"]}}, ["folder", "pack"]],
+  [null, ["folder", "pack"]]
+]

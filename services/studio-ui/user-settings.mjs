@@ -205,7 +205,7 @@ export function reelTransitionInfo(dataDir) {
 // cases: tests/fixtures/clip-look-cases.json). Any part may be left out; the rest keeps its default (data/clip/look.json).
 export const CLIP_LOOK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'clip', 'look.json');
 export const LOOK_GROUPS = Object.freeze(['music', 'transitions', 'name']);
-const LOOK_KEYS = Object.freeze({ music: ['modes', 'sources', 'folder', 'levelDb', 'lock'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
+const LOOK_KEYS = Object.freeze({ music: ['modes', 'sources', 'folder', 'levelDb', 'lock', 'packOffered'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
   name: ['styles', 'position', 'colour', 'sizePct', 'durationSec', 'logo', 'lock'] });
 let lookCache = null;
 /** data/clip/look.json, or null when unreadable. */
@@ -245,6 +245,7 @@ export function lookProblems(v, d = lookDefaults()) {
   if ('sources' in m) out.push(...lookTicks(m.sources, d.sources.map((s) => s.id), 'clips.look.music.sources'));
   if ('folder' in m && (typeof m.folder !== 'string' || m.folder.length > d.folderMaxChars || /[\x00-\x1f]/.test(m.folder))) out.push(`clips.look.music.folder must be a folder path up to ${d.folderMaxChars} characters`);
   if ('levelDb' in m) out.push(...lookRange(m.levelDb, d.levelDb, 'clips.look.music.levelDb'));
+  if ('packOffered' in m && typeof m.packOffered !== 'boolean') out.push('clips.look.music.packOffered must be true or false');
   const n = plainObj(v.name) ? v.name : {};
   if ('position' in n && !d.positions.includes(n.position)) out.push(`clips.look.name.position must be one of ${d.positions.join(', ')}`);
   if ('colour' in n && !(n.colour === 'theme' || (typeof n.colour === 'string' && /^#[0-9A-Fa-f]{6}$/.test(n.colour)))) out.push('clips.look.name.colour must be theme or a colour like #FF3B5C');
@@ -262,7 +263,20 @@ export function lookOverrideProblems(v, d = lookDefaults()) {
     : x === 'off' || lookIds(d, g).includes(x) ? [] : [`look.${g} must be off or one of ${lookIds(d, g).join(', ')}`]));
 }
 
-const readLook = (v) => (v !== undefined && lookDefaults() && lookProblems(v).length === 0 ? structuredClone(v) : null);
+const readLook = (v) => (v !== undefined && lookDefaults() && lookProblems(v).length === 0 ? migrateLookPack(structuredClone(v)) : null);
+/**
+ * D427 one-time move: music sources saved before the free pack existed (no packOffered) could not be a choice against
+ * it, so the pack is added once and packOffered records that; the next save stores it, and a later untick stays off.
+ * Same rule as services/clip/clip_look.py migrate_pack.
+ */
+export function migrateLookPack(v) {
+  const m = v?.music;
+  if (!plainObj(m) || m.packOffered === true || !Array.isArray(m.sources)) return v;
+  const ids = (lookDefaults()?.sources ?? []).map((s) => s.id);
+  m.sources = ids.filter((x) => x === 'pack' || m.sources.includes(x));
+  m.packOffered = true;
+  return v;
+}
 
 /** The stored look after a patch: group by group, part by part. */
 function mergeLook(cur, patch) {
@@ -270,6 +284,7 @@ function mergeLook(cur, patch) {
   const out = structuredClone(cur ?? {});
   if ('randomise' in patch) out.randomise = patch.randomise;
   for (const g of LOOK_GROUPS) if (patch[g]) out[g] = { ...(out[g] ?? {}), ...structuredClone(patch[g]) };
+  if (Array.isArray(patch.music?.sources)) out.music.packOffered = true; // D427: sources chosen with the pack on offer
   return Object.keys(out).length ? out : null;
 }
 
@@ -282,7 +297,14 @@ export function lookInfo(dataDir) {
   if ('randomise' in mine) look.randomise = mine.randomise;
   for (const g of LOOK_GROUPS) Object.assign(look[g], mine[g] ?? {});
   return { flag: d.flag, groups: d.groups, sources: d.sources, positions: d.positions, levelDb: d.levelDb, sizePct: d.sizePct,
-    durationSec: d.durationSec, defaults: d.defaults, look };
+    durationSec: d.durationSec, defaults: d.defaults, look, packReady: musicPackReady(dataDir) };
+}
+/** FX5 (D427): true when the free music pack's download finished (its marker is in the pack folder). */
+export function musicPackReady(dataDir) {
+  try {
+    const pk = JSON.parse(readFileSync(path.join(path.dirname(CLIP_LOOK_FILE), 'music-library.json'), 'utf8')).pack;
+    return typeof dataDir === 'string' && existsSync(path.join(dataDir, ...pk.folder.split('/'), pk.marker));
+  } catch { return false; }
 }
 // ---- clip look end
 // ---- reel styles (RS3, D412) begin: clips.reelStyles checks and read; also marked "reel styles" in readSettings,

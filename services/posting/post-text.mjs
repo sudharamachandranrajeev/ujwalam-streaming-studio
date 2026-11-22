@@ -110,6 +110,7 @@ export function musicCredit(mm, cfg = montageCfg()) {
   if (mm === undefined || mm === null) return { use: 'none' };
   if (mm === 'unknown') return { use: 'refuse', reason: "re-render to post: the song's source is not known", renderOnly: false, unknown: true };
   if (!isPlain(mm) || !cfg) return { use: 'refuse', reason: 'the montage music record cannot be read', renderOnly: false };
+  if (isPlain(cfg.pack) && mm.library === cfg.pack.library) return packCredit(mm, cfg);
   if (mm.library !== cfg.library) return { use: 'refuse', reason: 'render only, not auto-posted: the montage song is not from your NCS library', renderOnly: true };
   const origin = cfg.ncsFilename && mm.origin === cfg.ncsFilename.source ? mm.origin : null;
   const bad = creditProblem(mm.credit, cfg, origin);
@@ -118,10 +119,41 @@ export function musicCredit(mm, cfg = montageCfg()) {
   const text = (origin ? cfg.ncsFilename.template : cfg.credit.template).map((s) => s.replace(/\{(artist|title|line|link)\}/g, (_m, k) => c[k])).filter((s) => s.trim()).join('\n');
   return { use: 'credit', text };
 }
+/** FX5 (D427): a free-pack track (CC0) posts with its credit line anyway; a missing or unsafe credit is never sent. */
+/**
+ * The free pack's manifest files by name (data/downloads/music-pack.json, item cfg.pack.item), read on every call (it
+ * is small; Codex verify: a manifest removed or broken later is never trusted from an earlier read). null when the
+ * file cannot be read or parsed, items is not a list, or the item or its file list is missing (refused, fail closed).
+ */
+export function packTracks(p, repo = REPO) {
+  const j = readJson(path.join(repo, ...String(p?.manifest ?? '').split('/')));
+  if (!isPlain(j) || !Array.isArray(j.items)) return null;
+  const it = j.items.find((x) => isPlain(x) && x.id === p.item);
+  if (!isPlain(it) || !Array.isArray(it.files)) return null;
+  return Object.fromEntries(it.files.filter((f) => isPlain(f) && typeof f.name === 'string').map((f) => [f.name, f]));
+}
+function packCredit(mm, cfg, repo = REPO) {
+  const p = cfg.pack;
+  const c = mm.credit;
+  const tracks = packTracks(p, repo);
+  if (!tracks) return { use: 'refuse', reason: "not sent: the free music pack's track list cannot be read.", renderOnly: false };
+  const own = typeof mm.trackId === 'string' && Object.hasOwn(tracks, mm.trackId) ? tracks[mm.trackId] : null;
+  const bad = creditProblem(isPlain(c) ? { artist: c.artist, title: c.title, link: c.link } : c, cfg)
+    ?? (!isPlain(c) || typeof c.licence !== 'string' || !p.licences.includes(c.licence) ? 'the free-pack song has no known licence' : null)
+    ?? (typeof c.link !== 'string' || !c.link.startsWith(p.linkPrefix) ? "the free-pack song credit's link is not its Free Music Archive page" : null)
+    // Codex review: the credit must be the very track's own (its manifest row), never another track's or a made-up one
+    ?? (!own ? 'the free-pack song is not a track of the pack' : null)
+    ?? (own.artist !== c.artist || own.title !== c.title || own.licence !== c.licence || own.fma !== c.link ? "the free-pack song credit does not match the pack's own record of the track" : null);
+  if (bad) return { use: 'refuse', reason: `not sent: ${bad}. Download the free music pack again in Settings > Downloads.`, renderOnly: false };
+  const v = { artist: c.artist.trim(), title: c.title.trim(), link: c.link.trim() };
+  const text = p.template.map((s) => s.replace(/\{(artist|title|link)\}/g, (_m, k) => v[k])).filter((s) => s.trim()).join('\n');
+  return { use: 'credit', text };
+}
 /**
  * Codex BD review: a clip row's music, from the render's own record (row.music: clip_publish.py music_provenance, in
  * uploads.json or the <video>.music.json sidecar a clips-folder scan reads), as musicCredit's input. Made-here music
- * and no music -> undefined (postable); the NCS library -> { library: 'ncs', trackId, credit }; the D411 music folder
+ * and no music -> undefined (postable); the NCS library -> { library: 'ncs', trackId, credit }; the FX5 free pack ->
+ * { library: 'pack', trackId, credit } (posted with its credit); the D411 music folder
  * -> { library: null } (render only); an unknown record -> 'unknown' (held). A row with no record (rendered before
  * records were kept), of any kind: made here (postable) when legacyMadeHere (see legacyMadeHere), else 'unknown'.
  */
@@ -135,6 +167,7 @@ export function musicOf(row, { legacyMadeHere = false } = {}) {
   if (m.source === 'ncs') return { library: 'ncs', trackId: m.trackId, credit: m.credit ?? null };
   if (m.source === 'ncs-filename') return { library: 'ncs', origin: 'ncs-filename', trackId: m.trackId, credit: m.credit ?? null };
   if (m.source === 'user-folder') return { library: null };
+  if (m.source === 'pack') return { library: 'pack', trackId: m.trackId, credit: m.credit ?? null };
   return 'unknown';
 }
 /**
@@ -200,6 +233,7 @@ export function renderMusic(rdoc, clipId) {
   if (m.source === 'ncs') return { source: 'ncs', trackId: m.trackId, credit: m.credit ?? null };
   if (m.source === 'ncs-filename') return { source: 'ncs-filename', trackId: m.trackId, credit: m.credit ?? null, ncs: m.ncs ?? null };
   if (m.source === 'folder') return { source: 'user-folder', track: m.track };
+  if (m.source === 'pack') return { source: 'pack', trackId: m.trackId, credit: m.credit ?? null };
   if (m.source === 'made-here' || (m.source === undefined && !('track' in m) && 'seed' in m)) return { source: 'generated' };
   return { source: 'unknown' };
 }

@@ -108,7 +108,8 @@ def music_provenance(c, records=False):
     """Codex BD review (D414): where a rendered clip's music came from, from its own render.json entry ("music", the
     record clipper.py _music writes). -> {"source": "none"} (no music), {"source": "generated"} (made here: RP3 beds,
     D411 made-here fallback), {"source": "user-folder", "track"} (the D411 music folder: render only, never posted),
-    {"source": "ncs", "trackId", "credit"} (the NCS library: posted with its credit), {"source": "unknown"} (a record
+    {"source": "ncs", "trackId", "credit"} (the NCS library: posted with its credit), {"source": "pack", "trackId",
+    "credit"} (FX5 free music pack: posted with its credit), {"source": "unknown"} (a record
     of an unknown shape, or a render that keeps records but wrote none for this clip: held), or None (an older render
     without records: posting's legacy rule decides)."""
     if not isinstance(c, dict) or "music" not in c:
@@ -127,6 +128,8 @@ def music_provenance(c, records=False):
         return {"source": "ncs-filename", "trackId": m.get("trackId"), "credit": m.get("credit"), "ncs": m.get("ncs")}
     if src == "folder":
         return {"source": "user-folder", "track": m.get("track")}
+    if src == "pack":  # FX5 (D427): the free music pack, posted with its credit (CC0: credited anyway)
+        return {"source": "pack", "trackId": m.get("trackId"), "credit": m.get("credit")}
     if src == "made-here" or (src is None and "track" not in m and "seed" in m):
         return {"source": "generated"}
     return {"source": "unknown"}

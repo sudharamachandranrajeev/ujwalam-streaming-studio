@@ -34,7 +34,7 @@
   },
   "sources": [
     { "id": "folder", "label": "My music folder", "available": true },
-    { "id": "pack", "label": "Free music pack (download, asks you first)", "available": false },
+    { "id": "pack", "label": "Free music pack (download it in Settings > Downloads)", "available": true },
     { "id": "ai", "label": "Made on this PC by AI (install, asks you first)", "available": false }
   ],
   "positions": ["auto", "top-left", "top-right", "bottom-left", "bottom-right", "upper-third", "lower-third"],
@@ -44,7 +44,7 @@
   "folderMaxChars": 400,
   "defaults": {
     "randomise": true,
-    "music": { "modes": ["intro-outro", "drop", "full-bed"], "sources": ["folder"], "folder": "", "levelDb": -16, "lock": null },
+    "music": { "modes": ["intro-outro", "drop", "full-bed"], "sources": ["folder", "pack"], "folder": "", "levelDb": -16, "lock": null },
     "transitions": { "styles": ["punchy", "cinematic", "clean"], "sfx": true, "beatSync": true, "lock": null },
     "name": { "styles": ["lower-third", "corner-tag", "kinetic"], "position": "auto", "colour": "theme", "sizePct": 100,
               "durationSec": 2.0, "logo": true, "lock": null }

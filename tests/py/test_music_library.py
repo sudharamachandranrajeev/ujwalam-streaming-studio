@@ -353,5 +353,169 @@ class WiringTests(unittest.TestCase):
                          "captions are made on the final timeline, so beat sync stays on (Codex review)")
 
 
+@unittest.skipUnless(np is not None, "numpy/PyAV missing (use the project venv)")
+class PackTests(unittest.TestCase):
+    """FX5 (D427): the free music pack counts only files in its manifest, in <data>/music/pack, listed in the
+    download's marker with their own size. A fake pack in a temp folder: nothing is downloaded."""
+
+    def setUp(self):
+        import music_library as ml  # noqa: PLC0415
+        self.ml = ml
+        self.tmp = tempfile.mkdtemp(prefix="fx5-")
+        self.data = os.path.join(self.tmp, "data")
+        self.pack = os.path.join(self.data, "music", "pack")
+        os.makedirs(self.pack)
+        man = os.path.join(self.tmp, "music-pack.json")
+        files = {"pack-01-a.wav": hype_track(12.0), "pack-02-b.wav": calm_track(12.0), "pack-03-c.wav": calm_track(10.0)}
+        rows, marker = [], {}
+        for i, (name, x) in enumerate(files.items()):
+            p = os.path.join(self.pack, name)
+            write_wav(p, x)
+            rows.append({"name": name, "bytes": os.path.getsize(p), "sha256": ml._sha256(p), "artist": f"Artist {i}",
+                         "title": f"Song {i}", "licence": "CC0-1.0", "fma": f"https://freemusicarchive.org/music/a/{i}/"})
+            if name != "pack-03-c.wav":  # the third is in the folder but not in the marker: not finished
+                marker[name] = {"size": os.path.getsize(p)}
+        write_wav(os.path.join(self.pack, "extra.wav"), calm_track(10.0))  # not in the manifest
+        marker["extra.wav"] = {"size": os.path.getsize(os.path.join(self.pack, "extra.wav"))}
+        cc.write_json_atomic(man, {"items": [{"id": "music-pack", "dest": "music/pack", "files": rows}]})
+        self.marker = os.path.join(self.pack, ".ujwalam-download.json")
+        cc.write_json_atomic(self.marker, {"files": marker})
+        cfg = ml.load_config()
+        rel = os.path.relpath(man, os.path.dirname(cc.CLIP_DATA)).replace(os.sep, "/")
+        self.cfg = dict(cfg, pack=dict(cfg["pack"], manifest=rel))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_only_manifest_files_with_the_marker(self):
+        got = self.ml.pack_files(self.data, self.cfg)
+        self.assertEqual(sorted(os.path.basename(p) for p in got), ["pack-01-a.wav", "pack-02-b.wav"])
+        self.assertEqual(got[os.path.join(self.pack, "pack-01-a.wav")],
+                         {"artist": "Artist 0", "title": "Song 0", "licence": "CC0-1.0",
+                          "fma": "https://freemusicarchive.org/music/a/0/", "file": "pack-01-a.wav",
+                          "sha256": self.ml._sha256(os.path.join(self.pack, "pack-01-a.wav"))})
+        lib = self.ml.refresh_pack(self.data, self.cfg, live=lambda: False)
+        self.assertTrue(os.path.isfile(os.path.join(self.data, "music", "pack-library.json")), "its own library file")
+        self.assertFalse(os.path.exists(os.path.join(self.data, "music", "library.json")), "the folder library is untouched")
+        use = self.ml.usable_pack(lib, self.data, self.cfg)
+        self.assertEqual(sorted(t["name"] for t in use), ["pack-01-a", "pack-02-b"])
+        self.assertTrue(all(t["pack"]["licence"] == "CC0-1.0" and t["root"] == self.pack for t in use))
+        self.assertEqual(self.ml.usable(self.ml.load_library(self.data, self.cfg)), [])
+
+    def test_no_marker_no_tracks_and_nothing_while_live(self):
+        self.assertEqual(self.ml.refresh_pack(self.data, self.cfg, live=lambda: True)["tracks"], [], "never analysed live")
+        self.assertEqual(self.ml.refresh_pack(self.data, self.cfg, live=lambda: 1 / 0)["tracks"], [], "unknown = live")
+        lib = self.ml.refresh_pack(self.data, self.cfg, live=lambda: False)
+        os.remove(self.marker)
+        self.assertEqual(self.ml.pack_files(self.data, self.cfg), {})
+        self.assertEqual(self.ml.usable_pack(lib, self.data, self.cfg), [], "a removed marker drops the tracks")
+
+    def test_changed_size_drops_the_track(self):
+        lib = self.ml.refresh_pack(self.data, self.cfg, live=lambda: False)
+        with open(os.path.join(self.pack, "pack-02-b.wav"), "ab") as f:
+            f.write(bytes(16))
+        self.assertEqual([t["name"] for t in self.ml.usable_pack(lib, self.data, self.cfg)], ["pack-01-a"])
+
+    def test_same_size_same_time_replacement_is_refused_at_pick(self):
+        """Codex verify: no hash cache; the picked track is hashed when it is used, so a same-size replacement with
+        its old modified time restored is refused and no credit is written."""
+        import clipper  # noqa: PLC0415
+        import clip_look as cl  # noqa: PLC0415
+        lib = self.ml.refresh_pack(self.data, self.cfg, live=lambda: False)
+        track = next(t for t in self.ml.usable_pack(lib, self.data, self.cfg) if t["name"] == "pack-01-a")
+        self.assertTrue(self.ml.verify_pick(track))
+        p = track["file"]
+        st = os.stat(p)
+        with open(p, "r+b") as f:
+            f.seek(-8, os.SEEK_END)
+            f.write(bytes(8) if open(p, "rb").read()[-8:] != bytes(8) else b"\x01" * 8)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual((os.stat(p).st_size, os.stat(p).st_mtime_ns), (st.st_size, st.st_mtime_ns))
+        track = next(t for t in self.ml.usable_pack(lib, self.data, self.cfg) if t["name"] == "pack-01-a")
+        self.assertFalse(self.ml.verify_pick(track), "listed by name and size, refused by its bytes")
+        self.assertFalse(os.path.exists(os.path.join(self.data, "music", "pack-hashes.json")), "no hash cache")
+        lcfg = cl.load_config()
+        ex = {"look": {"cfg": lcfg, "look": cl.merge(lcfg, {}), "tracks": [dict(track, energyLevel=0.8, mood="edm")],
+                       "mlcfg": self.cfg, "history": {}}, "music": None}
+        ps = [{"start": 0.0, "end": 5.0, "kills": 1}, {"start": 9.0, "end": 14.0, "kills": 1}]
+        _, mp = clipper._look_music_plan(ex, {"music": "full-bed", "transitions": None, "name": None}, ps, 0.22, None,
+                                         {"kills": 4, "streaks": 1, "pieces": ps}, "montage", None, "M1")
+        self.assertIsNone(mp, "no pack record: the made-here bed is used")
+        rec = {"source": "pack", "track": track["id"], "trackId": "pack-01-a.wav", "credit": {}, "mode": "full-bed",
+               "total": 9.78, "levelDb": -16, "segments": [{"at": 0, "from": 0, "len": 9.78, "fadeIn": 0.05, "fadeOut": 1.2}]}
+        wd = os.path.join(self.tmp, "wd2")
+        os.makedirs(wd)
+        orig = self.ml.load_config
+        self.ml.load_config = lambda path=None: self.cfg
+        try:
+            _, new = clipper._recaption_music(self.data, wd, {"music": rec}, ps, 0.22, "r1")
+        finally:
+            self.ml.load_config = orig
+        self.assertEqual((new["source"], new["fallback"]), ("made-here", "the pack track does not match the pack's checksum"))
+
+    def test_junction_pack_folder_does_not_count(self):
+        import subprocess  # noqa: PLC0415
+        outside = os.path.join(self.tmp, "outside")
+        shutil.copytree(self.pack, outside)
+        shutil.rmtree(self.pack)
+        if os.name != "nt":
+            self.skipTest("junctions are Windows only")
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", self.pack, outside], capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), check=False)
+        if r.returncode != 0 or not os.path.isdir(self.pack):
+            self.skipTest("mklink /J did not work here")
+        try:
+            self.assertFalse(self.ml.pack_folder_ok(self.data, self.cfg))
+            self.assertEqual(self.ml.pack_files(self.data, self.cfg), {}, "a junction with a matching marker is refused")
+        finally:
+            os.rmdir(self.pack)  # removes the junction only
+
+    def test_clipper_pack_record_and_recaption(self):
+        import clipper  # noqa: PLC0415
+        import clip_look as cl  # noqa: PLC0415
+        import clip_publish as pub  # noqa: PLC0415
+        lib = self.ml.refresh_pack(self.data, self.cfg, live=lambda: False)
+        track = next(t for t in self.ml.usable_pack(lib, self.data, self.cfg) if t["name"] == "pack-01-a")
+        lcfg = cl.load_config()
+        self.assertIn("pack", cl.merge(lcfg, {})["music"]["sources"], "ticked by default (the user asked for the pack)")
+        self.assertTrue(next(s for s in lcfg["sources"] if s["id"] == "pack")["available"])
+        ex = {"look": {"cfg": lcfg, "look": cl.merge(lcfg, {}), "tracks": [dict(track, energyLevel=0.8, mood="edm")],
+                       "mlcfg": self.cfg, "history": {}}, "music": None}
+        ps = [{"start": 0.0, "end": 5.0, "kills": 1}, {"start": 9.0, "end": 14.0, "kills": 1}]
+        pk = {"music": "full-bed", "transitions": None, "name": None}
+        reel = {"kills": 4, "streaks": 1, "pieces": ps}
+        _, mp = clipper._look_music_plan(ex, pk, ps, 0.22, None, reel, "montage", None, "M1")
+        rec = mp["record"]
+        self.assertEqual((rec["source"], rec["trackId"], rec["track"]), ("pack", "pack-01-a.wav", track["id"]))
+        self.assertEqual(rec["credit"], {"artist": "Artist 0", "title": "Song 0", "licence": "CC0-1.0",
+                                         "link": "https://freemusicarchive.org/music/a/0/"})
+        self.assertEqual(pub.music_provenance({"music": rec}, True),
+                         {"source": "pack", "trackId": "pack-01-a.wav", "credit": rec["credit"]})
+        wd = os.path.join(self.tmp, "wd")
+        os.makedirs(wd)
+        orig = self.ml.load_config
+        self.ml.load_config = lambda path=None: self.cfg
+        try:
+            stale = dict(rec, trackId="pack-02-b.wav", credit={"artist": "Someone else"})
+            mus, new = clipper._recaption_music(self.data, wd, {"music": stale}, ps, 0.22, "r1")
+            self.assertTrue(os.path.isfile(os.path.join(wd, mus["file"])))
+            self.assertEqual((new["trackId"], new["credit"]), ("pack-01-a.wav", rec["credit"]),
+                             "the record is made again from the track rendered, never the stored credit")
+            os.remove(self.marker)
+            mus, new = clipper._recaption_music(self.data, wd, {"music": rec}, ps, 0.22, "r1")
+            self.assertEqual((new["source"], new["fallback"]), ("made-here", "the pack track is gone"))
+            import reel_music as rmu  # noqa: PLC0415
+            plan0 = rmu.plan
+            rmu.plan = lambda *a, **k: (_ for _ in ()).throw(ValueError("no bed"))
+            try:
+                mus, new = clipper._recaption_music(self.data, wd, {"music": rec}, ps, 0.22, "r1")
+            finally:
+                rmu.plan = plan0
+            self.assertIsNone(mus)
+            self.assertEqual(new, clipper.NO_MUSIC, "no music in the video: the pack credit is not kept")
+        finally:
+            self.ml.load_config = orig
+
+
 if __name__ == "__main__":
     unittest.main()

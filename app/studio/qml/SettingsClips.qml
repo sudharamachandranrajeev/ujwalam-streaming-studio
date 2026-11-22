@@ -334,6 +334,17 @@ Column {
             }
         }
         Words { text: "Music settings"; font.weight: Font.DemiBold }
+        USwitch {
+            objectName: "lookMusicPack"
+            readonly property var srcs: cp.d.look ? (cp.d.look.music.sources || []) : []
+            width: parent.width
+            text: "Use the free music pack"
+            hint: (cp.box.info.look || {}).packReady === true
+                  ? "37 free tracks (CC0, Free Music Archive). Posts name the artist and track."
+                  : "Not downloaded yet: get it in Settings > Downloads. Until then clips use your folder or music made on this PC."
+            checked: srcs.includes("pack")
+            onToggled: cp.box.setLook("music", "sources", ((cp.box.info.look || {}).sources || []).map(s => s.id).filter(x => x === "pack" ? checked : srcs.includes(x)))
+        }
         Words { text: "My music folder (tracks are picked to fit each clip; nothing is downloaded)" }
         UField {
             objectName: "lookMusicFolder"

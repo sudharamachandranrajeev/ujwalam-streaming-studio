@@ -2818,3 +2818,39 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    yet in docs/licenses/). The window reports "shown" only when the image decoded, and says so when it could not.
    The test fixture is now a real 16x9 JPEG. Check: the packaged studio passes the review test with the plugin and
    fails it without.
+
+## D427 — Free music pack joins the clip music, posts credit it (decided, 2026-11-22)
+
+1. **Reports** (user, FX5 plan 3.4; yes to the download 2026-11-22): clips should be able to use a free music pack
+   next to the user's own folder, downloaded only on the user's click in Settings > Downloads.
+2. **Check**: `data/downloads/music-pack.json` lists 37 tracks, each CC0 1.0 by its artist on the Free Music Archive
+   (manifest `$comment`: FMA metadata dataset says cc0 for all; three FMA pages read by hand, 34 UNVERIFIED by hand).
+3. **Change**: the music library has a second library for the pack (`<data>/music/pack-library.json`), analysed with
+   the same analysis and limits as the folder and never while live. A track counts only when it is in the manifest,
+   a plain file in `<data>/music/pack` and listed in the download marker with its own size. The clip look offers the
+   pack (`available: true`) and ticks it by default (`sources: ["folder", "pack"]`, the user asked for it); a pack
+   that is not downloaded gives no tracks, and Settings > Clips says so and points to Settings > Downloads. A pack
+   pick writes `source: "pack"`, `trackId` and `credit {artist, title, licence, link}` (link = FMA page). Recaption
+   renders it again or falls back to the made-here bed. Posting (Python `music_provenance`, Node `musicOf`,
+   `renderMusic`, `musicCredit`) posts a pack track with the credit line from `data/clip/montage-music.json` `pack`
+   ("Music: {artist} - {title} (CC0, Free Music Archive)" and the link). CC0 needs no credit; it is credited anyway.
+   A missing or unsafe credit, a licence outside `pack.licences` or a link outside the FMA site is refused (the NCS
+   credit's text checks). A countdown reel whose entries share one pack track (with none or made-here beds) posts
+   with that credit; a mix of tracks stays held.
+4. **Codex review of fc6f467** (fixed): the picked pack track must match the manifest SHA-256, hashed whole each time
+   it is picked or re-rendered, with no cache (Codex verify of 6e828c6: a size and time cache could be fooled); the
+   library lists pack files by name and size only, and a mismatch falls back as for a gone track. The pack folder must be the real folder (no link or
+   junction from the data root down, resolved path equal to the expected one); the render record's `trackId` is the
+   manifest file name and posting refuses a credit that is not exactly that file's manifest row (artist, title,
+   licence, FMA page), or a missing or unknown id; recaption makes the pack record again from the checked track it
+   rendered; when the pack track is gone and the made-here bed also fails, the record becomes no music. Posting reads
+   the manifest on every call and refuses when it is gone, broken or not a list. A junction at the data root itself
+   (or above it) is accepted on purpose: the data root is the app's own trusted place and a user may move it with a
+   junction; the check guards the folders below it.
+5. **Settings move**: sources saved before the pack existed could not be a choice against it. A one-time move adds
+   `pack` to saved `clips.look.music.sources` that have no `packOffered`, and sets `packOffered: true` (Node
+   `migrateLookPack`, Python `clip_look.migrate_pack`, same rule; both validate the stored value first and a bad value
+   is the defaults, shared cases in `tests/fixtures/clip-look-pack-migration.json`); the next save stores it, and choosing sources in
+   Settings also sets it, so a later untick stays off.
+6. **Live risk**: none on air: analysis and hashing run only off air, as for the folder. UNVERIFIED: a real render
+   with a downloaded pack track; the credit wording against FMA's own guidance.
