@@ -612,10 +612,11 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     try { r = JSON.parse(raw); } catch { r = null; } // unreadable: removed below, so it never blocks the next request
     // Codex BD7b: the request file goes only after the job is in status.json (the review route, another process,
     // reads either one as busy), so the card never sees a gap and says the take is done. A file that could not be
-    // removed is read again next tick: its atMs was taken already, so it is not queued twice.
-    try { if (r !== null && Number(r.atMs) !== lastRetakeAt) { lastRetakeAt = Number(r.atMs); takeRetake(r); } } finally { try { rmSync(f, { force: true }); } catch { /* read again next tick */ } }
+    // removed is read again next tick: it was taken already, so it is not queued twice.
+    const key = r !== null ? JSON.stringify([r.run, r.op, r.piece, r.atMs]) : null; // the whole request, not its time alone (Codex)
+    try { if (key !== null && key !== lastRetake) { lastRetake = key; takeRetake(r); } } finally { try { rmSync(f, { force: true }); } catch { /* read again next tick */ } }
   };
-  let lastRetakeAt = null;
+  let lastRetake = null;
   const takeRetake = (r) => {
     if (halted || !beatdropOnSafe() || !(Number(r?.atMs) >= createdAt)) return;
     const runs = knownRuns(dataDir);
