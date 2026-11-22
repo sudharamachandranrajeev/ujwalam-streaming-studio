@@ -288,7 +288,7 @@ class NcsFilenameTests(unittest.TestCase):
             self.assertEqual(rows[NCS_OK]["link"], "https://youtu.be/PTF5xgT-pm8")
             self.assertEqual(rows["My Own Song.mp3"]["source"], "none")
             tr = mm.pick(os.path.join(tmp, "d"), folder, {"mode": "fixed", "fixedTrack": rows[NCS_OK]["id"], "folder": folder},
-                         ["s"], self.cfg, live=OFF)
+                         ["s"], self.cfg, live=OFF, tags=lambda p: {})  # CI's plain Python has no PyAV
             rec = mm.music_record(tr, self.cfg)
             self.assertEqual(rec["source"], "ncs-filename")
             self.assertEqual(rec["ncs"], {"artist": "Aero Chord feat. DDARK", "title": "Shootin Stars", "genre": "Trap", "youtubeId": "PTF5xgT-pm8"})

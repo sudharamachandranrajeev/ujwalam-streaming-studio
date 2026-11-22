@@ -365,14 +365,15 @@ def view(doc, cfg=None):
     return rows
 
 
-def pick(data_dir, folder, settings, seed_parts, cfg=None, live=on_air):
+def pick(data_dir, folder, settings, seed_parts, cfg=None, live=on_air, tags=None):
     """The montage's track: {"id", "path", "credit"} or None (switch off, no folder, no usable track). Random: seeded,
-    none of the last avoidLast picks while another is free; fixed: that track only. History is saved."""
+    none of the last avoidLast picks while another is free; fixed: that track only. History is saved.
+    tags: the tag reader for the scan (default read_tags, PyAV)."""
     cfg = cfg or load_config()
     s = dict(cfg["defaults"], **(settings or {}))
     if not s.get("on") or not s.get("folder"):
         return None
-    doc = scan(data_dir, folder, cfg, live=live)
+    doc = scan(data_dir, folder, cfg, tags=tags, live=live)
     tracks = {tid: r for tid, r in doc["tracks"].items() if not r.get("missing")}
     if not tracks:
         return None

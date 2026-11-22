@@ -2725,7 +2725,7 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` LV1 (user-approved option orde
 3. **One ASS per render batch**, burned with the caption font through `clip_montage.render_argv(captions=)`. The
    batches are still joined without re-encoding.
 4. **No speech model** (or the studio found it damaged): chapter cards only. A caption failure never stops the video.
-5. **Flag** `long-video-teaching`, on by default (user-requested). Sizes and timings are data
+5. **Flag** `long-video-teaching`, ON by default (user-requested). Sizes and timings are data
    (`long-video.json` `teaching`, the agent's proposal).
 6. Callout cards and movement paths (rest of LV1) are not in LV1a. UNVERIFIED: word timing on real stream speech
    (whisper.cpp token times are approximate), the look on a real long video.
