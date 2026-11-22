@@ -477,8 +477,10 @@ def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, lay
             paths = _paths_context(tcfg, game, layout, rec_size, accent)
     except (AttributeError, KeyError, TypeError, ValueError):
         paths = None
+    cards, card_weights = card_choice(data_dir)
     return {"tcfg": tcfg, "style": style, "accent": accent, "ccfg": ccfg if use else None,
-            "opts": {"whisper_bin": whisper_bin, "whisper_model": model}, "box": box, "boxModes": box_modes, "paths": paths}
+            "opts": {"whisper_bin": whisper_bin, "whisper_model": model}, "box": box, "boxModes": box_modes, "paths": paths,
+            "cards": cards, "cardWeights": card_weights, "seed": seed or ""}
 
 
 def card_choice(data_dir):

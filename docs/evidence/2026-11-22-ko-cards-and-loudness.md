@@ -35,6 +35,13 @@ Long-batch cards: styles slam, zoom-punch, stamp, slam; words K.O., TRIPLE K.O.,
 - The Python clip suites (beatdrop*, clip_*, countdown, ko_cards, long_*, match_reel_rules, montage_music and others) all pass. `test_clip_reel_style.py` had a source-text assertion that was updated for the new `_render_pieces` call (the style still reaches the call).
 - Node: `tests/user-settings-clip-look.test.mjs` and `tests/studio-qml-settings.test.mjs` 33/33 pass, after `npm run build:studio`.
 
+## Codex review (medium, read-only) of 6d72f15
+
+1. High, fixed: `long_teaching.context()` did not pass the ticked styles, the weights or the seed, so the setting and the per-video seed had no effect in the real pipeline. A regression assertion was added in `test_long_teaching.py`. (The real check above passed them by hand, so it did not catch this.)
+2. High, left as a known gap: a live clip that takes the plain single-piece path (`clip_render.render_variant`: no music, captions, style, title, thumbnail or re-cut, or a non-canvas layout) gets no gain and no limiter. That path copies every source audio track unchanged. Reels with any of those features take the pieces path and are normalised.
+3. Medium, not changed: when a correction pass fails, `plan()` keeps the gain from the last good measure. That gain is still a measured estimate, the limiter still holds -1 dBTP, and the measure-after check records whether the target was reached.
+4. Medium, known limit: long-video batches are pooled by energy and duration without gating. Batches at very different levels can miss the target. The measure-after check runs on the final file and records `ok`. The real check landed at -14.3.
+
 ## Not covered
 
 - BeatDrop is unchanged: it calls `clip_montage.render_argv` without a gain, so its level is not normalised. Its level was not measured here.

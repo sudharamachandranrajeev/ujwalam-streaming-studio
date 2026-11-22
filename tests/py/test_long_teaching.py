@@ -254,6 +254,10 @@ class Chapters(unittest.TestCase):
             ctx = lt.context(d, lv.load_config())
             self.assertIsNotNone(ctx)
             self.assertIsNone(ctx["ccfg"], "no speech model in a bare data folder: chapter cards only")
+            # Codex D439 review: the context carries the ticked K.O. styles, their weights and the per-video seed
+            ctx = lt.context(d, lv.load_config(), seed="rec-1.mkv")
+            self.assertEqual((ctx["cards"], ctx["seed"]), (list(lt.KO_STYLES), "rec-1.mkv"))
+            self.assertEqual(set(ctx["cardWeights"]), set(lt.KO_STYLES))
 
     def test_merge_info(self):
         self.assertEqual(lt.merge_info([])["captions"]["status"], "off")
