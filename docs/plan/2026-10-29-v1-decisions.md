@@ -2658,6 +2658,15 @@ Evidence: `docs/evidence/2026-11-21-beatdrop-bd5.md`. Plan: `docs/plan/2026-11-2
 5. **Cleanup**: one try/finally from the music bed through the render removes the bed, LUT, graph and title files on any error.
 6. Registry: `title-extrude`, `title-pin`, `hero-bw`, `credits-roll` with 5 presets. UNVERIFIED: real footage and replays, the look to the user, NVENC with titles.
 
+## D417 — NCS song credit built from the file name (decided, 2026-11-21)
+
+The user said yes (2026-11-21): "build the song credit from the file names so these NCS songs can be auto-posted". Branch `claude/ncs-filename-credit`. Evidence: `docs/evidence/2026-11-21-ncs-filename-credit.md`.
+
+1. **Strict parser** `montage_music.parse_ncs_name`: only a name that matches the whole NCS yt-dlp pattern (`<Artist(s)> - <Title> | [<Genre> | ]NCS - Copyright Free Music [<11-char YouTube id>].<ext>`, the bar U+FF5C or `|`) gives {artist, title, genre?, youtubeId}. Anything else stays "your own music" (render only, never auto-posted), as before. File names are untrusted: a control, bidi, zero-width, `<` `>` `{` `}` character, an over-long name (300), artist (120), title (160) or genre (60) rejects the name; nothing is stripped.
+2. **Credit text is data** (`data/clip/montage-music.json` `ncsFilename.template`): `Music: <Artist> - <Title> [NCS Release]` / `Music provided by NoCopyrightSounds` / `Watch: https://youtu.be/<id>`. The wording is UNVERIFIED against NCS's published usage policy (the repo only quotes "credit artist and song in the description").
+3. **Provenance**: the render record, upload row and `<video>.music.json` sidecar carry source `ncs-filename` with the parsed fields. Posting treats it as a credited library song: the gate requires the credit in the description exactly as printed, and the link must be `https://youtu.be/` + an 11-char id. The credit is re-read from the file name when the render record is made, never from the stored record. A user-edited credit becomes a plain `ncs` record again.
+4. **Setting**: on by default, a data switch (`ncsFilename.enabled`), no feature flag (the user asked for it; no UI needed). Off: every name is own music, as before.
+
 ## D418 — BeatDrop BD7a retakes, summary and the V cut as built (decided, 2026-11-21)
 
 Evidence: `docs/evidence/2026-11-21-beatdrop-bd7a.md`. Plan: `docs/plan/2026-11-21-beatdrop-montages.md` section BD7 (engine side; the studio card is BD7b).
@@ -2668,3 +2677,13 @@ Evidence: `docs/evidence/2026-11-21-beatdrop-bd7a.md`. Plan: `docs/plan/2026-11-
 4. **V cut from the same plan**: a second ffmpeg run with the same pieces, bed, LUT, effects and slots. Framing reuses the clip layouts (`clip_render.layout_chain` wraps `layout_graph` per piece; no second framing system). It uses `stream-v` (the V canvas recording, as V clips are cut) when the session has one, else `blurred-fill` of the H recording (the whole picture fitted, nothing cut off). The V title is in screen space (the pin track is in H pixels); credits wrap per frame (BD5). Each output encodes its audio once. Each file gets its own new name and its own flash check. Both stay .part until both are measured. A V flash fail drops only the V file (render.json error `beatdrop-v`); an H fail drops both.
 5. **CLI**: `clipper.py beatdrop --retake <op> [--piece N] [--v-recording P]`. render.json lists files `beatdrop-h` and `beatdrop-v` (with geometry = layout id and its own flash), plus `summary` and `retakes`. Off air only, heavy-job lock, sweeps, music record and temp cleanup are unchanged.
 6. UNVERIFIED: real footage, NVENC, the look of the V framing to the user, a made-here retake when `--max-sec` differs from the first render.
+
+## D419 — BeatDrop BD7c: a BeatDrop montage publishes and posts like a montage; a retake is a new video (decided, 2026-11-22)
+
+Evidence: `docs/evidence/2026-11-22-beatdrop-bd7c-publish.md`. Plan: `docs/plan/2026-11-21-beatdrop-montages.md` section 7.
+
+1. **Publish**: a BeatDrop render publishes as kind `montage`, label `kills-N` from the plan's count, canvas from the layout (`beatdrop-h`/`beatdrop-v`); validate checks each file against its own frame.
+2. **Retake = new video**: published bytes are never replaced (replacing them races an upload in progress). Earlier takes get `supersededBy` in `uploads.json`; posting never packages or sends a superseded video. The last take stays current even when posting has removed its file, so an earlier take never becomes postable again and a posted render never republishes.
+3. **Repair**: every BeatDrop publish brings `uploads.json` in line with `published.json` (all takes on disk listed, earlier ones superseded, the current one cleared). A removed video's name is never reused.
+4. **One writer of `uploads.json`** across processes (clip publish and posting's `markPosted`): an exclusive lock file with an owner token; a stale lock (over 30 s) is removed only under an exclusive takeover file; an unreadable or odd-shaped list is never replaced.
+5. Accepted residuals: a take already uploading when a retake lands may still post; a publish killed between its two writes is repaired only by the next publish; two publishes of one run folder at once are unsupported (the studio runs clip jobs one at a time).

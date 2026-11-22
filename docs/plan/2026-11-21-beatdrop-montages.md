@@ -205,6 +205,29 @@ auto-posted.
 
 6.4 **Match Replay check.** Please open one Match Replay in CODM and tell me which camera buttons it shows
 (first person only, third person, free camera, other players). That decides BD6.
+Answered by the user 2026-11-21: third-person view yes; FPP/TPP switch during playback yes; HUD can be hidden (clean
+frame) yes; slow motion yes, 0.5x selectable. Free camera and other players not asked (UNVERIFIED). BD6 is go: the
+replay is recorded from the capture card with the HUD hidden; alignment to the original match uses sound and the match
+timer shown before the HUD is hidden; 0.5x playback is recorded as native slow motion (retimed to 1x where the beat
+plan needs real time).
+The replay screen also has a free camera (FREE CAM SPEED) and an IMMERSIVE MODE switch, which hides the HUD, the names
+and the device ID. Training replays recorded 2026-11-21 from the capture card (ffmpeg dshow, 1080p60 NVENC CQ19 + card
+HDMI audio; local only, outside the repo, never committed; they show other players' names and a device ID):
+A FPP with HUD and replay controls (47 s), B FPP with HUD (48 s), B2 FPP clean (51 s), C TPP clean (43 s), D TPP clean at
+0.5x (90 s). All have game audio (card HDMI, independent of the user's headphone monitoring). They are the first
+BD5 pin-tracking and BD6 alignment fixtures from real footage.
+Quality check 2026-11-21 (same clean TPP stretch): replay graphics Max is the sharpest (Laplacian median 182 vs 144 on
+Medium, Very High 167; scenes not identical, so indicative). "Ultra frame rate" does not reach the HDMI capture: about
+49 unique frames/s whether recorded at 60 or 120 (120 only duplicates). Use replay graphics Max, record at 60; slow
+motion comes from the replay's 0.5x, not from retiming 1x footage. A full match (5.5 min, Max, HUD and replay
+controls on) is recorded for the moment finder (encounter types). The replay can also show the enemy's point of view
+(user, 2026-11-21): BD6 can offer the victim's view of a kill as a reverse angle.
+The replay has no seek bar: every new point of view means playing from the start. BD6 therefore plans passes, not
+shots: it lists every shot it wants per point of view (own FPP, own TPP, each enemy), the user plays the replay once
+per point of view while the card records continuously, and Ujwalam cuts the shots out afterwards by aligning each pass
+to the match (timer, sound). The guide asks for the fewest passes that cover the chosen kills.
+Enemy point of view is OUT for now (user, 2026-11-21): finding each enemy without a seek bar costs too much time. BD6
+uses the user's own FPP/TPP passes only; enemy view stays a later option.
 
 6.5 **Option order.** Proposed order: BD1-BD3 (moments, song map, beat-locked edit) and BD4 first, then BD5, BD7,
 LV1, RR1, and BD6 when 6.4 is answered.

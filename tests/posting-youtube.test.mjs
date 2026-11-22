@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // P16b step 2 tests: services/posting/youtube.mjs. No test touches Google -- fetchImpl is always a fake here.
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { withUploadsLock } from '../services/posting/auto-chain.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { createLedger } from '../services/posting/index.mjs';
-import { uploadMetadata, uploadVideo, UploadError } from '../services/posting/youtube.mjs';
+import { createLedger, sha256File } from '../services/posting/index.mjs';
+import { sourceReplaced, supersededSource, uploadMetadata, uploadPost, uploadVideo, UploadError } from '../services/posting/youtube.mjs';
 
 // D409: every upload needs a publish time (uploadVideo refuses one without).
 const PUB = '2030-01-01T00:00:00.000Z';
@@ -111,6 +112,53 @@ test('uploadVideo: refuses if the video changed since approval (sha256 mismatch)
     post: basePost('d'.repeat(64)), sha256: 'e'.repeat(64), videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
     outputsStatus: async () => ({ sinks: [] }), fetchImpl: async () => { throw new Error('must not call the network'); },
   }), (e) => e.code === 'video-changed');
+});
+
+test('uploadVideo: refuses a package whose clips-folder source was replaced (BD7c retake); a moved source does not stop it', async () => {
+  const video = tmpVideo(16);
+  const ledger = createLedger(path.join(path.dirname(video), 'ledger.json'));
+  const sha = await sha256File(video);
+  const src = tmpVideo(32); // the clips-folder file now holds the retake's bytes
+  const noNet = async () => { throw new Error('must not call the network'); };
+  await assert.rejects(uploadVideo({ publishAt: PUB,
+    post: basePost(sha, { source: { sha256: sha, clipId: 'c1', file: src } }), sha256: sha, videoPath: video, accessToken: 'x', ledger, limits: LIMITS,
+    outputsStatus: async () => ({ sinks: [] }), fetchImpl: noNet,
+  }), (e) => e instanceof UploadError && e.code === 'superseded');
+  assert.equal(await sourceReplaced({ sha256: sha, file: video }), false); // same bytes
+  assert.equal(await sourceReplaced({ sha256: sha, file: path.join(path.dirname(src), 'moved-away.mp4') }), false); // tidy moved it
+  assert.equal(await sourceReplaced({ sha256: sha }), false); // an older package without a source file
+  assert.equal(await sourceReplaced({ sha256: sha, file: src }), true);
+});
+
+test('uploadPost: a package whose clip uploads.json marks superseded (BD7c retake) is never sent; an unreadable list waits', async () => {
+  const video = tmpVideo(16);
+  const dir = path.dirname(video);
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), 'uj-yt-data-'));
+  mkdirSync(path.join(dataDir, 'clips'));
+  const clip = path.join(dataDir, 'clip_a_h.mp4');
+  writeFileSync(path.join(dir, 'post.json'), JSON.stringify(basePost('a'.repeat(64), { source: { sha256: 'a'.repeat(64), clipId: 'c1', file: clip } })));
+  const store = { dataDir, dir: () => dir, media: (_id, kind) => (kind === 'video' ? { file: video } : null) };
+  const auth = { accessToken: async () => { throw new Error('must not get a token'); } };
+  const list = (files) => writeFileSync(path.join(dataDir, 'clips', 'uploads.json'), typeof files === 'string' ? files : JSON.stringify({ version: 1, files }));
+  list([{ file: clip, posted: [], supersededBy: path.join(dataDir, 'clip_b_h.mp4') }]);
+  await assert.rejects(uploadPost({ id: 'p', store, auth, publishAt: PUB }), (e) => e.code === 'superseded');
+  list('{broken');
+  await assert.rejects(uploadPost({ id: 'p', store, auth, publishAt: PUB }), (e) => e.code === 'uploads-unreadable');
+  list([{ file: clip, posted: [] }]);
+  assert.equal(supersededSource(dataDir, { file: clip }), false);
+  assert.equal(supersededSource(dataDir, {}), false); // a package without a source file
+});
+
+test('withUploadsLock: one writer at a time; a dead writer\'s lock is taken over', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'uj-lock-'));
+  const file = path.join(dir, 'uploads.json');
+  assert.equal(withUploadsLock(file, () => { assert.ok(existsSync(`${file}.lock`)); return 7; }), 7);
+  assert.equal(existsSync(`${file}.lock`), false);
+  writeFileSync(`${file}.lock`, '');
+  utimesSync(`${file}.lock`, 0, 0); // older than the stale limit
+  assert.equal(withUploadsLock(file, () => 8), 8);
+  for (const f of ['.lock', '.lock.takeover']) { writeFileSync(`${file}${f}`, ''); utimesSync(`${file}${f}`, 0, 0); }
+  assert.equal(withUploadsLock(file, () => existsSync(`${file}.lock.takeover`)), false); // a dead takeover is cleared too
 });
 
 test('uploadVideo: refuses an already-uploaded post (never upload the same video twice)', async () => {

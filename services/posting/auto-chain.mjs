@@ -49,9 +49,10 @@
 // gate + quotaExceeded record) inside one schedule-lock hold per pass; every new session is preceded by a complete
 // channel read in that hold and the 60-min check. The studio's Upload button and `cli.mjs youtube upload` only queue.
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadTemplates, packageRun, packageUploads, sha256File } from './index.mjs';
@@ -85,7 +86,7 @@ export const SCAN_EVERY_MS = 15 * 60 * 1000;
 export const STATUS_EVERY_MS = 15 * 60 * 1000;
 /** At most this many status checks per pass (1 quota unit each). */
 export const STATUS_PER_PASS = 10;
-const PERMANENT = new Set(['not-approved', 'video-changed', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at', 'publish-at-required', 'music-credit-missing', 'music-unchecked']);
+const PERMANENT = new Set(['not-approved', 'video-changed', 'superseded', 'over-limit', 'unresolved-placeholders', 'unknown-post', 'video-missing', 'bad-publish-at', 'publish-at-required', 'music-credit-missing', 'music-unchecked']);
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** PT3 (D408): the "Run auto-post now" request file (<dataDir>/posting/auto-run-now.json). The studio writes it (refused
@@ -430,6 +431,7 @@ const FAIL_TEXT = {
   'over-limit': 'The text is over a platform limit; edit it in the Posts view',
   'unresolved-placeholders': 'The text still has an unfilled placeholder; fill it in the Posts view',
   'video-changed': 'The video file changed after it was approved',
+  superseded: 'The clip was made again (a retake or new captions); the newer version is posted instead',
   'video-missing': 'The video file is missing',
   'not-approved': 'The package is not approved',
   'music-unchecked': "This package's music was never checked; package the clip again (or re-render it) to post it",
@@ -472,15 +474,37 @@ export function readQueueSummary(dataDir, flags = null, nowMs = Date.now()) {
 /** Fills `posted` on the uploads.json row(s) whose file is the uploaded video. Matches by run + content hash. */
 export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, at, privacy = 'private', target = UPLOAD_TARGET, publishAt = null }) {
   const file = path.join(dataDir, 'clips', 'uploads.json');
+  const first = readJson(file);
+  if (!isPlain(first) || !Array.isArray(first.files)) return 0;
+  // Codex BD7c: hash first (awaits), then read the list again and change only the matching rows right before the write,
+  // so a row or supersededBy that clip_publish.py added meanwhile is kept
+  const hits = new Set();
+  for (const row of first.files) {
+    if (!isPlain(row) || row.run !== run || typeof row.file !== 'string' || !existsSync(row.file)) continue;
+    if (Array.isArray(row.posted) && row.posted.some((p) => p?.platform === 'youtube' && p?.videoId === videoId)) continue;
+    let h; try { h = await sha256File(row.file); } catch { continue; }
+    if (h === sha256) hits.add(row.file);
+  }
+  if (!hits.size) return 0;
+  // Codex BD7c: the queue item is already done, so this write has no later retry: wait (without blocking) past the stale
+  // limit, so a lock left by a writer that died is always taken over; any other failure writes nothing
+  const end = Date.now() + UPLOADS_LOCK_STALE_MS + 15_000;
+  for (;;) {
+    try { return withUploadsLock(file, () => markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt }), 0); } catch (e) {
+      if (e?.code !== 'uploads-busy' || Date.now() > end) return 0;
+      await sleep(100);
+    }
+  }
+}
+
+function markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt }) {
   const doc = readJson(file);
   if (!isPlain(doc) || !Array.isArray(doc.files)) return 0;
   let n = 0;
   for (const row of doc.files) {
-    if (!isPlain(row) || row.run !== run || typeof row.file !== 'string' || !existsSync(row.file)) continue;
+    if (!isPlain(row) || row.run !== run || !hits.has(row.file)) continue;
     if (!Array.isArray(row.posted)) row.posted = [];
     if (row.posted.some((p) => p?.platform === 'youtube' && p?.videoId === videoId)) continue;
-    let h; try { h = await sha256File(row.file); } catch { continue; }
-    if (h !== sha256) continue;
     row.posted.push({ platform: 'youtube', target, id: postIdValue, videoId, url: `https://youtu.be/${videoId}`, at, privacy, ...(publishAt ? { publishAt } : {}) });
     n++;
   }
@@ -488,6 +512,50 @@ export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, a
   return n;
 }
 
+const UPLOADS_LOCK_STALE_MS = 30_000; // services/clip/clip_publish.py uploads_lock uses the same lock file and limit
+const UPLOADS_LOCK_WAIT_MS = 10_000;
+
+/** Codex BD7c: one writer of uploads.json at a time across processes (clip_publish.py add_uploads and this file):
+ *  <uploads.json>.lock created exclusively with this writer's token around one synchronous read-change-write (well
+ *  under a second); taken over when older than UPLOADS_LOCK_STALE_MS (takeStaleLock); released only while it still holds
+ *  this writer's token. Busy past waitMs (or a lock that keeps failing): throws code 'uploads-busy' (nothing written). */
+export function withUploadsLock(file, fn, waitMs = UPLOADS_LOCK_WAIT_MS) {
+  const lock = `${file}.lock`;
+  mkdirSync(path.dirname(lock), { recursive: true });
+  const token = `${process.pid}-${randomBytes(8).toString('hex')}`;
+  const end = Date.now() + waitMs;
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try { writeFileSync(lock, token, { flag: 'wx' }); break; } catch { // held, or being removed (Windows: EPERM while a delete is pending)
+      if (takeStaleLock(lock)) continue;
+      if (Date.now() > end) throw Object.assign(new Error('uploads.json is busy (another writer)'), { code: 'uploads-busy' });
+      Atomics.wait(nap, 0, 0, 50);
+    }
+  }
+  try { return fn(); } finally {
+    try { if (readFileSync(lock, 'utf8') === token) rmSync(lock, { force: true }); } catch { /* gone */ }
+  }
+}
+
+/** Removes a lock older than the limit. Only the holder of <lock>.takeover (created exclusively) checks and removes, so
+ *  no writer can remove a lock another writer has just taken. A takeover file older than the limit (its process died in
+ *  those few milliseconds) is removed. Returns true only when this call removed the lock: try to take it again at once. */
+function takeStaleLock(lock) {
+  const guard = `${lock}.takeover`;
+  try { closeSync(openSync(guard, 'wx')); } catch {
+    try { if (Date.now() - statSync(guard).mtimeMs > UPLOADS_LOCK_STALE_MS) rmSync(guard, { force: true }); } catch { /* gone */ }
+    return false;
+  }
+  try {
+    if (Date.now() - statSync(lock).mtimeMs <= UPLOADS_LOCK_STALE_MS) return false;
+    rmSync(lock);
+    return true;
+  } catch {
+    return false; // gone (the caller waits and tries again) or cannot be removed
+  } finally {
+    rmSync(guard, { force: true });
+  }
+}
 // ---------------------------------------------------------------- the chain
 
 /**

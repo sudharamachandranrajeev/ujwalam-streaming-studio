@@ -18,5 +18,16 @@
     "maxChars": { "artist": 120, "title": 160, "line": 200, "link": 200 },
     "template": ["Song: {artist} - {title} [NCS Release]", "{line}", "{link}"],
     "nameTag": "NCS"
+  },
+  "ncsFilename": {
+    "$comment": "D417: a file name that is exactly NCS's own yt-dlp name ('<Artist(s)> - <Title> | [<Genre> | ]NCS - Copyright Free Music [<11-char YouTube id>].<ext>', the bar is U+FF5C or |) is credited from the name. The wording of the template is the standard NCS credit form and is UNVERIFIED against NCS's published usage policy (docs/evidence/2026-11-21-ncs-filename-credit.md). File names are untrusted text: a name with a control, bidi or zero-width character, < > { } or an over-long part is not parsed.",
+    "enabled": true,
+    "source": "ncs-filename",
+    "marker": "NCS - Copyright Free Music",
+    "maxNameChars": 300,
+    "maxGenreChars": 60,
+    "line": "Music provided by NoCopyrightSounds",
+    "linkPrefix": "https://youtu.be/",
+    "template": ["Music: {artist} - {title} [NCS Release]", "{line}", "Watch: {link}"]
   }
 }

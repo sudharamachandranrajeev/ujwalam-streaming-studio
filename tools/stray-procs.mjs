@@ -45,13 +45,23 @@ export function listNodeProcesses() {
     .filter((m) => /\bnode\b/.test(m[4])).map((m) => ({ pid: Number(m[1]), parentPid: Number(m[2]), startedAt: new Date(m[3]).toISOString(), cmd: m[4] }));
 }
 
-/** Pure: which of `procs` are strays. `self` is the pid whose parent chain is exempt. */
-export function findStrays(procs, { self = process.pid, now = Date.now() } = {}) {
+/**
+ * Pure: which of `procs` are strays. `self` is the pid whose parent chain is exempt. `under` (a pid) keeps only that
+ * process's descendants: a run that checks "nothing I started is left" must not count another test file's mock that
+ * runs at the same time (CI runs 4 files at once; 2026-11-21 a parallel file's mock failed the soak replay check).
+ */
+export function findStrays(procs, { self = process.pid, now = Date.now(), under = null } = {}) {
   const byPid = new Map(procs.map((p) => [p.pid, p]));
   const exempt = new Set([self]);
   for (let p = byPid.get(self); p && p.parentPid && !exempt.has(p.parentPid); p = byPid.get(p.parentPid)) exempt.add(p.parentPid);
+  const descends = (p) => {
+    const seen = new Set();
+    for (let q = p; q && q.parentPid && !seen.has(q.pid); q = byPid.get(q.parentPid)) { seen.add(q.pid); if (q.parentPid === under) return true; }
+    return false;
+  };
   return procs
     .filter((p) => !exempt.has(p.pid))
+    .filter((p) => under == null || descends(p))
     .map((p) => ({ p, script: labelOf(p.cmd) }))
     .filter((x) => x.script)
     .map(({ p, script }) => ({ pid: p.pid, script, startedAt: p.startedAt, ageMin: p.startedAt ? Math.round((now - Date.parse(p.startedAt)) / 60000) : null }));

@@ -12,7 +12,7 @@ import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createPostStore, loadLimits, packageUploads } from '../services/posting/index.mjs';
 import { createPostChain } from '../services/posting/auto-chain.mjs';
-import { PROVENANCE_FILE, creditMissing, legacyMadeHere, musicCredit, musicOf, readProvenanceSince } from '../services/posting/post-text.mjs';
+import { PROVENANCE_FILE, creditMissing, legacyMadeHere, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from '../services/posting/post-text.mjs';
 import { MUSIC_SIDECAR, scanClipsFolder, videoBinding } from '../services/posting/clips-source.mjs';
 import { uploadVideo } from '../services/posting/youtube.mjs';
 import { createMontageMusic, montageMusicOpProblems } from '../services/studio-ui/montage-music.mjs';
@@ -78,6 +78,45 @@ describe('studio route', () => {
   });
 });
 
+describe('ncs-filename credit (D417)', () => {
+  const NCS_CREDIT = { artist: 'Aero Chord feat. DDARK', title: 'Shootin Stars', line: 'Music provided by NoCopyrightSounds', link: 'https://youtu.be/PTF5xgT-pm8' };
+  const NCS_TEXT = 'Music: Aero Chord feat. DDARK - Shootin Stars [NCS Release]\nMusic provided by NoCopyrightSounds\nWatch: https://youtu.be/PTF5xgT-pm8';
+  const rec = { source: 'ncs-filename', trackId: 'a'.repeat(16), credit: NCS_CREDIT, ncs: { artist: NCS_CREDIT.artist, title: NCS_CREDIT.title, genre: 'Trap', youtubeId: 'PTF5xgT-pm8' } };
+  test('gate accepts ncs-filename, prints the exact credit, and still blocks own-folder songs', () => {
+    const mm = musicOf({ kind: 'montage', music: rec });
+    assert.deepEqual(mm, { library: 'ncs', origin: 'ncs-filename', trackId: 'a'.repeat(16), credit: NCS_CREDIT });
+    assert.deepEqual(musicCredit(mm), { use: 'credit', text: NCS_TEXT });
+    const own = musicCredit(musicOf({ kind: 'montage', music: { source: 'user-folder' } }));
+    assert.deepEqual([own.use, own.renderOnly], ['refuse', true]);
+    assert.equal(musicCredit(musicOf({ kind: 'montage', music: { ...rec, credit: null } })).use, 'refuse');
+  });
+  test('a link that is not the song\'s YouTube link, or injected text, is refused', () => {
+    for (const bad of [{ link: 'https://evil.example/x' }, { link: 'https://youtu.be/short' }, { link: '' }, { artist: 'A\nBuy now' }, { title: '<b>x' },
+      { artist: 'Ae​ro' }, { artist: 'Ae­ro' }, { title: 'S\u0085x' }, { artist: 'Ae\u{E0001}ro' }, { title: 'Sx' }, { title: 'Sㅤx' },
+      { artist: 'A Buy now' }, { title: 'S x' }]) {
+      const mm = musicOf({ kind: 'montage', music: { ...rec, credit: { ...NCS_CREDIT, ...bad } } });
+      assert.equal(musicCredit(mm).use, 'refuse', JSON.stringify(bad));
+    }
+  });
+  test('Codex D417 review: lengths count characters (code points) as Python does, not UTF-16 units', () => {
+    const wide = '\u{1D400}'.repeat(61); // 61 characters (122 UTF-16 units) is inside the 120-character artist limit
+    const mm = musicOf({ kind: 'montage', music: { ...rec, credit: { ...NCS_CREDIT, artist: wide } } });
+    assert.equal(musicCredit(mm).use, 'credit');
+  });
+  test('the credit text is stamped and checked like the library credit', () => {
+    const mm = musicOf({ kind: 'montage', music: rec });
+    const c = musicCredit(mm);
+    assert.deepEqual(musicStamp(mm, c), { checked: 1, use: 'credit', library: 'ncs', trackId: 'a'.repeat(16) });
+    assert.equal(creditMissing({ source: { music: musicStamp(mm, c), musicCredit: c.text }, description: `Hi\n${c.text}` }), null);
+    assert.equal(creditMissing({ source: { music: musicStamp(mm, c), musicCredit: c.text }, description: 'Hi' }), 'music-credit-missing');
+  });
+  test('renderMusic keeps the source and parsed fields', () => {
+    const r = renderMusic({ musicRecords: 1, clips: [{ id: 'c1', music: rec }] }, 'c1');
+    assert.equal(r.source, 'ncs-filename');
+    assert.equal(r.ncs.youtubeId, 'PTF5xgT-pm8');
+  });
+});
+
 describe('posting', () => {
   test('musicCredit: library track with a credit, without one, and a song from elsewhere', () => {
     assert.deepEqual(musicCredit(undefined), { use: 'none' });
@@ -105,6 +144,16 @@ describe('posting', () => {
     writeFileSync(path.join(dataDir, 'clips', 'uploads.json'), JSON.stringify({ version: 1, files }));
     return { dataDir, ledgerFile: path.join(dataDir, 'posting', 'ledger.json') };
   }
+
+  test('BD7c: a superseded montage (an earlier BeatDrop take) is not packaged; its retake is', async () => {
+    const e = setup([
+      { name: 'codm_montage_20261121-100000_kills-5_01_h.mp4', music: { source: 'generated' }, supersededBy: 'x' },
+      { name: 'codm_montage_20261121-100000_kills-5_02_h.mp4', music: { source: 'generated' } },
+    ]);
+    const r = await packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: {}, ffmpeg: process.execPath });
+    assert.deepEqual(r.packaged.map((p) => path.basename(p.file)), ['codm_montage_20261121-100000_kills-5_02_h.mp4'], JSON.stringify(r.skipped));
+    assert.equal(r.skipped.find((s) => s.file.includes('_01_')).reason, 'superseded');
+  });
 
   test('packaging adds the credit; no credit and other songs are not packaged; approve and upload check again', async () => {
     const e = setup([

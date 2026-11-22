@@ -210,7 +210,10 @@ test('crash safety: a recording .mkv still probes after the host is killed mid-r
   const k = await launchHost({ dataDir: dd, project: CARD });
   let killed = false;
   try {
-    await k.client.call('outputs.configure', { rungs: [RUNG], audio: AUDIO, sinks: [{ id: 'rec', rung: 'r', platform: 'local', proto: 'file', priority: 1, target: { transport: 'file', name: 'crash.mkv' } }] });
+    // CPU encoder on purpose: killing a process mid-NVENC-encode sometimes makes the NVIDIA driver reset ~5 s later
+    // (nvlddmkm 153; matched 3 of 3 CI resets 2026-11-19..21 to this test). The test checks the muxer, not the
+    // encoder, and a reset can hurt a studio running next to CI. Evidence: docs/evidence/2026-11-21-nvenc-kill-driver-reset.md
+    await k.client.call('outputs.configure', { rungs: [{ ...RUNG, encoder: 'x264' }], audio: AUDIO, sinks: [{ id: 'rec', rung: 'r', platform: 'local', proto: 'file', priority: 1, target: { transport: 'file', name: 'crash.mkv' } }] });
     await k.client.call('record.start', {});
     let st;
     for (let i = 0; i < 50; i++) { st = await k.client.call('outputs.status'); if (st.sinks[0].state === 'live') break; await sleep(100); }

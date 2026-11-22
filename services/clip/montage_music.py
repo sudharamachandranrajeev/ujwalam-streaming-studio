@@ -31,6 +31,7 @@ import re
 import stat
 import sys
 import time
+import unicodedata
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -42,7 +43,19 @@ import style_analyse as sa  # noqa: E402
 
 CONFIG_FILE = os.path.join(CLIP_DATA, "montage-music.json")
 ID = re.compile(r"^[0-9a-f]{16}$")
-CONTROL = re.compile(r"[\x00-\x1f\x7f<>{}]")
+# Codex D417 review: credit text is untrusted. Refused: < > { }, controls (Cc), format characters (Cf: bidi, zero-width,
+# soft hyphen, BOM, tag characters ...), private use (Co), lone surrogates (Cs), and the invisible marks outside those
+# categories (CGJ, Hangul fillers). post-text.mjs CREDIT_BAD is the same rule.
+MARKUP = "<>{}"
+INVISIBLE = "͏ᅟᅠㅤﾠ"
+HIDDEN_CATS = ("Cf", "Co", "Cs")
+BREAK_CATS = ("Cc", "Zl", "Zp")  # controls and the line/paragraph separators U+2028/U+2029: a new description line
+
+
+def unsafe_text(s):
+    """True when s holds a character a credit may not carry (see MARKUP / INVISIBLE / HIDDEN_CATS / BREAK_CATS)."""
+    return any(ch in MARKUP or ch in INVISIBLE or unicodedata.category(ch) in BREAK_CATS + HIDDEN_CATS for ch in s)
+NCS_PART = "[^|｜]"
 NAME = re.compile(r"^(?P<artist>.+?)\s+-\s+(?P<title>.+?)\s*(?:\[(?P<tag>[^\]]*)\])?\s*$")
 
 
@@ -134,7 +147,9 @@ def _identity_cache(data_dir, cfg):
 def _clean(v, n):
     if not isinstance(v, str):
         return ""
-    v = re.sub(r"\s+", " ", CONTROL.sub(" ", v)).strip()
+    v = "".join(" " if ch in MARKUP or unicodedata.category(ch) in BREAK_CATS else
+                "" if ch in INVISIBLE or unicodedata.category(ch) in HIDDEN_CATS else ch for ch in v)
+    v = re.sub(r"\s+", " ", v).strip()
     return v[:n]
 
 
@@ -149,7 +164,7 @@ def credit_problems(c, cfg=None):
             out.append(f"the {k} is missing")
     for k, n in mx.items():
         v = c.get(k, "")
-        if not isinstance(v, str) or len(v) > n or CONTROL.search(v):
+        if not isinstance(v, str) or len(v) > n or unsafe_text(v):
             out.append(f"the {k} is plain text of at most {n} characters, without < > {{ }}")
     link = c.get("link", "")
     if isinstance(link, str) and link and not re.match(r"^https://[A-Za-z0-9.-]+(/[^\s]*)?$", link):
@@ -161,9 +176,11 @@ def complete(c, cfg=None):
     return isinstance(c, dict) and not credit_problems({k: c.get(k, "") for k in ("artist", "title", "line", "link")}, cfg)
 
 
-def credit_text(c, cfg=None):
+def credit_text(c, cfg=None, origin=None):
+    """The description lines. origin "ncs-filename" (D417) uses cfg ncsFilename.template, else credit.template."""
     cfg = cfg or load_config()
-    lines = [s.format(**{k: c.get(k, "") for k in ("artist", "title", "line", "link")}) for s in cfg["credit"]["template"]]
+    tpl = cfg["ncsFilename"]["template"] if origin == cfg["ncsFilename"]["source"] else cfg["credit"]["template"]
+    lines = [s.format(**{k: c.get(k, "") for k in ("artist", "title", "line", "link")}) for s in tpl]
     return "\n".join(s for s in lines if s.strip())
 
 
@@ -173,6 +190,41 @@ def from_name(stem, cfg):
         return None
     return {"artist": m.group("artist").strip(), "title": m.group("title").strip(),
             "ncsTagged": bool(m.group("tag") and cfg["credit"]["nameTag"].lower() in m.group("tag").lower())}
+
+
+def parse_ncs_name(name, cfg=None):
+    """D417: strict parse of an NCS yt-dlp file name -> {artist, title, genre?, youtubeId} or None (the song stays "your
+    own music": never auto-posted). The whole name must match '<Artist> - <Title> | [<Genre> | ]NCS - Copyright Free
+    Music [<11-char id>].<ext>' (bar U+FF5C or |). Untrusted text: control, bidi, zero-width, < > { } and over-long
+    parts reject the name (nothing is stripped, so the credit is always the file's own text)."""
+    cfg = cfg or load_config()
+    n = cfg.get("ncsFilename") or {}
+    if not n.get("enabled") or not isinstance(name, str) or len(name) > int(n["maxNameChars"]):
+        return None
+    if unsafe_text(name):
+        return None
+    stem, ext = os.path.splitext(name)
+    if ext.lower() not in cfg["extensions"]:
+        return None
+    bar = "[|｜]"
+    pat = (f"(?P<artist>{NCS_PART}+?) - (?P<title>{NCS_PART}+?) {bar} (?:(?P<genre>[^|｜\\[\\]]+?) {bar} )?"
+           + re.escape(n["marker"]) + r" \[(?P<id>[A-Za-z0-9_-]{11})\]")
+    m = re.fullmatch(pat, stem)
+    if not m:
+        return None
+    mx = cfg["credit"]["maxChars"]
+    artist, title, genre = m.group("artist").strip(), m.group("title").strip(), (m.group("genre") or "").strip()
+    if not artist or not title or len(artist) > mx["artist"] or len(title) > mx["title"] or len(genre) > int(n["maxGenreChars"]):
+        return None
+    out = {"artist": artist, "title": title, "youtubeId": m.group("id")}
+    if genre:
+        out["genre"] = genre
+    return out
+
+
+def ncs_credit(ncs, cfg):
+    n = cfg["ncsFilename"]
+    return {"artist": ncs["artist"], "title": ncs["title"], "line": n["line"], "link": n["linkPrefix"] + ncs["youtubeId"]}
 
 
 def read_tags(path):
@@ -257,10 +309,17 @@ def scan(data_dir, folder, cfg=None, tags=None, live=on_air):
             new[tid] = {"file": name, "artist": "", "title": "", "line": cfg["credit"]["line"], "link": "",
                         "source": "changed", "edited": False, "review": True}
             continue
+        ncs = parse_ncs_name(name, cfg)
+        if ncs:  # D417: NCS's own file name: credited from the name (the name is the proof, not the tags)
+            new[tid] = dict(ncs_credit(ncs, cfg), file=name, source=cfg["ncsFilename"]["source"], edited=False, ncs=ncs)
+            continue
         md = tags(p)
         artist, title = _clean(md.get("artist", ""), mx["artist"]), _clean(md.get("title", ""), mx["title"])
         source = "tags"
-        fn = from_name(os.path.splitext(name)[0], cfg)
+        # Codex D417 review: an NCS-marked name the strict parser refused is never credited from its name by the loose
+        # parser either (its tags may still credit it)
+        marked = cfg["ncsFilename"]["marker"].lower() in name.lower()
+        fn = None if marked else from_name(os.path.splitext(name)[0], cfg)
         if not (artist and title) and fn:
             artist, title, source = _clean(fn["artist"], mx["artist"]), _clean(fn["title"], mx["title"]), "file name"
         elif not (artist and title):
@@ -290,6 +349,7 @@ def set_credit(data_dir, track_id, credit, cfg=None):
     r = doc["tracks"][track_id]
     r.update({k: credit.get(k, "").strip() for k in ("artist", "title", "line", "link")}, source="edited", edited=True)
     r.pop("review", None)
+    r.pop("ncs", None)
     _save(_credits_path(data_dir, cfg), doc)
     return r
 
@@ -334,7 +394,7 @@ def pick(data_dir, folder, settings, seed_parts, cfg=None, live=on_air):
         tid = free[int(rng.random() * len(free))]
     _save(hist_path, {"version": 1, "recent": (hist + [tid])[-50:]})
     r = tracks[tid]
-    return {"id": tid, "path": os.path.join(folder, r["file"]),
+    return {"id": tid, "path": os.path.join(folder, r["file"]), "file": r["file"], "origin": r.get("source"),
             "credit": {k: r.get(k, "") for k in ("artist", "title", "line", "link")}}
 
 
@@ -344,6 +404,11 @@ def music_record(track, cfg=None):
     post is then never sent). clip_publish carries it into the upload row and the sidecar the clips-folder scan reads."""
     cfg = cfg or load_config()
     c = track.get("credit")
+    if track.get("origin") == cfg["ncsFilename"]["source"]:  # D417: re-read from the file name, never the stored record
+        ncs = parse_ncs_name(track.get("file"), cfg)
+        c = ncs_credit(ncs, cfg) if ncs else None
+        return {"source": cfg["ncsFilename"]["source"], "trackId": track["id"],
+                "credit": c if complete(c, cfg) else None, "ncs": ncs}
     return {"source": cfg["library"], "trackId": track["id"], "credit": c if complete(c, cfg) else None}
 
 
