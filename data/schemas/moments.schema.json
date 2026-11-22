@@ -72,6 +72,19 @@
     "thirdPerson": {
       "type": "object", "additionalProperties": false, "required": ["bodyZone", "minMotionShare", "maxZoneDiffRatio", "minFrames"],
       "properties": { "bodyZone": { "$ref": "#/$defs/box" }, "minMotionShare": { "$ref": "#/$defs/frac" }, "maxZoneDiffRatio": { "$ref": "#/$defs/frac" }, "minFrames": { "$ref": "#/$defs/int" } }
+    },
+    "enemyTag": {
+      "$comment": "LV1c (D423): the enemy name tag colour and size for the long video's movement paths (services/clip/long_paths.py). Optional: a game without it gets no paths.",
+      "type": "object", "additionalProperties": false, "required": ["status", "hueRanges", "minSat", "minVal", "joinPx", "minAreaShare", "maxAreaShare", "minAspect"],
+      "properties": {
+        "$comment": { "type": "string" },
+        "status": { "enum": ["unverified", "verified"] },
+        "hueRanges": { "type": "array", "minItems": 1, "items": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 0, "maximum": 180 } } },
+        "minSat": { "$ref": "#/$defs/luma" }, "minVal": { "$ref": "#/$defs/luma" },
+        "joinPx": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "minAreaShare": { "$ref": "#/$defs/frac" }, "maxAreaShare": { "$ref": "#/$defs/frac" },
+        "minAspect": { "type": "number", "minimum": 0 }
+      }
     }
   }
 }

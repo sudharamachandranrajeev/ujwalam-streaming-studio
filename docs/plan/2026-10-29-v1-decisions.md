@@ -2732,3 +2732,38 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` LV1 (user-approved option orde
 7. **After the Codex review (2026-11-22)**: a caption start exactly on a join belongs to the next piece, and a shown
    caption ends where the next shown one starts. Both also apply to the reel captions (D411 retime). A batch whose
    overlay fails to burn is rendered again without it.
+
+## D422 — LV1b: kill feed callout cards on the long highlights video (decided, 2026-11-22)
+
+1. **What it shows**: a little after each medal of a moment (0.4 s), the kill feed is cropped from the picture,
+   enlarged (1.4x) and framed in an accent border (the reel title accent) with a darker halo, for 2.4 s. The card's
+   top centre is at 50 % across and 28 % down (below the score and medal banner), always inside the safe margins.
+2. **Region from the game pack**: `teaching.callouts` names a detector and region (`M5` / `killfeed`); only a region
+   with status `verified` is framed. No game pack, or no verified region: no callouts. No game is named in engine code.
+3. **Timing**: never over a cross fade (only where the moment is alone on screen), never two at once (a later one that
+   would overlap is dropped), and dropped when less than 1.2 s fits. It pops in and out (0 ms, inside the overlay
+   rule).
+4. **One render**: an `fx` graph fragment on the joined picture of each batch, under the captions and chapter cards.
+   A batch whose overlay fails to render is made again without any overlay (D421 item 7). Callout counts go into
+   `render.json` and `long.json` (`teaching.callouts`).
+5. **Same flag** `long-video-teaching` (on by default), with its own switch `teaching.callouts.on`. Values are the
+   agent's proposal, tunable in `long-video.json`.
+6. UNVERIFIED: the MP kill feed region is used for every moment, so a BR moment frames the wrong area; the look on a
+   real long video. Movement paths: D423.
+
+## D423 — LV1c: enemy movement paths on the long highlights video (decided, 2026-11-22)
+
+1. **What it draws**: before the last kill of a moment, the enemy's path from its red name tag, drawn on in the accent
+   colour in step with the action (a line with a dot at its head), held 0.8 s and faded out in 300 ms.
+2. **Tracking**: the tag nearest the crosshair at the kill frame, followed back through the 2.5 s before it (30 fps,
+   480 px wide) to the nearest tag each frame within a jump limit; it ends when the tag is lost for more than 4
+   frames. HUD areas (`hud-zones.json`) and anything outside the game area are never used. A path is drawn only when
+   it has at least 15 points and its ends are at least 5 % of the width apart.
+3. **Tag colour and size are game data**: `data/games/<game>/moments.json` `enemyTag` (status unverified, the agent's
+   first proposal from synthetic frames). A game without it gets no paths; no game is named in engine code.
+4. **One ASS per batch**: the path events join the captions and chapter cards in the batch's ASS file. Any tracking or
+   decode failure leaves the rest of the overlay. One extra decode per moment with kills (2.5 s at 480 px).
+5. **Same flag** `long-video-teaching`, own switch `teaching.paths.on` (on). Values are tunable in
+   `long-video.json`.
+6. Not built: the user's own movement from optical flow, and dragging a path in the review before rendering. Both
+   left for a later step. UNVERIFIED: the tag colour and how often a path is confident on the user's footage.

@@ -18,6 +18,19 @@
     "flag": "long-video-teaching",
     "safe": { "left": 96, "right": 96, "top": 64, "bottom": 72 },
     "captions": { "on": true, "sizePx": 54, "maxCharsPerLine": 42, "maxWordsPerCard": 12, "maxLines": 2, "liftPx": 0 },
-    "chapters": { "sec": 2.6, "entranceMs": 350, "exitMs": 250, "slidePx": 48, "numberPx": 72, "labelPx": 40, "boxPadPx": 14 }
+    "chapters": { "sec": 2.6, "entranceMs": 350, "exitMs": 250, "slidePx": 48, "numberPx": 72, "labelPx": 40, "boxPadPx": 14 },
+    "callouts": {
+      "$comment": "LV1b (D422): a little after each medal, the kill feed (the game pack's detector M5, region killfeed, verified regions only) cropped from the picture, enlarged by scale, framed in an accent border with a darker halo; at = the card's top centre (fractions of the frame), kept inside safe. It pops in and out (0 ms). The MP kill feed region is used for every moment: on a BR moment it shows the wrong area (UNVERIFIED on real footage). Values are the agent's proposal, tunable here.",
+      "on": true, "detector": "M5", "roi": "killfeed",
+      "delaySec": 0.4, "sec": 2.4, "minSec": 1.2, "scale": 1.4,
+      "borderPx": 6, "glowPx": 10, "glowShade": 0.45,
+      "at": { "x": 0.5, "y": 0.28 }
+    },
+    "paths": {
+      "$comment": "LV1c (D423): the enemy's movement path before the last kill of a moment, from its red name tag (the game's moments.json enemyTag), drawn on in the accent colour in step with the action, held holdSec and faded out in fadeMs (under 400 ms). Tracked back from the kill for trackSec at fps and trackWidth px wide; drawn only when confident (minPoints points, ends minTravel of the width apart). startRadius / maxJump: shares of the width. Values are the agent's proposal, tunable here; tracking accuracy UNVERIFIED on real footage.",
+      "on": true, "trackSec": 2.5, "fps": 30, "trackWidth": 480,
+      "startRadius": 0.12, "maxJump": 0.04, "lostFrames": 4, "minPoints": 15, "minTravel": 0.05, "smooth": 5,
+      "stepFrames": 2, "holdSec": 0.8, "fadeMs": 300, "strokePx": 6, "dotPx": 9
+    }
   }
 }

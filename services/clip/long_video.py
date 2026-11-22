@@ -64,20 +64,24 @@ def moments(hits, ranking, mcfg, duration, matches, cfg):
         ps = u["pieces"]
         score = float(sc["perKill"]) * u["kills"] + (float(sc["streakBonus"]) * float(u["score"]) if u["streak"] else 0.0)
         out.append({"start": float(ps[0]["start"]), "end": float(ps[-1]["end"]), "score": round(score, 3),
-                    "kills": int(u["kills"]), "kind": "streak" if u["streak"] else "kills"})
+                    "kills": int(u["kills"]), "kind": "streak" if u["streak"] else "kills",
+                    "medals": sorted(float(md["t"]) for md in u.get("medals") or []),  # LV1b callouts (D422)
+                    # LV1c paths (D423): the moment's last kill (a merged segment keeps one per moment)
+                    "lastKills": [max(float(k) for k in u["peaks"])] if u.get("peaks") else []})
     wins = {str(x).upper() for x in cfg.get("winResults") or []}
     for mt in matches or []:
         if str(mt.get("result") or "").upper() in wins:
             p = mont._result_piece(mt, mcfg, float(duration))
             if p:
                 out.append({"start": float(p["start"]), "end": float(p["end"]), "score": float(sc["win"]), "kills": 0,
-                            "kind": "win"})
+                            "kind": "win", "medals": [], "lastKills": []})
     return sorted(out, key=lambda m: (m["start"], m["end"]))
 
 
 def merge(moms, pad, duration):
-    """Padded windows merged where they touch or overlap: [{start, end, score, kills, kinds, moments}] in time order.
-    Segments never overlap, so no footage is used twice."""
+    """Padded windows merged where they touch or overlap: [{start, end, score, kills, kinds, moments, medals,
+    lastKills}] in time order (medals: the medal times inside; lastKills: each merged moment's last kill; recording seconds). Segments never
+    overlap, so no footage is used twice."""
     segs = []
     for m in sorted(moms, key=lambda x: x["start"]):
         s, e = max(0.0, m["start"] - pad), min(float(duration), m["end"] + pad)
@@ -90,9 +94,12 @@ def merge(moms, pad, duration):
             g["kills"] += m["kills"]
             g["kinds"] = sorted(set(g["kinds"]) | {m["kind"]})
             g["moments"] += 1
+            g["medals"] = sorted(set(g["medals"]) | set(m.get("medals") or []))
+            g["lastKills"] = sorted(set(g["lastKills"]) | set(m.get("lastKills") or []))
         else:
             segs.append({"start": s, "end": e, "score": m["score"], "kills": m["kills"], "kinds": [m["kind"]],
-                         "moments": 1})
+                         "moments": 1, "medals": sorted(set(m.get("medals") or [])),
+                         "lastKills": sorted(set(m.get("lastKills") or []))})
     return [dict(g, start=round(g["start"], 3), end=round(g["end"], 3)) for g in segs]
 
 
@@ -201,9 +208,10 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
            audio, overlay=None, overlay_failed=None):
     """Renders the segments into wd/long-h.mp4. render_job(mk_argv, encoder, wd, part, what) -> (CompletedProcess,
     encoder) (clipper._render_job: stall watch, CPU retry). The parts and their list live in a per-attempt folder that
-    is removed in finally (and by the next start, after a kill). overlay (LV1a, D421): overlay(chunk, first number,
-    folder) -> (ass name or None, fonts dir or None), burned over that batch; a batch that fails with it is rendered
-    once more without it (overlay_failed(batch index, stderr) is told), so an overlay never stops the video.
+    is removed in finally (and by the next start, after a kill). overlay (LV1a/LV1b, D421/D422): overlay(chunk, first
+    number, folder) -> {"ass", "fontsdir", "fx"} (each may be None): the ASS burned over that batch, fx a render_argv
+    graph fragment ([fxin] -> [fxout], the callout cards); a batch that fails with it is rendered once more without it
+    (overlay_failed(batch index, stderr) is told), so an overlay never stops the video.
     -> (ok, expected seconds, error or None)."""
     clear_attempts(wd)
     adir = tempfile.mkdtemp(prefix=ATTEMPT_PREFIX, dir=wd)
@@ -212,17 +220,18 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
         for i, chunk in enumerate(batches(segs, batch_pieces)):
             name = f"part-{i:03d}.mp4"
             pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
-            ass, fd = overlay(chunk, first, adir) if overlay else (None, None)
+            ov = (overlay(chunk, first, adir) if overlay else None) or {}
             first += len(chunk)
 
-            def mk(enc, pieces=pieces, name=name, ass=ass, fd=fd):
+            def mk(enc, pieces=pieces, name=name, ov=ov):
                 return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], audio, fade_ms, name + ".part",
-                                        audio_tracks=audio_tracks, transition=tr, captions=ass, fontsdir=fd)
+                                        audio_tracks=audio_tracks, transition=tr, captions=ov.get("ass"),
+                                        fontsdir=ov.get("fontsdir"), fx=ov.get("fx"))
             r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
-            if r.returncode != 0 and ass:
+            if r.returncode != 0 and (ov.get("ass") or ov.get("fx")):
                 if overlay_failed:
                     overlay_failed(i, r.stderr)
-                r, encoder = render_job(lambda enc, mk=mk: mk(enc, ass=None, fd=None), encoder, adir, name + ".part",
+                r, encoder = render_job(lambda enc, mk=mk: mk(enc, ov={}), encoder, adir, name + ".part",
                                         f"long video part {i + 1} without captions")
             if r.returncode != 0:
                 return False, 0.0, f"part {i + 1} did not render: {r.stderr.strip()[-200:]}"

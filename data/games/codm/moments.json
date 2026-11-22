@@ -51,5 +51,16 @@
     "minMotionShare": 0.01,
     "maxZoneDiffRatio": 0.35,
     "minFrames": 8
+  },
+  "enemyTag": {
+    "$comment": "LV1c (D423): the enemy name tag (red text above an enemy) for the long video's movement paths, at the tracking size (data/clip/long-video.json teaching.paths.trackWidth). Red wraps the OpenCV hue circle (0-180), hence two ranges. joinPx closes the gaps between letters so one name is one tag. The agent's first proposal, tested on synthetic frames only; UNVERIFIED until measured on the user's footage.",
+    "status": "unverified",
+    "hueRanges": [[0, 8], [172, 180]],
+    "minSat": 140,
+    "minVal": 120,
+    "joinPx": 6,
+    "minAreaShare": 0.00005,
+    "maxAreaShare": 0.004,
+    "minAspect": 1.8
   }
 }
