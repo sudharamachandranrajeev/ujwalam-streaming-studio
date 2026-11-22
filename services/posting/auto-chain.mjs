@@ -510,7 +510,7 @@ const UPLOADS_LOCK_WAIT_MS = 10_000;
 /** Codex BD7c: one writer of uploads.json at a time across processes (clip_publish.py add_uploads and this file):
  *  <uploads.json>.lock created exclusively with this writer's token around one synchronous read-change-write (well
  *  under a second); taken over when older than UPLOADS_LOCK_STALE_MS (takeStaleLock); released only while it still holds
- *  this writer's token. Busy past UPLOADS_LOCK_WAIT_MS: throws (nothing written). */
+ *  this writer's token. Busy past UPLOADS_LOCK_WAIT_MS (or a lock that keeps failing): throws (nothing written). */
 export function withUploadsLock(file, fn) {
   const lock = `${file}.lock`;
   mkdirSync(path.dirname(lock), { recursive: true });
@@ -518,8 +518,7 @@ export function withUploadsLock(file, fn) {
   const end = Date.now() + UPLOADS_LOCK_WAIT_MS;
   const nap = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
-    try { writeFileSync(lock, token, { flag: 'wx' }); break; } catch (e) {
-      if (e?.code !== 'EEXIST') throw e;
+    try { writeFileSync(lock, token, { flag: 'wx' }); break; } catch { // held, or being removed (Windows: EPERM while a delete is pending)
       if (takeStaleLock(lock)) continue;
       if (Date.now() > end) throw new Error('uploads.json is busy (another writer)');
       Atomics.wait(nap, 0, 0, 50);
@@ -530,22 +529,25 @@ export function withUploadsLock(file, fn) {
   }
 }
 
-/** A lock older than the limit is moved aside (a rename: one contender wins) and removed; when the moved file turns out
- *  to be fresh (another writer had just taken the lock), it is moved back. Returns true: try to take the lock again. */
+/** Removes a lock older than the limit. Only the holder of <lock>.takeover (created exclusively) checks and removes, so
+ *  no writer can remove a lock another writer has just taken. A takeover file older than the limit (its process died in
+ *  those few milliseconds) is removed. Returns true only when the lock was removed or is gone: try to take it again. */
 function takeStaleLock(lock) {
-  const aside = `${lock}.${randomBytes(6).toString('hex')}.stale`;
+  const guard = `${lock}.takeover`;
+  try { closeSync(openSync(guard, 'wx')); } catch {
+    try { if (Date.now() - statSync(guard).mtimeMs > UPLOADS_LOCK_STALE_MS) rmSync(guard, { force: true }); } catch { /* gone */ }
+    return false;
+  }
   try {
     if (Date.now() - statSync(lock).mtimeMs <= UPLOADS_LOCK_STALE_MS) return false;
-    renameSync(lock, aside);
-  } catch { return true; } // gone or moved by another writer meanwhile
-  try {
-    // its owner keeps it: a hard link fails when a third writer took the lock meanwhile (a rename would replace it)
-    if (Date.now() - statSync(aside).mtimeMs <= UPLOADS_LOCK_STALE_MS) linkSync(aside, lock);
-  } catch { /* the third writer's lock stays */ }
-  rmSync(aside, { force: true });
-  return true;
+    rmSync(lock);
+    return true;
+  } catch (e) {
+    return e?.code === 'ENOENT';
+  } finally {
+    rmSync(guard, { force: true });
+  }
 }
-
 // ---------------------------------------------------------------- the chain
 
 /**

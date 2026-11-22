@@ -147,6 +147,12 @@ class Publish(unittest.TestCase):
             with pub.uploads_lock(data, wait_sec=0.2):
                 self.assertTrue(os.path.isfile(p + ".lock"))
             self.assertFalse(os.path.exists(p + ".lock"))
+            for f in (".lock", ".lock.takeover"):  # a takeover whose process died too: both cleared, then taken
+                with open(p + f, "w"):
+                    pass
+                os.utime(p + f, (0, 0))
+            with pub.uploads_lock(data, wait_sec=0.5):
+                self.assertFalse(os.path.exists(p + ".lock.takeover"))
             with open(p, "w", encoding="utf-8") as fh:
                 fh.write("{broken")
             row = {"file": "x.mp4", "kind": "montage", "label": "kills-1", "seconds": 1.0}

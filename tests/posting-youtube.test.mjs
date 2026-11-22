@@ -157,6 +157,8 @@ test('withUploadsLock: one writer at a time; a dead writer\'s lock is taken over
   writeFileSync(`${file}.lock`, '');
   utimesSync(`${file}.lock`, 0, 0); // older than the stale limit
   assert.equal(withUploadsLock(file, () => 8), 8);
+  for (const f of ['.lock', '.lock.takeover']) { writeFileSync(`${file}${f}`, ''); utimesSync(`${file}${f}`, 0, 0); }
+  assert.equal(withUploadsLock(file, () => existsSync(`${file}.lock.takeover`)), false); // a dead takeover is cleared too
 });
 
 test('uploadVideo: refuses an already-uploaded post (never upload the same video twice)', async () => {

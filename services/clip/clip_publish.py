@@ -297,7 +297,7 @@ def uploads_lock(data_dir, wait_sec=10.0):
     """Codex BD7c: one writer of uploads.json at a time across processes (this publish step and posting's markPosted):
     <uploads.json>.lock created exclusively with this writer's token, held only around one read-change-write (well under
     a second), taken over when older than UPLOADS_LOCK_STALE_SEC (a writer that died; _take_stale). Released only while
-    it still holds this writer's token. Busy past wait_sec: ClipError, nothing written."""
+    it still holds this writer's token. Busy past wait_sec (or a lock that keeps failing): ClipError, nothing written."""
     lock = os.path.join(data_dir, UPLOADS) + ".lock"
     os.makedirs(os.path.dirname(lock), exist_ok=True)
     token = f"{os.getpid()}-{os.urandom(8).hex()}"
@@ -310,7 +310,7 @@ def uploads_lock(data_dir, wait_sec=10.0):
             finally:
                 os.close(fd)
             break
-        except FileExistsError:
+        except OSError:  # held, or being removed (Windows: access denied while a delete is pending)
             if _take_stale(lock):
                 continue
             if time.monotonic() > end:
@@ -329,26 +329,33 @@ def uploads_lock(data_dir, wait_sec=10.0):
 
 
 def _take_stale(lock):
-    """A lock older than the limit is moved aside (a rename: one contender wins) and removed; when the moved file turns
-    out to be fresh (another writer had just taken the lock), it is moved back. -> True: try to take the lock again."""
+    """Removes a lock older than the limit. Only the holder of <lock>.takeover (created exclusively) checks and removes,
+    so no writer can remove a lock another writer has just taken. A takeover file older than the limit (its process died
+    in those few milliseconds) is removed. -> True only when the lock was removed or is gone: try to take it again."""
+    guard = lock + ".takeover"
+    try:
+        os.close(os.open(guard, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except OSError:
+        try:
+            if time.time() - os.path.getmtime(guard) > UPLOADS_LOCK_STALE_SEC:
+                os.remove(guard)
+        except OSError:
+            pass
+        return False
     try:
         if time.time() - os.path.getmtime(lock) <= UPLOADS_LOCK_STALE_SEC:
             return False
-        aside = f"{lock}.{os.urandom(6).hex()}.stale"
-        os.rename(lock, aside)
+        os.remove(lock)
+        return True
+    except FileNotFoundError:
+        return True
     except OSError:
-        return True  # gone or moved by another writer meanwhile
-    try:
-        if time.time() - os.path.getmtime(aside) <= UPLOADS_LOCK_STALE_SEC:
-            os.link(aside, lock)  # its owner keeps it: a hard link fails when a third writer took the lock meanwhile
-    except OSError:
-        pass  # the third writer's lock stays
-    try:
-        os.remove(aside)
-    except OSError:
-        pass
-    return True
-
+        return False
+    finally:
+        try:
+            os.remove(guard)
+        except OSError:
+            pass
 
 def add_uploads(data_dir, rows, superseded=None):
     p = os.path.join(data_dir, UPLOADS)
