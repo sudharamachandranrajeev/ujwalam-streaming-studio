@@ -85,15 +85,20 @@ describe('QML studio: tips, tours and help (headless probe)', { skip }, () => {
   });
 
   // User 2026-11-22 (Tasks chip over the name): with every bar button on, no chip or button covers the name at any width;
-  // a window too small even for the icon-only bar hides the name rather than covering it.
-  test('top bar: nothing covers the name, wide or narrow, with Tasks, Review reads and BeatDrop all shown', async () => {
-    const parts = ['updateBtn', 'taskChip', 'chipLive', 'chipBitrate', 'chipRec', 'chipClips', 'clipsFolderBtn', 'reviewBtn', 'beatdropBtn', 'moreBtn', 'helpBtn'];
+  // a window too small even for the compact bar hides the name rather than covering it.
+  // D431 (user 2026-11-22, the bar rated 0.2/10: unlabelled look-alike icons): every action keeps a text label at every
+  // size (only Help, and More/Settings in a narrow window, are icons); My clips, Review reads and BeatDrop are one
+  // labelled Clips menu.
+  test('top bar: labelled buttons, nothing covers the name, wide or narrow; BeatDrop in the Clips menu', async () => {
+    const parts = ['updateBtn', 'taskChip', 'chipLive', 'chipBitrate', 'chipRec', 'chipClips', 'clipsFolderBtn', 'moreBtn', 'helpBtn', 'settingsBtn', 'clipBtn', 'markBtn', 'recordBtn', 'youtubeEventsBtn', 'streamBtn'];
+    const labelled = ['clipsFolderBtn', 'clipBtn', 'markBtn', 'recordBtn', 'youtubeEventsBtn', 'streamBtn'];
     for (const size of ['1920x1080', '1600x900', '1366x768', '1100x700']) {
-      const { p } = await probe({ flagsOn: ['beatdrop', 'posting'], env: { UJWALAM_STUDIO_PROBE_SIZE: size } });
+      const { p } = await probe({ flagsOn: ['beatdrop', 'posting'], actions: ['clips-open'], env: { UJWALAM_STUDIO_PROBE_SIZE: size } });
       const brand = node(p, 'barBrand');
       assert.ok(brand, size);
       const shown = parts.map((n) => node(p, n)).filter((n) => n && n.visible !== false && n.rect[2] > 0);
-      assert.ok(shown.some((n) => n.name === 'beatdropBtn'), `${size}: BeatDrop shown`);
+      assert.ok(p.state.more.clips.some((i) => i.id === 'beatdrop'), `${size}: BeatDrop in the Clips menu`);
+      for (const n of labelled) { const b = node(p, n); assert.ok(b && b.rect[2] > b.rect[3] * 1.6, `${size}: ${n} keeps its label (${b?.rect})`); }
       if (brand.visible === false) { assert.equal(size, '1100x700', 'the name hides only in a very small window'); continue; }
       const end = brand.rect[0] + brand.rect[2];
       for (const n of shown) assert.ok(n.rect[0] >= end, `${size}: ${n.name} at ${n.rect[0]} covers the name (ends ${end})`);

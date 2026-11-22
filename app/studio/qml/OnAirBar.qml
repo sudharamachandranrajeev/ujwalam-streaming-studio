@@ -29,11 +29,14 @@ Rectangle {
         const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
         return h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
     }
-    // ---- probe (tests): more-open, more:<item id> (import, feedback, posts, growth, report) ----
-    function moreProbe() { return { open: moreMenu.opened, items: moreMenu.items() } }
+    // ---- probe (tests): more-open, more:<item id> (import, feedback, posts, growth, report); clips-open, clips:<id> ----
+    function moreProbe() { return { open: moreMenu.opened, items: moreMenu.items(), clipsOpen: clipsMenu.opened, clips: clipsMenu.items() } }
     function moreAction(a) {
         if (a === "more-open") { moreBtn.clicked(); return true }
         if (a.startsWith("more:")) return moreMenu.opened && moreMenu.trigger(a.slice(5));
+        // D431: the Clips menu (clips-open, clips:<folder|review|beatdrop>)
+        if (a === "clips-open") { clipsBtn.clicked(); return true }
+        if (a.startsWith("clips:")) return clipsMenu.opened && clipsMenu.trigger(a.slice(6));
         return false;
     }
 
@@ -42,7 +45,8 @@ Rectangle {
     // so the bar also goes compact at the width the full labels were measured to need (fullNeed only grows while full
     // labels overlap the name, so the switch never flips back and forth).
     property real fullNeed: 0
-    readonly property bool compact: width < Math.max(1500, fullNeed)
+    // D431: compact now only shortens two labels and turns More/Settings into their icons; nothing else goes icon-only.
+    readonly property bool compact: width < Math.max(1280, fullNeed)
     readonly property real nameEnd: brand.x + brand.implicitWidth + Theme.sp.l
     function fitCheck() {
         if (!compact && chips.x < nameEnd) fullNeed = width + (nameEnd - chips.x) + 1;
@@ -123,33 +127,31 @@ Rectangle {
             on: (bar.store.clips.asks || []).length > 0
             token: "accent"
         }
+        // D431 (user 2026-11-22): one labelled Clips menu instead of three icon buttons that all drew the same clip icon.
+        // My clips, Review reads (LL3, D340, flag learning-review, only with something to review) and BeatDrop (BD7b,
+        // D420, flag beatdrop) are its items; the button shows the review count.
         UButton {
+            id: clipsBtn
             objectName: "clipsFolderBtn"
-            iconOnly: bar.compact
-            text: "My clips"
+            text: bar.reviewShown ? "Clips (" + bar.store.reviewCount + ")" : "Clips"
             iconName: "folder"
-            tip: "Open the folder with your finished clips."
-            onClicked: bar.store.openClipsFolder()
-        }
-        // LL3 (D340, flag learning-review): beside My clips, only with the flag on and something to review. Optional.
-        UButton {
-            objectName: "reviewBtn"
-            iconOnly: bar.compact
-            visible: bar.reviewShown
-            text: "Review reads (" + bar.store.reviewCount + ")"
-            iconName: "clip"
-            tip: "Optional: confirm or correct what the clip maker was not sure of. Nothing waits for it."
-            onClicked: if (bar.windows.review) bar.windows.review.show()
-        }
-        // BD7b (D420, flag beatdrop): the BeatDrop montage review, one click to a new take.
-        UButton {
-            objectName: "beatdropBtn"
-            iconOnly: bar.compact
-            visible: bar.store.flags["beatdrop"] === true
-            text: "BeatDrop"
-            iconName: "clip"
-            tip: "See your BeatDrop montage and make a new take with one click."
-            onClicked: if (bar.windows.beatdrop) bar.windows.beatdrop.show()
+            tip: "Your finished clips" + (bar.reviewShown ? ", reads to review" : "") + (bar.store.flags["beatdrop"] === true ? " and the BeatDrop montage" : "") + "."
+            onClicked: clipsMenu.popup(clipsBtn, 0, clipsBtn.height + 4)
+            UMenu {
+                id: clipsMenu
+                objectName: "clipsMenu"
+                UMenuItem { objectName: "clipsMenu:folder"; text: "Open clips folder"
+                            tip: "Open the folder with your finished clips."
+                            onTriggered: bar.store.openClipsFolder() }
+                UMenuItem { objectName: "clipsMenu:review"; text: "Review reads (" + bar.store.reviewCount + ")…"
+                            visible: bar.reviewShown; height: visible ? implicitHeight : 0
+                            tip: "Optional: confirm or correct what the clip maker was not sure of. Nothing waits for it."
+                            onTriggered: if (bar.windows.review) bar.windows.review.show() }
+                UMenuItem { objectName: "clipsMenu:beatdrop"; text: "BeatDrop montage…"
+                            visible: bar.store.flags["beatdrop"] === true; height: visible ? implicitHeight : 0
+                            tip: "See your BeatDrop montage and make a new take with one click."
+                            onTriggered: if (bar.windows.beatdrop) bar.windows.beatdrop.show() }
+            }
         }
         // The stats chip is gone: the stats cards under the side column show the same numbers (D287, as the widget).
     }
@@ -271,16 +273,14 @@ Rectangle {
         // Clipping (D281): save the replay buffer now; mark a moment for the post-stream clipper. One click each (D332).
         UButton {
             objectName: "clipBtn"
-            iconOnly: bar.compact
-            text: "Save clip"
+            text: bar.compact ? "Clip" : "Save clip"
             iconName: "clip"
             tip: "Save the last 60 seconds of H and V as clip files (replay buffer)."
             onClicked: bar.store.saveClip()
         }
         UButton {
             objectName: "markBtn"
-            iconOnly: bar.compact
-            text: "Mark moment"
+            text: bar.compact ? "Mark" : "Mark moment"
             iconName: "flag"
             tip: "Mark this moment for the clipper (same as the marker hotkey, Ctrl+Alt+Shift+M by default)."
             onClicked: bar.store.markMoment()
@@ -297,7 +297,6 @@ Rectangle {
         // D388: the YouTube window (presets, event, live status, chat, past streams). Always there, also while live.
         UButton {
             objectName: "youtubeEventsBtn"
-            iconOnly: bar.compact
             text: "YouTube"
             iconName: "play"
             tip: "YouTube presets, the event for each output, live status and chat, and your past streams."

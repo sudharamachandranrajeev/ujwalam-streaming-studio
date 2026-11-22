@@ -130,7 +130,7 @@ describe('QML studio window (headless probe)', { skip }, () => {
     assert.deepEqual(p.state.flags.map((f) => f.id), defs.map((f) => f.id));
     const ON = defs.filter((f) => f.onBy).map((f) => f.id); // on by the user's decision (data/flags.json onBy)
     assert.deepEqual(p.state.flags.filter((f) => f.on !== ON.includes(f.id)).map((f) => f.id), [], 'all off but the flags a decision turned on');
-    for (const n of ['botsPanel', 'lookAdvanced', 'alertBar', 'reviewBtn'])
+    for (const n of ['botsPanel', 'lookAdvanced', 'alertBar', 'clipsMenu:review'])
       assert.notEqual(node(p, n)?.visible, true, `${n} hidden with its flag off`);
     assert.equal(node(p, 'transitionsPanel')?.visible, true, 'Transitions box shown: its flag is on by default (D391)');
     assert.ok(!p.tree.some((n) => n.name.startsWith('track:')), 'no track routing buttons while mixer-routing is off');

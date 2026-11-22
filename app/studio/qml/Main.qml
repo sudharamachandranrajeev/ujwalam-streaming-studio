@@ -112,7 +112,7 @@ ApplicationWindow {
         if (action === "clips-folder") { studioStore.openClipsFolder(); return true } // the My clips button
         if (action === "clips-review") { if (!bar.reviewShown) return false; reviewDlg.show(); return true } // Review reads (N) beside My clips
         if (String(action).startsWith("clips-")) return clipsAskDlg.probeAction(String(action));
-        if (action === "more-open" || String(action).startsWith("more:")) return bar.moreAction(String(action));
+        if (action === "more-open" || String(action).startsWith("more:") || action === "clips-open" || String(action).startsWith("clips:")) return bar.moreAction(String(action));
         if (String(action).startsWith("scene-hotkey:")) return sceneKey(parseInt(String(action).slice(13), 10)); // Ctrl+N (D382); scene-key: is the scene list's F2 / Del
         // Live controls (Q4 A), the widget probe's names: close, close-choice:<tray|stop|cancel>, tray:<click|open|stop>, tasks:*.
         if (action === "close") { Qt.callLater(win.close); return true } // as the window's X; the question opens on the next turn

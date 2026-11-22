@@ -88,7 +88,8 @@ Button {
         implicitHeight: row.implicitHeight
         Row {
             id: row
-            x: -b.px * b.blockRest // the pixel label slides left as the block grows (plan)
+            // D431 (user 2026-11-22: icon sat at the left edge of its square): an icon-only button centres its icon.
+            x: b.iconOnly ? Math.round((parent.width - width) / 2) : -b.px * b.blockRest // the pixel label slides left as the block grows (plan)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Theme.sp.s
             Canvas { // the premium crown (plan: viewBox 36 by 24, 23 px wide), drawn once
