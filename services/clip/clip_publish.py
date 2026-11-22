@@ -249,25 +249,41 @@ def upload_row(data_dir, file):
 
 
 UPLOAD_QUEUE = os.path.join("posting", "upload-queue.json")  # services/posting/auto-chain.mjs QUEUE_NAME
+POST_LEDGER = os.path.join("posting", "ledger.json")  # services/posting/index.mjs LEDGER_NAME
 
 
 def _uploading(data_dir, file):
-    """True when posting's upload queue has a package of this file's bytes in flight (state uploading, or a resumable
-    session kept for a resume), or when that cannot be told (unreadable queue or file): never replace those bytes."""
-    p = os.path.join(data_dir, UPLOAD_QUEUE)
-    if not os.path.isfile(p):
-        return False
+    """True when posting may have sent this file's bytes: an upload-queue item of them uploading, done or holding a
+    resumable session, or a ledger entry of them marked uploaded (uploads.json can lag behind both after a crash).
+    Anything that cannot be told (unreadable file, a queue or ledger of the wrong shape) counts as sent: never replaced."""
     try:
-        items = (load_json(p).get("items") or {}).values()
         h = hashlib.sha256()
         with open(file, "rb") as fh:
             for block in iter(lambda: fh.read(1 << 20), b""):
                 h.update(block)
-    except (ClipError, OSError, AttributeError):
+    except OSError:
         return True
-    pre = h.hexdigest()[:16] + "."  # index.mjs postId: <sha256 first 16>.<target>
-    return any(isinstance(it, dict) and str(it.get("id", "")).startswith(pre)
-               and (it.get("state") == "uploading" or it.get("session")) for it in items)
+    sha = h.hexdigest()
+    for rel, field in ((UPLOAD_QUEUE, "items"), (POST_LEDGER, "entries")):
+        p = os.path.join(data_dir, rel)
+        if not os.path.isfile(p):
+            continue
+        try:
+            doc = load_json(p)
+        except ClipError:
+            return True
+        rows = doc.get(field) if isinstance(doc, dict) else None
+        if not isinstance(rows, dict):
+            return True
+        for it in rows.values():
+            if not isinstance(it, dict):
+                return True
+            if field == "items" and str(it.get("id", "")).startswith(sha[:16] + ".") \
+                    and (it.get("state") in ("uploading", "done") or it.get("session")):  # postId: <sha 16>.<target>
+                return True
+            if field == "entries" and it.get("sha256") == sha and it.get("status") == "uploaded":
+                return True
+    return False
 
 
 def _replace_published(old, src, c, label, rdoc, data_dir):

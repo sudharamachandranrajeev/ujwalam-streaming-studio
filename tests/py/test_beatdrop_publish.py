@@ -117,6 +117,34 @@ class Publish(unittest.TestCase):
         os.remove(os.path.join(data, pub.UPLOADS))
         self.assertEqual(len(render("beatdrop-e.mp4", {"source": "made-here", "seed": 4}, b"fifth")), 1)
 
+    def test_sent_or_unknown_posting_state_counts_as_sent(self):
+        import hashlib  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            f = os.path.join(tmp, "v.mp4")
+            with open(f, "wb") as fh:
+                fh.write(b"bytes")
+            sha = hashlib.sha256(b"bytes").hexdigest()
+            os.makedirs(os.path.join(tmp, "posting"))
+
+            def state(rel, doc):
+                for r in (pub.UPLOAD_QUEUE, pub.POST_LEDGER):
+                    if os.path.exists(os.path.join(tmp, r)):
+                        os.remove(os.path.join(tmp, r))
+                if doc is not None:
+                    with open(os.path.join(tmp, rel), "w", encoding="utf-8") as fh:
+                        fh.write(doc if isinstance(doc, str) else json.dumps(doc))
+                return pub._uploading(tmp, f)
+            q = lambda st, **kw: {"items": {"a": {"id": f"{sha[:16]}.youtube-shorts", "state": st, **kw}}}  # noqa: E731
+            self.assertFalse(state(pub.UPLOAD_QUEUE, None))
+            self.assertFalse(state(pub.UPLOAD_QUEUE, q("queued")))
+            self.assertFalse(state(pub.UPLOAD_QUEUE, q("failed")))
+            self.assertTrue(state(pub.UPLOAD_QUEUE, q("done")))  # uploaded; uploads.json not marked yet (crash)
+            self.assertTrue(state(pub.UPLOAD_QUEUE, q("queued", session={"url": "x"})))
+            self.assertTrue(state(pub.UPLOAD_QUEUE, {"items": None}))  # wrong shape: unknown
+            self.assertTrue(state(pub.UPLOAD_QUEUE, "{not json"))
+            self.assertTrue(state(pub.POST_LEDGER, {"entries": {"k": {"sha256": sha, "status": "uploaded"}}}))
+            self.assertFalse(state(pub.POST_LEDGER, {"entries": {"k": {"sha256": sha, "status": "draft"}}}))
+
     def test_a_row_from_before_bd7c_without_source_is_the_same_render(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
