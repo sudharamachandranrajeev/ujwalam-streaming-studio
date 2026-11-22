@@ -1119,7 +1119,8 @@ def _reel_extras(a, data_dir):
     lcfg = look.load_config() if look.on(data_dir) else None  # FX1 (D411): the clip look, picked per reel
     look_now = look.effective(data_dir, lcfg) if lcfg else None
     tracks, mlcfg = _look_library(data_dir, look_now) if lcfg else ([], None)  # FX4: the user's music folder
-    ai = bool(lcfg and mlcfg and mgen.SOURCE in (look_now["music"].get("sources") or []) and _ai_ready())  # FX6
+    # FX6 (D429): the tick alone; a stored track is reused without the runtime, new ones need it (music_gen.make)
+    ai = bool(lcfg and mlcfg and mgen.SOURCE in (look_now["music"].get("sources") or []))
     return {"hooks": rh.active(data_dir, hcfg), "hcfg": hcfg, "cap_on": cap_on, "ccfg": ccfg,
             "look": ({"cfg": lcfg, "look": look_now, "override": look.override_from_env(lcfg), "tracks": tracks,
                       "mlcfg": mlcfg, "dataDir": data_dir, "history": look.load_history(data_dir), "ai": ai,
@@ -1353,14 +1354,6 @@ def _look_library(data_dir, look_now):
     return tracks, mcfg
 
 
-def _ai_ready():
-    """FX6 (D429): True when the ACE-Step runtime folder is set and has its Python (else the AI source is unavailable)."""
-    try:
-        return mgen.runtime_python() is not None
-    except (OSError, ClipError, KeyError, ValueError):
-        return False
-
-
 def pack_record(track):
     """FX5 (D427): the render record fields of a pack track: source pack, its id and the credit posting carries."""
     c = track["pack"]
@@ -1382,13 +1375,15 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
         target = dict(target, energy=round(float(reel["styleMusicEnergy"]), 3))
     track, sc = mlib.match(lk.get("tracks") or [], target, total, seed_parts, lk["history"].get("track") or [], mcfg,
                            n_avoid=int(lk["cfg"]["historyN"]["track"]), prefer_long=pk["music"] != "intro-outro")
+    generated = False  # where the track came from decides its record, never keys on the track dict (Codex review)
     if track is None and lk.get("ai"):  # FX6 (D429): nothing fits, so one track is made on this PC (off air)
         track, why = mgen.make(lk["dataDir"], target, total, mcfg)
+        generated = track is not None
         if track is None:
             eprint(f"music: no AI track ({why}); the made-here bed is used")
     if track is None:
         return pieces, None
-    if track.get("pack") and not mlib.verify_pick(track):  # D427: the bytes must be the pack's own before any credit
+    if not generated and track.get("pack") and not mlib.verify_pick(track):  # D427: the bytes must be the pack's own before any credit
         eprint(f"music pack: {track.get('name')} does not match the pack's checksum; the made-here bed is used")
         return pieces, None
     name_end = None
@@ -1407,7 +1402,7 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
             pieces = synced
             rec = mk(pieces)
     record = {k: v for k, v in rec.items() if k != "beats"}
-    origin = pack_record(track) if track.get("pack") else mgen.record(track) if track.get("generated") else {"source": "folder"}
+    origin = mgen.record(track) if generated else pack_record(track) if track.get("pack") else {"source": "folder"}
     return pieces, {"rec": rec, "track": track,
                     "record": dict(record, **origin, score=sc, target=target, beatShifts=shifts, beats=len(rec["beats"]))}
 
@@ -1800,7 +1795,7 @@ def _recaption_music(data_dir, wd, row, pieces, xd, rid):
         try:
             mcfg = mlib.load_config()
             if kind == "generated":
-                tracks = mgen.stored(data_dir)
+                tracks = [t for t in [mgen.stored_track(data_dir, mrec.get("track"))] if t]
             elif kind == "pack":
                 tracks = mlib.usable_pack(mlib.load_library(data_dir, mcfg, mcfg["pack"]["library"]), data_dir, mcfg)
             else:
@@ -1813,7 +1808,8 @@ def _recaption_music(data_dir, wd, row, pieces, xd, rid):
             if track is not None:
                 mus = mlib.prepare(wd, mrec, track, mcfg, cfg_m["duck"])
                 # Codex review: a pack record is made again from the checked track that was rendered, never kept
-                return mus, (dict(mrec, **pack_record(track)) if kind == "pack" else None)
+                return mus, (dict(mrec, **pack_record(track)) if kind == "pack"
+                             else dict(mrec, **mgen.record(track)) if kind == "generated" else None)
         except Exception as e:  # noqa: BLE001 - a broken track falls back to the made-here bed
             why = f"the {kind} track could not be read ({type(e).__name__})"
         eprint(f"recaption {rid}: {why}; the made-here bed is used")

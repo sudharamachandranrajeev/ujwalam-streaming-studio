@@ -57,19 +57,21 @@ test('free music pack (D427): saved sources get the pack once; a later untick st
 
 test('AI music (D429): ticked by default, aiReady only with the runtime Python, aiOffered checked', () => withDir((d) => {
   assert.equal(lookDefaults().sources.find((s) => s.id === 'ai').available, true);
-  const none = path.join(d, 'none.json');
-  assert.equal(musicAiReady({}, none), false, 'no profile, no env: unavailable');
-  assert.equal(musicAiReady({ UJWALAM_ACESTEP_RUNTIME: path.join(d, 'rt') }, none), false, 'folder without Python');
+  const rt = path.join(d, 'rt');
+  assert.equal(musicAiReady(undefined, {}), false, 'no setting, no env: unavailable');
+  assert.equal(musicAiReady(undefined, { UJWALAM_ACESTEP_RUNTIME: rt }), false, 'folder without Python');
   const py = JSON.parse(readFileSync(path.join(here, '..', 'data', 'clip', 'music-gen.json'), 'utf8')).python;
-  mkdirSync(path.join(d, 'rt', ...py.split('/').slice(0, -1)), { recursive: true });
-  writeFileSync(path.join(d, 'rt', ...py.split('/')), '');
-  assert.equal(musicAiReady({ UJWALAM_ACESTEP_RUNTIME: path.join(d, 'rt') }, none), true);
-  const prof = path.join(d, 'profile.json');
-  writeFileSync(prof, JSON.stringify({ paths: { acestep_runtime: path.join(d, 'rt') } }));
-  assert.equal(musicAiReady({}, prof), true, 'from the profile');
-  writeFileSync(prof, JSON.stringify({ paths: { acestep_runtime: '<ace-step-1.5-folder-or-remove-for-no-ai-music>' } }));
-  assert.equal(musicAiReady({}, prof), false, 'a placeholder is not set');
-  assert.equal(typeof lookInfo(d).aiReady, 'boolean');
+  mkdirSync(path.join(rt, ...py.split('/').slice(0, -1)), { recursive: true });
+  writeFileSync(path.join(rt, ...py.split('/')), '');
+  assert.equal(musicAiReady(undefined, { UJWALAM_ACESTEP_RUNTIME: rt }), true);
+  assert.equal(musicAiReady('rt', {}), false, 'not absolute');
+  writeSettings(d, { clips: { look: { music: { aiRuntime: rt } } } });
+  const saved = { ...process.env }; delete process.env.UJWALAM_ACESTEP_RUNTIME;
+  try { assert.equal(lookInfo(d).aiReady, true, 'from the setting'); } finally { Object.assign(process.env, saved); }
+  assert.deepEqual(settingsProblems({ clips: { look: { music: { aiRuntime: 'relative' } } } }),
+    ['clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters']);
+  assert.deepEqual(lookProblems({ music: { aiRuntime: 'C:\\x\ny' } }), ['clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters']);
+  assert.deepEqual(lookProblems({ music: { aiRuntime: '' } }), []);
   assert.deepEqual(lookProblems({ music: { aiOffered: 1 } }), ['clips.look.music.aiOffered must be true or false']);
 }));
 

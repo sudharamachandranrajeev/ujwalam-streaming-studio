@@ -335,7 +335,7 @@ export function allowProblems(paths) {
     // JPEG decoder for the review frames (2026-11-22: without it Review reads showed no picture)
     || /^studio\/imageformats\/qjpeg\.dll$/.test(p)
     // Qt Quick for the QML studio window (D360): its DLLs and the imports under studio/qml (QtQml, QtQuick only)
-    || /^studio\/Qt6(Qml|QmlModels|QmlMeta|QmlWorkerScript|Quick|QuickControls2|QuickControls2Basic|QuickControls2BasicStyleImpl|QuickControls2Impl|QuickTemplates2|OpenGL)\.dll$/.test(p)
+    || /^studio\/Qt6(Qml|QmlModels|QmlMeta|QmlWorkerScript|Quick|QuickControls2|QuickControls2Basic|QuickControls2BasicStyleImpl|QuickControls2Impl|QuickTemplates2|OpenGL|QuickDialogs2|QuickDialogs2QuickImpl|QuickDialogs2Utils|QuickLayouts)\.dll$/.test(p)
     || /^studio\/qml\/(QtQml|QtQuick)(\/[A-Za-z0-9_.-]+)*\/[A-Za-z0-9_.-]+\.(dll|qml|qmltypes|js|mjs|json|png|svg)$|^studio\/qml\/(QtQml|QtQuick)(\/[A-Za-z0-9_.-]+)*\/qmldir$/.test(p)
     || /^obs\/obs-plugins\/64bit\/([^/]+\.(dll|exe|pak|dat|bin)|locales\/[A-Za-z-]+\.pak)$/i.test(p)
     || /^obs\/data\/(libobs|obs-plugins)\/[^]+$/.test(p)

@@ -2883,9 +2883,12 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    `services/clip/ace_worker.py` run with the runtime's own Python, no window, below-normal priority, in a
    kill-on-close job, so the model is unloaded when it ends). Recipes per mood (tempo, caption words), energy words,
    length range and the free-memory floor are data in `data/clip/music-gen.json`.
-2. **Runtime path is local data**: env `UJWALAM_ACESTEP_RUNTIME`, else `data/profile.local.json` `paths.acestep_runtime`
-   (placeholder in `data/profile.example.json`). No folder or no Python in it: the source is unavailable, Settings
-   says so in plain words and the switch is greyed out.
+2. **Runtime path is a user setting** (main session, after the Codex review): env `UJWALAM_ACESTEP_RUNTIME`, else
+   `clips.look.music.aiRuntime` in `<data>/settings.json` (absolute folder path, at most 260 characters, no control
+   characters; checked the same way in Python and Node). Settings > Clips has a "Choose folder…" button (Qt
+   FolderDialog in its own QML file behind a Loader) while the runtime is not ready. Not the local profile: that file
+   holds private identity terms for the scan, and a tool path is not one. No folder or no Python in it: nothing new is
+   made, the switch is greyed out with plain text.
 3. **Guards**: never while live or when the live state is unknown (also stopped if a stream starts mid-run); one heavy
    clip job (HeavyJobLock "music-gen"; busy = fall back); free GPU memory checked first. The brief asked for 5.5 GB
    free; the card has 6141 MB and the desktop alone uses about 660 MB, so 5.5 GB free never happens. The floor is
@@ -2900,7 +2903,10 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    Recaption renders the stored track again; if it is gone, the made-here bed.
 6. **Default ON** (user-requested): `ai` is in the default sources; saved sources from before FX6 get it once
    (`aiOffered`, same pattern as `packOffered`, Python and Node).
-7. **UNVERIFIED**: musical quality for the user; YouTube Content ID on generated tracks; the installed app reading
-   the profile path (the dev checkout was used); generation while the studio is merely open. Open: the laptop's
-   profile does not set the folder yet, because every profile value is a private term and the handover names that
-   folder (private scan fails); the user decides whether the scan should skip `paths.acestep_runtime`
+7. **Codex review round 1**: live is checked again inside the lock right before the child starts; a stored track
+   JSON is read field by field (type and range checked) and can never set the posting source, which comes from the
+   branch that picked the track; the worker only writes plain names inside the job's own folder and checks every
+   field before importing torch; every failure, timeout or live stop removes the partial files and the work folder;
+   stored tracks are reused with the tick alone (only new ones need the runtime).
+8. **UNVERIFIED**: musical quality for the user; YouTube Content ID on generated tracks; the Settings switch and the
+   folder picker on screen and in the packaged app; generation while the studio is merely open.

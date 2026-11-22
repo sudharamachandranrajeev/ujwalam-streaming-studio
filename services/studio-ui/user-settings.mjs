@@ -205,7 +205,7 @@ export function reelTransitionInfo(dataDir) {
 // cases: tests/fixtures/clip-look-cases.json). Any part may be left out; the rest keeps its default (data/clip/look.json).
 export const CLIP_LOOK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'clip', 'look.json');
 export const LOOK_GROUPS = Object.freeze(['music', 'transitions', 'name']);
-const LOOK_KEYS = Object.freeze({ music: ['modes', 'sources', 'folder', 'levelDb', 'lock', 'packOffered', 'aiOffered'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
+const LOOK_KEYS = Object.freeze({ music: ['modes', 'sources', 'folder', 'levelDb', 'lock', 'packOffered', 'aiOffered', 'aiRuntime'], transitions: ['styles', 'sfx', 'beatSync', 'lock'],
   name: ['styles', 'position', 'colour', 'sizePct', 'durationSec', 'logo', 'lock'] });
 let lookCache = null;
 /** data/clip/look.json, or null when unreadable. */
@@ -224,6 +224,9 @@ const lookTicks = (v, allowed, where) => (!Array.isArray(v) || v.some((x) => typ
 const lookRange = (v, r, where, integer = false) => (isNum(v) && v >= r.min && v <= r.max && (!integer || Number.isInteger(v)) ? [] : [`${where} must be from ${r.min} to ${r.max}`]);
 const plainObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
+/** FX6 (D429): "" (not set) or an absolute folder path (drive, UNC or /), <= 260 chars, no control chars (clip_look.py ai_runtime_ok). */
+export const aiRuntimeOk = (v) => typeof v === 'string' && v.length <= 260 && !/[\x00-\x1f]/.test(v)
+  && (v === '' || /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|\/)/.test(v));
 /** Problems with a clips.look value; [] when fine. */
 export function lookProblems(v, d = lookDefaults()) {
   if (!d) return ['the clip look is not available (data/clip/look.json is missing)'];
@@ -245,6 +248,7 @@ export function lookProblems(v, d = lookDefaults()) {
   if ('sources' in m) out.push(...lookTicks(m.sources, d.sources.map((s) => s.id), 'clips.look.music.sources'));
   if ('folder' in m && (typeof m.folder !== 'string' || m.folder.length > d.folderMaxChars || /[\x00-\x1f]/.test(m.folder))) out.push(`clips.look.music.folder must be a folder path up to ${d.folderMaxChars} characters`);
   if ('levelDb' in m) out.push(...lookRange(m.levelDb, d.levelDb, 'clips.look.music.levelDb'));
+  if ('aiRuntime' in m && !aiRuntimeOk(m.aiRuntime)) out.push('clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters');
   for (const b of ['packOffered', 'aiOffered']) if (b in m && typeof m[b] !== 'boolean') out.push(`clips.look.music.${b} must be true or false`);
   const n = plainObj(v.name) ? v.name : {};
   if ('position' in n && !d.positions.includes(n.position)) out.push(`clips.look.name.position must be one of ${d.positions.join(', ')}`);
@@ -300,17 +304,16 @@ export function lookInfo(dataDir) {
   if ('randomise' in mine) look.randomise = mine.randomise;
   for (const g of LOOK_GROUPS) Object.assign(look[g], mine[g] ?? {});
   return { flag: d.flag, groups: d.groups, sources: d.sources, positions: d.positions, levelDb: d.levelDb, sizePct: d.sizePct,
-    durationSec: d.durationSec, defaults: d.defaults, look, packReady: musicPackReady(dataDir), aiReady: musicAiReady() };
+    durationSec: d.durationSec, defaults: d.defaults, look, packReady: musicPackReady(dataDir), aiReady: musicAiReady(look.music.aiRuntime) };
 }
 /**
- * FX6 (D429): true when the ACE-Step runtime folder (env UJWALAM_ACESTEP_RUNTIME, else data/profile.local.json
- * paths.acestep_runtime) holds its Python. Same rule as services/clip/music_gen.py runtime_python.
+ * FX6 (D429): true when the ACE-Step runtime folder (env UJWALAM_ACESTEP_RUNTIME, else the setting
+ * clips.look.music.aiRuntime) holds its Python. Same rule as services/clip/music_gen.py runtime_python.
  */
-export function musicAiReady(env = process.env, profileFile = path.join(path.dirname(CLIP_LOOK_FILE), '..', 'profile.local.json')) {
+export function musicAiReady(setting, env = process.env) {
   try {
-    let dir = env.UJWALAM_ACESTEP_RUNTIME;
-    if (!dir) { try { dir = JSON.parse(readFileSync(profileFile, 'utf8'))?.paths?.acestep_runtime; } catch { dir = null; } }
-    if (typeof dir !== 'string' || !dir || (dir.startsWith('<') && dir.endsWith('>'))) return false;
+    const dir = env.UJWALAM_ACESTEP_RUNTIME || setting;
+    if (typeof dir !== 'string' || !dir || !aiRuntimeOk(dir)) return false;
     const py = JSON.parse(readFileSync(path.join(path.dirname(CLIP_LOOK_FILE), 'music-gen.json'), 'utf8')).python;
     return existsSync(path.join(dir, ...py.split('/')));
   } catch { return false; }

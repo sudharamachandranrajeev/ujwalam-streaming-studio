@@ -357,6 +357,30 @@ Column {
             checked: srcs.includes("ai")
             onToggled: cp.box.setLook("music", "sources", ((cp.box.info.look || {}).sources || []).map(s => s.id).filter(x => x === "ai" ? checked : srcs.includes(x)))
         }
+        Row {
+            visible: (cp.box.info.look || {}).aiReady !== true
+            spacing: Theme.sp.s
+            UButton {
+                objectName: "lookMusicAiFolder"
+                text: "Choose folder…"
+                onClicked: { if (aiPicker.item) aiPicker.item.open(); else aiPicker.active = true }
+            }
+            Words {
+                anchors.verticalCenter: parent.verticalCenter
+                text: cp.d.look && cp.d.look.music.aiRuntime ? "Chosen: " + cp.d.look.music.aiRuntime + " (Save, then this page checks it)"
+                                                              : "Pick the folder where ACE-Step 1.5 is installed."
+            }
+            Loader {
+                id: aiPicker
+                active: false
+                source: "AiFolderPicker.qml"
+                onLoaded: item.open()
+                Connections {
+                    target: aiPicker.item
+                    function onChosen(folder) { cp.box.setLook("music", "aiRuntime", folder) }
+                }
+            }
+        }
         Words { text: "My music folder (tracks are picked to fit each clip; nothing is downloaded)" }
         UField {
             objectName: "lookMusicFolder"

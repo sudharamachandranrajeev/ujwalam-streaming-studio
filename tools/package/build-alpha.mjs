@@ -48,7 +48,9 @@ export const STUDIO_QT = Object.freeze([
   ['studio/imageformats/qjpeg.dll', 'plugins/imageformats/qjpeg.dll'],
   // Qt Quick (D360): the studio window is built in QML (the only studio since 2026-11-18), so it needs these.
   ...['Qml', 'QmlModels', 'QmlMeta', 'QmlWorkerScript', 'Quick', 'QuickControls2', 'QuickControls2Basic', 'QuickControls2BasicStyleImpl',
-    'QuickControls2Impl', 'QuickTemplates2', 'OpenGL'].map((m) => [`studio/Qt6${m}.dll`, `bin/Qt6${m}.dll`]),
+    'QuickControls2Impl', 'QuickTemplates2', 'OpenGL',
+    // FX6 (D429): the folder picker of Settings > Clips (QtQuick.Dialogs, which needs Qt Quick Layouts)
+    'QuickDialogs2', 'QuickDialogs2QuickImpl', 'QuickDialogs2Utils', 'QuickLayouts'].map((m) => [`studio/Qt6${m}.dll`, `bin/Qt6${m}.dll`]),
 ]);
 // The Qt Quick imports the QML window loads (D360), copied from the kit's qml/ into studio/qml/ (qml_studio.cpp adds
 // that folder to the import path). [folder under qml/, with its subfolders]. Debug builds (*d.dll) and .pdb files stay out.
@@ -59,6 +61,7 @@ export const STUDIO_QML = Object.freeze([
   ['QtQml', false], ['QtQml/Models', true], ['QtQml/WorkerScript', true],
   ['QtQuick', false], ['QtQuick/Window', true], ['QtQuick/Templates', true],
   ['QtQuick/Controls', false], ['QtQuick/Controls/impl', true], ['QtQuick/Controls/Basic', true],
+  ['QtQuick/Layouts', true], ['QtQuick/Dialogs', true], // FX6 (D429): the folder picker; its +Style folders are left out
 ]);
 
 /** [package path, source] of every STUDIO_QML file in the kit (pure apart from the directory reads; tested). */
@@ -69,7 +72,7 @@ export function studioQmlFiles(kit, { list = (d) => readdirSync(d, { withFileTyp
     const entries = list(dir);
     const names = new Set(entries.filter((e) => e.isFile()).map((e) => e.name.toLowerCase()));
     for (const e of entries) {
-      if (e.isDirectory()) { if (deep) walk(`${rel}/${e.name}`, true); continue; }
+      if (e.isDirectory()) { if (deep && !e.name.startsWith('+')) walk(`${rel}/${e.name}`, true); continue; }
       const n = e.name.toLowerCase();
       if (n.endsWith('.pdb') || (n.endsWith('d.dll') && names.has(n.replace(/d\.dll$/, '.dll')))) continue;
       out.push([`studio/qml/${rel}/${e.name}`, path.join(dir, e.name)]);

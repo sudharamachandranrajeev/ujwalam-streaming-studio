@@ -125,13 +125,18 @@ test('studioQmlFiles: the listed QML folders, subfolders only where asked, no de
     QtQuick: [f('qmldir'), d('Controls'), d('Particles')], 'QtQuick/Window': [f('qmldir')], 'QtQuick/Templates': [f('qmldir')],
     'QtQuick/Controls': [f('qmldir'), d('Basic'), d('Material')], 'QtQuick/Controls/impl': [f('qmldir')],
     'QtQuick/Controls/Basic': [f('Button.qml'), d('impl')], 'QtQuick/Controls/Basic/impl': [f('qmldir')],
+    'QtQuick/Layouts': [f('qmldir')], 'QtQuick/Dialogs': [f('qmldir'), d('quickimpl')],
+    'QtQuick/Dialogs/quickimpl': [f('qmldir'), d('qml')], 'QtQuick/Dialogs/quickimpl/qml': [f('FolderDialog.qml'), d('+Fusion')],
   };
   const list = (dir) => tree[path.relative(path.join(kit, 'qml'), dir).split(path.sep).join('/')] ?? assert.fail(`read ${dir}`);
 
   const files = studioQmlFiles(kit, { list }).map(([dest]) => dest);
   assert.deepEqual(files.sort(), ['studio/qml/QtQml/Models/modelsplugin.dll', 'studio/qml/QtQml/Models/qmldir', 'studio/qml/QtQml/WorkerScript/qmldir', 'studio/qml/QtQml/qmldir',
     'studio/qml/QtQml/qmlplugin.dll', 'studio/qml/QtQuick/Controls/Basic/Button.qml', 'studio/qml/QtQuick/Controls/Basic/impl/qmldir', 'studio/qml/QtQuick/Controls/impl/qmldir',
-    'studio/qml/QtQuick/Controls/qmldir', 'studio/qml/QtQuick/Templates/qmldir', 'studio/qml/QtQuick/Window/qmldir', 'studio/qml/QtQuick/qmldir']);
+    'studio/qml/QtQuick/Controls/qmldir', 'studio/qml/QtQuick/Dialogs/qmldir', 'studio/qml/QtQuick/Dialogs/quickimpl/qml/FolderDialog.qml',
+    'studio/qml/QtQuick/Dialogs/quickimpl/qmldir', 'studio/qml/QtQuick/Layouts/qmldir', 'studio/qml/QtQuick/Templates/qmldir',
+    'studio/qml/QtQuick/Window/qmldir', 'studio/qml/QtQuick/qmldir']);
+  assert.ok(!files.some((p) => p.includes('+')), 'style variants (+Fusion) are left out');
   assert.deepEqual(allowProblems(files), [], 'every file it picks may ship');
 });
 

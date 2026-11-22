@@ -88,6 +88,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/FeaturesCard.qml
 		qml/SettingsPage.qml
 		qml/SettingsClips.qml
+		qml/AiFolderPicker.qml
 		qml/SettingsAppearance.qml
 		qml/SettingsStream.qml
 		qml/SettingsTransitions.qml

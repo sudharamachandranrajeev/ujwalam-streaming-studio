@@ -87,7 +87,7 @@ def look_problems(v, cfg=None):
             out.append(f"unknown clips.look setting {k}")
     if "randomise" in v and not isinstance(v["randomise"], bool):
         out.append("clips.look.randomise must be true or false")
-    keys = {"music": ("modes", "sources", "folder", "levelDb", "lock", "packOffered", "aiOffered"),
+    keys = {"music": ("modes", "sources", "folder", "levelDb", "lock", "packOffered", "aiOffered", "aiRuntime"),
             "transitions": ("styles", "sfx", "beatSync", "lock"),
             "name": ("styles", "position", "colour", "sizePct", "durationSec", "logo", "lock")}
     for g in GROUPS:
@@ -114,6 +114,8 @@ def look_problems(v, cfg=None):
         out.append(f"clips.look.music.folder must be a folder path up to {cfg['folderMaxChars']} characters")
     if "levelDb" in m:
         out += _range(m["levelDb"], cfg["levelDb"], "clips.look.music.levelDb")
+    if "aiRuntime" in m and not ai_runtime_ok(m["aiRuntime"]):
+        out.append("clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters")
     for b in ("packOffered", "aiOffered"):
         if b in m and not isinstance(m[b], bool):
             out.append(f"clips.look.music.{b} must be true or false")
@@ -127,6 +129,15 @@ def look_problems(v, cfg=None):
     if "durationSec" in n:
         out += _range(n["durationSec"], cfg["durationSec"], "clips.look.name.durationSec")
     return out
+
+
+_ABS = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|/)")
+
+
+def ai_runtime_ok(v):
+    """FX6 (D429): clips.look.music.aiRuntime is "" (not set) or an absolute folder path (drive, UNC or /), at most 260
+    characters, no control characters. Same rule as user-settings.mjs."""
+    return isinstance(v, str) and len(v) <= 260 and not re.search(r"[\x00-\x1f]", v) and (v == "" or bool(_ABS.match(v)))
 
 
 def merge(cfg, v):
