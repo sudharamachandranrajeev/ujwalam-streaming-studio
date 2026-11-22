@@ -354,7 +354,7 @@ def render_argv(ffmpeg, items, parts, xd, cfg, encoder_args, audio_args, out_nam
         else:
             g.append(f"aevalsrc=0|0:c=stereo:s=48000:d={clip['sec']:.3f},{fmt}[p{2 * i + 1}a]")
     kinds = join_kinds(len(parts) - 1, cfg)
-    vlast = "[vj]" if ass else "[vout]"
+    vlast = "[vj]" if ass else "[vf]"
     for j in range(1, len(parts)):
         vin = "[p0v]" if j == 1 else f"[x{j - 1}v]"
         ain = "[p0a]" if j == 1 else f"[x{j - 1}a]"
@@ -363,7 +363,10 @@ def render_argv(ffmpeg, items, parts, xd, cfg, encoder_args, audio_args, out_nam
         g.append(f"{vin}[p{j}v]xfade=transition={kinds[j - 1]}:duration={xd:.3f}:offset={parts[j]['start']:.3f}{vout}")
         g.append(f"{ain}[p{j}a]acrossfade=d={xd:.3f}:c1=tri:c2=tri{aout}")
     if ass:
-        g.append(f"[vj]subtitles={ass}" + (f":fontsdir={fontsdir}" if fontsdir else "") + "[vout]")
+        g.append(f"[vj]subtitles={ass}" + (f":fontsdir={fontsdir}" if fontsdir else "") + "[vf]")
+    # the joins and the burned text may hand back another pixel format (yuv444p seen on real clips, 2026-11-22);
+    # every posted file is 4:2:0 (validate)
+    g.append("[vf]format=yuv420p[vout]")
     argv += ["-filter_complex", ";".join(g), "-map", "[vout]", "-map", "[aout]"] + list(encoder_args) \
         + list(audio_args) + ["-r", "60", "-movflags", "+faststart", "-f", "mp4", out_name]
     return argv

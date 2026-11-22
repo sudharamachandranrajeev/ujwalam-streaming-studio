@@ -300,7 +300,12 @@ class GraphTests(unittest.TestCase):
             self.assertIn(f":offset={p['start']:.3f}", g)
         self.assertNotIn("[1:a:0]", g)  # the silent clip gets generated silence
         self.assertEqual(g.count("aevalsrc="), 4)
-        self.assertTrue(g.endswith("[vj]subtitles=countdown.ass:fontsdir=countdown-fonts[vout]"))
+        # the text is burned last, then the output is pinned to 4:2:0 (joins and libass may hand back yuv444p)
+        self.assertTrue(g.endswith("[vj]subtitles=countdown.ass:fontsdir=countdown-fonts[vf];[vf]format=yuv420p[vout]"))
+        g2 = cd.render_argv("ffmpeg", items, parts, xd, cfg(), ["-c:v", "x"], ["-c:a", "aac"], "o.mp4.part")
+        g2 = g2[g2.index("-filter_complex") + 1]  # no text: the last join feeds the format step directly
+        self.assertIn(f":offset={parts[-1]['start']:.3f}[vf]", g2)
+        self.assertTrue(g2.endswith(";[vf]format=yuv420p[vout]"))
         self.assertEqual(argv[-3:], ["-f", "mp4", "o.mp4.part"])
 
     def test_sound_start_against_picture(self):
