@@ -52,6 +52,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadTemplates, packageRun, packageUploads, sha256File } from './index.mjs';
@@ -485,8 +486,15 @@ export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, a
     if (h === sha256) hits.add(row.file);
   }
   if (!hits.size) return 0;
-  // busy past the wait: nothing written (the ledger already says uploaded, so the video is not packaged again)
-  try { return withUploadsLock(file, () => markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt })); } catch { return 0; }
+  // Codex BD7c: the queue item is already done, so this write has no later retry: wait (without blocking) past the stale
+  // limit, so a lock left by a writer that died is always taken over; any other failure writes nothing
+  const end = Date.now() + UPLOADS_LOCK_STALE_MS + 15_000;
+  for (;;) {
+    try { return withUploadsLock(file, () => markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt }), 0); } catch (e) {
+      if (e?.code !== 'uploads-busy' || Date.now() > end) return 0;
+      await sleep(100);
+    }
+  }
 }
 
 function markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt }) {
@@ -510,17 +518,17 @@ const UPLOADS_LOCK_WAIT_MS = 10_000;
 /** Codex BD7c: one writer of uploads.json at a time across processes (clip_publish.py add_uploads and this file):
  *  <uploads.json>.lock created exclusively with this writer's token around one synchronous read-change-write (well
  *  under a second); taken over when older than UPLOADS_LOCK_STALE_MS (takeStaleLock); released only while it still holds
- *  this writer's token. Busy past UPLOADS_LOCK_WAIT_MS (or a lock that keeps failing): throws (nothing written). */
-export function withUploadsLock(file, fn) {
+ *  this writer's token. Busy past waitMs (or a lock that keeps failing): throws code 'uploads-busy' (nothing written). */
+export function withUploadsLock(file, fn, waitMs = UPLOADS_LOCK_WAIT_MS) {
   const lock = `${file}.lock`;
   mkdirSync(path.dirname(lock), { recursive: true });
   const token = `${process.pid}-${randomBytes(8).toString('hex')}`;
-  const end = Date.now() + UPLOADS_LOCK_WAIT_MS;
+  const end = Date.now() + waitMs;
   const nap = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
     try { writeFileSync(lock, token, { flag: 'wx' }); break; } catch { // held, or being removed (Windows: EPERM while a delete is pending)
       if (takeStaleLock(lock)) continue;
-      if (Date.now() > end) throw new Error('uploads.json is busy (another writer)');
+      if (Date.now() > end) throw Object.assign(new Error('uploads.json is busy (another writer)'), { code: 'uploads-busy' });
       Atomics.wait(nap, 0, 0, 50);
     }
   }
