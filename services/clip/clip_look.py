@@ -137,7 +137,8 @@ _ABS = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|/)")
 def ai_runtime_ok(v):
     """FX6 (D429): clips.look.music.aiRuntime is "" (not set) or an absolute folder path (drive, UNC or /), at most 260
     characters, no control characters. Same rule as user-settings.mjs."""
-    return isinstance(v, str) and len(v) <= 260 and not re.search(r"[\x00-\x1f]", v) and (v == "" or bool(_ABS.match(v)))
+    # length in UTF-16 units, as JavaScript counts it (user-settings.mjs aiRuntimeOk)
+    return isinstance(v, str) and len(v.encode("utf-16-le", "surrogatepass")) // 2 <= 260 and not re.search(r"[\x00-\x1f]", v) and (v == "" or bool(_ABS.match(v)))
 
 
 def merge(cfg, v):

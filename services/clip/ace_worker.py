@@ -33,8 +33,12 @@ CONFIGS = ("acestep-v15-turbo",)
 QUANT = ("int8_weight_only",)
 
 
+_RESERVED = re.compile(r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$", re.IGNORECASE)  # Windows device names
+
+
 def _name(v, ext=None):
-    return isinstance(v, str) and bool(_NAME.match(v)) and ".." not in v and (ext is None or v.lower().endswith(ext))
+    return (isinstance(v, str) and bool(_NAME.match(v)) and ".." not in v and not v.endswith((".", " "))
+            and not _RESERVED.match(v) and (ext is None or v.lower().endswith(ext)))
 
 
 def _int(v, lo, hi):

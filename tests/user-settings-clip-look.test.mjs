@@ -72,6 +72,9 @@ test('AI music (D429): ticked by default, aiReady only with the runtime Python, 
     ['clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters']);
   assert.deepEqual(lookProblems({ music: { aiRuntime: 'C:\\x\ny' } }), ['clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters']);
   assert.deepEqual(lookProblems({ music: { aiRuntime: '' } }), []);
+  // the same count as clip_look.py (UTF-16 units): 3 + 2*128 + 1 = 260 passes, 3 + 2*129 = 261 fails
+  assert.deepEqual(lookProblems({ music: { aiRuntime: `C:\\${'\u{1F3B5}'.repeat(128)}a` } }), []);
+  assert.equal(lookProblems({ music: { aiRuntime: `C:\\${'\u{1F3B5}'.repeat(129)}` } }).length, 1);
   assert.deepEqual(lookProblems({ music: { aiOffered: 1 } }), ['clips.look.music.aiOffered must be true or false']);
 }));
 

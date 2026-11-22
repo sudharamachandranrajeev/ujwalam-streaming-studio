@@ -165,7 +165,8 @@ class RequestTests(unittest.TestCase):
         for ok in ("", "C:\\AI\\ace", "D:/x", "\\\\server\\share\\ace"):
             self.assertEqual(cl.look_problems({"music": {"aiRuntime": ok}}, cfg), [], ok)
         msg = ["clips.look.music.aiRuntime must be empty or a full folder path up to 260 characters"]
-        for bad in ("ace", "C:", 5, "C:\\" + "a" * 260, "C:\\a\nb"):
+        self.assertEqual(cl.look_problems({"music": {"aiRuntime": "C:\\" + "\U0001F3B5" * 128 + "a"}}, cfg), [], "260 UTF-16 units")
+        for bad in ("ace", "C:", 5, "C:\\" + "a" * 260, "C:\\a\nb", "C:\\" + "\U0001F3B5" * 129):
             self.assertEqual(cl.look_problems({"music": {"aiRuntime": bad}}, cfg), msg, repr(bad))
 
 
@@ -214,6 +215,25 @@ class GuardTests(Base):
         self.assertIsNone(t)
         self.assertIn("CUDA out of memory", why)
         self.assertEqual(self.left(), [], "no part file, job, result or work folder left")
+
+    def test_metadata_write_failure_leaves_no_final_files(self):
+        real = mg.write_json_atomic
+
+        def failing(path, doc):
+            if path.endswith(".json.part"):
+                raise OSError("disk full")
+            return real(path, doc)
+        rid = mg.request_for(TARGET, 20.0, self.cfg)["id"]
+        os.makedirs(self.gen, exist_ok=True)
+        write(os.path.join(self.gen, rid + ".json"), "{\"id\": \"stale\"}")  # an old invalid JSON beside
+        mg.write_json_atomic = failing
+        try:
+            t, why = self.make()
+        finally:
+            mg.write_json_atomic = real
+        self.assertIsNone(t)
+        self.assertIn("not stored", why)
+        self.assertEqual(self.left(), [], "no final WAV, no stale JSON, no part files")
 
     def test_timeout_kills_and_cleans(self):
         t, why = self.make(worker=self.hang, cfg=dict(self.cfg, timeoutSec=3))
@@ -267,6 +287,12 @@ class WorkerContractTests(Base):
             self.assertEqual(rc, 2, f"{k}={v}")
             self.assertFalse(out["ok"])
             self.assertFalse(os.path.exists(os.path.join(self.d, "evil.wav")))
+        for k, v in (("out", "CON.wav"), ("out", "nul.wav"), ("out", "Com1.wav"), ("out", "lpt9.part.wav"),
+                     ("work", "AUX"), ("work", "prn"), ("work", "work."), ("result", "Nul.json")):
+            rc, out, _ = self._job(**{k: v})
+            self.assertEqual(rc, 2, f"reserved or trailing dot: {k}={v}")
+            if k != "result":
+                self.assertIn(k, out["error"])
         rc, out, _ = self._job(result="../escape.json")
         self.assertEqual((rc, out), (2, None), "a bad result name: nothing written anywhere")
         self.assertFalse(os.path.exists(os.path.join(self.d, "escape.json")))

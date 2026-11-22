@@ -240,7 +240,7 @@ def make(data_dir, target, need_sec, mlcfg, cfg=None, live=on_air, vram=free_vra
 
 def _clean(root, rid):
     """Removes everything one make of rid leaves while it runs: part WAV, job, result, the worker's work folders."""
-    for p in (os.path.join(root, rid + n) for n in (".part.wav", ".job.json", ".result.json")):
+    for p in (os.path.join(root, rid + n) for n in (".part.wav", ".job.json", ".result.json", ".json.part")):
         try:
             os.remove(p)
         except OSError:
@@ -255,6 +255,11 @@ def _run(root, req, cfg, mlcfg, py, worker, rt, live):
     wav, part = os.path.join(root, rid + ".wav"), os.path.join(root, rid + ".part.wav")
     job, res = os.path.join(root, rid + ".job.json"), os.path.join(root, rid + ".result.json")
     _clean(root, rid)
+    for p in (wav, os.path.join(root, rid + ".json")):  # only here when no valid stored track: a stale pair goes
+        try:
+            os.remove(p)
+        except OSError:
+            pass
     try:
         write_json_atomic(job, {"caption": req["caption"], "bpm": req["bpm"], "seconds": req["seconds"], "seed": req["seed"],
                                 "out": os.path.basename(part), "result": os.path.basename(res), "work": rid + ".work",
@@ -278,11 +283,9 @@ def _run(root, req, cfg, mlcfg, py, worker, rt, live):
         if r.returncode != 0 or out.get("ok") is not True or not os.path.isfile(part):
             why = out.get("error") if isinstance(out.get("error"), str) else ((r.stderr or "").strip()[-200:] or f"exit {r.returncode}")
             return None, f"not made ({why})"
-        os.replace(part, wav)
         try:
-            facts = mlib.analyse(wav, mlcfg, root)
+            facts = mlib.analyse(part, mlcfg, root)
         except Exception as e:  # noqa: BLE001 - an unreadable result is not used
-            os.remove(wav)
             return None, f"made but not readable ({type(e).__name__}: {str(e)[-100:]})"
         facts = dict(facts, bpmMeasured=facts["bpm"], bpm=tempo_fix(facts["bpm"], req["bpm"]))
         num = lambda k: out.get(k) if _num(out.get(k), 0, 1e6) else None  # noqa: E731
@@ -292,11 +295,24 @@ def _run(root, req, cfg, mlcfg, py, worker, rt, live):
                 "madeSec": num("seconds"), "loadSec": num("loadSeconds"), "torchPeakMB": num("torchPeakMB")}
         # the mood is the one asked for, not re-guessed (spike: a phonk track read as edm)
         doc = dict(facts, id=rid, mood=req["mood"], moodGuess=facts.get("mood"), generated=meta)
-        write_json_atomic(os.path.join(root, rid + ".json"), doc)
-        eprint(f"music: made {rid} ({req['mood']}, {req['bpm']} BPM, {req['seconds']} s) in {meta['madeSec']} s")
         t = checked_track(doc, rid, cfg)
         if t is None:
             return None, "made but its facts are out of range"
+        # Codex verify: metadata first (part file), then the WAV, then the JSON last; a WAV without its valid JSON is
+        # never reused (stored_track), and any failure here removes both final names
+        meta_part, meta = os.path.join(root, rid + ".json.part"), os.path.join(root, rid + ".json")
+        try:
+            write_json_atomic(meta_part, doc)
+            os.replace(part, wav)
+            os.replace(meta_part, meta)
+        except (OSError, ClipError) as e:
+            for p in (wav, meta):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            return None, f"made but not stored ({str(e)[-100:]})"
+        eprint(f"music: made {rid} ({req['mood']}, {req['bpm']} BPM, {req['seconds']} s) in {doc['generated']['madeSec']} s")
         return dict(t, file=wav, root=root, bpmMeasured=facts["bpmMeasured"]), "made"
     finally:
         _clean(root, rid)  # Codex review: a killed worker cannot clean up; nothing partial is left
