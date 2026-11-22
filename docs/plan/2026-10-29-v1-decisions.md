@@ -3023,3 +3023,12 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    channel's read cost per read (about 81 units at the current size, 401 at the cap); the card on the laptop's screen.
    The user's own saved settings (placement random-daily, maxUploadsPerDay 6 in the rules) override the shipped
    defaults until changed on the card.
+
+## D436 — No flash check on single reels (user, 2026-11-22)
+
+1. **Question**: single reels (one clip per post) are posted without a flash measurement; one ("Fury Kill") measured
+   9 flashes/s around 21.5 s, from the game's own explosions and gunfire.
+2. **Decision** (user, 2026-11-22: "no then"): no flash check on single reels. The flashing there is the game's own
+   picture, already in the live stream; YouTube sets no flash limit.
+3. **Unchanged**: the flash-safety rule (at most 3 flashes/s) still binds every effect Ujwalam adds (stream effects,
+   clip FX) and the reels already checked (countdown, BeatDrop).
