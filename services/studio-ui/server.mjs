@@ -61,6 +61,7 @@ import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
 import { createReelStyles } from './reel-styles.mjs';
 import { createMontageMusic } from './montage-music.mjs';
+import { createBeatdropReview } from './beatdrop-review.mjs';
 import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, montageMusicInfo, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
 import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
@@ -750,6 +751,8 @@ export function createStudioServer(opts) {
     isLive: () => live === true, status: () => host.call('outputs.status', {}), flagOn: () => !!flags && flags.isOn('reel-styles') }) : null;
   // D414 Settings > Clips > Montage music: the NCS library's tracks and their credits (montage_music.py, hidden)
   const montageMusic = typeof opts.dataDir === 'string' ? createMontageMusic({ dataDir: opts.dataDir, clipRoot: opts.clipRoot ?? (process.env.UJWALAM_CLIP_ROOT || REPO_ROOT) }) : null;
+  // BD7b (D420, flag beatdrop): the BeatDrop review card (summary, song strip, one-click retakes)
+  const beatdropReview = typeof opts.dataDir === 'string' ? createBeatdropReview({ dataDir: opts.dataDir, flagOn: () => !!flags && flags.isOn('beatdrop'), openFile: (p) => openFolder(p) }) : null;
   const renamed = new Map(); // 'layer:<id>' | 'scene:<id>' -> new name, until the host reloads the project (D292)
   let lastImport = null; // { file, project, bases }: server side only, never sent to the page
   let previewSeen = null; // last host preview edit seq handled (null: not read yet)
@@ -1566,6 +1569,7 @@ export function createStudioServer(opts) {
       try { return json(res, 200, publicReadiness(await readiness().run({ maxAgeMs: 0 }))); } catch { return json(res, 500, { error: 'readiness-failed' }); }
     }
     if (req.method === 'GET' && route === '/ui/api/montage-music') return montageMusic ? json(res, 200, await montageMusic.info()) : json(res, 404, { error: 'no-data-dir' }); // D414
+    if (req.method === 'GET' && route === '/ui/api/beatdrop') { if (!beatdropReview) return json(res, 404, { error: 'no-data-dir' }); const r = beatdropReview.info(url.searchParams.get('run') ?? ''); return json(res, r.status, r.body); } // BD7b
     if (req.method === 'GET' && route === '/ui/api/reel-styles') return reelStyles ? json(res, 200, await reelStyles.info()) : json(res, 404, { error: 'no-data-dir' }); // RS3
     if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir), montageMusic: montageMusicInfo(opts.dataDir) } : { settings: null });
     if (req.method === 'GET' && route === '/ui/api/edits') return json(res, 200, history.state());
@@ -1780,6 +1784,7 @@ export function createStudioServer(opts) {
     if (route === '/ui/api/montage-music') { if (!montageMusic) return json(res, 404, { error: 'no-data-dir' }); const r = await montageMusic.run(body); return json(res, r.status, r.body); } // D414
     if (route === '/ui/api/reel-styles') { if (!reelStyles) return json(res, 404, { error: 'no-data-dir' }); const r = await reelStyles.run(body); return json(res, r.status, r.body); } // RS3
     if (route === '/ui/api/clips/answer') return clipAnswer(res, body);
+    if (route === '/ui/api/beatdrop/retake' || route === '/ui/api/beatdrop/play') { if (!beatdropReview) return json(res, 404, { error: 'no-data-dir' }); const r = route.endsWith('retake') ? beatdropReview.retake(body) : beatdropReview.play(body); return json(res, r.status, r.body); } // BD7b
     if (route === '/ui/api/tasks/stop') return stopTasks(res);
     if (route === '/ui/api/updates/apply') {
       // LU7 (D343): one click applies a waiting update (D332: no typed phrase, no "are you sure"). Only a logged-in page

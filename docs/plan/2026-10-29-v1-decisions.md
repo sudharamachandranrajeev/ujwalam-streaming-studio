@@ -2693,3 +2693,19 @@ Evidence: `docs/evidence/2026-11-22-beatdrop-bd7c-publish.md`. Plan: `docs/plan/
 3. **Repair**: every BeatDrop publish brings `uploads.json` in line with `published.json` (all takes on disk listed, earlier ones superseded, the current one cleared). A removed video's name is never reused.
 4. **One writer of `uploads.json`** across processes (clip publish and posting's `markPosted`): an exclusive lock file with an owner token; a stale lock (over 30 s) is removed only under an exclusive takeover file; an unreadable or odd-shaped list is never replaced.
 5. Accepted residuals: a take already uploading when a retake lands may still post; a publish killed between its two writes is repaired only by the next publish; two publishes of one run folder at once are unsupported (the studio runs clip jobs one at a time).
+
+## D420 — BeatDrop BD7b: the studio makes the montage after the clip job and shows a review card with one-click retakes (decided, 2026-11-22)
+
+Evidence: `docs/evidence/2026-11-22-beatdrop-bd7b-studio.md`. Plan: `docs/plan/2026-11-21-beatdrop-montages.md` section "BD7 Review and final detail".
+
+1. **Job**: a `beatdrop` job type in the clip queue (`record-clips.mjs`), queued after a successful full clip job when the flag `beatdrop` is on and the run folder has non-empty detector hits. Two steps of one job: `moments.py`, then `clipper beatdrop --publish` (h264_nvenc, `--v-recording` when there is one). An unreadable flag counts as off. It waits while a stream or recording runs and is stopped when one starts, like the long video. Title: "BeatDrop montage from <name>". The source recordings are saved in the run folder for retakes.
+2. **Retake**: a retake is one step (`clipper beatdrop --retake <op> [--piece N]`), a new video (D419). The studio route writes `clips/retake.json`; the queue reads it and checks it again. Only a run folder that has a BeatDrop render is accepted, the op comes from a fixed list, a swap needs a whole piece number inside the saved plan. The client never sends a path. One BeatDrop job per run at a time.
+3. **Review card**: `BeatDropWindow.qml` (button "BeatDrop", shown with the flag): a song strip with one block per piece (kill on the beat, move, calm; each named in words), the plain-word summary, "Another take", "Slower intro", "More third person", "Swap clip N" (pick a block first). One click queues the take; the card says "Making a new take..." and loads the new take when it is done. No question is asked.
+4. **Video preview**: the H and V videos open in the user's video player (Qt Multimedia is not part of the studio build); an in-card player is a later step.
+5. **Not done here**: auto-post of a BeatDrop montage (it is published like a montage by D419; the queue calls the post chain only for the kill montages and the long video).
+6. **After the review (2026-11-22, main session + Codex)**: a retake needs its recording. Delete clipped recordings
+   (D403) keeps a recording while any job for it waits or runs, so the first montage is safe; afterwards the recording
+   may be deleted as before (no new retention rule; Keep for labelling still keeps one). The card then says the
+   recording was deleted and its retake buttons are off; the route refuses with `no-source`. One retake request waits
+   at a time (a second click before the queue takes it is refused, never written over the first). The plan's retake
+   history is shown once, inside the engine's summary.

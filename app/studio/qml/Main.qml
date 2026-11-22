@@ -88,6 +88,7 @@ ApplicationWindow {
         if (String(action).startsWith("palette-")) return cmdPalette.probeAction(String(action));
         if (String(action).startsWith("growth-")) return growthDlg.probeAction(String(action));
         if (String(action).startsWith("review-")) return reviewDlg.probeAction(String(action));
+        if (String(action).startsWith("beatdrop-")) return beatdropDlg.probeAction(String(action));
         if (String(action).startsWith("feedback-")) return feedbackDlg.probeAction(String(action));
         if (String(action).startsWith("report-")) return reportDlg.probeAction(String(action));
         if (String(action).startsWith("import-")) return importDlg.probeAction(String(action));
@@ -189,7 +190,7 @@ ApplicationWindow {
         store: studioStore
         taskCenter: taskCenter
         guide: guide
-        windows: ({ youtube: ytWin, growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg, sceneBuilder: sceneBuilderDlg })
+        windows: ({ youtube: ytWin, growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg, beatdrop: beatdropDlg, sceneBuilder: sceneBuilderDlg })
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
         height: 56
     }
@@ -334,6 +335,7 @@ ApplicationWindow {
     }
     LazyDialog { id: cmdPalette; sourceComponent: Component { CommandPalette { store: studioStore; settings: settingsDlg.get(); windows: ({ growth: growthDlg, review: reviewDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg }) } } }
     LazyDialog { id: growthDlg; sourceComponent: Component { GrowthWindow { store: studioStore } } }
+    LazyDialog { id: beatdropDlg; sourceComponent: Component { BeatDropWindow { store: studioStore } } }
     LazyDialog { id: reviewDlg; sourceComponent: Component { ReviewWindow { store: studioStore } } }
     LazyDialog { id: feedbackDlg; sourceComponent: Component { FeedbackWindow { store: studioStore } } }
     LazyDialog { id: reportDlg; sourceComponent: Component { ReportDialog { store: studioStore } } }
@@ -346,7 +348,7 @@ ApplicationWindow {
     // Probe (tests): which of them were made before the probe was read (the probe itself makes them all).
     function lazyMade() {
         const all = { addLayer: addLayerDlg, addScene: addSceneDlg, scenario: scenarioDlg, addAudio: addAudioDlg, audioTools: audioToolsDlg,
-                      sceneMusic: sceneMusicDlg, rename: renameDlg, settings: settingsDlg, palette: cmdPalette, growth: growthDlg, review: reviewDlg,
+                      sceneMusic: sceneMusicDlg, rename: renameDlg, settings: settingsDlg, palette: cmdPalette, growth: growthDlg, review: reviewDlg, beatdrop: beatdropDlg,
                       feedback: feedbackDlg, report: reportDlg, importer: importDlg, sceneBuilder: sceneBuilderDlg, youtube: ytWin, goLive: goLiveDlg,
                       posts: postsDlg, clipsAsk: clipsAskDlg };
         return Object.keys(all).filter(k => all[k].made);
