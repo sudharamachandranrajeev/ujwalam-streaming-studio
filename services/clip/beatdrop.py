@@ -1118,17 +1118,24 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
             _drop(vpart)
     # Codex BD7a: the plan is saved only with a finished video, so a stopped or failed (re)take never leaves a plan
     # that no video shows (a later retake starts from what the user got). Written aside first and moved in only once
-    # the video is in place: a failed move leaves the old plan with the old video.
+    # both videos are in place: a failed move removes what this take moved, so the old plan stays with the old videos
+    # render.json still names.
     plan_path = os.path.join(wd, PLAN)
     write_json_atomic(plan_path + ".part", pl)
-    try:
-        os.replace(part, os.path.join(wd, name))
-    except OSError:
-        _drop(plan_path + ".part")
-        raise
-    os.replace(plan_path + ".part", plan_path)
+    moves = [(part, os.path.join(wd, name))]
     if vertical and res["v"]["reason"] is None:
-        os.replace(vpart, os.path.join(wd, vname))
+        moves.append((vpart, os.path.join(wd, vname)))
+    moved = []
+    try:
+        for src, dst in moves:
+            os.replace(src, dst)
+            moved.append(dst)
+        os.replace(plan_path + ".part", plan_path)
+    except OSError:
+        for f in moved + [src for src, _ in moves] + [plan_path + ".part"]:
+            _drop(f)
+        raise
+    if len(moves) == 2:
         res["v"]["file"] = vname
     res.update(status="done", reason=None, file=name)
     return res
