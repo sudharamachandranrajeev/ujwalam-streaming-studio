@@ -2697,4 +2697,9 @@ Evidence: `docs/evidence/2026-11-22-beatdrop-bd7b-studio.md`. Plan: `docs/plan/2
 3. **Review card**: `BeatDropWindow.qml` (button "BeatDrop", shown with the flag): a song strip with one block per piece (kill on the beat, move, calm; each named in words), the plain-word summary, "Another take", "Slower intro", "More third person", "Swap clip N" (pick a block first). One click queues the take; the card says "Making a new take..." and loads the new take when it is done. No question is asked.
 4. **Video preview**: the H and V videos open in the user's video player (Qt Multimedia is not part of the studio build); an in-card player is a later step.
 5. **Not done here**: auto-post of a BeatDrop montage (it is published like a montage by D419; the queue calls the post chain only for the kill montages and the long video).
-6. UNVERIFIED: the new tests and the QML were written while a heavy render suite ran; nothing was run.
+6. **After the review (2026-11-22, main session + Codex)**: a retake needs its recording. Delete clipped recordings
+   (D403) keeps a recording while any job for it waits or runs, so the first montage is safe; afterwards the recording
+   may be deleted as before (no new retention rule; Keep for labelling still keeps one). The card then says the
+   recording was deleted and its retake buttons are off; the route refuses with `no-source`. One retake request waits
+   at a time (a second click before the queue takes it is refused, never written over the first). The plan's retake
+   history is shown once, inside the engine's summary.

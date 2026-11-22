@@ -19,13 +19,14 @@ Dialog {
     title: "BeatDrop montage"
     closePolicy: Popup.CloseOnEscape
 
-    property var data: ({ run: null, made: false, busy: false, summary: [], blocks: [], total: 0, retakes: [], h: null, v: null })
+    property var data: ({ run: null, made: false, busy: false, summary: [], blocks: [], total: 0, retakes: [], h: null, v: null, source: false })
     property bool loaded: false
     property string note: ""
     property int selected: -1          // the piece picked on the strip (for "Swap this clip")
     property int gen: 0
     readonly property bool busy: data.busy === true
     readonly property bool made: data.made === true
+    readonly property bool canRetake: made && !busy && data.source === true  // the recording it came from is still there
 
     function show() {
         gen++;
@@ -49,7 +50,7 @@ Dialog {
         });
     }
     function retake(op, piece) {
-        if (busy || !made) return false;
+        if (!canRetake) return false;
         const b = { run: data.run, op: op };
         if (op === "swap") b.piece = piece;
         const g = gen;
@@ -123,6 +124,7 @@ Dialog {
                 : dlg.note !== "" ? dlg.note
                 : !dlg.loaded ? "Loading..."
                 : !dlg.made ? "No BeatDrop montage yet. One is made after the clips of each stream or recording."
+                : dlg.data.source !== true ? "The recording this montage came from was deleted, so no new takes can be made."
                 : "Pick a piece on the strip to swap it, or tap a button for a new take."
         }
         // The song strip: one block per piece, as wide as it plays.
@@ -142,10 +144,10 @@ Dialog {
                     id: blk
                     required property var modelData
                     objectName: "beatdropBlock:" + modelData.n
-                    readonly property real scale: dlg.data.total > 0 ? (strip.width - 2) / dlg.data.total : 0
-                    x: 1 + modelData.start * scale
+                    readonly property real pxPerSec: dlg.data.total > 0 ? (strip.width - 2) / dlg.data.total : 0
+                    x: 1 + modelData.start * pxPerSec
                     y: 1
-                    width: Math.max(3, modelData.length * scale - 2)
+                    width: Math.max(3, modelData.length * pxPerSec - 2)
                     height: strip.height - 2
                     radius: 3
                     color: dlg.kindColor(modelData.kind)
@@ -179,7 +181,7 @@ Dialog {
             objectName: "beatdropSummary"
             anchors { left: parent.left; right: parent.right; top: key.bottom; topMargin: 8; bottom: parent.bottom }
             clip: true
-            model: dlg.made ? dlg.data.summary.concat(dlg.data.retakes) : []
+            model: dlg.made ? dlg.data.summary : [] // the engine's summary already ends with the retakes made
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
             delegate: Text {
@@ -205,13 +207,13 @@ Dialog {
         Flow {
             anchors { left: parent.left; right: closeBtn.left; leftMargin: 18; rightMargin: 10; bottom: parent.bottom; bottomMargin: 10 }
             spacing: 8
-            UButton { objectName: "beatdropAnother"; text: "Another take"; kind: "primary"; enabled: dlg.made && !dlg.busy; tip: "Make the montage again with different clips on the beats."; onClicked: dlg.retake("another-take", 0) }
-            UButton { objectName: "beatdropSlower"; text: "Slower intro"; enabled: dlg.made && !dlg.busy; tip: "Make the montage again with a slower start."; onClicked: dlg.retake("slower-intro", 0) }
-            UButton { objectName: "beatdropThird"; text: "More third person"; enabled: dlg.made && !dlg.busy; tip: "Make the montage again with more third-person shots."; onClicked: dlg.retake("more-third-person", 0) }
+            UButton { objectName: "beatdropAnother"; text: "Another take"; kind: "primary"; enabled: dlg.canRetake; tip: "Make the montage again with different clips on the beats."; onClicked: dlg.retake("another-take", 0) }
+            UButton { objectName: "beatdropSlower"; text: "Slower intro"; enabled: dlg.canRetake; tip: "Make the montage again with a slower start."; onClicked: dlg.retake("slower-intro", 0) }
+            UButton { objectName: "beatdropThird"; text: "More third person"; enabled: dlg.canRetake; tip: "Make the montage again with more third-person shots."; onClicked: dlg.retake("more-third-person", 0) }
             UButton {
                 objectName: "beatdropSwap"
                 text: dlg.selected > 0 ? "Swap clip " + dlg.selected : "Swap this clip"
-                enabled: dlg.made && !dlg.busy && dlg.selected > 0
+                enabled: dlg.canRetake && dlg.selected > 0
                 tip: "Pick a piece on the strip first, then swap just that clip for another."
                 onClicked: dlg.retake("swap", dlg.selected)
             }

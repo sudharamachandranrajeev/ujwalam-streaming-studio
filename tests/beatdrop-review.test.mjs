@@ -127,9 +127,10 @@ function fixtureRun(dataDir, name = 'run-a') {
   const dir = path.join(dataDir, 'clips', 'runs', name, 'beatdrop');
   const wd = path.join(dir, 'clips', 'B1'); mkdirSync(wd, { recursive: true });
   writeFileSync(path.join(dir, 'render.json'), JSON.stringify({ clips: [{ id: 'B1', files: [{ layout: 'beatdrop-h', file: 'beatdrop-h.mp4' }, { layout: 'beatdrop-v', file: 'beatdrop-v.mp4' }],
-    summary: ['Opened slow, then 3 kills on the beat.', 'The best kill is on the drop.'], retakes: ['Another take: 2 clips changed.'], music: { id: 'song-1' } }] }));
+    summary: ['Opened slow, then 3 kills on the beat.', 'The best kill is on the drop.'], retakes: [{ op: 'another-take', seed: 7 }, { op: 'swap', piece: 3 }, { op: 'bogus' }], music: { id: 'song-1' } }] }));
   writeFileSync(path.join(wd, 'beatdrop-h.mp4'), ''); writeFileSync(path.join(wd, 'beatdrop-v.mp4'), '');
-  writeFileSync(path.join(dir, '..', 'beatdrop-source.json'), JSON.stringify({ h: 'C:/r/h.mkv', v: null }));
+  const rec = path.join(dataDir, 'rec-h.mkv'); writeFileSync(rec, '');
+  writeFileSync(path.join(dir, '..', 'beatdrop-source.json'), JSON.stringify({ h: rec, v: null }));
   writeFileSync(path.join(wd, 'beatdrop-plan.json'), JSON.stringify({ fps: 30, total: 6, pieces: [
     { part: 'cold-open', anchor: null, outStart: 0, outFrames: 60 },
     { part: 'drop', anchor: { kind: 'kill' }, outStart: 60, outFrames: 30 },
@@ -152,10 +153,10 @@ test('the review route: the JSON shape from a render and its plan; flag off is 4
     const r = createBeatdropReview({ dataDir: s.dataDir });
     const { status, body } = r.info();
     assert.equal(status, 200);
-    assert.deepEqual(Object.keys(body).sort(), ['blocks', 'busy', 'h', 'made', 'retakes', 'run', 'runs', 'summary', 'total', 'v']);
+    assert.deepEqual(Object.keys(body).sort(), ['blocks', 'busy', 'h', 'made', 'retakes', 'run', 'runs', 'source', 'summary', 'total', 'v']);
     assert.equal(body.run, 'run-a'); assert.equal(body.made, true); assert.equal(body.busy, false);
     assert.deepEqual(body.summary, ['Opened slow, then 3 kills on the beat.', 'The best kill is on the drop.']);
-    assert.deepEqual(body.retakes, ['Another take: 2 clips changed.']);
+    assert.deepEqual(body.retakes, ['Another take', 'Swapped clip 3'], 'the plan\'s retake objects in plain words; unknown ops left out');
     assert.deepEqual(body.blocks.map((b) => [b.n, b.part, b.kind, b.start, b.length]), [[1, 'cold-open', 'calm', 0, 2], [2, 'drop', 'kill', 2, 1], [3, 'body', 'move', 3, 1.5], [4, 'body', 'kill', 4.5, 1.5]]);
     assert.equal(body.total, 6);
     assert.equal(path.basename(body.h), 'beatdrop-h.mp4'); assert.equal(path.basename(body.v), 'beatdrop-v.mp4');
@@ -210,5 +211,25 @@ test('a retake request becomes a retake job; one at a time per run; the video ro
     assert.equal(path.basename(opened[0]), 'beatdrop-v.mp4');
     for (const b of [{ run: 'practice-h-1', layout: 'x' }, { run: 'other', layout: 'h' }, { run: 'practice-h-1', layout: 'h', file: 'C:/x' }]) assert.equal(r.play(b).status, 400);
     rc.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex BD7b: a waiting retake is never written over; a deleted recording turns retakes off', () => {
+  const s = setup();
+  try {
+    fixtureRun(s.dataDir);
+    const r = createBeatdropReview({ dataDir: s.dataDir });
+    assert.equal(r.info().body.source, true);
+    assert.equal(r.retake({ run: 'run-a', op: 'another-take' }).status, 200);
+    const first = readFileSync(path.join(s.dataDir, 'clips', RETAKE_FILE), 'utf8');
+    const again = r.retake({ run: 'run-a', op: 'slower-intro' });
+    assert.equal(again.status, 409, 'the first request is still waiting for the queue');
+    assert.equal(readFileSync(path.join(s.dataDir, 'clips', RETAKE_FILE), 'utf8'), first, 'and it is kept as it was');
+    rmSync(path.join(s.dataDir, 'clips', RETAKE_FILE));
+    rmSync(path.join(s.dataDir, 'rec-h.mkv')); // Delete clipped recordings removed it
+    assert.equal(r.info().body.source, false);
+    const gone = r.retake({ run: 'run-a', op: 'another-take' });
+    assert.equal(gone.status, 409); assert.equal(gone.body.error, 'no-source');
+    assert.equal(existsSync(path.join(s.dataDir, 'clips', RETAKE_FILE)), false);
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });

@@ -612,7 +612,8 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     const runs = knownRuns(dataDir);
     let pieces = 0;
     try { pieces = pieceBlocks(JSON.parse(readFileSync(path.join(runsDir(dataDir), String(r?.run), 'beatdrop', 'clips', 'B1', 'beatdrop-plan.json'), 'utf8'))).blocks.length; } catch { pieces = 0; }
-    if (retakeProblems(r, { runs, pieces }).length) { log('clips: a BeatDrop retake request was not valid; ignored'); return; }
+    const { atMs: _at, ...req } = r ?? {}; // atMs is the queue's own field, not part of the request (Codex BD7b P1)
+    if (retakeProblems(req, { runs, pieces }).length) { log('clips: a BeatDrop retake request was not valid; ignored'); return; }
     const src = sourceOf(dataDir, r.run);
     if (!src || !existsSync(src.h)) { log(`clips: BeatDrop retake of ${r.run}: the recording is gone; not made`); return; }
     if (queue.some((q) => q.type === 'beatdrop' && q.name === r.run)) return;

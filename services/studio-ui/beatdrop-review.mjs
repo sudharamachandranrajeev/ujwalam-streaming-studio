@@ -67,11 +67,21 @@ export function retakeProblems(b, { runs, pieces = null }) {
   return [];
 }
 
+const OP_WORDS = Object.freeze({ 'another-take': 'Another take', 'slower-intro': 'Slower intro', 'more-third-person': 'More third person' });
+/** The plan's retakes (beatdrop.retake appends {op, seed | piece, ...}) in plain words, oldest first. */
+export function retakeWords(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 20).map((x) => (isObj(x) && x.op === 'swap' ? (Number.isInteger(x.piece) ? `Swapped clip ${x.piece}` : 'Swapped a clip') : isObj(x) ? OP_WORDS[x.op] : null)).filter(Boolean);
+}
+
 /** { h, v } sources of a run, saved by the job queue when it made the montage; null when unknown. */
 export function sourceOf(dataDir, run) {
   const s = readJson(path.join(runsDir(dataDir), run, 'beatdrop-source.json'));
   return isObj(s) && typeof s.h === 'string' && s.h ? { h: s.h, v: typeof s.v === 'string' && s.v ? s.v : null } : null;
 }
+
+/** The run's saved H recording still exists (a retake needs it). */
+export const sourceLive = (dataDir, run) => { const s = sourceOf(dataDir, run); return !!s && existsSync(s.h); };
 
 /** opts: { dataDir, flagOn: () => bool, openFile: (path) => bool } -> { info(run), retake(body), play(body) } each { status, body }. */
 export function createBeatdropReview({ dataDir, flagOn = () => true, openFile = () => false }) {
@@ -102,12 +112,13 @@ export function createBeatdropReview({ dataDir, flagOn = () => true, openFile = 
       const runs = knownRuns(dataDir);
       const pick = typeof run === 'string' && run ? (runs.includes(run) ? run : null) : runs[0] ?? null;
       if (run && !pick) return { status: 404, body: { error: 'unknown-run' } };
-      if (!pick) return { status: 200, body: { runs, run: null, made: false, busy: false, summary: [], blocks: [], total: 0, retakes: [], h: null, v: null } };
+      if (!pick) return { status: 200, body: { runs, run: null, made: false, busy: false, summary: [], blocks: [], total: 0, retakes: [], h: null, v: null, source: false } };
       const r = load(pick);
-      if (!r) return { status: 200, body: { runs, run: pick, made: false, busy: busyRun(pick), summary: [], blocks: [], total: 0, retakes: [], h: null, v: null } };
+      if (!r) return { status: 200, body: { runs, run: pick, made: false, busy: busyRun(pick), summary: [], blocks: [], total: 0, retakes: [], h: null, v: null, source: false } };
       const { blocks, total } = pieceBlocks(r.plan);
       const lines = (a) => (Array.isArray(a) ? a.slice(0, 20).map((x) => text(typeof x === 'string' ? x : x?.text, 200)).filter(Boolean) : []);
-      return { status: 200, body: { runs, run: pick, made: r.h !== null, busy: busyRun(pick), summary: lines(r.clip.summary), blocks, total, retakes: lines(r.clip.retakes), h: r.h, v: r.v } };
+      // source: the recording is still there, so a retake can be made (Delete clipped recordings may have removed it)
+      return { status: 200, body: { runs, run: pick, made: r.h !== null, busy: busyRun(pick), summary: lines(r.clip.summary), blocks, total, retakes: retakeWords(r.clip.retakes), h: r.h, v: r.v, source: sourceLive(dataDir, pick) } };
     },
     retake(body) {
       if (!on()) return { status: 404, body: { error: 'beatdrop-off' } };
@@ -117,9 +128,12 @@ export function createBeatdropReview({ dataDir, flagOn = () => true, openFile = 
       const bad = retakeProblems(body, { runs, pieces: r ? pieceBlocks(r.plan).blocks.length : 0 });
       if (bad.length) return { status: 400, body: { error: 'bad-params', problems: bad } };
       if (!r || r.h === null) return { status: 409, body: { error: 'no-montage' } };
-      if (!sourceOf(dataDir, run)) return { status: 409, body: { error: 'no-source', detail: 'the recording this montage came from is not known' } };
+      if (!sourceLive(dataDir, run)) return { status: 409, body: { error: 'no-source', detail: 'the recording this montage came from is gone' } };
       if (busyRun(run)) return { status: 409, body: { error: 'busy', detail: 'a BeatDrop job for this run is already waiting or running' } };
       const dir = path.join(dataDir, 'clips');
+      // Codex BD7b: one request waits at a time (the queue takes it on its next tick); a second one is refused, never
+      // written over the first (the handler is synchronous, so check and write cannot interleave)
+      if (existsSync(path.join(dir, RETAKE_FILE))) return { status: 409, body: { error: 'busy', detail: 'another new take is about to start' } };
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, `${RETAKE_FILE}.tmp`), JSON.stringify({ run, op: body.op, ...(body.op === 'swap' ? { piece: body.piece } : {}), atMs: Date.now() }));
       renameSync(path.join(dir, `${RETAKE_FILE}.tmp`), path.join(dir, RETAKE_FILE));
