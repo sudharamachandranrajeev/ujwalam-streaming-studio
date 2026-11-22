@@ -13,6 +13,12 @@ ScrollView {
     property string lead: ""          // a muted line above the cards
     property string note: ""          // a muted line under the FEATURES card
     default property alias content: col.data
+    // D432: a page body given as a Component is made the first time the page is shown, then kept (the stateful pages
+    // that the window calls by id stay as plain children). Every page made at once froze Settings for seconds.
+    property Component body: null
+    property bool made: false
+    onVisibleChanged: if (visible) made = true
+    Component.onCompleted: if (visible) made = true
     objectName: "settingsPage:" + title
     visible: box.page === title
     clip: true
@@ -46,6 +52,13 @@ ScrollView {
             id: col
             width: parent.width
             spacing: Theme.sp.m
+            Loader {
+                active: pg.body !== null && pg.made
+                visible: active
+                width: parent.width
+                sourceComponent: pg.body
+                asynchronous: true // built over several frames: the window keeps answering while a big page is made
+            }
         }
         FeaturesCard {
             box: pg.box

@@ -332,4 +332,15 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     assert.equal(both.saved.ui.snap, true, 'the snap switch was saved');
     assert.notEqual(both.saved.clips?.matchGate?.top3, false, 'the refused match filter change did not land');
   });
+  // D432: a Settings open must not block the window for seconds. Before the fix the open itself took 3.6 s and the
+  // settings answer 3.4 s on the GUI thread (every page and every shadow built at once). The lag monitor (lag_monitor.h)
+  // names each piece of GUI-thread work; the budgets leave room for a loaded CI machine.
+  test('opening Settings and switching pages stays inside the GUI-thread budget (lag monitor)', async () => {
+    const { p } = await probe(['settings-open', 'settings-page:Appearance', 'settings-page:Downloads', 'settings-page:Clips'], 8000);
+    assert.equal(p.lag.on, true, 'the lag monitor runs');
+    const w = (k) => (p.lag.work[k] || { maxMs: 0 }).maxMs;
+    assert.ok(w('probe settings-open') < 1500, `the open: ${w('probe settings-open')} ms`);
+    assert.ok(w('ui/api/settings') < 1500, `the settings answer: ${w('ui/api/settings')} ms`);
+    for (const pg of ['Appearance', 'Downloads', 'Clips']) assert.ok(w(`probe settings-page:${pg}`) < 1000, `${pg}: ${w(`probe settings-page:${pg}`)} ms`);
+  });
 });

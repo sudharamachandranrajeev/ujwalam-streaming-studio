@@ -45,6 +45,13 @@ Item {
     height: target ? target.height : parent ? parent.height : 0
     z: target ? target.z - 1 : -1
     visible: (keyAlpha > 0 || ambAlpha > 0) && (level === 0 || plainToo || Theme.fx !== "plain")
+    // D432 (freeze on Settings, 2026-11-22): the rectangles are made the first time this shadow is really on screen
+    // (visible here and in every parent), then kept. Every button and switch has shadows, and a shadow is 14 to 28
+    // rectangles: making them for the hidden Settings pages too blocked the window for seconds. Once made they stay, so
+    // a hover or a press that hides and shows a shadow does not build it again.
+    property bool made: false
+    onVisibleChanged: if (visible) made = true
+    Component.onCompleted: if (visible) made = true
 
     // One stack: n rectangles, outermost first, grown by up to `spread` past the edge, with alphas that compose to
     // a * exp(-(3 t)^2 / 2), t = distance / spread (t = 0 at the edge).
@@ -68,7 +75,7 @@ Item {
         width: parent.width
         height: parent.height
         Repeater {
-            model: st.spread > 0 && st.a > 0 ? st.n : 0
+            model: shadow.made && st.spread > 0 && st.a > 0 ? st.n : 0
             delegate: Rectangle {
                 required property int index
                 readonly property real grow: st.spread * (1 - index / st.n)

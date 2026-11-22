@@ -9,7 +9,9 @@ Rectangle {
     default property alias content: body.data
     width: parent ? parent.width : 0
     readonly property real pad: Theme.sp.l
-    implicitHeight: body.implicitHeight + (card.title !== "" ? head.height + Theme.sp.s : 0) + pad * 2
+    // D432: the heading's own implicit height, not its height: a height bound to its effective visibility looped (a
+    // binding loop on every hidden page, 20 at a time in the user's log, each one a layout pass more).
+    implicitHeight: body.implicitHeight + (card.title !== "" ? head.implicitHeight + Theme.sp.s : 0) + pad * 2
     height: implicitHeight
     color: Theme.c.panel
     radius: Theme.radiusMedium
@@ -21,7 +23,6 @@ Rectangle {
         y: card.pad
         width: card.width - card.pad * 2
         visible: card.title !== ""
-        height: visible ? implicitHeight : 0
         text: card.title
         color: Theme.c.muted
         elide: Text.ElideRight
@@ -33,7 +34,7 @@ Rectangle {
     Column {
         id: body
         x: card.pad
-        y: card.pad + (card.title !== "" ? head.height + Theme.sp.s : 0)
+        y: card.pad + (card.title !== "" ? head.implicitHeight + Theme.sp.s : 0)
         width: card.width - card.pad * 2
         spacing: Theme.sp.m
     }

@@ -25,6 +25,7 @@
 #include "api_client.h"
 #include "qml_studio.h"
 #include "startup_clock.h"
+#include "lag_monitor.h"
 #include "studio_log.h"
 #include "taskbar_id.h"
 #include "theme.h"
@@ -237,6 +238,7 @@ static int runQml(QApplication &app, ApiClient &api, const QString &key, bool he
 		loaded = true;
 	} else
 		loginThen(app, api, key, code, afterLogin);
+	lagmon::start(); // D432: GUI-thread gaps go to the log and the probe line
 	const int r = app.exec();
 	qInfo("studio exiting with code %d", code ? code : r);
 	return code ? code : r;
@@ -271,7 +273,12 @@ static void afterReveal(QApplication &app, QmlStudio &studio, QmlStudio::Mode mo
 				if (!run->todo.isEmpty() && now < lastAt) {
 					if (now >= run->nextAt && idle) {
 						const QString a = run->todo.takeFirst();
-						run->actions.append(QJsonObject{{QStringLiteral("action"), shownProbeAction(a)}, {QStringLiteral("done"), studio.probeAction(a)}});
+						bool ok = false;
+						{
+							lagmon::Scope timed(QStringLiteral("probe ") + shownProbeAction(a));
+							ok = studio.probeAction(a);
+						}
+						run->actions.append(QJsonObject{{QStringLiteral("action"), shownProbeAction(a)}, {QStringLiteral("done"), ok}});
 						run->nextAt = clock->elapsed() + 700;
 					}
 					return;
@@ -281,6 +288,7 @@ static void afterReveal(QApplication &app, QmlStudio &studio, QmlStudio::Mode mo
 				tick->stop();
 				QJsonObject o = studio.probe();
 				o.insert(QStringLiteral("actions"), run->actions);
+				o.insert(QStringLiteral("lag"), lagmon::report());
 #ifdef Q_OS_WIN
 				o.insert(QStringLiteral("appUserModelId"), QString::fromStdWString(taskbarid::current())); // taskbar_id.h
 #endif
@@ -354,7 +362,7 @@ int main(int argc, char **argv)
 	// The probe "shows" its window so bindings and layouts run: always on the offscreen platform, never on a screen.
 	if (probe)
 		qputenv("QT_QPA_PLATFORM", "offscreen");
-	QApplication app(argc, argv);
+	lagmon::TimedApplication<QApplication> app(argc, argv); // D432: times the outermost events (lag_monitor.h)
 	startupclock::mark("app");
 	if (logs.crash && !studiolog::reassert())
 		qWarning("crash reporter: Qt start-up had replaced the unhandled-exception filter; ours is back on top");

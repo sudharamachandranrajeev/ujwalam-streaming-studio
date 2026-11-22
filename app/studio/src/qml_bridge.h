@@ -53,7 +53,7 @@ public:
 	int inFlight() const { return inFlight_; }
 
 private:
-	void reply(QJSValue done, bool ok, const QJsonObject &body, const QString &err);
+	void reply(const QString &what, QJSValue done, bool ok, const QJsonObject &body, const QString &err);
 	ApiClient *api_;
 	QJSEngine *engine_;
 	int inFlight_ = 0;

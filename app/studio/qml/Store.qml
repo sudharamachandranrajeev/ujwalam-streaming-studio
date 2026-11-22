@@ -631,10 +631,15 @@ QtObject {
             const ready = h.outputsReady || {};
             canStream = ready.stream === true;
             canRecord = ready.record === true;
-            onAir = h.onAir || {};
+            // D432: a value that did not change is not assigned again: a new array or object on every poll re-ran every
+            // binding and handler that reads it (the task panel, the tray, the alert strip) each 2 s for nothing.
+            const nextOnAir = h.onAir || {};
+            if (JSON.stringify(nextOnAir) !== JSON.stringify(onAir)) onAir = nextOnAir;
             statusAt = typeof s.at === "number" ? s.at : Date.now();
-            alerts = Array.isArray(s.alerts) ? s.alerts : [];
-            tasks = Array.isArray(s.tasks) ? s.tasks : [];
+            const nextAlerts = Array.isArray(s.alerts) ? s.alerts : [];
+            if (JSON.stringify(nextAlerts) !== JSON.stringify(alerts)) alerts = nextAlerts;
+            const nextTasks = Array.isArray(s.tasks) ? s.tasks : [];
+            if (JSON.stringify(nextTasks) !== JSON.stringify(tasks)) tasks = nextTasks;
             takeClips(s.clips || {});
             // A restarted host (crash supervisor) lost the previews it drew in our windows: embed them again (D280).
             const up = typeof h.uptimeMs === "number" ? h.uptimeMs : -1;

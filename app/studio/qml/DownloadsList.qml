@@ -19,6 +19,11 @@ Column {
     width: parent ? parent.width : 0
     spacing: Theme.sp.s
     readonly property var shown: only ? items.filter(i => i.id === only && i.state !== "ready") : items
+    // D432: the rows follow the list of ids, and each row reads its item by id. A download's progress (read every
+    // second) then changes only the row's words; a new array as the model rebuilt every row and its buttons each second.
+    readonly property var byId: { const m = {}; for (const i of shown) m[i.id] = i; return m }
+    property var shownIds: []
+    onShownChanged: { const ids = shown.map(i => i.id); if (ids.join("|") !== shownIds.join("|")) shownIds = ids }
     readonly property bool busy: items.some(i => i.state === "downloading" || i.state === "queued" || i.state === "verifying")
     visible: !only || shown.length > 0
 
@@ -64,11 +69,11 @@ Column {
     }
 
     Repeater {
-        model: dl.shown
+        model: dl.shownIds
         delegate: Rectangle {
             id: row
             required property var modelData
-            readonly property var it: modelData
+            readonly property var it: dl.byId[modelData] || ({ id: modelData, name: "", total: 0, done: 0, state: "" })
             objectName: "download:" + it.id
             width: dl.width
             height: 132

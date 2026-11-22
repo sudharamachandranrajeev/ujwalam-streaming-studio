@@ -6,6 +6,7 @@
 #include "icons.h"
 #include "motion.h"
 #include "theme.h"
+#include "lag_monitor.h"
 
 #include <QClipboard>
 #include <QColorDialog>
@@ -27,10 +28,16 @@
 QmlApi::QmlApi(ApiClient *api, QJSEngine *engine, QObject *parent) : QObject(parent), api_(api), engine_(engine) {}
 
 // Counted down after the callback, so a request the callback sends next keeps the count above 0 in between.
-void QmlApi::reply(QJSValue done, bool ok, const QJsonObject &body, const QString &err)
+void QmlApi::reply(const QString &what, QJSValue done, bool ok, const QJsonObject &body, const QString &err)
 {
 	if (done.isCallable()) {
-		const QJSValue r = done.call({QJSValue(ok), engine_->toScriptValue(body), QJSValue(err)});
+		lagmon::Scope timed(what); // D432: a long callback (a big answer applied to the screens) names itself in a gap
+		QJSValue js;
+		{
+			lagmon::Scope conv(QStringLiteral("toJs ") + what);
+			js = engine_->toScriptValue(body);
+		}
+		const QJSValue r = done.call({QJSValue(ok), js, QJSValue(err)});
 		if (r.isError())
 			qWarning("qml: callback error: %s", qPrintable(r.toString()));
 	}
@@ -53,20 +60,20 @@ void QmlApi::get(const QString &route, const QJSValue &done)
 			startupclock::markOnce("status");
 		else if (route == QLatin1String("ui/api/flags"))
 			startupclock::finishOnce("flags");
-		reply(done, ok, b, e);
+		reply(route, done, ok, b, e);
 	});
 }
 
 void QmlApi::post(const QString &route, const QJSValue &body, const QJSValue &done)
 {
 	inFlight_++;
-	api_->post(route, toObject(body), [this, done](bool ok, const QJsonObject &b, const QString &e) { reply(done, ok, b, e); });
+	api_->post(route, toObject(body), [this, done, route](bool ok, const QJsonObject &b, const QString &e) { reply(QStringLiteral("POST ") + route, done, ok, b, e); });
 }
 
 void QmlApi::host(const QString &method, const QJSValue &params, const QJSValue &done)
 {
 	inFlight_++;
-	api_->host(method, toObject(params), [this, done](bool ok, const QJsonObject &b, const QString &e) { reply(done, ok, b, e); });
+	api_->host(method, toObject(params), [this, done, method](bool ok, const QJsonObject &b, const QString &e) { reply(QStringLiteral("host ") + method, done, ok, b, e); });
 }
 
 void QmlApi::log(const QString &line)

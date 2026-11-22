@@ -568,7 +568,7 @@ Dialog {
                 anchors.fill: parent
                 title: "Appearance"
                 pageId: "appearance"
-                SettingsAppearance { box: dlg }
+                body: Component { SettingsAppearance { box: dlg } } // made on first show (D432)
             }
 
             SettingsPage {
@@ -696,7 +696,7 @@ Dialog {
                 anchors.fill: parent
                 title: "Clips"
                 pageId: "clips"
-                SettingsClips { box: dlg }
+                body: Component { SettingsClips { box: dlg } } // made on first show (D432)
             }
 
             SettingsPage {
@@ -778,9 +778,11 @@ Dialog {
                 anchors.fill: parent
                 title: "Downloads"
                 lead: "Ujwalam's setup carries everything to stream, record and make clips. These optional models are downloaded only when you click, never while you are live or recording, and each file is checked before it is used."
-                UCard {
-                    title: "OPTIONAL MODELS"
-                    DownloadsList { objectName: "downloadsList" }
+                body: Component { // made on first show (D432)
+                    UCard {
+                        title: "OPTIONAL MODELS"
+                        DownloadsList { objectName: "downloadsList" }
+                    }
                 }
             }
 

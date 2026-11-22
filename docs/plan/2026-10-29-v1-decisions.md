@@ -2942,3 +2942,29 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    is known.
 5. **No user-facing entry point**, so no flag; the guided-capture UI is a later BD6 step. Evidence:
    `docs/evidence/2026-11-22-bd6-replay-align.md`.
+
+## D432 — Studio freezes: measured causes, a GUI-thread lag monitor and the Settings fixes (decided, 2026-11-22)
+
+1. **Report**: "clicked Settings, tried to navigate, app frozen; freezes are very common" (user, 2026-11-22). The cause
+   is measured, not hardware: the studio did seconds of needless work on the GUI thread.
+2. **Lag monitor** (`app/studio/src/lag_monitor.h`): a 16 ms timer on the GUI thread measures late ticks. API reply
+   callbacks, probe actions, frame steps and the outermost event of each dispatch (with its QML file) mark themselves,
+   so a gap names what ran. Gaps of 250 ms or more go to the studio log ("GUI thread blocked N ms (...)"), so the next
+   freeze on the laptop leaves a measured line. The probe line carries the full report (`lag`). `UJWALAM_LAG_MONITOR=0`
+   turns it off.
+3. **Measured on the headless probe** (all flags on, software renderer, one machine, so absolute numbers vary by about 2x
+   run to run): Settings open was about 11 s of blocked GUI thread: building the dialog 3650 ms, applying the settings
+   answer 3357 ms, then a 4045 ms first layout and frame. Cause: every Settings page was built at once, and every button
+   and switch built its soft shadows (14 to 28 rectangles each, more with the RareUI looks) even on hidden pages.
+   After the fixes: building 118 to 240 ms, the settings answer 329 to 450 ms. What is left in the probe is software
+   rendering of the newly shown page (about 1 s), which on the real screen runs on the render thread.
+4. **Fixes, same look**: (a) `ShadowLayers` makes its rectangles the first time it is really on screen, then keeps
+   them. (b) Settings pages Appearance, Clips and Downloads are made on first show, asynchronously; the pages the window
+   calls by id (Stream, Transitions, Connections, Chat, Posting) stay as they were. (c) The download list keys its rows
+   by id, so progress read every second no longer rebuilds every row and button. (d) The status poll no longer assigns
+   unchanged alerts, tasks and on-air values every 2 s. (e) `UCard` no longer has the height binding loop seen in the
+   user's log 20 times per Settings open.
+5. **Budget test**: `tests/studio-qml-settings.test.mjs` fails when the Settings open or the settings answer takes
+   1.5 s or more of GUI-thread time, or a page switch 1 s or more.
+6. **UNVERIFIED**: the user's real data shape (263 posting packages, long task lists) was not replayed; the timings on
+   the laptop's real screen (Direct3D, threaded render loop) are not measured yet. The new log lines will show both.

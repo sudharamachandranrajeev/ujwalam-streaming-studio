@@ -25,6 +25,7 @@ add_executable(ujwalam-studio WIN32
 	src/fx_types.cpp
 	src/qml_bridge.cpp
 	src/qml_bridge.h
+	src/lag_monitor.h
 	src/qml_studio.cpp
 	src/qml_studio.h
 	src/qml_tasks.cpp

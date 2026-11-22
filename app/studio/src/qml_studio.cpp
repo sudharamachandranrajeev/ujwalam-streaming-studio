@@ -20,6 +20,9 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QThread>
+#include <array>
+#include "lag_monitor.h"
 #include <QSet>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -123,6 +126,34 @@ void QmlStudio::reveal()
 	startupclock::mark("shown");
 	// The first frame on screen is one of the two ends of the start-up line.
 	connect(win_, &QQuickWindow::frameSwapped, this, []() { startupclock::finishOnce("frame"); }, Qt::SingleShotConnection);
+	// D432: the frame steps that run on the GUI thread (polish = layouts, sync, render: all of them on the probe's software
+	// loop; polish only on the threaded loop of a real screen) mark themselves for the lag monitor. Steps on the render
+	// thread are not marked (the monitor is GUI-thread only).
+	{
+		auto gui = [](QObject *o) { return QThread::currentThread() == o->thread(); };
+		auto t = std::make_shared<std::array<qint64, 3>>(std::array<qint64, 3>{-1, -1, -1}); // after animating, before sync, before render
+		QQuickWindow *w = win_;
+		connect(win_, &QQuickWindow::afterAnimating, this, [t]() { (*t)[0] = lagmon::now(); }, Qt::DirectConnection);
+		connect(win_, &QQuickWindow::beforeSynchronizing, this, [t, w, gui]() {
+			if (!gui(w)) return;
+			const qint64 n = lagmon::now();
+			if ((*t)[0] >= 0) lagmon::record(QStringLiteral("frame polish"), (*t)[0], n);
+			(*t)[0] = -1;
+			(*t)[1] = n;
+		}, Qt::DirectConnection);
+		connect(win_, &QQuickWindow::beforeRendering, this, [t, w, gui]() {
+			if (!gui(w)) return;
+			const qint64 n = lagmon::now();
+			if ((*t)[1] >= 0) lagmon::record(QStringLiteral("frame sync"), (*t)[1], n);
+			(*t)[1] = -1;
+			(*t)[2] = n;
+		}, Qt::DirectConnection);
+		connect(win_, &QQuickWindow::afterRendering, this, [t, w, gui]() {
+			if (!gui(w)) return;
+			if ((*t)[2] >= 0) lagmon::record(QStringLiteral("frame render"), (*t)[2], lagmon::now());
+			(*t)[2] = -1;
+		}, Qt::DirectConnection);
+	}
 	QMetaObject::invokeMethod(win_, "start");
 }
 
