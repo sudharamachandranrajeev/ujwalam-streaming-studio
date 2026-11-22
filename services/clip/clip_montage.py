@@ -492,7 +492,7 @@ def zoom_expr(z):
 
 def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, out_name, threads=4, audio_tracks=1, max_sec=None,
                 captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None,
-                fx=None):
+                fx=None, layout=None):
     """One ffmpeg run: each piece is its own input (-ss/-t, exact because it is re-encoded), scaled into the frame,
     audio faded in and out by fade_ms (no pop at a hard cut), then concatenated. Every audio track of the source
     (audio_tracks) is kept as its own track, in source order (track 1 = the studio mix); none is dropped or remixed.
@@ -517,7 +517,10 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     and "game" {gain, keep: [[a, b]]} (the game sound at gain except the keep windows, piece output seconds: the
     gunshot and kill cut-outs). music "duck": None mixes the bed without the sidechain duck (BeatDrop ducks the game
     instead). fx: a filter graph fragment from beatdrop_fx.graph() reading [fxin] and writing [fxout], run once on the
-    joined picture after zoom and lut. Pieces and calls without these keys render exactly as before."""
+    joined picture after zoom and lut. Pieces and calls without these keys render exactly as before.
+    layout (BD7, D418): {"layout" (a data/clip/layouts.json entry), "iw", "ih" (the source size)} frames each piece
+    with clip_render.layout_chain (the V clips' own crop/fill/stack/canvas graphs) instead of the fit-and-pad scale;
+    None = as before."""
     ow, oh = int(frame["width"]), int(frame["height"])
     fd = fade_ms / 1000.0
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(threads), "-filter_threads", "2"]
@@ -527,8 +530,15 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     xd = crossfade_sec(pieces, transition)
     for i, p in enumerate(pieces):
         d = _out_sec(p)
-        parts.append(f"[{i}:v]scale={ow}:{oh}:force_original_aspect_ratio=decrease:flags=lanczos,"
-                     f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS{_speed_video(p)}{_ramp_video(p)},fps=60,"
+        if layout:  # BD7: the V clips' layout graph for this piece, then the same timing chain
+            import clip_render as rnd  # noqa: PLC0415
+            parts.append(rnd.layout_chain(layout["layout"], int(layout["iw"]), int(layout["ih"]), ow, oh, f"[{i}:v]",
+                                          f"[vl{i}]", f"p{i}"))
+            fit = f"[vl{i}]"
+        else:
+            fit = (f"[{i}:v]scale={ow}:{oh}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                   f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2,setsar=1,")
+        parts.append(f"{fit}setpts=PTS-STARTPTS{_speed_video(p)}{_ramp_video(p)},fps=60,"
                      f"format=yuv420p,setpts=PTS-STARTPTS{_frames_video(p)}[v{i}]")
         # hard cut: every piece fades in and out (no pop); crossfade: only the reel's own start and end (the joins
         # are the acrossfade)
@@ -556,6 +566,9 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     if post or fx:
         vlast = "[vgr]"
     alast = "ab" if thumbnail else "aout"  # RP6: the sound is delayed by the thumbnail frame
+    # Codex BD7a: a BeatDrop bed (duck None: it is the montage's own sound) over a source without sound (a silent V
+    # recording) is the one audio track, alone; other music over a silent source stays picture only, as before
+    bed_only = music if (not audio_tracks and music and music.get("file") and music.get("duck") is None) else None
     music = music if audio_tracks else None
 
     def aj(k):  # the joined track k; track 1 goes through the RP3 music mix first
@@ -619,11 +632,25 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         # the AAC encode stays under -1 dBTP. Still one audio encode.
         parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,aresample=192000,"
                      f"alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1,aresample=48000[{alast}0]")
-    maps = ["-map", "[vout]"] + [x for k in range(audio_tracks) for x in ("-map", f"[aout{k}]")]
+    if bed_only:
+        mi = len(pieces) + (1 if thumbnail else 0)
+        argv += ["-i", bed_only["file"]]
+        ins = [f"[{mi}:a]aresample=48000[mbed]"]
+        mixin = ["[mbed]"]
+        if bed_only.get("sfx"):
+            argv += ["-i", bed_only["sfx"]]
+            ins.append(f"[{mi + 1}:a]aresample=48000[msfx]")
+            mixin.append("[msfx]")
+        parts += ins
+        parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,aresample=192000,"
+                     f"alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1,aresample=48000"
+                     + (",adelay=delays=800S:all=1" if thumbnail else "") + "[aout0]")
+    n_audio = audio_tracks or (1 if bed_only else 0)
+    maps = ["-map", "[vout]"] + [x for k in range(n_audio) for x in ("-map", f"[aout{k}]")]
     # CL1 (D350): nothing here adds time (no pad or hold; a crossfade only shortens: each join overlaps by xd); the fps
     # filter can round a piece by up to one frame, so the output is also cut at the type's maximum.
     cap = ["-t", f"{float(max_sec):.3f}"] if max_sec else []
-    argv += ["-filter_complex", ";".join(parts), *maps, *encoder_args, *(audio_args if audio_tracks else ["-an"]), *cap,
+    argv += ["-filter_complex", ";".join(parts), *maps, *encoder_args, *(audio_args if n_audio else ["-an"]), *cap,
              "-movflags", "+faststart", "-f", "mp4", out_name]
     return argv
 

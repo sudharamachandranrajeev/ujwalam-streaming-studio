@@ -425,6 +425,7 @@ export async function packageUploads(opts) {
       if (!flags.isOn(KIND_FLAGS[row.kind])) { skip('flag-off'); continue; }
     }
     if (Array.isArray(row.posted) && row.posted.some((p) => p?.platform === 'youtube')) { skip('already-posted'); continue; }
+    if (row.supersededBy !== undefined) { skip('superseded'); continue; } // BD7c: a BeatDrop retake replaced this render
     if (!path.isAbsolute(file) || !isRealFile(file)) { skip('file-missing'); continue; }
     // D414: a montage's song. NCS library track = its credit goes in the description, no credit = not sent; a song
     // from anywhere else = render only, never posted (fail closed, plain-word reason)

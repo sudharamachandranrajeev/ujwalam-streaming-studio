@@ -1080,6 +1080,8 @@ class RenderedMontageTests(unittest.TestCase):
         self.assertEqual(res["status"], "stopped: on air")
         self.assertIsNone(res["file"])
         self.assertEqual([f for f in os.listdir(wd) if f.endswith((".mp4", ".part"))], [])
+        # Codex BD7a: the plan is saved only with a finished video (a later retake starts from what the user got)
+        self.assertFalse(os.path.exists(os.path.join(wd, "beatdrop-plan.json")))
         unknown = self._make(os.path.join(self.tmp, "unknown"), live=lambda: None)
         self.assertEqual(unknown["status"], "stopped: on air", "unknown counts as on air")
 
@@ -1137,7 +1139,8 @@ class RenderedMontageTests(unittest.TestCase):
         self.assertNotEqual(new, old)
         self.assertEqual(row["music"]["source"], "ncs")
         vids = sorted(f for f in os.listdir(self.wd) if f.endswith((".mp4", ".part")))
-        self.assertEqual(vids, [new], "only the video render.json points at")
+        # BD7a: the V cut is rendered too (its canvas sibling exists), so render.json points at both videos
+        self.assertEqual(vids, sorted(x["file"] for x in row["files"]), "only the videos render.json points at")
         type(self).video = os.path.join(self.wd, new)
 
     def test_flag_off_makes_nothing(self):

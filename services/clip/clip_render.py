@@ -19,6 +19,7 @@ or soak owns the GPU; one GPU job at a time). Children run at below-normal prior
 from __future__ import annotations
 
 import os
+import re
 
 from clip_common import ClipError, FFMPEG_THREADS, host_running, run_tool
 
@@ -87,6 +88,15 @@ def layout_graph(layout, iw, ih, ow, oh):
                 f"[b]crop={gw}:{gh}:{gx}:{gy},{_cover(ow, oh - top)}[game];"
                 f"[cam][game]vstack=inputs=2,setsar=1[vout]")
     raise ClipError(f"unknown layout kind {kind}")
+
+
+def layout_chain(layout, iw, ih, ow, oh, src, dst, tag):
+    """BD7 (D418): layout_graph as one chain of a bigger graph: [0:v] -> src, [vout] -> dst, every inner label made
+    unique with _tag (one chain per montage piece)."""
+    def label(m):
+        n = m.group(1)
+        return src if n == "0:v" else dst if n == "vout" else f"[{n}_{tag}]"
+    return re.sub(r"\[([A-Za-z0-9:_]+)\]", label, layout_graph(layout, iw, ih, ow, oh))
 
 
 def render_argv(ffmpeg, src, start, dur, graph, encoder, out_name, has_audio, captions=None, lut=None):
