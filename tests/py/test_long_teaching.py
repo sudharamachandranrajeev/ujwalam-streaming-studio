@@ -314,7 +314,7 @@ class Chapters(unittest.TestCase):
 
 FRAME = {"width": 1920, "height": 1080}
 FX = "[fxin]split=2[lvcb][lvcs];[lvcs]null[lvcc];[lvcb][lvcc]overlay[fxout]"
-PACK = {"detectors": [{"id": "M5", "rois": [{"id": "killfeed", "x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96,
+PACK = {"detectors": [{"id": "M5", "modes": ["mp"], "rois": [{"id": "killfeed", "x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96,
                                              "status": "verified"}]},
                       {"id": "X9", "rois": [{"id": "killfeed", "x0": 0.1, "y0": 0.1, "x1": 0.2, "y1": 0.2,
                                              "status": "unverified"}]}]}
@@ -399,6 +399,17 @@ class Callouts(unittest.TestCase):
         self.assertEqual(lt.batch_callouts(chunk, FADE, FRAME, dict(ctx, box=None)), (None, 0))
         self.assertEqual(lt.merge_info([{"status": "off", "callouts": 2}, {"status": "off", "callouts": 1}])["callouts"], 3)
         self.assertEqual(lt.merge_info([])["callouts"], 0)
+
+    def test_callouts_skip_moments_of_another_family(self):
+        # D438 (user 2026-11-22): a Battle Royale moment never frames the multiplayer kill feed region
+        ctx = dict(_ctx(), box={"x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96}, boxModes=["mp"])
+        self.assertEqual(lt.batch_callouts([{"start": 0.0, "end": 10.0, "medals": [2.0], "modes": ["br"]}], FADE, FRAME, ctx), (None, 0))
+        self.assertEqual(lt.batch_callouts([{"start": 0.0, "end": 10.0, "medals": [2.0], "modes": ["mp"]}], FADE, FRAME, ctx)[1], 1)
+        self.assertEqual(lt.batch_callouts([{"start": 0.0, "end": 10.0, "medals": [2.0]}], FADE, FRAME, ctx)[1], 1, "unknown family: as before")
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(lt.context(d, lv.load_config(), pack=PACK, rec_size=(1920, 1080))["boxModes"], ["mp"])
+        self.assertEqual(lv.mode_at(50.0, [{"start": 0, "mode": "mp"}, {"start": 40, "mode": "br"}, {"start": 90, "mode": "mp"}]), "br")
+        self.assertIsNone(lv.mode_at(5.0, [{"start": 10, "mode": "br"}]))
 
     def test_context_reads_the_box_from_the_pack(self):
         with tempfile.TemporaryDirectory() as d:

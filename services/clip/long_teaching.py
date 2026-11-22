@@ -121,6 +121,14 @@ def callout_box(pack, ocfg):
     return None
 
 
+def callout_modes(pack, ocfg):
+    """D438: the game families (detector `modes`) the callout region belongs to; [] when not stated."""
+    for d in (pack or {}).get("detectors") or []:
+        if d.get("id") == ocfg["detector"]:
+            return [m for m in d.get("modes") or [] if isinstance(m, str)]
+    return []
+
+
 def frame_box(roi, layout, rec_size, frame):
     """A region in game-area fractions (detector ROIs are fractions of the game area) -> fractions of the long video
     frame. layout: the detect summary's {"game": [x, y, w, h], "visible": [x0, y0, x1, y1]} in recording pixels (the
@@ -209,6 +217,10 @@ def batch_callouts(chunk, tr, frame, ctx):
     if not ocfg.get("on") or not ctx.get("box"):
         return None, 0
     pieces = [{"start": float(g["start"]), "end": float(g["end"])} for g in chunk]
+    # D438 (user 2026-11-22: a Battle Royale moment showed a cut-out of the wrong screen area): a moment from a match of
+    # a family the region was not measured in gets no callout. A moment of unknown family keeps the old behaviour.
+    fams = ctx.get("boxModes") or []
+    chunk = [dict(g, medals=[]) if fams and any(m not in fams for m in g.get("modes") or []) else g for g in chunk]
     win = callout_windows(chunk, mont.crossfade_sec(pieces, tr), ocfg)
     fx = callout_fx(win, ctx["box"], frame, dict(ocfg, margin=ctx["tcfg"]["safe"]), ctx["accent"])
     return fx, (len(win) if fx else 0)  # Codex verify: no card drawn, none counted
@@ -304,9 +316,11 @@ def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, lay
     layout = layout if isinstance(layout, dict) else None  # Codex LV1b: the detect summary is outside data
     game = game if isinstance(game, str) else None
     box = paths = None
+    box_modes = []
     try:  # Codex: malformed region or layout data leaves the video without callouts, never stops it
         if ocfg.get("on") and ok_size:
             box = frame_box(callout_box(pack, ocfg), layout, rec_size, lcfg["frame"])
+            box_modes = callout_modes(pack, ocfg)
     except (AttributeError, KeyError, TypeError, ValueError):
         box = None
     try:
@@ -315,7 +329,7 @@ def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, lay
     except (AttributeError, KeyError, TypeError, ValueError):
         paths = None
     return {"tcfg": tcfg, "style": style, "accent": accent, "ccfg": ccfg if use else None,
-            "opts": {"whisper_bin": whisper_bin, "whisper_model": model}, "box": box, "paths": paths}
+            "opts": {"whisper_bin": whisper_bin, "whisper_model": model}, "box": box, "boxModes": box_modes, "paths": paths}
 
 
 def _paths_context(tcfg, game, layout, rec_size, accent):

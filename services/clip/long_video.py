@@ -55,6 +55,19 @@ def transition(data_dir, cfg, rt):
     return dict(d) if d and d.get("xfade") else None
 
 
+def mode_at(t, matches):
+    """The game family (match "mode", e.g. mp or br) of the match that time t falls in, or None (D438)."""
+    best = None
+    for m in matches or []:
+        try:
+            if float(m["start"]) <= t and (best is None or float(m["start"]) >= float(best["start"])):
+                best = m
+        except (KeyError, TypeError, ValueError):
+            continue
+    v = (best or {}).get("mode")
+    return v if isinstance(v, str) and v else None
+
+
 def moments(hits, ranking, mcfg, duration, matches, cfg):
     """[{start, end, score, kills, kind}] in recording seconds (unpadded): kill groups and won-match result screens."""
     sc = cfg["score"]
@@ -67,14 +80,16 @@ def moments(hits, ranking, mcfg, duration, matches, cfg):
                     "kills": int(u["kills"]), "kind": "streak" if u["streak"] else "kills",
                     "medals": sorted(float(md["t"]) for md in u.get("medals") or []),  # LV1b callouts (D422)
                     # LV1c paths (D423): the moment's last kill (a merged segment keeps one per moment)
-                    "lastKills": [max(float(k) for k in u["peaks"])] if u.get("peaks") else []})
+                    "lastKills": [max(float(k) for k in u["peaks"])] if u.get("peaks") else [],
+                    # D438: the match family, so a callout never frames a HUD region of another family
+                    "modes": [x for x in [mode_at(float(ps[0]["start"]), matches)] if x]})
     wins = {str(x).upper() for x in cfg.get("winResults") or []}
     for mt in matches or []:
         if str(mt.get("result") or "").upper() in wins:
             p = mont._result_piece(mt, mcfg, float(duration))
             if p:
                 out.append({"start": float(p["start"]), "end": float(p["end"]), "score": float(sc["win"]), "kills": 0,
-                            "kind": "win", "medals": [], "lastKills": []})
+                            "kind": "win", "medals": [], "lastKills": [], "modes": [x for x in [mt.get("mode")] if isinstance(x, str) and x]})
     return sorted(out, key=lambda m: (m["start"], m["end"]))
 
 
@@ -96,10 +111,11 @@ def merge(moms, pad, duration):
             g["moments"] += 1
             g["medals"] = sorted(set(g["medals"]) | set(m.get("medals") or []))
             g["lastKills"] = sorted(set(g["lastKills"]) | set(m.get("lastKills") or []))
+            g["modes"] = sorted(set(g["modes"]) | set(m.get("modes") or []))
         else:
             segs.append({"start": s, "end": e, "score": m["score"], "kills": m["kills"], "kinds": [m["kind"]],
                          "moments": 1, "medals": sorted(set(m.get("medals") or [])),
-                         "lastKills": sorted(set(m.get("lastKills") or []))})
+                         "lastKills": sorted(set(m.get("lastKills") or [])), "modes": sorted(set(m.get("modes") or []))})
     return [dict(g, start=round(g["start"], 3), end=round(g["end"], 3)) for g in segs]
 
 

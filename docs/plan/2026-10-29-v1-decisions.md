@@ -3067,3 +3067,17 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
 4. **Not done (needs the user)**: the game mix itself is quiet (-27 to -38 LUFS; YouTube normalises down to about
    -14, never up). Raising the game mix (loudness normalisation of track 1) would make reels louder overall; that
    changes the main audio and is left for the user to decide.
+
+## D438 — Long video callouts only on moments of the family their region was measured in (decided, 2026-11-22)
+
+1. **User report**: a "weird cut-out" in the middle of the long highlights video: a framed crop of the top-left of the
+   picture during a Battle Royale moment.
+2. **Cause**: the LV1b kill feed callout (D422) crops the pack's verified `M5` `killfeed` region, measured on the
+   multiplayer screen, for every moment with a medal. D422 item 6 listed this as UNVERIFIED: in Battle Royale the
+   region frames the wrong part of the screen.
+3. **Change**: each long video moment carries its match family (`modes`, from the match it starts in;
+   `long_video.mode_at`); merged segments keep the union. `long_teaching.context` reads the callout detector's own
+   `modes` (`["mp"]` for this pack; data, no game in code), and a segment with a known family outside that list gets
+   no callout. A moment of unknown family keeps the old behaviour.
+4. **Open**: a Battle Royale kill callout needs a measured Battle Royale region (the user pointed at the BR kill
+   counter and kill banner, 2026-11-22); the BR footage scan is collecting them.
