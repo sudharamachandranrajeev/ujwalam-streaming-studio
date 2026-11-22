@@ -2767,3 +2767,23 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` LV1 (user-approved option orde
    `long-video.json`.
 6. Not built: the user's own movement from optical flow, and dragging a path in the review before rendering. Both
    left for a later step. UNVERIFIED: the tag colour and how often a path is confident on the user's footage.
+
+## D424 — RR1: Top 5 countdown reel (decided, 2026-11-22)
+
+Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approved order BD → LV1 → RR1). Evidence:
+`docs/evidence/2026-11-22-rr1-countdown-reel.md`. Flag `countdown-reel`, ON by default (user-requested).
+
+1. **Items**: the best rendered vertical clips across all runs (live clips and impact plays; score, then kills, then
+   the newest run), one entry per file, or the user's own list (`clipper countdown --items`). Sources are the
+   rendered clip files, never recordings (those are deleted once clipped). Fewer than `minItems` (3): no reel.
+2. **Each entry**: a rank card (the clip's first frame blurred and darkened, a big `#N` in the rank's colour popping
+   in, the clip's name letters flying in and assembling in 500 ms, all fading out in 250 ms), then the clip itself
+   (up to 7 s, its own sound). Whip joins (220 ms directional slides, `xfade`) between every part; the sound
+   cross-fades with them; the card is silent.
+3. **Output**: one vertical file per render in its own run folder (`clips/R1/countdown.mp4`), validated like every
+   reel, flash-checked like BeatDrop, published as kind `countdown` (label `top-N`). Not auto-posted in this version
+   (posting's name patterns do not include it).
+4. **Music record (D414)**: combined from the entries' records. Only as postable as the least known entry: all none
+   → none; made-here beds only → generated; one NCS track → that record; anything else, or a user's own list →
+   unknown (held).
+5. Not built: the loadout screenshot pop-in, the face-cam part, the notes box (reference 2), a studio button.

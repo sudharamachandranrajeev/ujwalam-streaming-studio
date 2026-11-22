@@ -53,6 +53,8 @@ def kind_of(clip_id, doc_tool=None):
         return "impact-play"  # D326
     if str(clip_id).startswith("M") and (doc_tool or "").startswith("clipper.montage"):
         return "montage"
+    if (doc_tool or "") == "clipper.countdown":
+        return "countdown"  # RR1 (D424): the Top 5 countdown reel (never auto-posted; not a ranked item itself)
     if str(clip_id).startswith("B") and (doc_tool or "") == "clipper.beatdrop":
         return "montage"  # BD7c: a BeatDrop montage posts under the montage rules (names, auto-post, music gate)
     return "short"
@@ -73,6 +75,8 @@ def clip_time(clip, rec_start_local, kind):
 
 
 def _kills(clip):
+    if isinstance(clip.get("countdown"), list):  # RR1 (D424): the countdown's label counts its entries (top-N)
+        return len(clip["countdown"])
     if clip.get("pieces") is None and isinstance(clip.get("beatdrop"), dict):  # BD7c: the BeatDrop plan's own count
         return int((clip["beatdrop"].get("stats") or {}).get("kills") or 0)
     return sum(int(p.get("kills") or 0) for p in clip.get("pieces") or [])

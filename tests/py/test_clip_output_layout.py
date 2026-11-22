@@ -199,8 +199,17 @@ class PublishTests(unittest.TestCase):
         video) sets musicRecords and gives each clip entry its "music" record, so no new render reads as legacy."""
         import ast  # noqa: PLC0415
         src = open(os.path.join(os.path.dirname(pub.__file__), "clipper.py"), encoding="utf-8").read()
+        tree = ast.parse(src)
         writers = 0
-        for node in ast.walk(ast.parse(src)):
+
+        def entry_keys(d):  # a literal entry, or a name bound to a literal dict (the countdown's `row`)
+            if isinstance(d, ast.Name):
+                d = next((n.value for n in ast.walk(tree) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Dict)
+                          and any(isinstance(t, ast.Name) and t.id == d.id for t in n.targets)
+                          and "music" in [k.value for k in n.value.keys if isinstance(k, ast.Constant)]), None)
+            return [k.value for k in d.keys if isinstance(k, ast.Constant)] if isinstance(d, ast.Dict) else []
+
+        for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "write_json_atomic" and len(node.args) == 2):
                 continue
             target, doc = node.args
@@ -214,8 +223,8 @@ class PublishTests(unittest.TestCase):
             clips = doc.values[keys.index("clips")] if "clips" in keys else None
             if isinstance(clips, ast.List):  # a literal clip entry (the long video) must carry "music"
                 for d in clips.elts:
-                    self.assertIn("music", [k.value for k in d.keys if isinstance(k, ast.Constant)], f"line {node.lineno}")
-        self.assertEqual(writers, 4, "plain, live saves, montage, long video")
+                    self.assertIn("music", entry_keys(d), f"line {node.lineno}")
+        self.assertEqual(writers, 5, "plain, live saves, montage, long video, countdown (RR1)")
 
     def test_live_clip_uses_its_wall_time(self):
         ts = WHEN.timestamp()
