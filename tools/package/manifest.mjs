@@ -71,6 +71,7 @@ export const REPO_FILES = Object.freeze([
   'data/studio/tasks.json', // task panel: stall warning threshold (2026-11-10)
   // F6 live markers (services/event-core/live-markers.mjs): shared ranking rules + live-only values
   'data/clip/ranking.json', 'data/clip/live-markers.json',
+  'data/clip/themes/cyberpunk.json', 'data/music/moods/starting-soon.json', 'data/schemas/music-mood.schema.json',
   'data/actions/catalogue.json', 'data/actions/catalogue.schema.json',
   'data/effects/guards.json', 'data/effects/flash-measurements.json',
   'data/moderation/blocklist.json', 'data/moderation/blocklist.schema.json',

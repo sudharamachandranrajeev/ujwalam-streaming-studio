@@ -142,6 +142,11 @@ def gain_for(tgt, measured, cfg):
     return round(max(float(cfg["minGainDb"]), min(float(cfg["maxGainDb"]), float(tgt) - float(measured))), 2)
 
 
+def measure_parts(parts, run, cwd, timeout=900):
+    """Measure track one across the selected edit without decoding its picture."""
+    return pooled([(_measure(run, argv, cwd, timeout), seconds) for argv, seconds in parts])
+
+
 def plan(build, run, cwd, tgt, cfg, timeout=900):
     """build(gain dB or None) -> [(render argv, seconds)] (one per part; the long video has several batches).
     -> (gain dB or None, record). None = render as before (off, nothing to measure, or the pre-pass failed)."""
@@ -149,14 +154,14 @@ def plan(build, run, cwd, tgt, cfg, timeout=900):
     if tgt is None:
         return None, rec
     try:
-        before = pooled([(_measure(run, a, cwd, timeout), s) for a, s in build(None)])
+        before = measure_parts(build(None), run, cwd, timeout)
         if before is None:
             return None, dict(rec, status="failed", reason="the loudness pre-pass could not measure the mix")
         g = gain_for(tgt, before, cfg)
         steps = [{"gainDb": None, "lufs": round(before, 2)}]
         last_g, last_m = 0.0, before
         for _ in range(max(0, int(cfg.get("passes", 2)) - 1)):
-            m = pooled([(_measure(run, a, cwd, timeout), s) for a, s in build(g)])
+            m = measure_parts(build(g), run, cwd, timeout)
             if m is None:
                 break
             steps.append({"gainDb": g, "lufs": round(m, 2)})

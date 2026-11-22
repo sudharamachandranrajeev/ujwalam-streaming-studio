@@ -5,6 +5,7 @@
   "approved": "user 2026-11-20 chose the content, the 8-20 minute length, time order, merging and posting as a normal YouTube video; padSec, the scores and batchPieces are the agent's proposal",
   "checked": "2026-11-21",
   "flag": "long-highlights-video",
+  "theme": "cyberpunk",
   "minSec": 480,
   "maxSec": 1200,
   "padSec": 2.0,

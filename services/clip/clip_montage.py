@@ -492,7 +492,7 @@ def zoom_expr(z):
 
 def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, out_name, threads=4, audio_tracks=1, max_sec=None,
                 captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None,
-                fx=None, layout=None, gain_db=None):
+                fx=None, layout=None, gain_db=None, grade=None):
     """One ffmpeg run: each piece is its own input (-ss/-t, exact because it is re-encoded), scaled into the frame,
     audio faded in and out by fade_ms (no pop at a hard cut), then concatenated. Every audio track of the source
     (audio_tracks) is kept as its own track, in source order (track 1 = the studio mix); none is dropped or remixed.
@@ -567,6 +567,9 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         post.append(f"zoompan=z='{zoom_expr(zoom)}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={ow}x{oh}:fps=60")
     if lut:
         post.append(f"lut3d=file={lut}:interp=tetrahedral")
+    if grade:
+        post.append(f"colorbalance=bs={float(grade['blueShadows']):g}:rm={float(grade['redMidtones']):g}:"
+                    f"gh={float(grade['greenHighlights']):g}:pl=1")
     vgraded = vlast
     if post or fx:
         vlast = "[vgr]"
@@ -619,8 +622,16 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         mixin = ["[amus0]"]
         if music.get("file"):
             dk = music["duck"]
+            trim = ""
+            if music.get("loopFrames"):
+                # The scene-music WAV is 48 kHz. Start at the next sample on the joined output timeline.
+                start = round(48000 * music["offsetSec"]) % music["loopFrames"]
+                end = start + round(48000 * music["durationSec"])
+                argv += ["-stream_loop", "-1", "-t", f"{end / 48000 + 0.01:.6f}"]
+                trim = (f"atrim=start_sample={start}:end_sample={end},asetpts=PTS-STARTPTS,"
+                        f"volume={float(music['gainDb']):.2f}dB,")
             argv += ["-i", music["file"]]
-            parts.append(f"[{mi}:a]aresample=48000[mbed]")
+            parts.append(f"[{mi}:a]{trim}aresample=48000[mbed]")
             if dk is None:  # BD3 (D415): the game is ducked under the bed per piece; the bed is not ducked
                 mixin = ["[amus0]", "[mbed]"]
             else:

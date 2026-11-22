@@ -997,6 +997,7 @@ def _long_video(a):
     import long_video as lv  # noqa: PLC0415
     out = os.path.join(a.out, lv.SUBDIR)
     os.makedirs(out, exist_ok=True)
+    lv.clear_attempts(out)  # abandoned theme soundtrack from an interrupted render
     lv.clear_attempts(os.path.join(out, "clips", lv.CLIP_ID))  # Codex D406: every path, before any early return
     progress_line("long", 0, 1, "making the long highlights video")
     try:
@@ -1024,6 +1025,7 @@ def cmd_long(a):
 
 
 def _long_video_steps(a, lv, out):
+    import long_theme  # noqa: PLC0415
     data_dir = resolve_data_dir(a.data_dir)
     if not lv.on(data_dir):
         return {"status": "off", "reason": f"the long highlights video is switched off (flag {lv.FLAG})"}
@@ -1044,8 +1046,11 @@ def _long_video_steps(a, lv, out):
     ranking = load_config("ranking", a.ranking)
     mcfg = load_config("montage", getattr(a, "montage_config", None))
     cfg = lv.load_config()
+    theme = long_theme.active(data_dir, cfg)
+    if theme:
+        cfg = dict(cfg, padSec=theme["padSec"])
     matches, _ = _reel_matches(a, hits_path, info["duration"])
-    tr = lv.transition(data_dir, cfg, rt)
+    tr = theme["transition"] if theme else lv.transition(data_dir, cfg, rt)
     p = lv.plan(hits, ranking, mcfg, info["duration"], matches, cfg, tr)
     if p["status"] != "planned":
         return p
@@ -1067,7 +1072,7 @@ def _long_video_steps(a, lv, out):
         summ = {}
     ctx = lt.context(data_dir, cfg, getattr(a, "whisper_bin", None), getattr(a, "whisper_model", None),
                      pack=_gate_pack(a), layout=summ.get("layout"), rec_size=(info.get("width"), info.get("height")),
-                     game=summ.get("game"), seed=os.path.basename(rec))
+                     game=summ.get("game"), seed=os.path.basename(rec), theme=theme)
     infos = []
 
     def overlay(chunk, first, adir):
@@ -1085,13 +1090,20 @@ def _long_video_steps(a, lv, out):
                         reason=f"burning the overlay failed: {(stderr or '').strip()[-120:]}")
     # D440: one loudness gain for the whole video from an audio-only pre-pass of every batch
     enc0 = rnd.pick_encoder(a.encoder)
-    gain, lrec = _loud_plan(wd, None, _loud_target(data_dir), parts=lv.batch_parts(
-        ffmpeg, rec, p["segments"], frame, rnd.ENCODERS[enc0], rnd.AUDIO, int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"],
-        tracks))
-    ok, expected, err = lv.render(ffmpeg, rec, p["segments"], frame, enc0, wd, tracks,
-                                  int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"], _render_job, rnd.run_tool,
-                                  rnd.ENCODERS, rnd.AUDIO, overlay=overlay if ctx else None,
-                                  overlay_failed=overlay_failed, gain_db=gain)
+
+    def audio_parts(music=None):
+        return lv.batch_parts(ffmpeg, rec, p["segments"], frame, rnd.ENCODERS[enc0], rnd.AUDIO, int(mcfg["audioFadeMs"]),
+                              tr, cfg["batchPieces"], tracks, music=music)
+
+    with long_theme.soundtrack(theme, os.path.basename(rec), out, lv.ATTEMPT_PREFIX) as (bed, music_rec):
+        if bed:
+            bed["gainDb"] = long_theme.balance(theme["music"], music_rec, audio_parts(), rnd.run_tool, wd)
+        gain, lrec = _loud_plan(wd, None, _loud_target(data_dir), parts=audio_parts(bed))
+        ok, expected, err = lv.render(ffmpeg, rec, p["segments"], frame, enc0, wd, tracks,
+                                      int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"], _render_job, rnd.run_tool,
+                                      rnd.ENCODERS, rnd.AUDIO, overlay=overlay if ctx else None,
+                                      overlay_failed=overlay_failed, gain_db=gain, music=bed,
+                                      grade=theme["grade"] if theme else None)
     if ok:
         lrec = _loud_check(ffmpeg, os.path.join(wd, lv.FILE), lrec, "long video")
     teach = lt.merge_info(infos if ctx else [])
@@ -1105,13 +1117,15 @@ def _long_video_steps(a, lv, out):
         "tool": lv.TOOL, "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": os.path.basename(rec),
         "musicRecords": 1,  # D414: never treated as a legacy clip by posting
         "frame": frame, "configVersion": cfg.get("version"), "transition": tr,
-        "flash": "no flash effect: cross fade or cut only", "failed": 0 if ok else 1,
+        **({"theme": {"id": theme["id"], "version": theme["version"]}} if theme else {}),
+        "flash": "no flash effect: sliding join" if theme else "no flash effect: cross fade or cut only",
+        "failed": 0 if ok else 1,
         "clips": [{"id": lv.CLIP_ID, "start": 0.0, "end": expected, "score": round(sum(g["score"] for g in p["segments"]), 3),
                    "labels": [], "kills": kills, "pieces": p["segments"], "dropped": p["dropped"],
                    "captions": teach["captions"], "chapters": teach["chapters"],
                    "cardStyles": teach.get("cardStyles", []), "callouts": teach["callouts"],
                    "paths": teach["paths"],
-                   "music": None,  # D414: the long video adds no music (the stream's own sound only)
+                   "music": music_rec,
                    "loudness": lrec,
                    "files": files, "errors": errors}]})
     if not ok:
@@ -1457,7 +1471,7 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
                     "record": dict(record, **origin, score=sc, target=target, beatShifts=shifts, beats=len(rec["beats"]))}
 
 
-def _music_level(ffmpeg, src, pieces, xd, wd, mv, mcfg):
+def _music_level(ffmpeg, src, pieces, xd, wd, mv, mcfg, segments=None):
     """D437: (target LUFS, voice duck dict or None, record) of a folder/pack/AI track: the game mix of this reel is
     measured once (music_voice), the music set underGameDb under it (never louder than the user's level), and the
     speech times found for the voice duck. Any failure: the user's level and no voice duck (the old rules)."""
@@ -1467,11 +1481,15 @@ def _music_level(ffmpeg, src, pieces, xd, wd, mv, mcfg):
     depth = float(mv.get("voiceDuckDb", vc["depthDb"]))
     if not ffmpeg or not src:
         return float(mv["levelDb"]), None, {"gameLufs": None, "speech": "not measured"}
-    m = mvo.measure(ffmpeg, src, pieces, xd, wd, vc, want_speech=depth > 0)
-    tgt = mlib.target_lufs(mv["levelDb"], m["gameLufs"], under)
+    m = mvo.measure(ffmpeg, src, pieces, xd, wd, vc, want_speech=depth > 0, segments=segments)
+    game = m["gameLufs"]
+    window = m.get("bedWindowGameLufs")
+    reference = min(game, window) if game is not None and window is not None else game
+    tgt = mlib.target_lufs(mv["levelDb"], reference, under)
     voice = ({"spans": m["spans"], "depthDb": depth, "attackSec": float(vc["attackSec"]), "releaseSec": float(vc["releaseSec"])}
              if depth > 0 and m.get("spans") else None)
-    rec = {"gameLufs": m["gameLufs"], "underGameDb": under, "targetLufs": tgt, "voiceDuckDb": depth if voice else 0,
+    rec = {"gameLufs": game, "bedWindowGameLufs": window, "underGameDb": under, "targetLufs": tgt,
+           "voiceDuckDb": depth if voice else 0,
            "speech": m["speech"], "speechSpans": len(m["spans"] or []), "speechSec": round(sum(b - a for a, b in m["spans"] or []), 2)}
     return tgt, voice, rec
 
@@ -1486,7 +1504,8 @@ def _music(wd, pieces, xd, title_rec, ex, *seed_parts, pk=None, mplan=None, ffmp
     if mplan:
         try:
             mcfg = ex["look"]["mlcfg"]
-            tgt, voice, lrec = _music_level(ffmpeg, src, pieces, xd, wd, ex["look"]["look"]["music"], mcfg)
+            tgt, voice, lrec = _music_level(ffmpeg, src, pieces, xd, wd, ex["look"]["look"]["music"], mcfg,
+                                           segments=mplan["rec"]["segments"])
             rec = dict(mplan["rec"], targetLufs=tgt)
             return (mlib.prepare(wd, rec, mplan["track"], mcfg, ex["music"]["duck"], voice),
                     dict(mplan["record"], targetLufs=tgt, level=lrec,

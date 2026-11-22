@@ -1,0 +1,14 @@
+{
+  "id": "cyberpunk",
+  "version": "1.0.0",
+  "status": "proposed",
+  "palette": { "accent": "#28E9ED", "secondary": "#FD49CB", "text": "#EBFBFF", "shadow": "#150E28" },
+  "cardStyles": ["glitch", "slash", "zoom-punch"],
+  "grade": { "blueShadows": 0.10, "redMidtones": 0.045, "greenHighlights": 0.045 },
+  "padSec": 1.0,
+  "transition": { "kind": "slideleft", "xfade": "slideleft", "ms": 200 },
+  "music": {
+    "mood": "starting-soon", "bars": 8, "targetLufs": -33, "underGameDb": 12,
+    "duck": { "threshold": 0.023, "ratio": 6, "attackMs": 12, "releaseMs": 330 }
+  }
+}

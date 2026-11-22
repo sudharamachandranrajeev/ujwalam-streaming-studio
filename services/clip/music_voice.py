@@ -4,7 +4,7 @@
   game_audio(ffmpeg, src, pieces, wd)   -> float stereo (n, 2) at 48 kHz: the first audio track of each piece, joined
   game_lufs(x)                          -> integrated loudness of the game mix (BS.1770), or None when silent
   speech_spans(x, pieces, xd, vcfg)     -> [(start, end)] reel seconds where someone speaks (Silero VAD)
-  measure(ffmpeg, src, pieces, xd, wd, vcfg) -> {"gameLufs", "spans", "speech"} (never raises: any failure gives Nones)
+  measure(ffmpeg, src, pieces, xd, wd, vcfg) -> {"gameLufs", "bedWindowGameLufs", "spans", "speech"}
 
 Speech times come from Silero VAD: the onnx model that ships inside faster-whisper, already in the runtime; it runs on
 the CPU and downloads nothing. A failure here never stops a render: the bed then keeps the user's level and the game
@@ -86,6 +86,36 @@ def merge(spans, gap):
     return out
 
 
+def bed_window_lufs(x, pieces, xd, segments):
+    """Program loudness in a partial music bed's windows, using the raw PCM already read for the reel.
+
+    Crossfades mix two sources, so measure only the unambiguous portion of each piece. Constant speeds change
+    the source times of the boundaries. Ramps, padding and per-piece gain need the rendered mix instead.
+    """
+    if not segments or not pieces or any(p.get("ramp") or p.get("outFrames") or p.get("game") for p in pieces):
+        return None
+    windows = merge([(s["at"], s["at"] + s["len"]) for s in segments if s["len"] > 0], 0)
+    chunks = []
+    reel_start = source_start = 0.0
+    for i, piece in enumerate(pieces):
+        duration = piece["end"] - piece["start"]
+        speed = float(piece.get("speed") or 1.0)
+        reel_end = reel_start + duration / speed
+        for start, end in windows:
+            a = max(start, reel_start + (xd if i else 0.0))
+            b = min(end, reel_end - (xd if i + 1 < len(pieces) else 0.0))
+            if b > a:
+                first = round((source_start + (a - reel_start) * speed) * SR)
+                last = round((source_start + (b - reel_start) * speed) * SR)
+                chunks.append(x[first:last])
+        source_start += duration
+        reel_start = reel_end - xd
+    full_bed = len(windows) == 1 and windows[0][0] <= 0 and windows[0][1] >= round(reel_end, 3)
+    if not chunks or full_bed:
+        return None
+    return game_lufs(_np().concatenate(chunks))
+
+
 def vad_spans(mono16k, vcfg, vad=None):
     """[(start, end)] seconds of speech in 16 kHz mono float audio. vad: injected for tests."""
     if vad is None:
@@ -106,9 +136,9 @@ def speech_spans(x, pieces, xd, vcfg, vad=None):
     return [(round(a, 3), round(b, 3)) for a, b in merge([s for s in spans if s[1] > s[0]], float(vcfg["mergeGapSec"]))]
 
 
-def measure(ffmpeg, src, pieces, xd, wd, vcfg, want_speech=True, vad=None, audio=None):
-    """-> {"gameLufs": float or None, "spans": list or None, "speech": "vad" | reason}. Never raises."""
-    out = {"gameLufs": None, "spans": None, "speech": "off" if not want_speech else "failed"}
+def measure(ffmpeg, src, pieces, xd, wd, vcfg, want_speech=True, vad=None, audio=None, segments=None):
+    """Whole-reel and partial-bed program loudness, plus speech times. A failed measurement leaves its value unset."""
+    out = {"gameLufs": None, "bedWindowGameLufs": None, "spans": None, "speech": "off" if not want_speech else "failed"}
     try:
         x = audio if audio is not None else game_audio(ffmpeg, src, pieces, wd)
     except Exception as e:  # noqa: BLE001 - a failed read leaves the old rules
@@ -116,6 +146,8 @@ def measure(ffmpeg, src, pieces, xd, wd, vcfg, want_speech=True, vad=None, audio
         return out
     try:
         out["gameLufs"] = game_lufs(x)
+        if out["gameLufs"] is not None:
+            out["bedWindowGameLufs"] = bed_window_lufs(x, pieces, xd, segments)
     except Exception as e:  # noqa: BLE001
         out["why"] = f"loudness not measured ({type(e).__name__})"
     if want_speech:

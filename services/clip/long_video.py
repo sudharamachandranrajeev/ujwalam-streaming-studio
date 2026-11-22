@@ -199,6 +199,15 @@ def batches(segs, n):
     return [segs[i:i + n] for i in range(0, len(segs), n)]
 
 
+def _render_batches(segs, n, tr, music):
+    offset = 0.0
+    for chunk in batches(segs, n):
+        seconds = video_seconds(chunk, tr)
+        bed = dict(music, offsetSec=offset, durationSec=seconds) if music else None
+        yield chunk, seconds, bed
+        offset += seconds
+
+
 def concat_argv(ffmpeg, list_name, out_name):
     """Joins the batch files without re-encoding (picture and audio copied: the audio is encoded once)."""
     return [ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list_name, "-map", "0",
@@ -221,7 +230,7 @@ def clear_attempts(wd):
 
 
 def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, batch_pieces, render_job, run_tool, encoders,
-           audio, overlay=None, overlay_failed=None, gain_db=None):
+           audio, overlay=None, overlay_failed=None, gain_db=None, music=None, grade=None):
     """Renders the segments into wd/long-h.mp4. render_job(mk_argv, encoder, wd, part, what) -> (CompletedProcess,
     encoder) (clipper._render_job: stall watch, CPU retry). The parts and their list live in a per-attempt folder that
     is removed in finally (and by the next start, after a kill). overlay (LV1a/LV1b, D421/D422): overlay(chunk, first
@@ -234,16 +243,16 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
     adir = tempfile.mkdtemp(prefix=ATTEMPT_PREFIX, dir=wd)
     try:
         parts, expected, first = [], 0.0, 1
-        for i, chunk in enumerate(batches(segs, batch_pieces)):
+        for i, (chunk, seconds, bed) in enumerate(_render_batches(segs, batch_pieces, tr, music)):
             name = f"part-{i:03d}.mp4"
             pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
             ov = (overlay(chunk, first, adir) if overlay else None) or {}
             first += len(chunk)
 
-            def mk(enc, pieces=pieces, name=name, ov=ov):
+            def mk(enc, pieces=pieces, name=name, ov=ov, bed=bed):
                 return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], audio, fade_ms, name + ".part",
                                         audio_tracks=audio_tracks, transition=tr, captions=ov.get("ass"),
-                                        fontsdir=ov.get("fontsdir"), fx=ov.get("fx"), gain_db=gain_db)
+                                        fontsdir=ov.get("fontsdir"), fx=ov.get("fx"), gain_db=gain_db, music=bed, grade=grade)
             r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
             if r.returncode != 0 and (ov.get("ass") or ov.get("fx")):
                 if overlay_failed:
@@ -254,7 +263,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
                 return False, 0.0, f"part {i + 1} did not render: {r.stderr.strip()[-200:]}"
             os.replace(os.path.join(adir, name + ".part"), os.path.join(adir, name))
             parts.append(name)
-            expected += video_seconds(pieces, tr)
+            expected += seconds
         with open(os.path.join(adir, "parts.txt"), "w", encoding="utf-8") as f:
             f.write("".join(f"file '{p}'\n" for p in parts))
         r = run_tool(concat_argv(ffmpeg, "parts.txt", FILE + ".part"), cwd=adir, timeout=1800)
@@ -265,17 +274,17 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
     finally:
         shutil.rmtree(adir, ignore_errors=True)
 
-def batch_parts(ffmpeg, src, segs, frame, enc_args, audio, fade_ms, tr, batch_pieces, audio_tracks):
+def batch_parts(ffmpeg, src, segs, frame, enc_args, audio, fade_ms, tr, batch_pieces, audio_tracks, music=None):
     """D440: [(argv builder(gain), seconds)] per batch, as render() cuts them (no overlay: the sound is the same), for
     the loudness pre-pass of the whole video."""
     out = []
-    for chunk in batches(segs, batch_pieces):
+    for chunk, seconds, bed in _render_batches(segs, batch_pieces, tr, music):
         pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
 
-        def b(gain, pieces=pieces):
+        def b(gain, pieces=pieces, bed=bed):
             return mont.render_argv(ffmpeg, src, pieces, frame, enc_args, audio, fade_ms, "probe.mp4",
-                                    audio_tracks=audio_tracks, transition=tr, gain_db=gain)
-        out.append((b, video_seconds(pieces, tr)))
+                                    audio_tracks=audio_tracks, transition=tr, gain_db=gain, music=bed)
+        out.append((b, seconds))
     return out
 
 

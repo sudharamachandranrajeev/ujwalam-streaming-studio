@@ -67,6 +67,9 @@ test('repo file set: no tests, docs or local files, Python only the clip and fac
   assert.deepEqual(dataRefProblems(REPO, files), []);
   for (const f of ['data/posting/auto-post-rules.json', 'data/posting/schedule.json', 'data/clip/targets.json', 'data/stream/stream-options.json']) assert.ok(files.includes(f), f);
   assert.ok(files.includes('data/luts/realism-filmic.cube'), 'the shipped LUTs (base luts, D381)');
+  for (const f of ['data/clip/themes/cyberpunk.json', 'data/music/moods/starting-soon.json', 'data/schemas/music-mood.schema.json']) {
+    assert.ok(files.includes(f), f);
+  }
   assert.deepEqual(dataRefProblems(REPO, files.filter((f) => f !== 'data/posting/auto-post-rules.json')).length, 1, 'the check sees a missing file');
   {
     // Codex review: either quote style counts; comments and joins on another folder (the data dir) do not

@@ -53,7 +53,7 @@ session file/
 legacy/
 
 # Live-stream feedback captures (replay clips, logs, voice notes). Local only; triage goes to docs/feedback/.
-feedback/
+/feedback/
 
 # Agent session lock (docs/procedures/session-protocol.md).
 .agent-lock

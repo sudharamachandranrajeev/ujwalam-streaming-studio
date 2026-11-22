@@ -169,9 +169,11 @@ def _ko_lines(anim, p, word, detail, cx, cy, dy, d_ms, kcfg, accent):
     elif anim == "glitch":  # an accent copy and a white copy slide in from both sides and snap into the word
         sp = int(p["splitPx"])
         acc = _tag_colour(accent)
+        palette = kcfg.get("palette")
+        ghost = f"\\1c{_tag_colour(palette['secondary'])}\\3c{_tag_colour(palette['secondary'])}" if palette else ""
         out.append((1, fin, "KOWord", f"{{\\an5\\move({cx - sp},{cy},{cx},{cy},0,{fin})\\1c{acc}\\3c{acc}\\alpha&H60&"
                                       f"\\t({fin // 2},{fin},\\alpha&HFF&)}}{txt}"))
-        out.append((1, fin, "KOWord", f"{{\\an5\\move({cx + sp},{cy - sp // 4},{cx},{cy},0,{fin})\\alpha&H80&"
+        out.append((1, fin, "KOWord", f"{{\\an5\\move({cx + sp},{cy - sp // 4},{cx},{cy},0,{fin}){ghost}\\alpha&H80&"
                                       f"\\t({fin // 2},{fin},\\alpha&HFF&)}}{txt}"))
         out.append((2, None, "KOWord", f"{{\\an5\\pos({cx},{cy})\\alpha&HFF&\\t({fin // 2},{fin},\\alpha&H00&)"
                                        f"\\t({ex0},{d_ms},\\alpha&HFF&\\fscx115)}}{txt}"))
@@ -198,14 +200,16 @@ def _ko_lines(anim, p, word, detail, cx, cy, dy, d_ms, kcfg, accent):
 
 def ko_styles(frame, tcfg, style, accent):
     kc, safe = tcfg["koCards"], tcfg["safe"]
-    tx, sh = _colour(style["textColour"]), _colour("#000000", 0x60)
+    palette = kc.get("palette") or {}
+    tx, sh = _colour(style["textColour"]), _colour(palette.get("shadow", "#000000"), 0x60)
+    detail = _colour(palette.get("secondary", style["textColour"]))
     row = (f"0,0,0,100,100,0,0,{{bs}},{{bord}},{{shad}},5,{int(safe['left'])},{int(safe['right'])},0,1")
     return [
         f"Style: KOWord,{style['fontFamily']},{int(kc['wordPx'])},{tx},{tx},{_colour(accent)},{sh},-1,"
         + row.format(bs=1, bord=int(kc["outlinePx"]), shad=int(kc["shadowPx"])),
         f"Style: KOBox,{style['fontFamily']},{int(kc['wordPx'])},{tx},{tx},{_colour(accent)},{_colour(accent)},-1,"
         + row.format(bs=3, bord=int(kc["boxPadPx"]), shad=0),
-        f"Style: KODetail,{style['fontFamily']},{int(kc['detailPx'])},{tx},{tx},{_colour('#000000', 0x30)},{sh},-1,"
+        f"Style: KODetail,{style['fontFamily']},{int(kc['detailPx'])},{detail},{detail},{_colour(palette.get('shadow', '#000000'), 0x30)},{sh},-1,"
         + row.format(bs=1, bord=3, shad=2),
     ]
 
@@ -444,7 +448,7 @@ def merge_info(infos):
 
 
 def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, layout=None, rec_size=None, game=None,
-            seed=None):
+            seed=None, theme=None):
     """What batch_overlay needs, or None with the flag off. Captions need the reel captions' speech model; without it
     (or with UJWALAM_REEL_CAPTIONS=off from the studio's model check) only the chapter cards are drawn. pack: the
     run's game pack (the callout's HUD box); none -> no callouts. layout / rec_size: where the game sits in the
@@ -457,6 +461,14 @@ def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, lay
     ccfg = rcap.load_config()
     style = caption_style(ccfg, tcfg)
     accent = rti.load_config()["themeAccent"]
+    cards, card_weights = card_choice(data_dir)
+    if theme:
+        palette = theme["palette"]
+        accent = palette["accent"]
+        style = dict(style, textColour=palette["text"], outlineColour=palette["shadow"])
+        tcfg = dict(tcfg, koCards=dict(tcfg["koCards"], palette=palette))
+        # Respect disabled styles, including the user's choice to draw no cards.
+        cards = [st for st in cards if st in theme["cardStyles"]] or cards
     model = rcap.model_path(data_dir, ccfg, whisper_model)
     use = bool(tcfg["captions"].get("on")) and os.environ.get("UJWALAM_REEL_CAPTIONS") != "off" and (
         ccfg["backend"] == "faster-whisper" and model or ccfg["backend"] == "whisper-cli" and whisper_bin and model)
@@ -477,7 +489,6 @@ def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, lay
             paths = _paths_context(tcfg, game, layout, rec_size, accent)
     except (AttributeError, KeyError, TypeError, ValueError):
         paths = None
-    cards, card_weights = card_choice(data_dir)
     return {"tcfg": tcfg, "style": style, "accent": accent, "ccfg": ccfg if use else None,
             "opts": {"whisper_bin": whisper_bin, "whisper_model": model}, "box": box, "boxModes": box_modes, "paths": paths,
             "cards": cards, "cardWeights": card_weights, "seed": seed or ""}

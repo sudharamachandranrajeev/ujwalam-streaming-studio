@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "services", "clip"))
 
@@ -66,6 +67,18 @@ class VoiceTests(unittest.TestCase):
         self.assertTrue(-22.0 < v < -16.0, v)  # a 997 Hz sine at -20 dBFS per channel, two channels: about -17 LUFS
         self.assertIsNone(mv.game_lufs(tone(4.0, -120)))
 
+    def test_bed_window_follows_speed_and_skips_crossfade(self):
+        import numpy as np
+        pieces = [{"start": 10, "end": 14, "speed": 2}, {"start": 30, "end": 33}]
+        # On the reel: 1.5-2 is the crossfade; 2-3 is the second piece's 0.5-1.5.
+        raw = np.concatenate([tone(4.5, -10), tone(1, -40), tone(1.5, -10)])
+        window = [{"at": 1.5, "len": 1.5}]
+        self.assertEqual(mv.bed_window_lufs(raw, pieces, 0.5, window), mv.game_lufs(tone(1, -40)))
+        self.assertIsNone(mv.bed_window_lufs(raw, pieces, 0.5, [{"at": 0, "len": 4.5}]), "full bed")
+        self.assertIsNone(mv.bed_window_lufs(raw, pieces, 0.5, [{"at": 1.5, "len": 0.5}]), "only a crossfade")
+        self.assertIsNone(mv.bed_window_lufs(raw, [dict(pieces[0], ramp={"audio": "mute"}), pieces[1]], 0.5, window))
+        self.assertIsNone(mv.bed_window_lufs(raw * 0, pieces, 0.5, window), "silent program in the window")
+
     def test_argv_joins_the_pieces_at_48k_stereo(self):
         a = mv.game_audio_argv("ffmpeg", "rec.mp4", [{"start": 1.0, "end": 3.0}, {"start": 5.0, "end": 6.5}], "g.wav")
         self.assertEqual(a.count("-i"), 2)
@@ -82,6 +95,38 @@ class VoiceTests(unittest.TestCase):
 
 
 class ClipperLevelTests(unittest.TestCase):
+    def test_off_bed_action_cannot_raise_partial_music(self):
+        import numpy as np
+        import clipper
+        import music_library as mlib
+        segments = [{"at": 0, "len": 1}, {"at": 4, "len": 1}]
+        plan = {"segments": segments, "levelDb": -20}
+        mplan = {"rec": plan, "record": dict(plan, source="folder", track="song"), "track": {"id": "song"}}
+        ex = {"look": {"mlcfg": mlib.load_config(), "look": {"music": {"levelDb": -20, "voiceDuckDb": 0}}},
+              "music": {"duck": {}}}
+        pieces = [{"start": 10, "end": 15}]
+
+        def render(edges, middle):
+            raw = np.concatenate([tone(1, edges), tone(3, middle), tone(1, edges)])
+            with patch.object(mv, "game_audio", return_value=raw) as extract, patch.object(mlib, "prepare") as prepare:
+                _, rec = clipper._music(".", pieces, 0, None, ex, mplan=mplan, ffmpeg="ffmpeg", src="original")
+                extract.assert_called_once()
+                self.assertEqual(prepare.call_args.args[1]["targetLufs"], rec["targetLufs"])
+            return rec
+
+        quiet = render(-40, -40)
+        action = render(-40, -12)
+        self.assertGreater(action["level"]["gameLufs"], quiet["level"]["gameLufs"] + 20)
+        self.assertAlmostEqual(action["targetLufs"], quiet["targetLufs"], delta=0.1)
+        self.assertAlmostEqual(action["targetLufs"], action["level"]["bedWindowGameLufs"] - 8, delta=0.1)
+        bright = render(-24, -30)
+        self.assertGreater(bright["level"]["bedWindowGameLufs"], bright["level"]["gameLufs"])
+        self.assertEqual(bright["targetLufs"], mlib.target_lufs(-20, bright["level"]["gameLufs"], 8))
+        with (patch.object(mlib, "load_library"), patch.object(mlib, "usable", return_value=[mplan["track"]]),
+              patch.object(mlib, "prepare") as prepare):
+            clipper._recaption_music(".", ".", {"music": action}, pieces, 0, "M01")
+            self.assertEqual(prepare.call_args.args[1]["targetLufs"], action["targetLufs"])
+
     def test_music_level_without_ffmpeg_keeps_the_users_level(self):
         import clipper
         import music_library as mlib
