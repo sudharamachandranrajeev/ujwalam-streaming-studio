@@ -55,6 +55,14 @@ test('free music pack (D427): saved sources get the pack once; a later untick st
   assert.deepEqual(lookProblems({ music: { packOffered: 'yes' } }), ['clips.look.music.packOffered must be true or false']);
 }));
 
+test('free music pack (D427): shared cases with the Python side, validated first, then moved', () => {
+  const cases = JSON.parse(readFileSync(path.join(here, 'fixtures', 'clip-look-pack-migration.json'), 'utf8'));
+  for (const [stored, want] of cases) withDir((d) => {
+    if (stored !== null) writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ clips: { look: stored } }));
+    assert.deepEqual(lookInfo(d).look.music.sources, want, JSON.stringify(stored));
+  });
+});
+
 test('round trip: saved group by group, read back, a bad stored value reads as the defaults', () => withDir((d) => {
   assert.equal('look' in readSettings(d).clips, false);
   assert.deepEqual(lookInfo(d).look, lookDefaults().defaults);

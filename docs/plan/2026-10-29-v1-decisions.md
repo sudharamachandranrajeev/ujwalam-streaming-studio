@@ -2837,15 +2837,20 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    A missing or unsafe credit, a licence outside `pack.licences` or a link outside the FMA site is refused (the NCS
    credit's text checks). A countdown reel whose entries share one pack track (with none or made-here beds) posts
    with that credit; a mix of tracks stays held.
-4. **Codex review of fc6f467** (fixed): a pack file must also match the manifest SHA-256 (hashed once, cached per
-   size and modified time in `<data>/music/pack-hashes.json`); the pack folder must be the real folder (no link or
+4. **Codex review of fc6f467** (fixed): the picked pack track must match the manifest SHA-256, hashed whole each time
+   it is picked or re-rendered, with no cache (Codex verify of 6e828c6: a size and time cache could be fooled); the
+   library lists pack files by name and size only, and a mismatch falls back as for a gone track. The pack folder must be the real folder (no link or
    junction from the data root down, resolved path equal to the expected one); the render record's `trackId` is the
    manifest file name and posting refuses a credit that is not exactly that file's manifest row (artist, title,
    licence, FMA page), or a missing or unknown id; recaption makes the pack record again from the checked track it
-   rendered; when the pack track is gone and the made-here bed also fails, the record becomes no music.
+   rendered; when the pack track is gone and the made-here bed also fails, the record becomes no music. Posting reads
+   the manifest on every call and refuses when it is gone, broken or not a list. A junction at the data root itself
+   (or above it) is accepted on purpose: the data root is the app's own trusted place and a user may move it with a
+   junction; the check guards the folders below it.
 5. **Settings move**: sources saved before the pack existed could not be a choice against it. A one-time move adds
    `pack` to saved `clips.look.music.sources` that have no `packOffered`, and sets `packOffered: true` (Node
-   `migrateLookPack`, Python `clip_look.migrate_pack`, same rule); the next save stores it, and choosing sources in
+   `migrateLookPack`, Python `clip_look.migrate_pack`, same rule; both validate the stored value first and a bad value
+   is the defaults, shared cases in `tests/fixtures/clip-look-pack-migration.json`); the next save stores it, and choosing sources in
    Settings also sets it, so a later untick stays off.
 6. **Live risk**: none on air: analysis and hashing run only off air, as for the folder. UNVERIFIED: a real render
    with a downloaded pack track; the credit wording against FMA's own guidance.

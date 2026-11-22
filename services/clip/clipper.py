@@ -1374,6 +1374,9 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
                            n_avoid=int(lk["cfg"]["historyN"]["track"]), prefer_long=pk["music"] != "intro-outro")
     if track is None:
         return pieces, None
+    if track.get("pack") and not mlib.verify_pick(track):  # D427: the bytes must be the pack's own before any credit
+        eprint(f"music pack: {track.get('name')} does not match the pack's checksum; the made-here bed is used")
+        return pieces, None
     name_end = None
     if pk.get("name") in ("lower-third", "kinetic"):
         name_end = rti.timeline(pieces, xd)[0] + float(lk["look"]["name"]["durationSec"])
@@ -1786,11 +1789,14 @@ def _recaption_music(data_dir, wd, row, pieces, xd, rid):
             else:
                 tracks = mlib.usable(mlib.load_library(data_dir, mcfg))
             track = next((t for t in tracks if t["id"] == mrec.get("track")), None)
+            if track is not None and kind == "pack" and not mlib.verify_pick(track):
+                track, why = None, "the pack track does not match the pack's checksum"
+            else:
+                why = f"the {kind} track is gone"
             if track is not None:
                 mus = mlib.prepare(wd, mrec, track, mcfg, cfg_m["duck"])
                 # Codex review: a pack record is made again from the checked track that was rendered, never kept
                 return mus, (dict(mrec, **pack_record(track)) if kind == "pack" else None)
-            why = f"the {kind} track is gone"
         except Exception as e:  # noqa: BLE001 - a broken track falls back to the made-here bed
             why = f"the {kind} track could not be read ({type(e).__name__})"
         eprint(f"recaption {rid}: {why}; the made-here bed is used")

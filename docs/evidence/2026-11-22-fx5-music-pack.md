@@ -43,7 +43,8 @@ match the music library config; `packReady` follows the marker.
 
 ## Codex review fixes (second commit)
 
-SHA-256 check with a cache; the pack folder must be the real folder (junction test with `mklink /J`); posting binds
+SHA-256 of the picked track, hashed at pick and recaption time with no cache (a same-size, same-time replacement is
+refused at pick); the pack folder must be the real folder (junction test with `mklink /J`); posting binds
 the credit to the manifest row of `trackId` (real id, wrong pairing, missing and made-up ids tested); recaption
 rebuilds the pack record from the rendered track; the no-music branch records no music; the one-time settings move
 (Node and Python tests). Test counts are in the commit report.

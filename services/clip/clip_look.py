@@ -149,6 +149,8 @@ def effective(data_dir=None, cfg=None):
             v = c.get("look") if isinstance(c, dict) else None
         except (OSError, ClipError):
             v = None
+    if isinstance(v, dict) and look_problems(v, cfg):  # validated first, as Node readLook: a bad value is the defaults
+        v = None
     return merge(cfg, migrate_pack(v, cfg))
 
 

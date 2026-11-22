@@ -398,35 +398,23 @@ def _sha256(path):
     return h.hexdigest()
 
 
-def _verified(data_dir, cfg, p, name, want, st):
-    """True when the file's SHA-256 equals the manifest's. Hashed once per size + modified time (cache file
-    cfg.pack.hashes in the data root), so a run does not hash the pack again."""
-    cache_f = os.path.join(data_dir, *cfg["pack"]["hashes"].split("/"))
-    try:
-        cache = load_json(cache_f)
-        cache = cache if isinstance(cache, dict) else {}
-    except (OSError, ClipError, ValueError):
-        cache = {}
-    e = cache.get(name)
-    if isinstance(e, dict) and e.get("size") == st.st_size and e.get("mtimeNs") == st.st_mtime_ns and isinstance(e.get("sha256"), str):
-        return e["sha256"] == want
-    try:
-        got = _sha256(p)
-    except OSError:
+def verify_pick(track):
+    """True when the picked pack track's bytes match the manifest (SHA-256 of the whole file, read now, every time:
+    Codex verify, no cache to trust). Called right before the track is rendered and before its credit is written."""
+    want = (track.get("pack") or {}).get("sha256")
+    if not isinstance(want, str):
         return False
-    cache[name] = {"size": st.st_size, "mtimeNs": st.st_mtime_ns, "sha256": got}
     try:
-        os.makedirs(os.path.dirname(cache_f), exist_ok=True)
-        write_json_atomic(cache_f, cache)
-    except OSError:
-        pass
-    return got == want
+        _open_checked(track["file"], track.get("root"))
+        return _sha256(track["file"]) == want
+    except (OSError, ClipError, KeyError):
+        return False
 
 
 def pack_files(data_dir, cfg=None):
     """{path: credit} of the pack tracks that count: in the manifest, a plain file inside the pack folder, and listed
-    in the download's marker with the file's own size (and the manifest's size), and its SHA-256 equals the manifest's.
-    The folder itself must be the real pack folder (pack_folder_ok). No marker: none (the download is not
+    in the download's marker with the file's own size (and the manifest's size). The folder itself must be the real
+    pack folder (pack_folder_ok). The SHA-256 is checked for the picked track only (verify_pick). No marker: none (the download is not
     finished, or was never asked for)."""
     cfg = cfg or load_config()
     folder = pack_dir(data_dir, cfg)
@@ -451,9 +439,8 @@ def pack_files(data_dir, cfg=None):
             continue
         if e.get("size") != st.st_size or credit["bytes"] != st.st_size:
             continue
-        if not _verified(data_dir, cfg, p, name, credit["sha256"], st):  # Codex review: the bytes, not only the size
-            continue
-        out[p] = dict({k: credit[k] for k in ("artist", "title", "licence", "fma")}, file=name)
+        # the bytes are checked only for the track that is picked (verify_pick), right before it is used
+        out[p] = dict({k: credit[k] for k in ("artist", "title", "licence", "fma", "sha256")}, file=name)
     return out
 
 

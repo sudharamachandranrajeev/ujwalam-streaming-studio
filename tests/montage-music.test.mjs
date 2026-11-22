@@ -12,7 +12,7 @@ import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createPostStore, loadLimits, packageUploads } from '../services/posting/index.mjs';
 import { createPostChain } from '../services/posting/auto-chain.mjs';
-import { PROVENANCE_FILE, creditMissing, legacyMadeHere, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from '../services/posting/post-text.mjs';
+import { PROVENANCE_FILE, creditMissing, legacyMadeHere, musicCredit, musicOf, musicStamp, packTracks, readProvenanceSince, renderMusic } from '../services/posting/post-text.mjs';
 import { MUSIC_SIDECAR, scanClipsFolder, videoBinding } from '../services/posting/clips-source.mjs';
 import { uploadVideo } from '../services/posting/youtube.mjs';
 import { createMontageMusic, montageMusicOpProblems } from '../services/studio-ui/montage-music.mjs';
@@ -152,6 +152,27 @@ describe('free music pack (D427)', () => {
     assert.equal(musicCredit({ library: 'pack', trackId: other.name, credit }).use, 'refuse', 'one track id with another credit');
     assert.equal(musicCredit({ library: 'pack', trackId: other.name, credit: { artist: other.artist, title: other.title, licence: other.licence, link: other.fma } }).use, 'credit');
     assert.equal(musicCredit({ library: 'pack', trackId: ID, credit: { ...credit, title: 'Night Sun 2' } }).use, 'refuse');
+  });
+  test('the pack list is read on every call and fails closed', () => {
+    const cfg = JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'clip', 'montage-music.json'), 'utf8'));
+    const mm = { library: 'pack', trackId: ID, credit };
+    assert.equal(musicCredit(mm, cfg).use, 'credit');
+    for (const manifest of ['data/downloads/missing.json', 'data/clip/look.json']) {
+      assert.equal(musicCredit(mm, { ...cfg, pack: { ...cfg.pack, manifest } }).use, 'refuse', manifest);
+    }
+    assert.equal(musicCredit(mm, { ...cfg, pack: { ...cfg.pack, item: 'other' } }).use, 'refuse', 'item missing');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'ujw-pack-'));
+    try {
+      const p = { manifest: 'm.json', item: 'music-pack' };
+      writeFileSync(path.join(root, 'm.json'), JSON.stringify({ items: [{ id: 'music-pack', files: [{ name: 'a.mp3' }] }] }));
+      assert.deepEqual(Object.keys(packTracks(p, root)), ['a.mp3']);
+      rmSync(path.join(root, 'm.json'));
+      assert.equal(packTracks(p, root), null, 'removed after the first read: not trusted');
+      writeFileSync(path.join(root, 'm.json'), JSON.stringify({ items: { 0: { id: 'music-pack', files: [] } } }));
+      assert.equal(packTracks(p, root), null, 'items as an object');
+      writeFileSync(path.join(root, 'm.json'), '{broken');
+      assert.equal(packTracks(p, root), null, 'broken JSON');
+    } finally { rmSync(root, { recursive: true, force: true }); }
     assert.equal(musicOf({ kind: 'short', music: { source: 'pack-x', trackId: 'p1', credit } }), 'unknown');
     assert.deepEqual(renderMusic({ musicRecords: 1, clips: [{ id: 'c1', music: { source: 'packs' } }] }, 'c1'), { source: 'unknown' });
   });

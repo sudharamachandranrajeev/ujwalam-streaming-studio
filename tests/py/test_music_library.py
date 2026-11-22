@@ -392,8 +392,8 @@ class PackTests(unittest.TestCase):
         self.assertEqual(sorted(os.path.basename(p) for p in got), ["pack-01-a.wav", "pack-02-b.wav"])
         self.assertEqual(got[os.path.join(self.pack, "pack-01-a.wav")],
                          {"artist": "Artist 0", "title": "Song 0", "licence": "CC0-1.0",
-                          "fma": "https://freemusicarchive.org/music/a/0/", "file": "pack-01-a.wav"})
-        self.assertTrue(os.path.isfile(os.path.join(self.data, "music", "pack-hashes.json")), "hashes cached")
+                          "fma": "https://freemusicarchive.org/music/a/0/", "file": "pack-01-a.wav",
+                          "sha256": self.ml._sha256(os.path.join(self.pack, "pack-01-a.wav"))})
         lib = self.ml.refresh_pack(self.data, self.cfg, live=lambda: False)
         self.assertTrue(os.path.isfile(os.path.join(self.data, "music", "pack-library.json")), "its own library file")
         self.assertFalse(os.path.exists(os.path.join(self.data, "music", "library.json")), "the folder library is untouched")
@@ -416,14 +416,42 @@ class PackTests(unittest.TestCase):
             f.write(bytes(16))
         self.assertEqual([t["name"] for t in self.ml.usable_pack(lib, self.data, self.cfg)], ["pack-01-a"])
 
-    def test_same_size_other_bytes_is_not_a_pack_track(self):
-        p = os.path.join(self.pack, "pack-02-b.wav")
-        self.assertIn(p, self.ml.pack_files(self.data, self.cfg))
-        with open(p, "r+b") as f:  # same size, other bytes, marker size still matches
+    def test_same_size_same_time_replacement_is_refused_at_pick(self):
+        """Codex verify: no hash cache; the picked track is hashed when it is used, so a same-size replacement with
+        its old modified time restored is refused and no credit is written."""
+        import clipper  # noqa: PLC0415
+        import clip_look as cl  # noqa: PLC0415
+        lib = self.ml.refresh_pack(self.data, self.cfg, live=lambda: False)
+        track = next(t for t in self.ml.usable_pack(lib, self.data, self.cfg) if t["name"] == "pack-01-a")
+        self.assertTrue(self.ml.verify_pick(track))
+        p = track["file"]
+        st = os.stat(p)
+        with open(p, "r+b") as f:
             f.seek(-8, os.SEEK_END)
-            f.write(b"\x01" * 8)
-        self.assertNotIn(p, self.ml.pack_files(self.data, self.cfg))
-        self.assertIn(os.path.join(self.pack, "pack-01-a.wav"), self.ml.pack_files(self.data, self.cfg), "cached hash kept")
+            f.write(bytes(8) if open(p, "rb").read()[-8:] != bytes(8) else b"\x01" * 8)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual((os.stat(p).st_size, os.stat(p).st_mtime_ns), (st.st_size, st.st_mtime_ns))
+        track = next(t for t in self.ml.usable_pack(lib, self.data, self.cfg) if t["name"] == "pack-01-a")
+        self.assertFalse(self.ml.verify_pick(track), "listed by name and size, refused by its bytes")
+        self.assertFalse(os.path.exists(os.path.join(self.data, "music", "pack-hashes.json")), "no hash cache")
+        lcfg = cl.load_config()
+        ex = {"look": {"cfg": lcfg, "look": cl.merge(lcfg, {}), "tracks": [dict(track, energyLevel=0.8, mood="edm")],
+                       "mlcfg": self.cfg, "history": {}}, "music": None}
+        ps = [{"start": 0.0, "end": 5.0, "kills": 1}, {"start": 9.0, "end": 14.0, "kills": 1}]
+        _, mp = clipper._look_music_plan(ex, {"music": "full-bed", "transitions": None, "name": None}, ps, 0.22, None,
+                                         {"kills": 4, "streaks": 1, "pieces": ps}, "montage", None, "M1")
+        self.assertIsNone(mp, "no pack record: the made-here bed is used")
+        rec = {"source": "pack", "track": track["id"], "trackId": "pack-01-a.wav", "credit": {}, "mode": "full-bed",
+               "total": 9.78, "levelDb": -16, "segments": [{"at": 0, "from": 0, "len": 9.78, "fadeIn": 0.05, "fadeOut": 1.2}]}
+        wd = os.path.join(self.tmp, "wd2")
+        os.makedirs(wd)
+        orig = self.ml.load_config
+        self.ml.load_config = lambda path=None: self.cfg
+        try:
+            _, new = clipper._recaption_music(self.data, wd, {"music": rec}, ps, 0.22, "r1")
+        finally:
+            self.ml.load_config = orig
+        self.assertEqual((new["source"], new["fallback"]), ("made-here", "the pack track does not match the pack's checksum"))
 
     def test_junction_pack_folder_does_not_count(self):
         import subprocess  # noqa: PLC0415

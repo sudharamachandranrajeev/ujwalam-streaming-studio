@@ -25,6 +25,6 @@
            "dropLeadFadeSec": 0.3, "peakCeilingDb": -1.0 },
   "pack": { "$comment": "FX5 (D427): the free music pack from Settings > Downloads (data/downloads/music-pack.json, item music-pack). A track counts only when it is in that manifest, in the pack folder and in the download's marker; its credit comes from the manifest.",
             "item": "music-pack", "manifest": "downloads/music-pack.json", "folder": "music/pack", "marker": ".ujwalam-download.json",
-            "library": "music/pack-library.json", "hashes": "music/pack-hashes.json", "licence": "CC0 1.0 (Free Music Archive)" },
+            "library": "music/pack-library.json", "licence": "CC0 1.0 (Free Music Archive)" },
   "licence": "your own music: you said you may use it (the folder you picked)"
 }

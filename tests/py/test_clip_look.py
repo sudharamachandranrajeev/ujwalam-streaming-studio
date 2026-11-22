@@ -197,6 +197,22 @@ class PackMigrationTests(unittest.TestCase):
         self.assertEqual(cl.look_problems({"music": {"packOffered": 1}}, cfg), ["clips.look.music.packOffered must be true or false"])
         self.assertEqual(cl.merge(cfg, cl.migrate_pack({"music": {"sources": []}}, cfg))["music"]["sources"], ["pack"])
 
+    def test_shared_cases_validate_first_then_migrate(self):
+        """Same file as tests/user-settings-clip-look.test.mjs: a bad stored value is the defaults (never migrated)."""
+        import clip_look as cl  # noqa: PLC0415
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "fixtures", "clip-look-pack-migration.json"), encoding="utf-8") as f:
+            cases = json.load(f)
+        for stored, want in cases:
+            d = tempfile.mkdtemp(prefix="fx5-look-")
+            try:
+                if stored is not None:
+                    with open(os.path.join(d, "settings.json"), "w", encoding="utf-8") as f:
+                        json.dump({"clips": {"look": stored}}, f)
+                self.assertEqual(cl.effective(d)["music"]["sources"], want, json.dumps(stored))
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

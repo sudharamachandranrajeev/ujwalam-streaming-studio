@@ -120,20 +120,24 @@ export function musicCredit(mm, cfg = montageCfg()) {
   return { use: 'credit', text };
 }
 /** FX5 (D427): a free-pack track (CC0) posts with its credit line anyway; a missing or unsafe credit is never sent. */
-const packCache = new Map();
-/** The free pack's manifest files by name (data/downloads/music-pack.json, item cfg.pack.item); {} when unreadable. */
+/**
+ * The free pack's manifest files by name (data/downloads/music-pack.json, item cfg.pack.item), read on every call (it
+ * is small; Codex verify: a manifest removed or broken later is never trusted from an earlier read). null when the
+ * file cannot be read or parsed, items is not a list, or the item or its file list is missing (refused, fail closed).
+ */
 export function packTracks(p, repo = REPO) {
-  const file = path.join(repo, ...String(p.manifest).split('/'));
-  if (!packCache.has(file)) {
-    const it = (readJson(file)?.items ?? []).find((x) => isPlain(x) && x.id === p.item);
-    packCache.set(file, Object.fromEntries((Array.isArray(it?.files) ? it.files : []).filter((f) => isPlain(f) && typeof f.name === 'string').map((f) => [f.name, f])));
-  }
-  return packCache.get(file);
+  const j = readJson(path.join(repo, ...String(p?.manifest ?? '').split('/')));
+  if (!isPlain(j) || !Array.isArray(j.items)) return null;
+  const it = j.items.find((x) => isPlain(x) && x.id === p.item);
+  if (!isPlain(it) || !Array.isArray(it.files)) return null;
+  return Object.fromEntries(it.files.filter((f) => isPlain(f) && typeof f.name === 'string').map((f) => [f.name, f]));
 }
-function packCredit(mm, cfg) {
+function packCredit(mm, cfg, repo = REPO) {
   const p = cfg.pack;
   const c = mm.credit;
-  const own = typeof mm.trackId === 'string' && Object.hasOwn(packTracks(p), mm.trackId) ? packTracks(p)[mm.trackId] : null;
+  const tracks = packTracks(p, repo);
+  if (!tracks) return { use: 'refuse', reason: "not sent: the free music pack's track list cannot be read.", renderOnly: false };
+  const own = typeof mm.trackId === 'string' && Object.hasOwn(tracks, mm.trackId) ? tracks[mm.trackId] : null;
   const bad = creditProblem(isPlain(c) ? { artist: c.artist, title: c.title, link: c.link } : c, cfg)
     ?? (!isPlain(c) || typeof c.licence !== 'string' || !p.licences.includes(c.licence) ? 'the free-pack song has no known licence' : null)
     ?? (typeof c.link !== 'string' || !c.link.startsWith(p.linkPrefix) ? "the free-pack song credit's link is not its Free Music Archive page" : null)
