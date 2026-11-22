@@ -262,6 +262,13 @@ class RenderedRetakeTests(unittest.TestCase):
         cls.wd = os.path.join(cls.out, "beatdrop", "clips", "B1")
         cls.p1 = cls._run()
         cls.doc1, cls.plan1 = cls._read()
+        # the retake below renders new file names and sweeps these videos: measure them now
+        cls.probe1, cls.vflash1 = {}, None
+        if cls.doc1:
+            for f in cls.doc1["clips"][0]["files"]:
+                cls.probe1[f["layout"]] = _ffprobe(os.path.join(cls.wd, f["file"]))
+                if f["layout"] == "beatdrop-v":
+                    cls.vflash1 = tb.flash_measure(os.path.join(cls.wd, f["file"]))
         cls.swap_piece = 1
         if cls.plan1:
             cls.swap_piece = 1 + next(i for i, p in enumerate(cls.plan1["pieces"]) if p["part"] == "body"
@@ -303,13 +310,13 @@ class RenderedRetakeTests(unittest.TestCase):
         self.assertEqual(fs["beatdrop-v"]["geometry"], "stream-v", "the V canvas recording, framed as V clips are")
         total = self.plan1["total"]
         for lay, (w, h) in (("beatdrop-h", (tb.W, tb.H)), ("beatdrop-v", (tb.W * 9 // 16 // 2 * 2, tb.W))):
-            info = _ffprobe(os.path.join(self.wd, fs[lay]["file"]))
+            info = self.probe1[lay]
             kinds = [s["codec_type"] for s in info["streams"]]
             self.assertEqual(kinds.count("audio"), 1, lay)
             v = next(s for s in info["streams"] if s["codec_type"] == "video")
             self.assertEqual((v["width"], v["height"]), (w, h), lay)
             self.assertAlmostEqual(float(info["format"]["duration"]), total, delta=0.1, msg=lay)
-        vf = tb.flash_measure(os.path.join(self.wd, fs["beatdrop-v"]["file"]))
+        vf = self.vflash1
         print(f"BD7 V: flash peak {vf['peakFlashesPerSecond']}/s over {vf['frames']} frames; summary "
               f"{self.doc1['clips'][0]['summary']}")
         self.assertTrue(vf["pass"])
@@ -317,9 +324,7 @@ class RenderedRetakeTests(unittest.TestCase):
         self.assertTrue(self.doc1["clips"][0]["summary"][0].startswith("kill on the first drop at"))
 
     def test_v_is_9_16(self):
-        fs = self._files(self.doc1)
-        info = _ffprobe(os.path.join(self.wd, fs["beatdrop-v"]["file"]))
-        v = next(s for s in info["streams"] if s["codec_type"] == "video")
+        v = next(s for s in self.probe1["beatdrop-v"]["streams"] if s["codec_type"] == "video")
         self.assertAlmostEqual(v["width"] / v["height"], 9 / 16, delta=0.01)
 
     def test_retake_swap_changes_only_that_piece_and_renders_both(self):
