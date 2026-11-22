@@ -455,15 +455,21 @@ def _drop_fx(effects, p, fps):
                                        (e["fn"] == "scope-zoom-transition" and abs(e["at"] - end_t) < 1e-6))]
 
 
-def _carry_ramp(old, new, effects):
-    """The ragdoll slow motion stays only on a kill at speed 1 (it starts at the kill frame: same output frame)."""
-    if not old.get("ramp"):
+def _refx(P, effects, pieces, i, old, new):
+    """Codex BD7a: piece i's moment changed (old -> new, same frames): the old anchor's beat effects and scope push go
+    and the new on-beat anchor gets the ones the planner gives it (_on_anchor: shake, flash, RGB split on the drop and
+    every Nth kill counted with the pieces as they are now, a scope push when it was scoped, the ragdoll ramp)."""
+    effects = _drop_fx(effects, old, P.fps)
+    new.pop("ramp", None)
+    a = new.get("anchor")
+    if not (a and a.get("onBeat")):
         return effects
-    if new.get("anchor") and new["anchor"]["kind"] == "kill" and new["speed"] == 1.0:
-        new["ramp"] = dict(old["ramp"])
-        return effects
-    t = old["anchor"]["outT"]
-    return [e for e in effects if not (e["fn"] == "ragdoll-slowmo" and abs(e["at"] - t) < 1e-6)]
+    now = pieces[:i] + [new]
+    kill_no = 1 + sum(1 for p in now if p["part"] == "body" and p.get("anchor") and p["anchor"].get("onBeat")
+                      and p["anchor"]["kind"] == "kill")
+    P.effects = []
+    P._on_anchor(new, first=new["part"] == "drop", kill_no=kill_no)
+    return effects + P.effects
 
 
 def retake(pl, op, moments_doc, cfg=None, game=None, piece=None, luma=None, rec_seconds=None):
@@ -511,7 +517,7 @@ def retake(pl, op, moments_doc, cfg=None, game=None, piece=None, luma=None, rec_
             new = _redo(P, old, None)
         if new is None or new["src"] == old["src"]:
             raise ClipError(f"beatdrop: piece {piece} has no other candidate that fits its frames")
-        effects = _carry_ramp(old, new, effects)
+        effects = _refx(P, effects, pieces, i, old, new)
         pieces[i] = new
         rec["piece"] = piece
         changed = [i]
@@ -577,7 +583,7 @@ def retake(pl, op, moments_doc, cfg=None, game=None, piece=None, luma=None, rec_
             else:
                 new = _redo(P, old, None)
             P.used.append((new["src"]["start"], new["src"]["end"]))
-            effects = _carry_ramp(old, new, effects)
+            effects = _refx(P, effects, pieces, i, old, new)
             pieces[i] = new
             changed.append(i)
         rec["seed"] = seed
@@ -811,7 +817,8 @@ def made_here_song(wd, seconds, seed_parts):
         raise ClipError("beatdrop: the made-here bed could not be planned")
     rec = dict(rec, intro=[0.0, rec["total"]], outro=None)
     rmu.prepare(wd, rec, mcfg)
-    return os.path.join(wd, rmu.WAV), dict(rec, source="made-here")
+    # bedSec: the length asked for, so a retake makes the very same bed (BD7, Codex)
+    return os.path.join(wd, rmu.WAV), dict(rec, source="made-here", bedSec=round(float(seconds), 3))
 
 
 def settings_of(data_dir):
@@ -936,7 +943,8 @@ def retake_song(data_dir, record, wd, max_sec, cfg, seed_parts, live=on_air):
         if song is None:
             raise ClipError("beatdrop: the saved plan's song is no longer in the montage music folder")
         return song, rec
-    path, rec = made_here_song(wd, float(max_sec or cfg["maxSec"]) + 8.0, seed_parts)
+    sec = (record or {}).get("bedSec")  # the saved length; a record from before bedSec: as a new montage would ask
+    path, rec = made_here_song(wd, float(sec) if sec else float(max_sec or cfg["maxSec"]) + 8.0, seed_parts)
     return {"path": path, "root": wd}, rec
 
 
@@ -990,8 +998,11 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
         from clip_common import PROFILE_FILE  # noqa: PLC0415
         gid = moments_doc.get("game") or "codm"
         game = load_game(gid)
-        brand, player = bt.profile_names(profile or PROFILE_FILE, gid)
-        bt.fill(pl, res["music"], brand, player, cfg, game)
+        # Codex BD7a: a retake keeps the saved plan's filled slots (names, song title, credits and its one hero-bw
+        # effect); only the pin is tracked again over the pieces as they are now
+        if not (retake and any(e.get("fn") == "hero-bw" for e in pl["effects"])):
+            brand, player = bt.profile_names(profile or PROFILE_FILE, gid)
+            bt.fill(pl, res["music"], brand, player, cfg, game)
         bt.pin(pl, recording, ffmpeg, wd, frame, cfg, stop=on)
         check()
     res["plan"] = pl
@@ -1007,7 +1018,6 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
         vname = f"beatdrop-{hashlib.sha1((pid + '|v').encode('utf-8')).hexdigest()[:12]}.mp4"
         vpart = os.path.join(wd, vname + ".part")
         res["vpart"] = vpart
-    write_json_atomic(os.path.join(wd, PLAN), pl)
     wav = lut = r = None
     try:  # Codex BD5 review: the music bed, LUT, graph and title files go on any error before or during the render
         wav = music_bed(wd, pl, song["path"], song["root"], cfg)
@@ -1048,16 +1058,18 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
     if r is None or r.returncode == STOPPED_RC:
         raise OnAir("on air during the render")
     _not_started(r)
+    h_ok = r.returncode == 0 and os.path.isfile(part)
+    if vertical and h_ok:  # Codex BD7a: both children checked before the orphan sweep (a V not started sweeps nothing)
+        if rv is None or rv.returncode == STOPPED_RC:
+            raise OnAir("on air during the V render")
+        _not_started(rv)
     if started is not None:
         started({name, name + ".part"} | ({vname, vname + ".part"} if vname else set()))
-    if r.returncode != 0 or not os.path.isfile(part):
+    if not h_ok:
         _drop(part)
         res.update(status="failed", reason=f"ffmpeg exited {r.returncode}")
         return res
     if vertical:
-        if rv is None or rv.returncode == STOPPED_RC:
-            raise OnAir("on air during the V render")
-        _not_started(rv)
         res["v"] = {"file": None, "flash": None, "reason": None, "layout": vertical["layout"]["id"]}
         if rv.returncode != 0 or not os.path.isfile(vpart):
             _drop(vpart)
@@ -1102,6 +1114,9 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
                                       f"(limit {float(fl['maxPerSec']):g}): not published")
         if res["v"]["reason"]:
             _drop(vpart)
+    # Codex BD7a: the plan is saved only with a finished video, so a stopped or failed (re)take never leaves a plan
+    # that no video shows (a later retake starts from what the user got)
+    write_json_atomic(os.path.join(wd, PLAN), pl)
     os.replace(part, os.path.join(wd, name))
     if vertical and res["v"]["reason"] is None:
         os.replace(vpart, os.path.join(wd, vname))

@@ -87,6 +87,31 @@ class RetakePlanTests(unittest.TestCase):
         self.assertEqual(new["retakes"], [{"op": "swap", "piece": i + 1}])
         self.assertNotIn("retakes", self.pl, "the saved plan is not modified")
 
+    def test_swap_effects_follow_the_new_moment(self):
+        """Codex BD7a: the swapped piece carries the beat effects the planner gives its new moment, no stale ones."""
+        fps = self.pl["fps"]
+        for i, p in enumerate(self.pl["pieces"]):
+            if not (p.get("anchor") and p["anchor"]["onBeat"]):
+                continue
+            try:
+                new = self.bd.retake(self.pl, "swap", self.md, piece=i + 1)
+            except Exception:  # noqa: BLE001 - a piece without another candidate
+                continue
+            b = new["pieces"][i]
+            t, end_t = b["anchor"]["outT"], round((b["outStart"] + b["outFrames"]) / fps, 4)
+            at_t = {e["fn"] for e in new["effects"] if abs(e["at"] - t) < 1e-6}
+            self.assertIn("shot-shake", at_t, f"piece {i + 1}")
+            self.assertEqual("ragdoll-slowmo" in at_t, bool(b.get("ramp")), f"piece {i + 1}: ramp and its effect")
+            if b["anchor"]["kind"] != "kill" and b["part"] != "drop":
+                self.assertNotIn("rgb-split", at_t, f"piece {i + 1}: a split only on the drop or a kill")
+                self.assertNotIn("ragdoll-slowmo", at_t)
+            scoped = any(b["src"]["start"] <= s <= b["anchor"]["srcT"]
+                         for s in sorted(m["t"] for m in self.md["moments"] if m["kind"] == "scope-in")) \
+                if all("t" in m for m in self.md["moments"]) else None
+            if scoped is not None:
+                self.assertEqual(any(e["fn"] == "scope-zoom-transition" and abs(e["at"] - end_t) < 1e-6
+                                     for e in new["effects"]), scoped, f"piece {i + 1}: scope push")
+
     def test_swap_a_calm_piece_and_the_drop(self):
         new = self.bd.retake(self.pl, "swap", self.md, piece=1)
         self._check_common(new, {0})
@@ -223,6 +248,34 @@ class VerticalGraphTests(unittest.TestCase):
         self.assertNotIn("[bgb_p0]", hg)
         self.assertEqual(hg.count("gblur"), g.count("gblur") - n, "the H graph is the old one")
 
+    def test_a_silent_source_gets_the_bed_alone(self):
+        """Codex BD7a: a V recording without sound still carries the BeatDrop music as its one audio track."""
+        import beatdrop  # noqa: PLC0415
+        pl = beatdrop.plan(tb.moments_doc(), tb.smap_fixture(), max_sec=60)
+        v = beatdrop.render_argv(pl, "ffmpeg", "rec.mkv", {"width": 180, "height": 320}, ["-c:v", "x"],
+                                 ["-c:a", "aac"], "music.wav", "v.mp4", audio_tracks=0)
+        g = v[v.index("-filter_complex") + 1]
+        self.assertIn("music.wav", v)
+        self.assertNotIn("-an", v)
+        self.assertEqual(v.count("-c:a"), 1)
+        self.assertEqual([v[i + 1] for i, x in enumerate(v) if x == "-map"], ["[vout]", "[aout0]"])
+        self.assertNotIn(":a:0]", g, "no source sound is read")
+        silent = beatdrop.render_argv(pl, "ffmpeg", "rec.mkv", {"width": 180, "height": 320}, ["-c:v", "x"],
+                                      ["-c:a", "aac"], None, "v.mp4", audio_tracks=0)
+        self.assertIn("-an", silent)  # no bed: picture only, as before
+
+    def test_made_here_retake_keeps_the_bed_length(self):
+        import beatdrop  # noqa: PLC0415
+        seen = []
+        real = beatdrop.made_here_song
+        try:
+            beatdrop.made_here_song = lambda wd, sec, seed: (seen.append(sec), ("m.wav", {"source": "made-here"}))[1]
+            beatdrop.retake_song(None, {"source": "made-here", "bedSec": 47.5}, "wd", 90, beatdrop.load_config(), ())
+            beatdrop.retake_song(None, {"source": "made-here"}, "wd", 30, beatdrop.load_config(), ())
+        finally:
+            beatdrop.made_here_song = real
+        self.assertEqual(seen, [47.5, 38.0])
+
 
 def _ffprobe(path):
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
@@ -336,6 +389,11 @@ class RenderedRetakeTests(unittest.TestCase):
             for k in ("start", "end"):
                 self.assertEqual(self.plan1["slots"][s][k], self.plan2["slots"][s][k])
         self.assertEqual(self.doc1["clips"][0]["music"], self.doc2["clips"][0]["music"], "the same song")
+        # Codex BD7a: the saved titles are kept (no second fill): one hero-bw, the same slot content
+        self.assertEqual([e for e in self.plan2["effects"] if e["fn"] == "hero-bw"],
+                         [e for e in self.plan1["effects"] if e["fn"] == "hero-bw"])
+        for s in ("hero", "credits"):
+            self.assertEqual(_dump(self.plan1["slots"][s].get("content")), _dump(self.plan2["slots"][s].get("content")))
         fs1, fs2 = self._files(self.doc1), self._files(self.doc2)
         self.assertEqual(set(fs2), {"beatdrop-h", "beatdrop-v"}, self.doc2["clips"][0].get("errors"))
         self.assertEqual(fs2["beatdrop-v"]["geometry"], "blurred-fill", "no V recording: the H recording, fitted")

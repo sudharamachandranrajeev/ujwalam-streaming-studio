@@ -1945,7 +1945,9 @@ def cmd_beatdrop(a):
     beatdrop-v; framing from the clip layouts: the V canvas recording (--v-recording or the '-v-' sibling) when there is
     one, else the blurred fill of the H recording) and render.json carries the plan's plain-word summary.
     --retake <op> [--piece N] re-plans from the saved plan (DIR/beatdrop/clips/B1/beatdrop-plan.json) and the same
-    song (render.json's music record): only what the retake names changes; the plan records it."""
+    song (render.json's music record): only what the retake names changes; the plan records it.
+    BD7c (D419): then `validate --out DIR/beatdrop`; with --publish CLIPS the passing files are published as montages
+    (a retake as a new video; the earlier takes superseded in uploads.json)."""
     import beatdrop as bd  # noqa: PLC0415
     data_dir = resolve_data_dir(a.data_dir)
     cfg = bd.load_config()
@@ -1964,7 +1966,7 @@ def cmd_beatdrop(a):
         eprint(f"beatdrop B1: {bd.NOT_STARTED} ({e})")
         return EXIT_NOT_STARTED
     style = None
-    if rstyle.on(data_dir):
+    if rstyle.on(data_dir) and not a.retake:  # a retake grades with the saved style (below), never a new pick
         st = rstyle.pick(data_dir, "montage", (os.path.basename(a.recording), "beatdrop"))
         if st:
             style = dict(rstyle.effective(st), id=st["id"], name=st["name"])
@@ -1986,6 +1988,9 @@ def cmd_beatdrop(a):
         if not row0 or not row0.get("files"):
             raise ClipError("retake needs a finished BeatDrop montage first (render.json has no video)")
         retake = {"op": a.retake, "piece": a.piece, "plan": saved, "music": row0.get("music")}
+        # Codex BD7a: the saved style (id, name and the colour it graded with); a retake re-plans nothing it uses
+        st = row0.get("style")
+        style = dict(st) if isinstance(st, dict) and st.get("id") else None
     elif a.piece is not None:
         raise ClipError("--piece goes with --retake swap")
     vframe = None
@@ -2010,7 +2015,8 @@ def cmd_beatdrop(a):
             eprint(f"beatdrop B1: {line}")
         done = os.path.join(wd, res["file"]) if res["file"] else None
         row = {"id": "B1", "kind": "beatdrop", "start": 0.0, "end": pl["total"], "music": res["music"],
-               "style": {"id": style["id"], "name": style["name"]} if style else None,
+               "style": {"id": style["id"], "name": style["name"],
+                         **({"colour": style["colour"]} if style.get("colour") else {})} if style else None,
                "beatdrop": {"plan": bd.PLAN, "stats": pl["stats"], "targets": pl["targets"], "slots": pl["slots"]},
                "files": [{"layout": "beatdrop-h", "file": res["file"], "geometry": "canvas"}] if res["file"] else [],
                "flash": res["flash"],
@@ -2021,6 +2027,7 @@ def cmd_beatdrop(a):
         v = res.get("v")
         if res["file"] and v and v.get("file"):  # BD7: the V cut of the same plan
             row["files"].append({"layout": "beatdrop-v", "file": v["file"], "geometry": v["layout"],
+                                 "frame": dict(vertical["frame"]),  # BD7c: validate checks it against its own frame
                                  "flash": v["flash"], "fileStamp": _file_stamp(os.path.join(wd, v["file"]))})
         elif res["file"] and v:
             row["errors"].append({"layout": "beatdrop-v", "error": (v.get("reason") or "")[:300]})
@@ -2053,7 +2060,13 @@ def cmd_beatdrop(a):
     for line in res.get("summary") or []:
         print(f"beatdrop B1: {line}")
     progress_line("montage", 1, 1, "BeatDrop montage done")
-    return 0
+    # BD7c (D419): validated like every reel (each file against its own frame) and, with --publish, published as a
+    # montage (a retake is a new video; the earlier takes are marked superseded so posting never sends them)
+    sub = argparse.Namespace(**{**vars(a), "out": out})
+    rc = cmd_validate(sub)
+    if a.publish:
+        _publish(sub, out, run_name=os.path.basename(os.path.normpath(a.out)), rec_start=a.recording)
+    return rc
 
 
 def _now():
@@ -2154,6 +2167,7 @@ def build_parser():
     s.add_argument("--retake", choices=["another-take", "slower-intro", "more-third-person", "swap"],
                    help="BD7: change the saved plan only where named and render again")
     s.add_argument("--piece", type=int, help="the piece number for --retake swap (1-based)")
+    s.add_argument("--record-start"); s.add_argument("--no-decode", action="store_true"); publish_arg(s)
     s.set_defaults(fn=cmd_beatdrop)
     s = sub.add_parser("recaption", help="render one reel again with its edited transcript (ED2, flag reel-captions)")
     common(s, recording=False)
