@@ -34,7 +34,10 @@ function seed(dataDir, session = S, items = null) {
   const list = items ?? [
     { v: 1, id: 'live-00001', at: '2026-11-11T12:10:00.000Z', t: 600, kind: 'unclassified-banner', detector: 'W1', label: 'VICTORY', mode: 'mp', ocrScore: 0.97, threshold: null, value: null, choices: ['round', 'match', 'not a banner'], frame: 'frames/live-00001.jpg', texts: [{ text: 'PLACEHOLDER', score: 0.9, g: [0, 0, 1, 1] }] },
     { v: 1, id: 'live-00002', at: '2026-11-11T12:20:00.000Z', t: 1200, kind: 'ocr-low', detector: 'M3', label: 'PLACEHOLDER MEDAL', mode: 'mp', ocrScore: 0.41, threshold: 0.5, value: 'PLACEHOLDER MEDAL', choices: ['PLACEHOLDER MEDAL', 'wrong read'], frame: 'frames/live-00002.jpg', texts: [] },
-    { v: 1, id: 'mode-002', at: '2026-11-11T13:00:00.000Z', t: 740, kind: 'unknown-mode', detector: null, label: null, mode: 'mp', ocrScore: null, threshold: null, value: null, choices: ['domination', 'hardpoint'], match: 2, frame: null, modeReason: 'no mode evidence', modeEvidence: [], texts: [] },
+    { v: 1, id: 'mode-002', at: '2026-11-11T13:00:00.000Z', t: 740, kind: 'unknown-mode', detector: null, label: null, mode: 'mp', ocrScore: null, threshold: null, value: null, choices: ['domination', 'hardpoint'], modeFamilies: ['mp'], match: 2, frame: null, modeReason: 'no mode evidence', modeEvidence: [], texts: [] },
+    // D435: a BR match offered MP modes (made before D435, no modeFamilies) is not shown; nor one whose families leave BR out
+    { v: 1, id: 'mode-003', at: '2026-11-11T13:10:00.000Z', t: 900, kind: 'unknown-mode', detector: null, label: null, mode: 'br', ocrScore: null, threshold: null, value: null, choices: ['domination', 'hardpoint'], match: 3, frame: null, modeReason: 'no mode evidence', modeEvidence: [], texts: [] },
+    { v: 1, id: 'mode-004', at: '2026-11-11T13:20:00.000Z', t: 990, kind: 'unknown-mode', detector: null, label: null, mode: 'br', ocrScore: null, threshold: null, value: null, choices: ['domination', 'hardpoint'], modeFamilies: ['mp'], match: 4, frame: null, modeReason: 'no mode evidence', modeEvidence: [], texts: [] },
   ];
   writeFileSync(path.join(dir, 'review.jsonl'), `${list.map((x) => JSON.stringify(x)).join('\n')}\n{"torn`);
   for (const it of list) if (it.frame) writeFileSync(path.join(dir, it.frame), JPEG);

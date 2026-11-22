@@ -38,6 +38,11 @@ function shape(raw, session) {
   if (!raw || typeof raw !== 'object' || !ITEM_RE.test(raw.id ?? '') || !KINDS.includes(raw.kind)) return null;
   const choices = Array.isArray(raw.choices) ? raw.choices.filter((c) => typeof c === 'string' && c && c.length <= MAX_VALUE).slice(0, 40) : [];
   if (!choices.length) return null;
+  // D435 (user 2026-11-22: BR matches were asked to pick an MP mode): an unknown-mode item for a match of a family its
+  // choices are not for is not shown. Items from before D435 carry no modeFamilies; with a known match family they are
+  // hidden (their choices were the MP names only).
+  if (raw.kind === 'unknown-mode' && typeof raw.mode === 'string' && raw.mode
+      && !(Array.isArray(raw.modeFamilies) && raw.modeFamilies.includes(raw.mode))) return null;
   return {
     session, id: raw.id, kind: raw.kind, at: str(raw.at, 40), t: num(raw.t), detector: str(raw.detector, 16), label: str(raw.label),
     mode: str(raw.mode, 40), ocrScore: num(raw.ocrScore), threshold: num(raw.threshold), value: str(raw.value, MAX_VALUE), choices,

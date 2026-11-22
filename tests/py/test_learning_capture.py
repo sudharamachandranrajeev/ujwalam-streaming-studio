@@ -356,6 +356,20 @@ class UnknownModeTests(unittest.TestCase):
         self.assertEqual(len(frames), len(want))
         self.assertIn("queued for review", out.getvalue())
 
+    def test_other_family_match_not_queued(self):
+        # D435 (user 2026-11-22): a BR match is never asked to pick one of the pack's MP mode names.
+        cfg = mg.stats_config(PACK)
+        self.assertEqual(cfg["modeFamilies"], ["mp"])
+        with tempfile.TemporaryDirectory() as td:
+            n = lc.queue_unknown_modes(td, "s1", [{"endSeen": True, "gameMode": None, "mode": "br"},
+                                                  {"endSeen": True, "gameMode": None, "mode": "mp"},
+                                                  {"endSeen": True, "gameMode": None, "mode": None}], cfg)
+            with open(os.path.join(td, lc.STORE_DIR, "s1", "review.jsonl"), encoding="utf-8") as f:
+                items = [json.loads(x) for x in f if x.strip()]
+        self.assertEqual(n, 2)
+        self.assertEqual([i["match"] for i in items], [2, 3])
+        self.assertTrue(all(i["modeFamilies"] == ["mp"] for i in items))
+
     def test_failure_is_logged_never_raised(self):
         logs = []
         with tempfile.TemporaryDirectory() as td:

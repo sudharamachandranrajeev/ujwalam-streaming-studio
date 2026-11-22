@@ -67,6 +67,12 @@ def stats_config(pack):
     c2 = next((d for d in pack.get("detectors", []) if d.get("id") == "C2"), None) or {}
     st["headerCues"] = list(c2.get("cues") or [])
     st["headerAfterSec"] = float(c2.get("afterEndSec") or 0)
+    # D435: the game families (detector `modes`, e.g. mp) the mode names above belong to: the review asks for a mode only
+    # in these (user 2026-11-22: BR matches were offered only MP modes).
+    fams = set()
+    for x in (d, w1, c1, c2):
+        fams.update(m for m in x.get("modes") or [] if isinstance(m, str))
+    st["modeFamilies"] = sorted(fams)
     return st
 
 

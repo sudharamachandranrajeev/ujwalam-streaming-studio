@@ -2968,3 +2968,20 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    1.5 s or more of GUI-thread time, or a page switch 1 s or more.
 6. **UNVERIFIED**: the user's real data shape (263 posting packages, long task lists) was not replayed; the timings on
    the laptop's real screen (Direct3D, threaded render loop) are not measured yet. The new log lines will show both.
+
+## D435 — Review reads ask for a game mode only in matches of a family the pack names modes for (decided, 2026-11-22)
+
+1. **User report**: Review reads asked what mode three matches were, with screenshots, offering only multiplayer modes;
+   all three were Battle Royale matches on different maps.
+2. **Cause**: `learning_capture.queue_unknown_modes` queued an unknown-mode question for every match without a game mode,
+   whatever its family, and offered the pack's mode names (S1 modeNames, C1/C2 cues, W1 banner subtitles). Every one
+   of those names is a multiplayer mode: the detectors that read them run in `mp` only. The match's own family (`br`)
+   was known and stored on the item, but not checked.
+3. **Change**: `match_gate.stats_config` adds `modeFamilies` (the detector `modes` of S1, W1, C1 and C2: `["mp"]` for
+   this pack, read from data, no game in code). A match whose family is known and not in that list is not asked about;
+   a match with no known family still is. New items record `modeFamilies`. `services/learning/review.mjs` hides an
+   unknown-mode item whose match family is not in its `modeFamilies`; items made before D435 carry none, so any of
+   them with a known family is hidden (this also hides older multiplayer ones; the questions are optional and only
+   counted, never applied).
+4. **Not done**: no Battle Royale mode or map names exist in the pack, so Battle Royale matches are not asked about at
+   all. Adding them needs names read from real end screens (AGENTS.md: names come from footage, not invented).

@@ -341,8 +341,12 @@ def queue_unknown_modes(data_dir, session, matches, cfg, frame_of=None, log=None
             return 0
         w = SessionWriter(data_dir, session)
         have = w.item_ids()
+        fams = list(cfg.get("modeFamilies") or [])
         for i, m in enumerate(matches, 1):
             if not m.get("endSeen") or m.get("gameMode"):
+                continue
+            # D435: a match of another family (BR, DMZ) has none of these modes; asking would offer only wrong answers.
+            if m.get("mode") and fams and m.get("mode") not in fams:
                 continue
             item_id = f"mode-{i:03d}"
             if item_id in have:
@@ -355,7 +359,7 @@ def queue_unknown_modes(data_dir, session, matches, cfg, frame_of=None, log=None
                     jpeg = None
             w.add_item({"v": 1, "id": item_id, "at": now_iso(), "t": m.get("endScreenAt"), "kind": "unknown-mode",
                         "detector": None, "label": None, "mode": m.get("mode"), "ocrScore": None, "threshold": None,
-                        "value": None, "choices": choices, "match": i, "matchStartUtc": m.get("startUtc"),
+                        "value": None, "choices": choices, "modeFamilies": fams, "match": i, "matchStartUtc": m.get("startUtc"),
                         "matchEndUtc": m.get("endUtc"), "modeReason": m.get("modeReason"),
                         "modeEvidence": [{"source": e.get("source"), "text": e.get("text")}
                                          for e in m.get("modeEvidence") or []][:8],
