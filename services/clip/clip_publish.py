@@ -184,11 +184,13 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
     except ClipError:
         prev_all = []
     prev = [r for r in prev_all if os.path.isfile(r.get("file", ""))]
+    tool = rdoc.get("tool") or ""
     done = {}
-    for r in prev:
+    # BeatDrop: a take whose file is gone (posted, then removed) still counts as published, so its render never
+    # publishes again; other tools publish an id and layout again when its file is gone (as before BD7c)
+    for r in prev_all if tool == "clipper.beatdrop" else prev:
         done.setdefault((r.get("id"), r.get("layout")), []).append(r)
     rows, counters = [], {}
-    tool = rdoc.get("tool") or ""
     # Codex BD7c: a name a listed video had (since removed) is never given to a new one; uploads.json would match the new
     # video to the old row and its posted record
     listed = {os.path.normcase(os.path.abspath(r["file"])) for r in prev_all if isinstance(r.get("file"), str)}
@@ -241,19 +243,18 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
             # Codex BD7c: every publish of a BeatDrop folder brings uploads.json in line with published.json (the newest
             # take of each id and layout listed, every earlier take superseded by it), so a publish that stopped between
             # the two writes is repaired by the next one
-            # Codex BD7c: an earlier take whose file is gone (deleted or moved) is superseded too; its package must not post
-            groups, live = {}, {r.get("file") for r in prev + rows}
+            # The last take is the current one even when its file is gone (posting removes a file once it is uploaded):
+            # an earlier take never becomes current again. Earlier takes whose files are gone are superseded too.
+            groups = {}
             for r in prev_all + rows:
                 groups.setdefault((r.get("id"), r.get("layout")), []).append(r)
             for takes in groups.values():
-                newest = next((t for t in reversed(takes) if t.get("file") in live), None)
-                if newest is None:
-                    continue
-                # every take is listed (add_uploads keeps a row already listed), so an earlier take whose first uploads
-                # write failed is still marked superseded; the newest one is cleared of any earlier mark
+                newest = takes[-1]
+                # every take still on disk is listed (add_uploads keeps a row already listed), so an earlier take whose
+                # first uploads write failed is still marked superseded
                 entries += [_upload_entry(t, run, rdoc, game) for t in takes
-                            if all(k in t for k in ("file", "kind", "label", "seconds"))]  # whole published rows only
-                sup.update({o["file"]: newest["file"] for o in takes if o.get("file")})
+                            if all(k in t for k in ("file", "kind", "label", "seconds")) and os.path.isfile(t["file"])]
+                sup.update({o["file"]: newest.get("file") for o in takes if o.get("file") and newest.get("file")})
         if entries or sup:
             add_uploads(data_dir, entries, sup)
     return rows

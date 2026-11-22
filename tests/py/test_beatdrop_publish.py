@@ -114,14 +114,13 @@ class Publish(unittest.TestCase):
         self.assertEqual(by[third[0]["file"]].get("supersededBy"), fourth[0]["file"])
         with open(os.path.join(work, pub.PUBLISHED), encoding="utf-8") as fh:
             self.assertIn(third[0]["file"], [r["file"] for r in json.load(fh)["files"]])  # its row is kept
-        # the newest take removed too and nothing new passed: the newest take still on disk is current again
+        # the newest take posted and removed (posting deletes uploaded files): it stays the current take, no earlier
+        # take becomes postable again, and publishing the same render again publishes nothing
         os.remove(fourth[0]["file"])
-        with open(os.path.join(work, "report.json"), "w", encoding="utf-8") as fh:
-            json.dump({"results": [{"id": "B1", "file": "beatdrop-d.mp4", "ok": False}]}, fh)
-        self.assertEqual(pub.publish(work, to, data, "codm", {}, run_name="run"), [])
+        self.assertEqual(render("beatdrop-d.mp4", {"source": "made-here", "seed": 3}, b"fourth"), [])
         by = {u["file"]: u for u in uploads()}
-        self.assertNotIn("supersededBy", by[second[0]["file"]])
-        self.assertEqual({by[x[0]["file"]].get("supersededBy") for x in (first, third, fourth)}, {second[0]["file"]})
+        self.assertNotIn("supersededBy", by[fourth[0]["file"]])
+        self.assertEqual({by[x[0]["file"]].get("supersededBy") for x in (first, second, third)}, {fourth[0]["file"]})
 
     def test_a_row_from_before_bd7c_without_source_is_the_same_render(self):
         tmp = tempfile.TemporaryDirectory()
