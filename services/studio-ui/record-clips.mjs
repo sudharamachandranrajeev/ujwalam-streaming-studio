@@ -606,11 +606,16 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   // BD7b (D420): a retake asked in the studio (beatdrop-review.mjs writes <dataDir>/clips/retake.json); checked again here.
   const readRetake = () => {
     let r = null;
-    try { r = JSON.parse(readFileSync(path.join(stateDir, RETAKE_FILE), 'utf8')); } catch { return; }
+    const f = path.join(stateDir, RETAKE_FILE);
+    let raw = null;
+    try { raw = readFileSync(f, 'utf8'); } catch { return; } // none waiting
+    try { r = JSON.parse(raw); } catch { r = null; } // unreadable: removed below, so it never blocks the next request
     // Codex BD7b: the request file goes only after the job is in status.json (the review route, another process,
-    // reads either one as busy), so the card never sees a gap and says the take is done
-    try { takeRetake(r); } finally { try { rmSync(path.join(stateDir, RETAKE_FILE), { force: true }); } catch { /* read again next tick */ } }
+    // reads either one as busy), so the card never sees a gap and says the take is done. A file that could not be
+    // removed is read again next tick: its atMs was taken already, so it is not queued twice.
+    try { if (r !== null && Number(r.atMs) !== lastRetakeAt) { lastRetakeAt = Number(r.atMs); takeRetake(r); } } finally { try { rmSync(f, { force: true }); } catch { /* read again next tick */ } }
   };
+  let lastRetakeAt = null;
   const takeRetake = (r) => {
     if (halted || !beatdropOnSafe() || !(Number(r?.atMs) >= createdAt)) return;
     const runs = knownRuns(dataDir);

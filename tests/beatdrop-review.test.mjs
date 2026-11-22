@@ -234,3 +234,22 @@ test('Codex BD7b: a waiting retake is never written over; a deleted recording tu
     assert.equal(existsSync(path.join(s.dataDir, 'clips', RETAKE_FILE)), false);
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
+
+test('Codex BD7b: an unreadable retake request is removed and never blocks the next one', () => {
+  const s = setup();
+  try {
+    fixtureRun(s.dataDir, 'practice-h-1');
+    writeFileSync(path.join(s.run, 'beatdrop-source.json'), JSON.stringify({ h: s.h, v: s.v }));
+    const rc = make(s);
+    mkdirSync(path.join(s.dataDir, 'clips'), { recursive: true });
+    writeFileSync(path.join(s.dataDir, 'clips', RETAKE_FILE), '{not json');
+    rc.feed(s.S('stopped'));
+    assert.equal(existsSync(path.join(s.dataDir, 'clips', RETAKE_FILE)), false);
+    assert.equal(s.spawned.length, 0);
+    const r = createBeatdropReview({ dataDir: s.dataDir });
+    assert.equal(r.retake({ run: 'practice-h-1', op: 'another-take' }).status, 200);
+    rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1);
+    rc.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
