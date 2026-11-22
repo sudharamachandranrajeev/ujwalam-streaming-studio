@@ -473,15 +473,25 @@ export function readQueueSummary(dataDir, flags = null, nowMs = Date.now()) {
 /** Fills `posted` on the uploads.json row(s) whose file is the uploaded video. Matches by run + content hash. */
 export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, at, privacy = 'private', target = UPLOAD_TARGET, publishAt = null }) {
   const file = path.join(dataDir, 'clips', 'uploads.json');
+  const first = readJson(file);
+  if (!isPlain(first) || !Array.isArray(first.files)) return 0;
+  // Codex BD7c: hash first (awaits), then read the list again and change only the matching rows right before the write,
+  // so a row or supersededBy that clip_publish.py added meanwhile is kept
+  const hits = new Set();
+  for (const row of first.files) {
+    if (!isPlain(row) || row.run !== run || typeof row.file !== 'string' || !existsSync(row.file)) continue;
+    if (Array.isArray(row.posted) && row.posted.some((p) => p?.platform === 'youtube' && p?.videoId === videoId)) continue;
+    let h; try { h = await sha256File(row.file); } catch { continue; }
+    if (h === sha256) hits.add(row.file);
+  }
+  if (!hits.size) return 0;
   const doc = readJson(file);
   if (!isPlain(doc) || !Array.isArray(doc.files)) return 0;
   let n = 0;
   for (const row of doc.files) {
-    if (!isPlain(row) || row.run !== run || typeof row.file !== 'string' || !existsSync(row.file)) continue;
+    if (!isPlain(row) || row.run !== run || !hits.has(row.file)) continue;
     if (!Array.isArray(row.posted)) row.posted = [];
     if (row.posted.some((p) => p?.platform === 'youtube' && p?.videoId === videoId)) continue;
-    let h; try { h = await sha256File(row.file); } catch { continue; }
-    if (h !== sha256) continue;
     row.posted.push({ platform: 'youtube', target, id: postIdValue, videoId, url: `https://youtu.be/${videoId}`, at, privacy, ...(publishAt ? { publishAt } : {}) });
     n++;
   }

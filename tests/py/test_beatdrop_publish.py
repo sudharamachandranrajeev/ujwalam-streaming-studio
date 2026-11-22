@@ -98,6 +98,15 @@ class Publish(unittest.TestCase):
         by = {u["file"]: u for u in uploads()}
         self.assertEqual({by[x[0]["file"]].get("supersededBy") for x in (first, second)}, {third[0]["file"]})
         self.assertEqual(len(by), 3)
+        # a publish that stopped after published.json: the next publish lists the newest take and supersedes the rest
+        only_first = {k: v for k, v in by[first[0]["file"]].items() if k != "supersededBy"}
+        with open(os.path.join(data, pub.UPLOADS), "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "files": [only_first]}, fh)
+        self.assertEqual(render("beatdrop-c.mp4", {"source": "made-here", "seed": 2}, b"third"), [])  # same render
+        by = {u["file"]: u for u in uploads()}
+        self.assertEqual(by[first[0]["file"]].get("supersededBy"), third[0]["file"])
+        self.assertIn(third[0]["file"], by)
+        self.assertNotIn("supersededBy", by[third[0]["file"]])
     def test_a_row_from_before_bd7c_without_source_is_the_same_render(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

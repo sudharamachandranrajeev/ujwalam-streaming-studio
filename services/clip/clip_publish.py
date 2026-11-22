@@ -183,7 +183,7 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
     done = {}
     for r in prev:
         done.setdefault((r.get("id"), r.get("layout")), []).append(r)
-    rows, counters, supersede = [], {}, []
+    rows, counters = [], {}
     tool = rdoc.get("tool") or ""
     for c, f, kind, when, label, canvas in name_rows(rdoc, game, layouts_by_id, det_weights, rec_start_local):
         if not passed.get((c["id"], f["file"])):
@@ -222,21 +222,35 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                      # RP5 (D373): the edit choices a reel was made with, so its results can be linked to them
                      **({"choices": lmix.choices_record(c, (c.get("learning") or {}).get("mixAt"))}
                         if tool.startswith("clipper.montage") else {})})
-        if olds:
-            supersede.append(([o["file"] for o in olds], rows[-1]["file"]))
     run = run_name or os.path.basename(os.path.normpath(work))
     write_json_atomic(prev_path, {"tool": "clipper.publish", "to": to, "files": prev + rows})
-    if data_dir and rows:
-        add_uploads(data_dir, [{**{k: r[k] for k in ("file", "kind", "label", "seconds")}, "run": run,
-                                "recording": rdoc.get("recording"), "posted": [], "game": game,
-                                **({"facts": r["facts"]} if r.get("facts") else {}),
-                                **({"thumbnail": True} if r.get("thumbnail") else {}),
-                                **({"music": r["music"]} if r.get("music") else {}),
-                                **({"video": r["video"]} if r.get("video") else {}),
-                                **({"choices": r["choices"]} if r.get("choices") else {})} for r in rows])
-    for olds, new_file in supersede:  # after the retake's own row is in the list
-        supersede_uploads(data_dir, olds, new_file)
+    if data_dir:
+        entries = [_upload_entry(r, run, rdoc, game) for r in rows]
+        sup = {}
+        if tool == "clipper.beatdrop":
+            # Codex BD7c: every publish of a BeatDrop folder brings uploads.json in line with published.json (the newest
+            # take of each id and layout listed, every earlier take superseded by it), so a publish that stopped between
+            # the two writes is repaired by the next one
+            groups = {}
+            for r in prev + rows:
+                groups.setdefault((r.get("id"), r.get("layout")), []).append(r)
+            for takes in groups.values():
+                if all(k in takes[-1] for k in ("file", "kind", "label", "seconds")):  # a whole published row only
+                    entries.append(_upload_entry(takes[-1], run, rdoc, game))  # add_uploads keeps a row already listed
+                sup.update({o["file"]: takes[-1]["file"] for o in takes[:-1]})
+        if entries or sup:
+            add_uploads(data_dir, entries, sup)
     return rows
+
+
+def _upload_entry(r, run, rdoc, game):
+    return {**{k: r[k] for k in ("file", "kind", "label", "seconds")}, "run": run,
+            "recording": rdoc.get("recording"), "posted": [], "game": game,
+            **({"facts": r["facts"]} if r.get("facts") else {}),
+            **({"thumbnail": True} if r.get("thumbnail") else {}),
+            **({"music": r["music"]} if r.get("music") else {}),
+            **({"video": r["video"]} if r.get("video") else {}),
+            **({"choices": r["choices"]} if r.get("choices") else {})}
 
 
 def _same_render(old, src, name):
@@ -250,25 +264,7 @@ def _same_render(old, src, name):
         return True  # unreadable: never published twice
 
 
-def supersede_uploads(data_dir, olds, new_file):
-    """BD7c: the earlier BeatDrop renders `olds` (published files) get supersededBy = the retake's file in uploads.json;
-    posting never packages or sends a superseded video (services/posting). A posted one keeps its posted record."""
-    p = os.path.join(data_dir, UPLOADS) if data_dir else None
-    if not p or not os.path.isfile(p) or not olds:
-        return
-    try:
-        doc = load_json(p)
-    except ClipError:
-        return
-    hit = False
-    for x in doc.get("files") or [] if isinstance(doc, dict) else []:
-        if isinstance(x, dict) and x.get("file") in olds and x.get("file") != new_file:
-            x["supersededBy"] = new_file
-            hit = True
-    if hit:
-        write_json_atomic(p, doc)
-
-def add_uploads(data_dir, rows):
+def add_uploads(data_dir, rows, superseded=None):
     p = os.path.join(data_dir, UPLOADS)
     try:
         doc = load_json(p) if os.path.isfile(p) else {}
@@ -277,7 +273,10 @@ def add_uploads(data_dir, rows):
     files = [x for x in doc.get("files") or [] if isinstance(x, dict)]
     have = {x.get("file") for x in files}
     now = datetime.now().astimezone().isoformat(timespec="seconds")
-    files += [{**r, "addedAt": now} for r in rows if r["file"] not in have]
+    files += [{**r, "addedAt": now} for r in rows if r["file"] not in have and not have.add(r["file"])]
+    for x in files:  # BD7c: earlier BeatDrop takes; posting never packages or sends a superseded video
+        if (superseded or {}).get(x.get("file")) not in (None, x.get("file")):
+            x["supersededBy"] = superseded[x["file"]]
     os.makedirs(os.path.dirname(p), exist_ok=True)
     write_json_atomic(p, {"$comment": "Finished clips in the clips folder and where each was posted (posted: "
                                       "[{target, at, id}]). Written by clipper.py publish; read by the studio.",
