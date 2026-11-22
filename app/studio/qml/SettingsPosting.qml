@@ -81,7 +81,10 @@ Column {
     readonly property string fit: {
         // Same sum as the server (quota-budget.mjs loadQuota): (quota - read reserve) / (upload + thumbnail units); 0 is
         // possible and is said plainly (the daily budget then stops every upload).
-        const per = typeof quota.perUploadUnits === "number" ? quota.perUploadUnits : 0;
+        // D430: each upload also carries one full channel read (readUnitsPerUpload), as the server counts it; without it the
+        // card said 24 fit while the sender allowed 21.
+        const per = (typeof quota.perUploadUnits === "number" ? quota.perUploadUnits : 0)
+            + (typeof quota.readUnitsPerUpload === "number" ? quota.readUnitsPerUpload : 0);
         const reserve = typeof quota.readReserveUnits === "number" ? quota.readReserveUnits : 0;
         const q = card.quotaUnitsPerDay;
         // PT2: the upload bucket caps the count too (uploadsCap), and never more than the 24 the hour gap allows.
@@ -90,7 +93,7 @@ Column {
         const model = typeof quota.modelText === "string" && quota.modelText !== "" ? quota.modelText + " " : "";
         if (n === 0) return model + "No upload fits in a quota of " + q.toLocaleString(Qt.locale("en_US"), "f", 0) + " units a day (one upload needs "
             + (per + reserve).toLocaleString(Qt.locale("en_US"), "f", 0) + "): nothing uploads until the quota is raised.";
-        return model + "About " + n + " uploads a day fit in the quota." + (card.maxPerDay > n ? " More than that a day stop at the quota and wait for the next day." : "");
+        return model + "About " + n + (n === 1 ? " upload a day fits" : " uploads a day fit") + " in the quota." + (card.maxPerDay > n ? " More than that a day stop at the quota and wait for the next day." : "");
     }
 
     // PT5: the quota model in use and why, in plain words

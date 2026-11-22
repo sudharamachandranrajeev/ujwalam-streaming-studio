@@ -93,9 +93,9 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(ap.dirty, false);
     assert.equal(s.settings.dirty, false);
     // D405: random-daily is the shipped placement; the card also carries the random-daily and custom-times fields.
-    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 3, maxPerDay: 24, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000,
+    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 3, maxPerDay: 21, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000,
       minGapMinutes: 60, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, skipDates: [] });
-    assert.match(ap.fit, /About 24 uploads a day fit/); assert.match(ap.fit, /own upload allowance/); // PT2 (D408): the upload bucket
+    assert.match(ap.fit, /About 21 uploads a day fit/); assert.match(ap.fit, /own upload allowance/); // PT2 (D408): the upload bucket
     assert.match(ap.flags, /Auto post and Scheduled posting are on/);
     assert.match(ap.flags, /stay in the clips folder/);
     assert.ok(ap.times.length >= 11, ap.times.join(' | '));
@@ -129,10 +129,11 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(exists(userRulesFile(r.dataDir)), false, 'nothing written');
   });
 
-  test('PT2: a low quota with the upload bucket still fits uploads (each costs only its cover, 50 units)', async () => {
+  // D430: the card counts what the sender counts, each upload's cover (50 units) plus one full channel read (1 + 2 x 200).
+  test('PT2: a low quota with the upload bucket: the card counts the cover and the channel read, as the sender does', async () => {
     const r = await probe({ actions: [...open, ...WAIT, 'ap-quota:1000', ...WAIT] });
     assert.equal(done(r.p)['ap-quota:1000'], true);
-    assert.match(r.ap.fit, /About 18 uploads a day fit/);
+    assert.match(r.ap.fit, /About 1 upload a day fits/); // (1000 - 100) / (50 + 401)
   });
 
   test('Save writes the user files in the data folder (one click, no question)', async () => {
@@ -144,7 +145,7 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(sched.maxAheadDays, 60);
     const rules = JSON.parse(readFileSync(userRulesFile(r.dataDir), 'utf8'));
     assert.deepEqual(rules.rules[0].kinds, ['short', 'montage', 'won-reel', 'long-highlights']);
-    assert.equal(rules.maxUploadsPerDay, 24);
+    assert.equal(rules.maxUploadsPerDay, 21);
     assert.equal(r.s.flagsInSettings, false, 'Settings closed');
     assert.match(r.s.note, /Settings saved\.|Auto-post settings saved; the next upload pass uses them\./);
   });
