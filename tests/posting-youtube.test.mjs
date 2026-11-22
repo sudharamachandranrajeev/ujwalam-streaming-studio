@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // P16b step 2 tests: services/posting/youtube.mjs. No test touches Google -- fetchImpl is always a fake here.
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { withUploadsLock } from '../services/posting/auto-chain.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -146,6 +147,16 @@ test('uploadPost: a package whose clip uploads.json marks superseded (BD7c retak
   list([{ file: clip, posted: [] }]);
   assert.equal(supersededSource(dataDir, { file: clip }), false);
   assert.equal(supersededSource(dataDir, {}), false); // a package without a source file
+});
+
+test('withUploadsLock: one writer at a time; a dead writer\'s lock is taken over', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'uj-lock-'));
+  const file = path.join(dir, 'uploads.json');
+  assert.equal(withUploadsLock(file, () => { assert.ok(existsSync(`${file}.lock`)); return 7; }), 7);
+  assert.equal(existsSync(`${file}.lock`), false);
+  writeFileSync(`${file}.lock`, '');
+  utimesSync(`${file}.lock`, 0, 0); // older than the stale limit
+  assert.equal(withUploadsLock(file, () => 8), 8);
 });
 
 test('uploadVideo: refuses an already-uploaded post (never upload the same video twice)', async () => {

@@ -14,10 +14,12 @@ tidy_plan(recordings, clips, data_dir) -> [action]   read-only; `apply_plan` act
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
+import time
 from datetime import datetime
 
 import clip_names as names
@@ -177,9 +179,11 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
         raise ClipError("publish needs report.json (validate first)")
     prev_path = os.path.join(work, PUBLISHED)
     try:
-        prev = [r for r in (load_json(prev_path).get("files") or []) if os.path.isfile(r.get("file", ""))]             if os.path.isfile(prev_path) else []
+        prev_all = [r for r in (load_json(prev_path).get("files") or []) if isinstance(r, dict)] \
+            if os.path.isfile(prev_path) else []
     except ClipError:
-        prev = []
+        prev_all = []
+    prev = [r for r in prev_all if os.path.isfile(r.get("file", ""))]
     done = {}
     for r in prev:
         done.setdefault((r.get("id"), r.get("layout")), []).append(r)
@@ -231,13 +235,17 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
             # Codex BD7c: every publish of a BeatDrop folder brings uploads.json in line with published.json (the newest
             # take of each id and layout listed, every earlier take superseded by it), so a publish that stopped between
             # the two writes is repaired by the next one
-            groups = {}
-            for r in prev + rows:
+            # Codex BD7c: an earlier take whose file is gone (deleted or moved) is superseded too; its package must not post
+            groups, live = {}, {r.get("file") for r in prev + rows}
+            for r in prev_all + rows:
                 groups.setdefault((r.get("id"), r.get("layout")), []).append(r)
             for takes in groups.values():
-                if all(k in takes[-1] for k in ("file", "kind", "label", "seconds")):  # a whole published row only
-                    entries.append(_upload_entry(takes[-1], run, rdoc, game))  # add_uploads keeps a row already listed
-                sup.update({o["file"]: takes[-1]["file"] for o in takes[:-1]})
+                newest = next((t for t in reversed(takes) if t.get("file") in live), None)
+                if newest is None:
+                    continue
+                if all(k in newest for k in ("file", "kind", "label", "seconds")):  # a whole published row only
+                    entries.append(_upload_entry(newest, run, rdoc, game))  # add_uploads keeps a row already listed
+                sup.update({o["file"]: newest["file"] for o in takes if o is not newest and o.get("file")})
         if entries or sup:
             add_uploads(data_dir, entries, sup)
     return rows
@@ -264,24 +272,64 @@ def _same_render(old, src, name):
         return True  # unreadable: never published twice
 
 
+UPLOADS_LOCK_STALE_SEC = 30.0  # services/posting/auto-chain.mjs withUploadsLock uses the same lock file and limit
+
+
+@contextlib.contextmanager
+def uploads_lock(data_dir, wait_sec=10.0):
+    """Codex BD7c: one writer of uploads.json at a time across processes (this publish step and posting's markPosted):
+    <uploads.json>.lock created exclusively, held only around one read-change-write, taken over when older than
+    UPLOADS_LOCK_STALE_SEC (a writer that died). Busy past wait_sec: ClipError, nothing written."""
+    lock = os.path.join(data_dir, UPLOADS) + ".lock"
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    end = time.monotonic() + wait_sec
+    while True:
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(lock) > UPLOADS_LOCK_STALE_SEC:
+                    os.remove(lock)
+                    continue
+            except OSError:
+                continue  # removed meanwhile: try again at once
+            if time.monotonic() > end:
+                raise ClipError("the finished-video list (uploads.json) is busy; publish again later") from None
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.remove(lock)
+        except OSError:
+            pass
+
+
 def add_uploads(data_dir, rows, superseded=None):
     p = os.path.join(data_dir, UPLOADS)
-    try:
-        doc = load_json(p) if os.path.isfile(p) else {}
-    except ClipError:
-        doc = {}
-    files = [x for x in doc.get("files") or [] if isinstance(x, dict)]
-    have = {x.get("file") for x in files}
-    now = datetime.now().astimezone().isoformat(timespec="seconds")
-    files += [{**r, "addedAt": now} for r in rows if r["file"] not in have and not have.add(r["file"])]
-    for x in files:  # BD7c: earlier BeatDrop takes; posting never packages or sends a superseded video
-        if (superseded or {}).get(x.get("file")) not in (None, x.get("file")):
-            x["supersededBy"] = superseded[x["file"]]
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    write_json_atomic(p, {"$comment": "Finished clips in the clips folder and where each was posted (posted: "
-                                      "[{target, at, id}]). Written by clipper.py publish; read by the studio.",
-                          "version": 1, "files": files})
-
+    with uploads_lock(data_dir):
+        try:
+            doc = load_json(p) if os.path.isfile(p) else {}
+        except ClipError:
+            # Codex BD7c: an unreadable list is never replaced by a new one (its posted records would be lost and every
+            # clip posted again); the clips-folder scan still finds the published videos with their music sidecars
+            raise ClipError("the finished-video list (uploads.json) cannot be read; it was not changed") from None
+        if not isinstance(doc, dict) or not isinstance(doc.get("files", []), list):
+            raise ClipError("the finished-video list (uploads.json) has an unknown shape; it was not changed")
+        files = [x for x in doc.get("files") or [] if isinstance(x, dict)]
+        have = {x.get("file") for x in files}
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        files += [{**r, "addedAt": now} for r in rows if r["file"] not in have and not have.add(r["file"])]
+        sup = superseded or {}
+        for x in files:  # BD7c: earlier BeatDrop takes; posting never packages or sends a superseded video
+            new = sup.get(x.get("file"))
+            if new is not None and new != x.get("file"):
+                x["supersededBy"] = new
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        write_json_atomic(p, {"$comment": "Finished clips in the clips folder and where each was posted (posted: "
+                                          "[{target, at, id}]). Written by clipper.py publish; read by the studio.",
+                              "version": 1, "files": files})
 
 def is_replay_save(path):
     return bool(REPLAY_RE.match(os.path.basename(path))) and os.path.basename(os.path.dirname(path)).lower() == "replay"

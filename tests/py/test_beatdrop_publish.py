@@ -125,6 +125,28 @@ class Publish(unittest.TestCase):
                 json.dump(obj, fh)
         self.assertEqual(pub.publish(work, os.path.join(tmp.name, "clips"), os.path.join(tmp.name, "d"), "codm", {}), [])
 
+    def test_uploads_list_lock_and_unreadable_list(self):
+        from clip_common import ClipError  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as data:
+            p = os.path.join(data, pub.UPLOADS)
+            os.makedirs(os.path.dirname(p))
+            with open(p + ".lock", "w"):
+                pass  # a live writer holds it
+            with self.assertRaises(ClipError):
+                with pub.uploads_lock(data, wait_sec=0.2):
+                    pass
+            os.utime(p + ".lock", (0, 0))  # a writer that died: taken over
+            with pub.uploads_lock(data, wait_sec=0.2):
+                self.assertTrue(os.path.isfile(p + ".lock"))
+            self.assertFalse(os.path.exists(p + ".lock"))
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("{broken")
+            row = {"file": "x.mp4", "kind": "montage", "label": "kills-1", "seconds": 1.0}
+            with self.assertRaises(ClipError):
+                pub.add_uploads(data, [row])
+            with open(p, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "{broken")  # never replaced (its posted records would be lost)
+
     def test_user_folder_song_is_marked_for_the_gate(self):
         _, ups = self._run({"source": "folder", "track": "my-song.mp3"})
         self.assertTrue(all(u["music"]["source"] == "user-folder" for u in ups))  # posting never auto-posts these

@@ -485,6 +485,11 @@ export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, a
     if (h === sha256) hits.add(row.file);
   }
   if (!hits.size) return 0;
+  // busy past the wait: nothing written (the ledger already says uploaded, so the video is not packaged again)
+  try { return withUploadsLock(file, () => markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt })); } catch { return 0; }
+}
+
+function markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt }) {
   const doc = readJson(file);
   if (!isPlain(doc) || !Array.isArray(doc.files)) return 0;
   let n = 0;
@@ -497,6 +502,28 @@ export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, a
   }
   if (n) writeJsonAtomic(file, doc);
   return n;
+}
+
+const UPLOADS_LOCK_STALE_MS = 30_000; // services/clip/clip_publish.py uploads_lock uses the same lock file and limit
+const UPLOADS_LOCK_WAIT_MS = 10_000;
+
+/** Codex BD7c: one writer of uploads.json at a time across processes (clip_publish.py add_uploads and this file):
+ *  <uploads.json>.lock created exclusively around one synchronous read-change-write; taken over when older than
+ *  UPLOADS_LOCK_STALE_MS. Busy past UPLOADS_LOCK_WAIT_MS: throws (the caller's step is retried; nothing written). */
+export function withUploadsLock(file, fn) {
+  const lock = `${file}.lock`;
+  mkdirSync(path.dirname(lock), { recursive: true });
+  const end = Date.now() + UPLOADS_LOCK_WAIT_MS;
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try { closeSync(openSync(lock, 'wx')); break; } catch (e) {
+      if (e?.code !== 'EEXIST') throw e;
+      try { if (Date.now() - statSync(lock).mtimeMs > UPLOADS_LOCK_STALE_MS) { rmSync(lock, { force: true }); continue; } } catch { continue; }
+      if (Date.now() > end) throw new Error('uploads.json is busy (another writer)');
+      Atomics.wait(nap, 0, 0, 50);
+    }
+  }
+  try { return fn(); } finally { rmSync(lock, { force: true }); }
 }
 
 // ---------------------------------------------------------------- the chain
