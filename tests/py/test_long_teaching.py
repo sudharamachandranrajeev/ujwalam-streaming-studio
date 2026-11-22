@@ -274,7 +274,7 @@ class Chapters(unittest.TestCase):
 
         def overlay(chunk, first, adir):
             seen.append((len(chunk), first))
-            return "captions.ass", "fonts"
+            return {"ass": "captions.ass", "fontsdir": "fonts", "fx": None}
         with tempfile.TemporaryDirectory() as wd:
             ok, _, err = lv.render("ffmpeg", "h.mkv", segs, {"width": 1920, "height": 1080}, "e", wd, 1, 80, FADE, 2,
                                    render_job, run_tool, {"e": []}, [], overlay=overlay)
@@ -301,12 +301,144 @@ class Chapters(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, "", "")
         with tempfile.TemporaryDirectory() as wd:
             ok, _, err = lv.render("ffmpeg", "h.mkv", segs, {"width": 1920, "height": 1080}, "e", wd, 1, 80, FADE, 12,
-                                   render_job, run_tool, {"e": []}, [], overlay=lambda c, f, a: ("captions.ass", "fonts"),
+                                   render_job, run_tool, {"e": []}, [],
+                                   overlay=lambda c, f, a: {"ass": "captions.ass", "fontsdir": "fonts", "fx": FX},
                                    overlay_failed=lambda i, e: failed.append((i, e)))
             self.assertTrue(ok, err)
         self.assertEqual(len(calls), 2)
+        self.assertIn("lvcc", " ".join(calls[0]))
         self.assertNotIn("subtitles=", " ".join(calls[1]))
+        self.assertNotIn("lvcc", " ".join(calls[1]), "the retry drops the callouts too")
         self.assertEqual(failed, [(0, "libass: bad")])
+
+
+FRAME = {"width": 1920, "height": 1080}
+FX = "[fxin]split=2[lvcb][lvcs];[lvcs]null[lvcc];[lvcb][lvcc]overlay[fxout]"
+PACK = {"detectors": [{"id": "M5", "rois": [{"id": "killfeed", "x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96,
+                                             "status": "verified"}]},
+                      {"id": "X9", "rois": [{"id": "killfeed", "x0": 0.1, "y0": 0.1, "x1": 0.2, "y1": 0.2,
+                                             "status": "unverified"}]}]}
+
+
+class Callouts(unittest.TestCase):
+    """LV1b (D422): the kill feed callout after each medal."""
+
+    def ocfg(self, **kw):
+        return dict(lt.check(lv.load_config()["teaching"])["callouts"], **kw)
+
+    def test_box_only_from_a_verified_region(self):
+        self.assertEqual(lt.callout_box(PACK, self.ocfg()), {"x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96})
+        self.assertIsNone(lt.callout_box(PACK, self.ocfg(detector="X9")), "an unverified region is never framed")
+        self.assertIsNone(lt.callout_box(PACK, self.ocfg(roi="banner")))
+        self.assertIsNone(lt.callout_box(None, self.ocfg()))
+
+    def test_windows_follow_the_medals_and_skip_cross_fades(self):
+        oc = self.ocfg(delaySec=0.4, sec=2.4, minSec=1.2)
+        chunk = [{"start": 100.0, "end": 110.0, "medals": [103.0, 104.0, 109.5]},
+                 {"start": 200.0, "end": 206.0, "medals": [199.0, 200.0]}]
+        # piece 2 starts at 10 - 0.25 = 9.75 on the output; its medal at 200 would show at 10.15, after the cross fade
+        self.assertEqual(lt.callout_windows(chunk, 0.25, oc), [(3.4, 5.8), (10.15, 12.55)])
+        # 104 overlaps the first, 109.5 is cut by the cross fade out (under minSec), 199 is outside the moment
+
+    def test_no_medals_no_callouts(self):
+        chunk = [{"start": 0.0, "end": 10.0, "medals": []}, {"start": 50.0, "end": 60.0}]
+        self.assertEqual(lt.callout_windows(chunk, 0.25, self.ocfg()), [])
+        self.assertIsNone(lt.callout_fx([], {"x0": 0, "y0": 0, "x1": 1, "y1": 1}, FRAME, self.ocfg(), "#FF3366"))
+
+    def test_fx_crops_frames_and_places_inside_safe(self):
+        oc = dict(self.ocfg(scale=1.4, borderPx=6, glowPx=10, glowShade=0.5, at={"x": 0.5, "y": 0.28}),
+                  margin={"left": 96, "right": 96, "top": 64, "bottom": 72})
+        fx = lt.callout_fx([(1.0, 2.0), (5.0, 6.5)], {"x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96}, FRAME, oc,
+                           "#FF3366")
+        self.assertTrue(fx.startswith("[fxin]") and fx.endswith("[fxout]"))
+        self.assertIn("crop=576:130:538:906", fx)  # even sizes and offsets (yuv420p)
+        self.assertIn("scale=806:182", fx)
+        self.assertIn("color=0xFF3366", fx)
+        self.assertIn("color=0x7F1933", fx)  # the halo: the accent at half brightness
+        self.assertIn("between(t,1.000,2.000)+between(t,5.000,6.500)", fx)
+        tw = 806 + 2 * 16
+        self.assertIn(f"overlay=x={960 - tw // 2}:y=302:", fx)
+        oc["at"] = {"x": 0.99, "y": 0.99}  # pushed into the safe area, never off the frame
+        fx = lt.callout_fx([(1.0, 2.0)], {"x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96}, FRAME, oc, "#FF3366")
+        self.assertIn(f"overlay=x={1920 - 96 - tw}:y={1080 - 72 - (182 + 32)}:", fx)
+
+    def test_card_shrinks_to_fit_the_safe_area(self):
+        oc = dict(self.ocfg(scale=3.0, borderPx=6, glowPx=10, at={"x": 0.5, "y": 0.5}),
+                  margin={"left": 96, "right": 96, "top": 64, "bottom": 72})
+        fx = lt.callout_fx([(1.0, 2.0)], {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 0.5}, FRAME, oc, "#FF3366")
+        import re
+        sw, sh = map(int, re.search(r"scale=(\d+):(\d+)", fx).groups())
+        self.assertLessEqual(sw + 32, 1920 - 192)
+        self.assertLessEqual(sh + 32, 1080 - 136)
+        x, y = map(int, re.search(r"overlay=x=(\d+):y=(\d+)", fx).groups())
+        self.assertGreaterEqual(x, 96)
+        self.assertGreaterEqual(y, 64)
+
+    def test_bad_geometry_never_stops_the_video(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = lt.context(d, lv.load_config(), pack=PACK, rec_size=(None, None), game="codm")
+            self.assertEqual((c["box"], c["paths"]), (None, None))
+            bad = {"detectors": [{"id": "M5", "rois": [{"id": "killfeed", "x0": "a", "y0": 0, "x1": 1, "y1": 1,
+                                                         "status": "verified"}]}]}
+            self.assertIsNone(lt.context(d, lv.load_config(), pack=bad, rec_size=(1920, 1080))["box"])
+
+    def test_bad_settings_are_refused(self):
+        t = lv.load_config()["teaching"]
+        for bad in ({"minSec": 3.0}, {"scale": 0}, {"glowShade": 2}):
+            with self.assertRaises(cc.ClipError):
+                lt.check(dict(t, callouts=dict(t["callouts"], **bad)))
+        with self.assertRaises(cc.ClipError):
+            lt._hex("red")
+
+    def test_batch_callouts_and_merge(self):
+        ctx = dict(_ctx(), box={"x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96})
+        chunk = [{"start": 0.0, "end": 10.0, "medals": [2.0]}]
+        fx, n = lt.batch_callouts(chunk, FADE, FRAME, ctx)
+        self.assertEqual(n, 1)
+        self.assertIn("lvcc", fx)
+        self.assertEqual(lt.batch_callouts(chunk, FADE, FRAME, dict(ctx, box=None)), (None, 0))
+        self.assertEqual(lt.merge_info([{"status": "off", "callouts": 2}, {"status": "off", "callouts": 1}])["callouts"], 3)
+        self.assertEqual(lt.merge_info([])["callouts"], 0)
+
+    def test_context_reads_the_box_from_the_pack(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertAlmostEqual(lt.context(d, lv.load_config(), pack=PACK, rec_size=(1920, 1080))["box"]["x0"], 0.28)
+            self.assertIsNone(lt.context(d, lv.load_config(), rec_size=(1920, 1080))["box"], "no game pack: no callouts")
+            self.assertIsNone(lt.context(d, lv.load_config(), pack=PACK)["box"], "no recording size: no callouts")
+            # Codex LV1b: odd detect summary data never stops the video (a non-object layout counts as none)
+            for lay in ([1], "x", 5, {"game": {"a": 1}, "visible": [0]}):
+                ctx = lt.context(d, lv.load_config(), pack=PACK, layout=lay, rec_size=(1920, 1080), game=["codm"])
+                self.assertIsNone(ctx["paths"])
+            self.assertAlmostEqual(lt.context(d, lv.load_config(), pack=PACK, layout=[1],
+                                              rec_size=(1920, 1080))["box"]["x0"], 0.28)
+
+    def test_frame_box_follows_the_game_area(self):
+        roi = {"x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96}
+        # the game fills a 1920x1080 recording: the region keeps its fractions
+        b = lt.frame_box(roi, None, (1920, 1080), FRAME)
+        self.assertAlmostEqual(b["x0"], 0.28)
+        self.assertAlmostEqual(b["y1"], 0.96)
+        # a 2560x1440 canvas with the game in its left 1920x1080: fractions of the game, then scaled into the frame
+        lay = {"game": [0, 0, 1920, 1080], "visible": [0, 0, 1920, 1080]}
+        b = lt.frame_box(roi, lay, (2560, 1440), FRAME)
+        self.assertAlmostEqual(b["x0"], 0.28 * 1920 / 2560)
+        self.assertAlmostEqual(b["y0"], 0.84 * 1080 / 1440)
+        # a 4:3 recording is pillarboxed into the 16:9 frame
+        b = lt.frame_box({"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}, None, (1440, 1080), FRAME)
+        self.assertAlmostEqual(b["x0"], 240 / 1920)
+        self.assertAlmostEqual(b["x1"], 1680 / 1920)
+        # a region cut off by the visible part is clipped; one wholly outside is None
+        lay = {"game": [0, 0, 1920, 1080], "visible": [0, 0, 1920, 1000]}
+        self.assertAlmostEqual(lt.frame_box(roi, lay, (1920, 1080), FRAME)["y1"], 1000 / 1080)
+        lay = {"game": [0, 0, 1920, 1080], "visible": [0, 0, 1920, 800]}
+        self.assertIsNone(lt.frame_box(roi, lay, (1920, 1080), FRAME))
+        self.assertIsNone(lt.frame_box(None, None, (1920, 1080), FRAME))
+
+    def test_medals_reach_the_segments(self):
+        merged = lv.merge([{"start": 10.0, "end": 20.0, "score": 1, "kills": 1, "kind": "kills", "medals": [15.0]},
+                           {"start": 19.0, "end": 30.0, "score": 1, "kills": 1, "kind": "kills", "medals": [25.0]}],
+                          lv.load_config()["padSec"], 100.0)
+        self.assertEqual(merged[0]["medals"], [15.0, 25.0])
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
@@ -329,6 +461,45 @@ class Burn(unittest.TestCase):
                                timeout=120, creationflags=NOWIN)
             self.assertEqual(r.returncode, 0, r.stderr[-800:])
             self.assertGreater(os.path.getsize(os.path.join(d, "out.mp4")), 0)
+
+    def test_callout_fx_runs_in_ffmpeg(self):
+        """LV1b: the callout graph on a 2 s test picture; the card's border colour is in the frame while it shows."""
+        frame = {"width": 320, "height": 180}
+        oc = dict(lt.check(lv.load_config()["teaching"])["callouts"], scale=1.4, borderPx=4, glowPx=4,
+                  margin={"left": 8, "right": 8, "top": 8, "bottom": 8})
+        fx = lt.callout_fx([(0.5, 1.5)], {"x0": 0.28, "y0": 0.84, "x1": 0.58, "y1": 0.96}, frame, oc, "#FF00FF")
+        graph = "[0:v]null[fxin];" + fx.replace("[fxout]", "[o]")
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
+                                "color=c=black:size=320x180:rate=10:duration=2", "-filter_complex", graph, "-map", "[o]",
+                                "-f", "rawvideo", "-pix_fmt", "rgb24", "out.rgb"], cwd=d, capture_output=True,
+                               timeout=120, creationflags=NOWIN)
+            self.assertEqual(r.returncode, 0, r.stderr[-800:])
+            raw = open(os.path.join(d, "out.rgb"), "rb").read()
+        n = 320 * 180 * 3
+        frames = [raw[i * n:(i + 1) * n] for i in range(len(raw) // n)]
+        self.assertEqual(len(frames), 20)
+        def accent_px(f):  # magenta after the yuv420p round trip: red and blue high, green low
+            return sum(1 for r, g, b in zip(f[0::3], f[1::3], f[2::3]) if r > 180 and g < 90 and b > 180)
+        self.assertEqual(accent_px(frames[2]), 0, "hidden before the window")
+        self.assertGreater(accent_px(frames[10]), 500, "the accent border shows inside the window")
+        self.assertEqual(accent_px(frames[18]), 0, "hidden after the window")
+
+
+class SummaryReadTests(unittest.TestCase):
+    """Codex LV1b: the detect summary is outside data; an odd one never stops the long video."""
+
+    def test_gate_pack_with_odd_summaries(self):
+        import argparse  # noqa: PLC0415
+
+        import clipper  # noqa: PLC0415
+        import detector_pass as dp  # noqa: PLC0415
+        for doc in ({"game": ["codm"]}, {"game": {"id": 1}}, {"game": 5}, [1], None, "x"):
+            with self.subTest(doc=doc), tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, dp.SUMMARY), "w", encoding="utf-8") as f:
+                    json.dump(doc, f)
+                pack = clipper._gate_pack(argparse.Namespace(out=d))  # the default game's pack, or None
+                self.assertTrue(pack is None or isinstance(pack, dict))
 
 
 if __name__ == "__main__":

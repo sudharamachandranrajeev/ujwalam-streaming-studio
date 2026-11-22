@@ -199,13 +199,15 @@ def _gate_pack(a):
     s = os.path.join(a.out, dp.SUMMARY)
     if not game and os.path.isfile(s):
         try:
-            game = load_json(s).get("game")
-        except ClipError:
+            doc = load_json(s)
+            game = doc.get("game") if isinstance(doc, dict) else None
+        except (ClipError, OSError):  # Codex LV1b: an unreadable or odd summary never stops a caller
             game = None
+        game = game if isinstance(game, str) else None  # Codex LV1b: {"game": ["codm"]} is not a game id
     try:
         _gid, st, _doc = dp.load_settings(game, getattr(a, "detector_config", None))
         return game_pack.load_pack(dp.pack_path(st))
-    except (ClipError, OSError, ValueError, KeyError):
+    except (ClipError, OSError, ValueError, KeyError, TypeError):
         return None
 
 
@@ -1019,22 +1021,38 @@ def _long_video_steps(a, lv, out):
     frame = cfg["frame"]
     tracks = max(1, int(info.get("audio_tracks") or 1))
     import long_teaching as lt  # noqa: PLC0415 - LV1a (D421): word captions and chapter cards (flag long-video-teaching)
-    ctx = lt.context(data_dir, cfg, getattr(a, "whisper_bin", None), getattr(a, "whisper_model", None))
+    import detector_pass as dp  # noqa: PLC0415
+    # LV1b/LV1c (D422/D423): the callout's HUD box from the run's game pack and the path's tag colour from the game's
+    # data, placed with the detect pass's game area
+    try:  # Codex: an optional overlay input never stops the video
+        summ = load_json(os.path.join(a.out, dp.SUMMARY))
+    except (ClipError, OSError):
+        summ = {}
+    if not isinstance(summ, dict):
+        summ = {}
+    ctx = lt.context(data_dir, cfg, getattr(a, "whisper_bin", None), getattr(a, "whisper_model", None),
+                     pack=_gate_pack(a), layout=summ.get("layout"), rec_size=(info.get("width"), info.get("height")),
+                     game=summ.get("game"))
     infos = []
 
     def overlay(chunk, first, adir):
         ass, fd, inf = lt.batch_overlay(ffmpeg, rec, chunk, first, tr, frame, adir, ctx)
-        infos.append(inf)
-        return ass, fd
+        try:
+            fx, nc = lt.batch_callouts(chunk, tr, frame, ctx)
+        except (ClipError, KeyError, TypeError, ValueError) as e:  # a bad callout setting: the video without callouts
+            fx, nc = None, 0
+            inf = dict(inf, reason=f"callouts not drawn: {e}"[-200:])
+        infos.append(dict(inf, callouts=nc))
+        return {"ass": ass, "fontsdir": fd, "fx": fx}
 
     def overlay_failed(i, stderr):  # the batch was rendered again without its overlay: nothing of it is on screen
-        infos[i] = dict(infos[i], status="failed", cards=0, chapters=0,
+        infos[i] = dict(infos[i], status="failed", cards=0, chapters=0, callouts=0, paths=0,
                         reason=f"burning the overlay failed: {(stderr or '').strip()[-120:]}")
     ok, expected, err = lv.render(ffmpeg, rec, p["segments"], frame, rnd.pick_encoder(a.encoder), wd, tracks,
                                   int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"], _render_job, rnd.run_tool,
                                   rnd.ENCODERS, rnd.AUDIO, overlay=overlay if ctx else None,
                                   overlay_failed=overlay_failed)
-    teach = lt.merge_info(infos) if ctx else {"captions": {"backend": "none", "status": "off"}, "chapters": 0}
+    teach = lt.merge_info(infos if ctx else [])
     files, errors = [], []
     if ok:
         files.append({"layout": lv.LAYOUT, "file": lv.FILE, "geometry": "canvas", "sourceAudioTracks": tracks})
@@ -1048,7 +1066,8 @@ def _long_video_steps(a, lv, out):
         "flash": "no flash effect: cross fade or cut only", "failed": 0 if ok else 1,
         "clips": [{"id": lv.CLIP_ID, "start": 0.0, "end": expected, "score": round(sum(g["score"] for g in p["segments"]), 3),
                    "labels": [], "kills": kills, "pieces": p["segments"], "dropped": p["dropped"],
-                   "captions": teach["captions"], "chapters": teach["chapters"],
+                   "captions": teach["captions"], "chapters": teach["chapters"], "callouts": teach["callouts"],
+                   "paths": teach["paths"],
                    "music": None,  # D414: the long video adds no music (the stream's own sound only)
                    "files": files, "errors": errors}]})
     if not ok:
