@@ -2,6 +2,13 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.39 — 2026-11-22
+
+- Auto-post: uploads run again. Before each upload Ujwalam reads the channel to keep new posts an hour away from scheduled ones; it stopped after 2000 videos, so on a bigger channel it waited forever. It now reads up to 10000.
+- Clips: a free music pack (37 CC0 tracks, Settings > Downloads). Posts name the artist and track.
+- Clips: music made on this PC when nothing fits (ACE-Step 1.5). Pick its folder once in Settings > Clips. Never while live.
+- Countdown reel: the picture format is fixed, and a clip that breaks the flash limit is left out and replaced.
+
 ## 0.1.0-alpha.38 — 2026-11-22
 
 - Top bar: buttons no longer sit on top of the Ujwalam name. When the window is too narrow for the full labels, the bar switches to icons.
