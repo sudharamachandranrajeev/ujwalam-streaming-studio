@@ -464,9 +464,11 @@ def _refx(P, effects, pieces, i, old, new):
     a = new.get("anchor")
     if not (a and a.get("onBeat")):
         return effects
-    now = pieces[:i] + [new]
-    kill_no = 1 + sum(1 for p in now if p["part"] == "body" and p.get("anchor") and p["anchor"].get("onBeat")
-                      and p["anchor"]["kind"] == "kill")
+    # the planner's count (kills_on starts at 1: the drop's kill): 1 + the body on-beat kills up to and including this
+    # one. another-take re-chooses in order, so pieces[:i] are already the new ones; a swap leaves the other pieces'
+    # effects as they are (it changes only what it names)
+    kill_no = 1 + sum(1 for p in pieces[:i] + [new] if p["part"] == "body" and p.get("anchor")
+                      and p["anchor"].get("onBeat") and p["anchor"]["kind"] == "kill")
     P.effects = []
     P._on_anchor(new, first=new["part"] == "drop", kill_no=kill_no)
     return effects + P.effects
@@ -1115,9 +1117,16 @@ def _make_locked(res, on, recording, moments_doc, wd, data_dir, ffmpeg, encoder_
         if res["v"]["reason"]:
             _drop(vpart)
     # Codex BD7a: the plan is saved only with a finished video, so a stopped or failed (re)take never leaves a plan
-    # that no video shows (a later retake starts from what the user got)
-    write_json_atomic(os.path.join(wd, PLAN), pl)
-    os.replace(part, os.path.join(wd, name))
+    # that no video shows (a later retake starts from what the user got). Written aside first and moved in only once
+    # the video is in place: a failed move leaves the old plan with the old video.
+    plan_path = os.path.join(wd, PLAN)
+    write_json_atomic(plan_path + ".part", pl)
+    try:
+        os.replace(part, os.path.join(wd, name))
+    except OSError:
+        _drop(plan_path + ".part")
+        raise
+    os.replace(plan_path + ".part", plan_path)
     if vertical and res["v"]["reason"] is None:
         os.replace(vpart, os.path.join(wd, vname))
         res["v"]["file"] = vname

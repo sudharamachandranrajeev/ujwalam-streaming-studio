@@ -1139,7 +1139,8 @@ class RenderedMontageTests(unittest.TestCase):
         self.assertNotEqual(new, old)
         self.assertEqual(row["music"]["source"], "ncs")
         vids = sorted(f for f in os.listdir(self.wd) if f.endswith((".mp4", ".part")))
-        self.assertEqual(vids, [new], "only the video render.json points at")
+        # BD7a: the V cut is rendered too (its canvas sibling exists), so render.json points at both videos
+        self.assertEqual(vids, sorted(x["file"] for x in row["files"]), "only the videos render.json points at")
         type(self).video = os.path.join(self.wd, new)
 
     def test_flag_off_makes_nothing(self):

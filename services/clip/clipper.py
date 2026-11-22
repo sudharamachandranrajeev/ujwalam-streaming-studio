@@ -1992,6 +1992,9 @@ def cmd_beatdrop(a):
         # Codex BD7a: the saved style (id, name and the colour it graded with); a retake re-plans nothing it uses
         st = row0.get("style")
         style = dict(st) if isinstance(st, dict) and st.get("id") else None
+        if style and "colour" not in style:  # Codex BD7a: a render from before the grade was saved: the library's
+            doc = rstyle.load_style(data_dir, style["id"])
+            style["colour"] = rstyle.effective(doc)["colour"] if doc else None
     elif a.piece is not None:
         raise ClipError("--piece goes with --retake swap")
     vframe = None
@@ -2016,8 +2019,9 @@ def cmd_beatdrop(a):
             eprint(f"beatdrop B1: {line}")
         done = os.path.join(wd, res["file"]) if res["file"] else None
         row = {"id": "B1", "kind": "beatdrop", "start": 0.0, "end": pl["total"], "music": res["music"],
-               "style": {"id": style["id"], "name": style["name"],
-                         **({"colour": style["colour"]} if style.get("colour") else {})} if style else None,
+               # colour always present (None = no grade): a row without the key is from before it was saved
+               "style": {"id": style["id"], "name": style["name"], "colour": style.get("colour") or None}
+               if style else None,
                "beatdrop": {"plan": bd.PLAN, "stats": pl["stats"], "targets": pl["targets"], "slots": pl["slots"]},
                "files": [{"layout": "beatdrop-h", "file": res["file"], "geometry": "canvas"}] if res["file"] else [],
                "flash": res["flash"],

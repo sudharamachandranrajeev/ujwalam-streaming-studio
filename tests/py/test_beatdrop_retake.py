@@ -187,6 +187,20 @@ class RetakePlanTests(unittest.TestCase):
         self.assertEqual(c["retakes"], [{"op": "another-take", "seed": 1}, {"op": "another-take", "seed": 2}])
         self.assertNotEqual(_dump(c["pieces"]), _dump(a["pieces"]))
 
+    def test_another_take_keeps_the_planner_kill_cadence(self):
+        """A body kill gets the RGB split exactly when its kill number (the drop's kill is 1, then the body on-beat
+        kills) is a multiple of rgbSplitEvery (the planner's count), on the first plan and after another-take."""
+        every = int(self.cfg["rgbSplitEvery"])
+        for pl in (self.pl, self.bd.retake(self.pl, "another-take", self.md)):
+            n = 1
+            for p in pl["pieces"]:
+                a = p.get("anchor")
+                if not (p["part"] == "body" and a and a["onBeat"] and a["kind"] == "kill"):
+                    continue
+                n += 1
+                split = any(e["fn"] == "rgb-split" and abs(e["at"] - a["outT"]) < 1e-6 for e in pl["effects"])
+                self.assertEqual(split, n % every == 0, f"kill {n} at {a['outT']}")
+
     def test_retakes_are_recorded_and_capped(self):
         from clip_common import ClipError  # noqa: PLC0415
         cfg = copy.deepcopy(self.cfg)
@@ -336,7 +350,7 @@ class RenderedRetakeTests(unittest.TestCase):
         return subprocess.run([sys.executable, "-I", os.path.join(CLIP, "clipper.py"), "--data-dir", cls.data,
                                "beatdrop", "--out", cls.out, "--recording", cls.rec, "--encoder", "libopenh264",
                                "--width", str(tb.W), "--height", str(tb.H), "--max-sec", "60",
-                               "--profile", cls.profile, *extra],
+                               "--profile", cls.profile, "--publish", os.path.join(cls.tmp, "clips"), *extra],
                               capture_output=True, text=True, timeout=1800, env=env, creationflags=tb.NOWIN)
 
     @classmethod
@@ -375,6 +389,23 @@ class RenderedRetakeTests(unittest.TestCase):
         self.assertTrue(vf["pass"])
         self.assertTrue(fs["beatdrop-v"]["flash"]["pass"])
         self.assertTrue(self.doc1["clips"][0]["summary"][0].startswith("kill on the first drop at"))
+
+    def test_validated_and_published_and_the_retake_supersedes(self):
+        """BD7c (D419): each run is validated (V against its own 9:16 frame) and published as a montage; the retake's
+        files are new videos and the first take's rows point at them, so posting never sends the first take."""
+        self.assertEqual(self.p2.returncode, 0, self.p2.stderr[-1500:])
+        with open(os.path.join(self.data, "clips", "uploads.json"), encoding="utf-8") as f:
+            ups = json.load(f)["files"]
+        self.assertEqual(len(ups), 4, ups)  # two takes, H and V each
+        self.assertEqual({u["kind"] for u in ups}, {"montage"})
+        cur = [u for u in ups if "supersededBy" not in u]
+        old = [u for u in ups if "supersededBy" in u]
+        self.assertEqual(len(cur), 2)
+        self.assertEqual({u["supersededBy"] for u in old}, {u["file"] for u in cur})
+        for u in cur:
+            self.assertTrue(os.path.isfile(u["file"]), u["file"])
+        with open(os.path.join(self.out, "beatdrop", "report.json"), encoding="utf-8") as f:
+            self.assertTrue(all(r["ok"] for r in json.load(f)["results"]))
 
     def test_v_is_9_16(self):
         v = next(s for s in self.probe1["beatdrop-v"]["streams"] if s["codec_type"] == "video")
