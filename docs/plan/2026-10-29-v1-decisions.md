@@ -2665,3 +2665,13 @@ The user said yes (2026-11-21): "build the song credit from the file names so th
 2. **Credit text is data** (`data/clip/montage-music.json` `ncsFilename.template`): `Music: <Artist> - <Title> [NCS Release]` / `Music provided by NoCopyrightSounds` / `Watch: https://youtu.be/<id>`. The wording is UNVERIFIED against NCS's published usage policy (the repo only quotes "credit artist and song in the description").
 3. **Provenance**: the render record, upload row and `<video>.music.json` sidecar carry source `ncs-filename` with the parsed fields. Posting treats it as a credited library song: the gate requires the credit in the description exactly as printed, and the link must be `https://youtu.be/` + an 11-char id. The credit is re-read from the file name when the render record is made, never from the stored record. A user-edited credit becomes a plain `ncs` record again.
 4. **Setting**: on by default, a data switch (`ncsFilename.enabled`), no feature flag (the user asked for it; no UI needed). Off: every name is own music, as before.
+
+## D419 — BeatDrop BD7c: a BeatDrop montage publishes and posts like a montage; a retake is a new video (decided, 2026-11-22)
+
+Evidence: `docs/evidence/2026-11-22-beatdrop-bd7c-publish.md`. Plan: `docs/plan/2026-11-21-beatdrop-montages.md` section 7.
+
+1. **Publish**: a BeatDrop render publishes as kind `montage`, label `kills-N` from the plan's count, canvas from the layout (`beatdrop-h`/`beatdrop-v`); validate checks each file against its own frame.
+2. **Retake = new video**: published bytes are never replaced (replacing them races an upload in progress). Earlier takes get `supersededBy` in `uploads.json`; posting never packages or sends a superseded video. The last take stays current even when posting has removed its file, so an earlier take never becomes postable again and a posted render never republishes.
+3. **Repair**: every BeatDrop publish brings `uploads.json` in line with `published.json` (all takes on disk listed, earlier ones superseded, the current one cleared). A removed video's name is never reused.
+4. **One writer of `uploads.json`** across processes (clip publish and posting's `markPosted`): an exclusive lock file with an owner token; a stale lock (over 30 s) is removed only under an exclusive takeover file; an unreadable or odd-shaped list is never replaced.
+5. Accepted residuals: a take already uploading when a retake lands may still post; a publish killed between its two writes is repaired only by the next publish; two publishes of one run folder at once are unsupported (the studio runs clip jobs one at a time).
