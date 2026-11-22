@@ -128,6 +128,16 @@ Rectangle {
             tip: "Optional: confirm or correct what the clip maker was not sure of. Nothing waits for it."
             onClicked: if (bar.windows.review) bar.windows.review.show()
         }
+        // BD7b (D420, flag beatdrop): the BeatDrop montage review, one click to a new take.
+        UButton {
+            objectName: "beatdropBtn"
+            iconOnly: bar.compact
+            visible: bar.store.flags["beatdrop"] === true
+            text: "BeatDrop"
+            iconName: "clip"
+            tip: "See your BeatDrop montage and make a new take with one click."
+            onClicked: if (bar.windows.beatdrop) bar.windows.beatdrop.show()
+        }
         // The stats chip is gone: the stats cards under the side column show the same numbers (D287, as the widget).
     }
 

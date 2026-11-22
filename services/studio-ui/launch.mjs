@@ -1656,7 +1656,7 @@ export async function main(argv = process.argv.slice(2)) {
         // D403 (flag delete-processed-recordings): processed recordings are deleted from the recordings folder in use
         // (Settings, else <host data>/recordings), never from anywhere else.
         recordingsFolder: () => hostCfg?.recordings ?? null,
-        cleanupFlag: () => flagIsOn('delete-processed-recordings'), longFlag: () => flagIsOn('long-highlights-video') });
+        cleanupFlag: () => flagIsOn('delete-processed-recordings'), longFlag: () => flagIsOn('long-highlights-video'), beatdropFlag: () => flagIsOn('beatdrop') });
       const clipTick = async () => {
         if (stopping) return;
         // Idle load (2026-11-18): the live clipper and the face worker run only while wanted (flags and clip settings,

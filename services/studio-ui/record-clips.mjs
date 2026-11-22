@@ -35,6 +35,7 @@ import { PARENT_PIPE_ENV } from '../common/parent-pipe.mjs';
 import { killChildTree } from '../common/kill-tree.mjs';
 import { clipsFolder, readSettings, writeSettings } from './user-settings.mjs';
 import { writeTaskFile } from './tasks.mjs';
+import { RETAKE_FILE, RETAKE_OPS, knownRuns, pieceBlocks, retakeProblems, runsDir, sourceOf } from './beatdrop-review.mjs';
 import { CLEANUP_FLAG, appendJobRecord, fileIdentity, runRecordingCleanup } from './recording-cleanup.mjs';
 
 const ACTIVE = new Set(['starting', 'live', 'reconnecting', 'retrying']);
@@ -209,6 +210,29 @@ export function clipRunSpec({ clipRoot, dataDir, job, outRoot = clipsFolder(data
   }
   const argv = ['-I', t.script, '--data-dir', dataDir];
   const projOf = () => (typeof project === 'string' && project && exists(project) ? ['--project', project] : []);
+  if (job.type === 'beatdrop') {
+    // BD7b (D420, flag beatdrop): after a full clip job, the moment finder then the BeatDrop render (two steps of one
+    // job type: step 'moments', then 'render'); a retake is step 'retake' (clipper beatdrop --retake, the saved plan).
+    if (typeof job.h !== 'string' || !job.h || !exists(job.h)) return { spec: null, reason: 'the stream recording is missing' };
+    if (job.step === undefined || job.step === 'moments') {
+      const mom = path.join(clipRoot, 'services', 'clip', 'moments.py');
+      if (!exists(mom)) return { spec: null, reason: 'the moment finder is not in the clip maker folder' };
+      const hits = path.join(out, 'detector-hits.jsonl');
+      return { spec: { exe: t.py, argv: ['-I', mom, '--recording', job.h, ...(exists(hits) ? ['--hits', hits] : []), '--out', path.join(out, 'moments.json')], out, folder: outRoot }, reason: null };
+    }
+    argv.push('beatdrop', '--out', out, '--recording', job.h);
+    if (typeof job.v === 'string' && job.v && exists(job.v)) argv.push('--v-recording', job.v);
+    argv.push('--encoder', 'h264_nvenc', '--publish', outRoot);
+    if (job.step === 'retake') {
+      if (!RETAKE_OPS.includes(job.retake)) return { spec: null, reason: 'that retake is not known' };
+      argv.push('--retake', job.retake);
+      if (job.retake === 'swap') {
+        if (!Number.isInteger(job.piece) || job.piece < 1) return { spec: null, reason: 'the clip to swap is not known' };
+        argv.push('--piece', String(job.piece));
+      }
+    }
+    return { spec: { exe: t.py, argv, out, folder: outRoot }, reason: null };
+  }
   if (job.type === 'long') {
     // D406: the long highlights video of the H recording, its own job after the clip job, in the same run folder (the
     // clip job's detector hits are reused). H only; the clipper checks the flag itself and writes <out>/long/long.json.
@@ -244,6 +268,10 @@ export function clipRunSpec({ clipRoot, dataDir, job, outRoot = clipsFolder(data
   }
   return { spec: { exe: t.py, argv, out, folder: outRoot }, reason: null };
 }
+
+/** BD7b: the run folder has detector hits (the full clip job's detect step wrote any). */
+export const hasHits = (out, { stat = statSync } = {}) => { try { return stat(path.join(out, 'detector-hits.jsonl')).size > 0; } catch { return false; } };
+const beatdropTitle = (j) => (j.step === 'retake' ? `New BeatDrop take from ${j.name ?? 'the stream'}` : `BeatDrop montage from ${j.name ?? 'the stream'}`);
 
 /** Number of finished clips of a run: the videos published to the clips folder (out/published.json and
  *  out/montage/published.json); a run folder without them (older runs) counts out/clips/<id>/*.mp4. */
@@ -288,6 +316,7 @@ const STAGE_TEXT = { detect: ['Reading the game screen', 'frame'], candidates: [
  *  there is one, then review and publish, then the montage when the V recording exists too, D322 proposed). */
 export function jobStages(job) {
   if (job?.type === 'train') return ['train'];
+  if (job?.type === 'beatdrop') return ['montage']; // BD7b
   if (job?.type === 'long') return ['long']; // D406: its own job (detect only when the clip job left no hits)
   if (job?.type === 'review') {
     const h = typeof job.h === 'string' && job.h;
@@ -319,7 +348,7 @@ export function parseProgress(line) {
 
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
 const iso = (ms) => new Date(ms).toISOString();
-const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes', 'look']; // look: FX (D411) clip look for this job only
+const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes', 'look', 'step', 'retake', 'piece']; // look: FX (D411) clip look for this job only
 const pickJob = (j) => Object.fromEntries(JOB_KEYS.filter((k) => j[k] !== undefined).map((k) => [k, j[k]]));
 
 /** The queue and the child. feed(status) is called with each outputs.status. */
@@ -333,7 +362,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   // D403: the recordings folder in use (string or () => string) and the flag check for Delete clipped recordings.
   recordingsFolder = null, cleanupFlag = () => false, cleanupImpl = runRecordingCleanup,
   // D406: the flag long-highlights-video (a recording with no clip job waits for its long video while it is on).
-  longFlag = () => false }) {
+  longFlag = () => false,
+  // BD7b (D420): the flag beatdrop (a montage after each full clip job; retakes).
+  beatdropFlag = () => false }) {
   const stateDir = path.join(dataDir, 'clips');
   const statusFile = path.join(stateDir, 'status.json');
   const answerFile = path.join(stateDir, 'answer.json');
@@ -359,7 +390,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   } catch { /* no status yet */ }
 
   // Task bar (tasks.mjs): one task file per clip job, rewritten with every status write (that also keeps it fresh).
-  const taskId = (j) => `${j.type === 'long' ? 'long' : 'clip'}-${String(j.name ?? 'run').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 70)}`;
+  const taskId = (j) => `${j.type === 'long' ? 'long' : j.type === 'beatdrop' ? 'beatdrop' : 'clip'}-${String(j.name ?? 'run').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 70)}`;
   const taskFor = (j, p) => {
     const nm = j.type === 'train' ? 'your answers from the streams' : j.name ?? 'the stream';
     const base = { id: taskId(j), kind: 'clips', startedAt: j.taskStart ?? now(), updatedAt: now() };
@@ -367,12 +398,12 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       const st = p?.stage ?? jobStages(j)[0];
       // No progress line yet: the stage is the first one expected, with no count (the panel says "Starting").
       const words = p ? stageWords(st, j) : { stageText: 'Starting', unit: null, measured: true };
-      return { ...base, title: `${STAGE_TITLE[st]} ${nm}`, state: 'running', stage: st, done: p?.done ?? null, total: p?.total ?? null, note: p?.note ?? null,
+      return { ...base, title: j.type === 'beatdrop' ? beatdropTitle(j) : `${STAGE_TITLE[st]} ${nm}`, state: 'running', stage: st, done: p?.done ?? null, total: p?.total ?? null, note: p?.note ?? null,
         ...(p?.note ? {} : { note: j.captionsOk === false ? CAPTIONS_SKIPPED : null }), stages: jobStages(j), ...words, activeAt: j.activeAt ?? null, progressAt: j.progressAt ?? null };
     }
-    return { ...base, title: j.type === 'train' ? 'Game pack check' : j.type === 'long' ? `Long highlights video from ${nm}` : `Clips from ${nm}`, state: 'waiting', stage: null, done: null, total: null,
+    return { ...base, title: j.type === 'train' ? 'Game pack check' : j.type === 'beatdrop' ? beatdropTitle(j) : j.type === 'long' ? `Long highlights video from ${nm}` : `Clips from ${nm}`, state: 'waiting', stage: null, done: null, total: null,
       note: j === current ? (liveNow ? 'Paused while the stream runs' : 'Paused while recording') : liveNow ? 'Waiting until the stream ends'
-        : j.type === 'long' && recNow ? 'Waiting until the recording ends' : 'Waiting for its turn' };
+        : (j.type === 'long' || j.type === 'beatdrop') && recNow ? 'Waiting until the recording ends' : 'Waiting for its turn' };
   };
   const writeTasks = () => {
     if (halted) return; // stopped by the user: the task files say so; the jobs run again at the next start
@@ -384,7 +415,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     if (t) writeTaskFile(dataDir, t);
     watchEnded = false;
   };
-  const finishTask = (j, ok, note) => writeTaskFile(dataDir, { id: taskId(j), kind: 'clips', title: j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : j.type === 'long' ? (ok ? `Long highlights video done for ${j.name}` : `Long highlights video from ${j.name} not made`) : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
+  const finishTask = (j, ok, note) => writeTaskFile(dataDir, { id: taskId(j), kind: 'clips', title: j.type === 'beatdrop' ? (ok ? `${beatdropTitle(j)} done` : `${beatdropTitle(j)} not made`) : j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : j.type === 'long' ? (ok ? `Long highlights video done for ${j.name}` : `Long highlights video from ${j.name} not made`) : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
   const trainOn = () => { try { return trainFlag() === true; } catch { return false; } };
 
   const write = () => {
@@ -417,13 +448,13 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     // ffmpeg and Python do not compete with the studio opening. A job of this session starts at once, also when held
     // jobs are ahead of it in the queue (Codex: no head-of-line block); the held ones keep their order after the hold.
     // D406 (Codex P1): the long highlights video never starts while a recording runs (live never reaches start()).
-    const held = (j) => (j.resumed === true && now() - createdAt < resumeHoldMs) || (j.type === 'long' && (recNow || liveNow));
+    const held = (j) => (j.resumed === true && now() - createdAt < resumeHoldMs) || ((j.type === 'long' || j.type === 'beatdrop') && (recNow || liveNow));
     const at = queue.findIndex((j) => !held(j));
     if (at < 0) return;
     const job = queue[at];
     if (at > 0) { queue.splice(at, 1); queue.unshift(job); }
     // The speech model check (captions): a failure skips only the captions step, the job still runs.
-    if (job.type !== 'train' && job.type !== 'long' && job.captionsOk === undefined) {
+    if (job.type !== 'train' && job.type !== 'long' && job.type !== 'beatdrop' && job.captionsOk === undefined) {
       const settle = (ok) => { job.captionsOk = ok === true; if (!job.captionsOk) log(`clips: ${CAPTIONS_SKIPPED}`); };
       // Codex round 4 (P3): while a check runs, a poll does not start another one (each call hashes the model).
       if (checkingModel) return;
@@ -484,6 +515,21 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
         finishTask(done, code === 0, note);
         write(); start(); return;
       }
+      if (done.type === 'beatdrop') {
+        // BD7b (D420): moments, then the render (its source recorded for retakes); no job record, no auto-post here.
+        if (done.step === undefined || done.step === 'moments') {
+          if (code === 0) {
+            try { mkdirSync(spec.out, { recursive: true }); writeFileSync(path.join(spec.out, 'beatdrop-source.json'), JSON.stringify({ h: done.h, v: done.v ?? null })); } catch { /* retakes then say the source is unknown */ }
+            queue.unshift({ ...done, step: 'render' });
+            log(`clips: moments found in ${done.name}; making its BeatDrop montage next`);
+          } else { log(`clips: BeatDrop moments of ${done.name} failed (exit ${code}); see ${logFile}`); finishTask(done, false, 'Not made: the moments could not be found; see the log'); }
+          write(); start(); return;
+        }
+        const what = done.step === 'retake' ? 'retake' : 'montage';
+        log(code === 0 ? `clips: BeatDrop ${what} of ${done.name} done` : `clips: BeatDrop ${what} of ${done.name} not made (exit ${code}); see ${logFile}`);
+        finishTask(done, code === 0, code === 0 ? 'Saved to your clips folder' : 'Not made; see the log');
+        write(); start(); cleanupSoon('the BeatDrop montage finished'); return;
+      }
       if (done.type === 'long') {
         // D406: no job record (the recording cleanup reads <out>/long/long.json itself); posted like any finished video.
         const long = longNotMade(done, spec.out);
@@ -509,6 +555,10 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       if (code === 0 && typeof done.h === 'string' && done.h && existsSync(done.h) && longOnSafe() && !queue.some((q) => q.type === 'long' && q.h === done.h)) {
         add({ type: 'long', kind: done.kind, h: done.h, v: done.v ?? undefined, name: done.name }, `clips from ${done.name} done; making its long highlights video next`);
       }
+      // BD7b (D420): the BeatDrop montage after a full clip job, when the flag is on and the run has detector hits.
+      if (code === 0 && done.type === 'full' && typeof done.h === 'string' && done.h && existsSync(done.h) && beatdropOnSafe() && hasHits(spec.out) && !queue.some((q) => q.type === 'beatdrop' && q.name === done.name)) {
+        add({ type: 'beatdrop', kind: done.kind, h: done.h, v: done.v ?? undefined, name: done.name }, `clips from ${done.name} done; making its BeatDrop montage next`);
+      }
       // LL4 (D342): after a stream's clip job, the game pack check runs last (flag learning-train, off by default).
       if (done.kind === 'live' && trainOn() && !queue.some((q) => q.type === 'train')) add({ type: 'train', kind: 'train', name: `pack-check-${stamp(now())}` }, 'stream clips done; checking the game pack against the labels (runs last)');
       write();
@@ -523,6 +573,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   let cleaning = false; let lastCleanAt = null;
   const flagOnSafe = () => { try { return cleanupFlag() === true; } catch { return false; } };
   // Fail closed: an unreadable long-video flag counts as on (the recording waits; it is never deleted early).
+  const beatdropOnSafe = () => { try { return beatdropFlag() === true; } catch { return false; } };
   const longOnSafe = () => { try { return longFlag() !== false; } catch { return true; } };
   const cleanupSoon = (why) => {
     if (cleaning || stopped || halted || child || liveNow || !lastStatus) return;
@@ -551,6 +602,22 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     for (const j of queue) finishTask(j, false, 'Stopped by you; it runs again at the next start');
     log(`clips: stopped by you (${queue.length} job(s) run again at the next start)`);
     postChain?.stopTasks?.();
+  };
+  // BD7b (D420): a retake asked in the studio (beatdrop-review.mjs writes <dataDir>/clips/retake.json); checked again here.
+  const readRetake = () => {
+    let r = null;
+    try { r = JSON.parse(readFileSync(path.join(stateDir, RETAKE_FILE), 'utf8')); } catch { return; }
+    try { rmSync(path.join(stateDir, RETAKE_FILE), { force: true }); } catch { /* read again next tick */ }
+    if (halted || !beatdropOnSafe() || !(Number(r?.atMs) >= createdAt)) return;
+    const runs = knownRuns(dataDir);
+    let pieces = 0;
+    try { pieces = pieceBlocks(JSON.parse(readFileSync(path.join(runsDir(dataDir), String(r?.run), 'beatdrop', 'clips', 'B1', 'beatdrop-plan.json'), 'utf8'))).blocks.length; } catch { pieces = 0; }
+    if (retakeProblems(r, { runs, pieces }).length) { log('clips: a BeatDrop retake request was not valid; ignored'); return; }
+    const src = sourceOf(dataDir, r.run);
+    if (!src || !existsSync(src.h)) { log(`clips: BeatDrop retake of ${r.run}: the recording is gone; not made`); return; }
+    if (queue.some((q) => q.type === 'beatdrop' && q.name === r.run)) return;
+    add({ type: 'beatdrop', step: 'retake', kind: 'recording', h: src.h, v: src.v ?? undefined, name: r.run, retake: r.op, ...(r.op === 'swap' ? { piece: r.piece } : {}) }, `BeatDrop retake (${r.op}) of ${r.run}`);
+    write();
   };
   const readAnswer = (s) => {
     let a = null;
@@ -607,11 +674,12 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       }
       prev = status; lastStatus = status;
       readAnswer(s);
+      readRetake();
       readStop();
       if (live && child && current && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); } // the whole tree: ffmpeg must not encode while live
       // D406 (Codex P1): the long highlights video also stops (whole tree) when a recording starts; it runs again after.
       // Only that job: the other clip stages keep running beside a plain local recording, as before.
-      if (rec && child && current && current.type === 'long' && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); }
+      if (rec && child && current && (current.type === 'long' || current.type === 'beatdrop') && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); }
       if (!live) start();
       if (!live && !rec && (lastCleanAt === null || now() - lastCleanAt >= CLEANUP_EVERY_MS)) cleanupSoon(lastCleanAt === null ? 'start-up' : 'an idle check');
       if (postChain) void Promise.resolve(postChain.tick(status)).catch(() => {}); // retries of queued uploads; the chain itself refuses while a stream is live

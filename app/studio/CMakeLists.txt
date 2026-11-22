@@ -99,6 +99,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/CommandPalette.qml
 		qml/GrowthWindow.qml
 		qml/ReviewWindow.qml
+		qml/BeatDropWindow.qml
 		qml/AlertStrip.qml
 		qml/TaskCenter.qml
 		qml/TaskChip.qml
