@@ -52,6 +52,9 @@ def check(cfg):
         raise ClipError("countdown: the card text must leave in under 400 ms")
     if not 2 <= int(cfg["minItems"]) <= int(cfg["items"]) <= len(cfg["rankColours"]):
         raise ClipError("countdown: need 2 <= minItems <= items <= the number of rank colours")
+    r = cfg["flash"].get("retries", 0)
+    if isinstance(r, bool) or not isinstance(r, int) or not 0 <= r <= 10:
+        raise ClipError("countdown: flash.retries must be a whole number from 0 to 10")
     xd = float(cfg["join"]["ms"]) / 1000.0
     if not 0 < xd < float(cfg["clipMinSec"]) / 2 or float(cfg["clipMinSec"]) > float(cfg["clipMaxSec"]):
         raise ClipError("countdown: the join must be shorter than half the shortest clip; clipMinSec <= clipMaxSec")
@@ -135,10 +138,12 @@ def _clip_rows(data_dir):
     return rows
 
 
-def pick_items(data_dir, cfg):
+def pick_items(data_dir, cfg, exclude=()):
     """The best cfg.items vertical clips across the runs, best last (#1): by score, then kills, then newest run; one
-    entry per file. -> [{file, name}] in countdown order (lowest rank first); ClipError when fewer than minItems."""
-    rows, seen = [], set()
+    entry per file; files in exclude left out (D428). -> [{file, name}] in countdown order (lowest rank first);
+    ClipError when fewer than minItems."""
+    seen = {os.path.normcase(os.path.abspath(f)) for f in exclude}
+    rows = []
     for r in sorted(_clip_rows(data_dir), key=lambda r: (r["score"], r["kills"], r["run"]), reverse=True):
         key = os.path.normcase(os.path.abspath(r["file"]))
         if key in seen:
@@ -427,13 +432,56 @@ def make(items, wd, ffmpeg, ffprobe, encoder_args, audio_args, cfg, live=on_air,
             bd._drop(part)
             return dict(res, reason="a stream or recording started (or that cannot be told)")
         res["flash"] = {"peakFlashesPerSecond": m.get("peakFlashesPerSecond"), "limit": m.get("limit"),
-                        "pass": bool(m.get("pass"))}
+                        "pass": bool(m.get("pass")), "worstWindowStartSec": m.get("worstWindowStartSec"),
+                        "worstKind": m.get("worstKind")}
         if not m.get("pass") or float(m.get("peakFlashesPerSecond") or 0) > float(fl["maxPerSec"]):
             bd._drop(part)
             return dict(res, status="failed", reason=f"flash limit: {m.get('peakFlashesPerSecond')} flashes/s "
                                                      f"(limit {float(fl['maxPerSec']):g}): not kept")
         os.replace(part, os.path.join(wd, FILE))
         return dict(res, status="done", reason=None, file=FILE)
+
+
+def part_at(parts, t):
+    """The timeline part playing at output second t: a clip part whose [start, start+sec) holds t wins over a card
+    (the joins overlap by the join length). -> the part or None."""
+    hits = [p for p in parts or [] if float(p["start"]) <= float(t) < float(p["start"]) + float(p["sec"])]
+    return next((p for p in hits if p["kind"] == "clip"), hits[0] if hits else None)
+
+
+def _flash_failed(res):
+    return res["status"] == "failed" and str(res.get("reason") or "").startswith("flash limit")
+
+
+def make_auto(items, wd, cfg, render, pick=None):
+    """D428: the reel with flash retries. render(items) -> make()'s result. When items were picked (pick is the
+    re-pick, pick(exclude) -> items) and the reel fails the flash limit inside a clip part, that clip's file is left
+    out, the items picked again and the reel rendered again, up to cfg.flash.retries more times. The user's own list
+    (pick None), a worst window in a card or unknown, too few clips left: it fails as before. Each try is a full
+    make() (off air, the heavy-job lock). -> make()'s result plus "items" (the ones rendered) and "dropped"
+    ([{source, reason}])."""
+    dropped, exclude = [], []
+    tries = int(cfg["flash"].get("retries", 0)) if pick else 0
+    while True:
+        res = dict(render(items), items=items, dropped=list(dropped))
+        if not _flash_failed(res) or pick is None:
+            return res
+        start = (res.get("flash") or {}).get("worstWindowStartSec")
+        p = part_at(res.get("parts"), start) if start is not None else None
+        if p is None or p["kind"] != "clip":
+            where = "a rank card" if p else "an unknown place"
+            return dict(res, reason=f"{res['reason']}; the worst window is in {where}, no clip to leave out")
+        if tries <= 0:
+            return dict(res, reason=f"{res['reason']}; no retries left")
+        bad = items[p["item"]]["file"]
+        exclude.append(bad)
+        dropped.append({"source": os.path.basename(bad), "reason": "flash"})
+        try:
+            items = pick(exclude)
+        except ClipError as e:
+            return dict(res, dropped=list(dropped), reason=f"{res['reason']}; {e} after leaving out "
+                                                           f"{len(dropped)} clip(s)")
+        tries -= 1
 
 
 def _num(x):

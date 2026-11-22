@@ -2857,3 +2857,21 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    Settings also sets it, so a later untick stays off.
 6. **Live risk**: none on air: analysis and hashing run only off air, as for the folder. UNVERIFIED: a real render
    with a downloaded pack track; the credit wording against FMA's own guidance.
+
+## D428 — Countdown reel leaves out the clip that breaks the flash limit and tries again (decided, 2026-11-22)
+
+1. **Problem**: on the user's real clips the countdown reel measured 4 flashes/s (limit 3), worst window inside the
+   rank-2 clip. That source measures exactly 3/s on its own; the reel's re-encode pushed it over. Gameplay footage is
+   borderline, so a pick cannot be judged in advance. The render's own measurement stays the judge: the flash check is
+   never weakened or skipped and the footage is never altered to pass it.
+2. **Rule**: `countdown.make` keeps the analyser's `worstWindowStartSec` and `worstKind` in its flash result. When the
+   items were picked automatically (not `--items`) and the reel fails the flash limit, `countdown.make_auto` finds the
+   timeline part at the worst window (a clip part wins over a card where a join overlaps). If it is a clip, that
+   clip's file is left out, `pick_items(..., exclude=...)` picks again and the reel is rendered again, each try a full
+   off-air `make` under the heavy-job lock. A window in a card or at an unknown place, no retries left, or fewer than
+   `minItems` clips left: it fails as before, with the reason. The user's own list never retries.
+3. **Data**: `data/clip/countdown.json` `flash.retries` (3; the config check takes a whole number 0 to 10). The
+   reel's render.json row lists `dropped` clips as `{source, reason: "flash"}` so the user can see why a clip is
+   missing.
+4. **Live risk**: none; retries run off air and stop on air as the first try does. UNVERIFIED: a real retry run on
+   the user's clips (the main session runs it).

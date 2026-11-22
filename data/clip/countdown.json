@@ -17,7 +17,7 @@
   "numeral": { "fontFile": "Anton-Regular.ttf", "fontFamily": "Anton", "sizeOfHeight": 0.26, "y": 0.36, "popMs": 380, "outlinePx": 10, "outlineColour": "#101014" },
   "name": { "fontFile": "Anton-Regular.ttf", "fontFamily": "Anton", "sizeOfHeight": 0.07, "y": 0.58, "colour": "#FFE14D", "outlinePx": 7, "outlineColour": "#101014", "assembleMs": 500, "scatterPx": 260, "maxChars": 22, "widthOfFrame": 0.88 },
   "exitMs": 250,
-  "flash": { "maxPerSec": 3, "sample": { "width": 108, "height": 192 }, "$comment": "the rendered reel is measured with tools/fx-test.mjs analyseVideo at `sample` (as BeatDrop, D415); above maxPerSec it is not kept" },
+  "flash": { "maxPerSec": 3, "sample": { "width": 108, "height": 192 }, "retries": 3, "$comment": "the rendered reel is measured with tools/fx-test.mjs analyseVideo at `sample` (as BeatDrop, D415); above maxPerSec it is not kept. D428: with picked items (not --items), the clip holding the worst window is left out and the reel rendered again, up to `retries` more times" },
   "safe": { "left": 64, "right": 64, "top": 160, "bottom": 300 },
   "seed": 0
 }

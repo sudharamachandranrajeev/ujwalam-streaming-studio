@@ -2171,7 +2171,11 @@ def cmd_countdown(a):
     ffmpeg, ffprobe = _tools(a)
     items = cd.user_items(a.items, cfg) if a.items else cd.pick_items(data_dir, cfg)
     encoder = rnd.pick_encoder(a.encoder)
-    res = cd.make(items, wd, ffmpeg, ffprobe, rnd.ENCODERS[encoder], rnd.AUDIO, cfg)
+    # D428: picked items get flash retries (the clip holding the worst window left out); the user's list does not
+    res = cd.make_auto(items, wd, cfg,
+                       lambda its: cd.make(its, wd, ffmpeg, ffprobe, rnd.ENCODERS[encoder], rnd.AUDIO, cfg),
+                       pick=None if a.items else (lambda ex: cd.pick_items(data_dir, cfg, exclude=ex)))
+    items = res["items"]
     if res["status"] == cd.STOPPED_ON_AIR:
         eprint(f"countdown {cd.CLIP_ID}: {cd.STOPPED_ON_AIR} ({res['reason']})")
         return EXIT_ON_AIR
@@ -2182,6 +2186,7 @@ def cmd_countdown(a):
                for i, it in enumerate(items)]
     row = {"id": cd.CLIP_ID, "kind": "countdown", "start": 0.0, "end": res["total"] or 0.0,
            "labels": [], "countdown": entries, "flash": res["flash"], "music": cd.combined_music(items),
+           "dropped": res["dropped"],
            "files": [{"layout": cd.LAYOUT, "file": res["file"], "geometry": "canvas", "frame": dict(cfg["frame"])}]
            if res["file"] else [],
            "errors": [] if res["file"] else [{"layout": cd.LAYOUT, "error": (res["reason"] or "")[:300]}],

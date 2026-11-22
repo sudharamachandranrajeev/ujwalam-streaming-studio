@@ -357,6 +357,101 @@ class MakeGuardTests(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class FlashRetryTests(unittest.TestCase):
+    """D428: make_auto with a fake render (make()'s result shape) and a fake re-pick; no ffmpeg."""
+
+    def setUp(self):
+        self.pool = [f"p{i}.mp4" for i in range(7)]  # best first
+        self.picks = []
+
+    def pick(self, exclude, n=3):
+        self.picks.append(list(exclude))
+        left = [f for f in self.pool if f not in exclude][:n]
+        if len(left) < 3:
+            raise cc.ClipError(f"countdown: only {len(left)} rendered vertical clip(s) to rank (need 3)")
+        return [{"file": f, "name": f} for f in reversed(left)]
+
+    def render_with(self, bad, where=None, status=None):
+        """A render that fails the flash limit while any file in bad is in the reel; where: a fixed window second."""
+        calls = []
+
+        def render(items):
+            calls.append([i["file"] for i in items])
+            if status:
+                return {"status": status, "reason": "on", "file": None, "parts": None, "total": None, "flash": None}
+            parts, _, total = cd.timeline(items, [5.0] * len(items), [True] * len(items), cfg())
+            hit = [i for i, it in enumerate(items) if it["file"] in bad]
+            if not hit:
+                return {"status": "done", "reason": None, "file": cd.FILE, "parts": parts, "total": total,
+                        "flash": {"pass": True, "peakFlashesPerSecond": 2}}
+            t = where if where is not None else next(p for p in parts if p["kind"] == "clip"
+                                                     and p["item"] == hit[0])["start"] + 1.0
+            return {"status": "failed", "reason": "flash limit: 4 flashes/s (limit 3): not kept", "file": None,
+                    "parts": parts, "total": total, "flash": {"pass": False, "peakFlashesPerSecond": 4,
+                                                              "worstWindowStartSec": t}}
+        return render, calls
+
+    def test_part_at_prefers_clip_in_a_join(self):
+        items = [{"file": "a"}, {"file": "b"}]
+        parts, xd, _ = cd.timeline(items, [5.0, 5.0], [True, True], cfg())
+        self.assertEqual(cd.part_at(parts, 0.1)["kind"], "card")
+        join = parts[2]["start"] + xd / 2  # clip 0's tail overlaps card 1's head
+        self.assertEqual((cd.part_at(parts, join)["kind"], cd.part_at(parts, join)["item"]), ("clip", 0))
+        self.assertIsNone(cd.part_at(parts, 999))
+
+    def test_drop_and_retry_succeeds(self):
+        items = self.pick([])
+        render, calls = self.render_with({"p1.mp4"})
+        r = cd.make_auto(items, "w", cfg(), render, pick=self.pick)
+        self.assertEqual(r["status"], "done")
+        self.assertEqual(r["dropped"], [{"source": "p1.mp4", "reason": "flash"}])
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("p1.mp4", calls[1])
+        self.assertEqual([i["file"] for i in r["items"]], ["p3.mp4", "p2.mp4", "p0.mp4"])
+
+    def test_window_in_card_fails(self):
+        render, calls = self.render_with({"p0.mp4"}, where=0.1)
+        r = cd.make_auto(self.pick([]), "w", cfg(), render, pick=self.pick)
+        self.assertEqual(r["status"], "failed")
+        self.assertIn("rank card", r["reason"])
+        self.assertEqual((len(calls), r["dropped"]), (1, []))
+
+    def test_user_list_never_retries(self):
+        render, calls = self.render_with({"p1.mp4"})
+        r = cd.make_auto(self.pick([]), "w", cfg(), render, pick=None)
+        self.assertEqual(r["status"], "failed")
+        self.assertTrue(r["reason"].startswith("flash limit"))
+        self.assertEqual(len(calls), 1)
+
+    def test_retries_exhausted_fails(self):
+        render, calls = self.render_with(set(self.pool))  # every clip flashes
+        r = cd.make_auto(self.pick([]), "w", cfg(flash__retries=2), render, pick=self.pick)
+        self.assertEqual(r["status"], "failed")
+        self.assertIn("no retries left", r["reason"])
+        self.assertEqual((len(calls), len(r["dropped"])), (3, 2))
+
+    def test_too_few_left_fails(self):
+        self.pool = self.pool[:4]
+        render, calls = self.render_with(set(self.pool))
+        r = cd.make_auto(self.pick([]), "w", cfg(flash__retries=5), render, pick=self.pick)
+        self.assertEqual(r["status"], "failed")
+        self.assertIn("only 2", r["reason"])
+        self.assertEqual((len(calls), len(r["dropped"])), (2, 2))
+
+    def test_on_air_during_retry_stops(self):
+        bad_render, _ = self.render_with({"p1.mp4"})
+        stop_render, _ = self.render_with(set(), status=cd.STOPPED_ON_AIR)
+        seq = iter([bad_render, stop_render, bad_render])
+        r = cd.make_auto(self.pick([]), "w", cfg(), lambda its: next(seq)(its), pick=self.pick)
+        self.assertEqual(r["status"], cd.STOPPED_ON_AIR)
+        self.assertEqual(r["dropped"], [{"source": "p1.mp4", "reason": "flash"}])
+
+    def test_retries_checked(self):
+        for bad in (-1, 11, 1.5, True, "3"):
+            with self.subTest(bad=bad), self.assertRaises(cc.ClipError):
+                cd.check(cfg(flash__retries=bad))
+
+
 @unittest.skipUnless(HAVE_FFMPEG and HAVE_PIL, "ffmpeg or Pillow missing")
 class RenderTests(unittest.TestCase):
     @classmethod
