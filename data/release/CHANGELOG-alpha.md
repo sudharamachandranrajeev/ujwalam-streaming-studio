@@ -2,6 +2,16 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.37 — 2026-11-22
+
+- Long highlights video: one longer horizontal video per session from your best moments, posted like the other clips. It now shows captions word by word, numbered chapter cards, an enlarged kill feed after each medal and a drawn path of the enemy you tracked before the kill ("Long video teaching", on).
+- BeatDrop montages: your moments cut on the beat of a song, with a cold open, an in-scene title, the drop, effects and an outro. The studio makes one after the clip job and shows a review card with one-click retakes. NCS songs are credited from their file names; a montage with a song that cannot be credited is not posted.
+- Top 5 countdown reel (new, on): your five best vertical clips counted down, each after a rank card with a big number and the clip's name assembling, joined by quick slides. Made from the command line for now (`clipper countdown`); not posted on its own yet.
+- Clip look: music from your own folder matched to each clip, name styles without blur (Lower third, Corner tag, Kinetic text), transition and sound-effect sets, and a random mix from the boxes you tick in Settings > Clips.
+- Reel styles: named styles learned from example videos (cuts, pacing, zoom pulses, speed ramps), chosen in Settings > Clips > Reel styles.
+- Posting: titles and descriptions from what happened in the clip, up to 24 posts a day with at least 60 minutes between them, a button to run posting now, and timing suggestions you can apply or undo.
+- New fonts for titles and captions (Anton, Chakra Petch, Rajdhani; free licence).
+
 ## 0.1.0-alpha.36 — 2026-11-21
 
 - Auto-post works: it now reads your profile, so the clips waiting with an unfilled channel handle or Discord link get it filled in and upload as scheduled posts. If a value is ever missing, the task bar names it instead of skipping in silence.
