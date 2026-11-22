@@ -185,5 +185,18 @@ class CodexReviewTests(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class PackMigrationTests(unittest.TestCase):
+    def test_saved_sources_get_the_pack_once(self):
+        import clip_look as cl  # noqa: PLC0415
+        cfg = cl.load_config()
+        self.assertEqual(cl.migrate_pack({"music": {"sources": ["folder"]}}, cfg)["music"],
+                         {"sources": ["folder", "pack"], "packOffered": True})
+        kept = {"music": {"sources": ["folder"], "packOffered": True}}
+        self.assertEqual(cl.migrate_pack(kept, cfg), kept, "a later untick stays off")
+        self.assertEqual(cl.migrate_pack({"music": {"levelDb": -16}}, cfg), {"music": {"levelDb": -16}})
+        self.assertEqual(cl.look_problems({"music": {"packOffered": 1}}, cfg), ["clips.look.music.packOffered must be true or false"])
+        self.assertEqual(cl.merge(cfg, cl.migrate_pack({"music": {"sources": []}}, cfg))["music"]["sources"], ["pack"])
+
+
 if __name__ == "__main__":
     unittest.main()

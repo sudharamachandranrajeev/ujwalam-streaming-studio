@@ -44,6 +44,17 @@ test('free music pack (D427): ticked by default, offered, and packReady follows 
   assert.equal(lookInfo(d).packReady, true);
 }));
 
+test('free music pack (D427): saved sources get the pack once; a later untick stays off', () => withDir((d) => {
+  writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ clips: { look: { music: { sources: ['folder'] } } } }));
+  assert.deepEqual(readSettings(d).clips.look.music, { sources: ['folder', 'pack'], packOffered: true });
+  assert.deepEqual(lookInfo(d).look.music.sources, ['folder', 'pack']);
+  writeSettings(d, { clips: { look: { transitions: { sfx: false } } } }); // any save stores the move
+  assert.equal(JSON.parse(readFileSync(path.join(d, 'settings.json'), 'utf8')).clips.look.music.packOffered, true);
+  writeSettings(d, { clips: { look: { music: { sources: ['folder'] } } } });
+  assert.deepEqual(readSettings(d).clips.look.music.sources, ['folder'], 'unticked by the user: stays off');
+  assert.deepEqual(lookProblems({ music: { packOffered: 'yes' } }), ['clips.look.music.packOffered must be true or false']);
+}));
+
 test('round trip: saved group by group, read back, a bad stored value reads as the defaults', () => withDir((d) => {
   assert.equal('look' in readSettings(d).clips, false);
   assert.deepEqual(lookInfo(d).look, lookDefaults().defaults);

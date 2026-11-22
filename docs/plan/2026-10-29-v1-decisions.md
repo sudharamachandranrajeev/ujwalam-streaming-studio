@@ -2837,6 +2837,15 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    A missing or unsafe credit, a licence outside `pack.licences` or a link outside the FMA site is refused (the NCS
    credit's text checks). A countdown reel whose entries share one pack track (with none or made-here beds) posts
    with that credit; a mix of tracks stays held.
-4. **Live risk**: none on air: analysis runs only off air, as for the folder. Settings saved before D427 keep their
-   stored sources (`["folder"]`), so the pack is off for a user who already saved clip look settings until it is
-   ticked. UNVERIFIED: a real render with a downloaded pack track; the credit wording against FMA's own guidance.
+4. **Codex review of fc6f467** (fixed): a pack file must also match the manifest SHA-256 (hashed once, cached per
+   size and modified time in `<data>/music/pack-hashes.json`); the pack folder must be the real folder (no link or
+   junction from the data root down, resolved path equal to the expected one); the render record's `trackId` is the
+   manifest file name and posting refuses a credit that is not exactly that file's manifest row (artist, title,
+   licence, FMA page), or a missing or unknown id; recaption makes the pack record again from the checked track it
+   rendered; when the pack track is gone and the made-here bed also fails, the record becomes no music.
+5. **Settings move**: sources saved before the pack existed could not be a choice against it. A one-time move adds
+   `pack` to saved `clips.look.music.sources` that have no `packOffered`, and sets `packOffered: true` (Node
+   `migrateLookPack`, Python `clip_look.migrate_pack`, same rule); the next save stores it, and choosing sources in
+   Settings also sets it, so a later untick stays off.
+6. **Live risk**: none on air: analysis and hashing run only off air, as for the folder. UNVERIFIED: a real render
+   with a downloaded pack track; the credit wording against FMA's own guidance.

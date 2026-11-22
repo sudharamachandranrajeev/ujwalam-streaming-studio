@@ -371,8 +371,8 @@ class PackTests(unittest.TestCase):
         for i, (name, x) in enumerate(files.items()):
             p = os.path.join(self.pack, name)
             write_wav(p, x)
-            rows.append({"name": name, "bytes": os.path.getsize(p), "artist": f"Artist {i}", "title": f"Song {i}",
-                         "licence": "CC0-1.0", "fma": f"https://freemusicarchive.org/music/a/{i}/"})
+            rows.append({"name": name, "bytes": os.path.getsize(p), "sha256": ml._sha256(p), "artist": f"Artist {i}",
+                         "title": f"Song {i}", "licence": "CC0-1.0", "fma": f"https://freemusicarchive.org/music/a/{i}/"})
             if name != "pack-03-c.wav":  # the third is in the folder but not in the marker: not finished
                 marker[name] = {"size": os.path.getsize(p)}
         write_wav(os.path.join(self.pack, "extra.wav"), calm_track(10.0))  # not in the manifest
@@ -392,7 +392,8 @@ class PackTests(unittest.TestCase):
         self.assertEqual(sorted(os.path.basename(p) for p in got), ["pack-01-a.wav", "pack-02-b.wav"])
         self.assertEqual(got[os.path.join(self.pack, "pack-01-a.wav")],
                          {"artist": "Artist 0", "title": "Song 0", "licence": "CC0-1.0",
-                          "fma": "https://freemusicarchive.org/music/a/0/"})
+                          "fma": "https://freemusicarchive.org/music/a/0/", "file": "pack-01-a.wav"})
+        self.assertTrue(os.path.isfile(os.path.join(self.data, "music", "pack-hashes.json")), "hashes cached")
         lib = self.ml.refresh_pack(self.data, self.cfg, live=lambda: False)
         self.assertTrue(os.path.isfile(os.path.join(self.data, "music", "pack-library.json")), "its own library file")
         self.assertFalse(os.path.exists(os.path.join(self.data, "music", "library.json")), "the folder library is untouched")
@@ -415,6 +416,32 @@ class PackTests(unittest.TestCase):
             f.write(bytes(16))
         self.assertEqual([t["name"] for t in self.ml.usable_pack(lib, self.data, self.cfg)], ["pack-01-a"])
 
+    def test_same_size_other_bytes_is_not_a_pack_track(self):
+        p = os.path.join(self.pack, "pack-02-b.wav")
+        self.assertIn(p, self.ml.pack_files(self.data, self.cfg))
+        with open(p, "r+b") as f:  # same size, other bytes, marker size still matches
+            f.seek(-8, os.SEEK_END)
+            f.write(b"\x01" * 8)
+        self.assertNotIn(p, self.ml.pack_files(self.data, self.cfg))
+        self.assertIn(os.path.join(self.pack, "pack-01-a.wav"), self.ml.pack_files(self.data, self.cfg), "cached hash kept")
+
+    def test_junction_pack_folder_does_not_count(self):
+        import subprocess  # noqa: PLC0415
+        outside = os.path.join(self.tmp, "outside")
+        shutil.copytree(self.pack, outside)
+        shutil.rmtree(self.pack)
+        if os.name != "nt":
+            self.skipTest("junctions are Windows only")
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", self.pack, outside], capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), check=False)
+        if r.returncode != 0 or not os.path.isdir(self.pack):
+            self.skipTest("mklink /J did not work here")
+        try:
+            self.assertFalse(self.ml.pack_folder_ok(self.data, self.cfg))
+            self.assertEqual(self.ml.pack_files(self.data, self.cfg), {}, "a junction with a matching marker is refused")
+        finally:
+            os.rmdir(self.pack)  # removes the junction only
+
     def test_clipper_pack_record_and_recaption(self):
         import clipper  # noqa: PLC0415
         import clip_look as cl  # noqa: PLC0415
@@ -431,22 +458,33 @@ class PackTests(unittest.TestCase):
         reel = {"kills": 4, "streaks": 1, "pieces": ps}
         _, mp = clipper._look_music_plan(ex, pk, ps, 0.22, None, reel, "montage", None, "M1")
         rec = mp["record"]
-        self.assertEqual((rec["source"], rec["trackId"], rec["track"]), ("pack", track["id"], track["id"]))
+        self.assertEqual((rec["source"], rec["trackId"], rec["track"]), ("pack", "pack-01-a.wav", track["id"]))
         self.assertEqual(rec["credit"], {"artist": "Artist 0", "title": "Song 0", "licence": "CC0-1.0",
                                          "link": "https://freemusicarchive.org/music/a/0/"})
         self.assertEqual(pub.music_provenance({"music": rec}, True),
-                         {"source": "pack", "trackId": track["id"], "credit": rec["credit"]})
+                         {"source": "pack", "trackId": "pack-01-a.wav", "credit": rec["credit"]})
         wd = os.path.join(self.tmp, "wd")
         os.makedirs(wd)
         orig = self.ml.load_config
         self.ml.load_config = lambda path=None: self.cfg
         try:
-            mus, new = clipper._recaption_music(self.data, wd, {"music": rec}, ps, 0.22, "r1")
-            self.assertIsNone(new, "the same pack track rendered again")
+            stale = dict(rec, trackId="pack-02-b.wav", credit={"artist": "Someone else"})
+            mus, new = clipper._recaption_music(self.data, wd, {"music": stale}, ps, 0.22, "r1")
             self.assertTrue(os.path.isfile(os.path.join(wd, mus["file"])))
+            self.assertEqual((new["trackId"], new["credit"]), ("pack-01-a.wav", rec["credit"]),
+                             "the record is made again from the track rendered, never the stored credit")
             os.remove(self.marker)
             mus, new = clipper._recaption_music(self.data, wd, {"music": rec}, ps, 0.22, "r1")
             self.assertEqual((new["source"], new["fallback"]), ("made-here", "the pack track is gone"))
+            import reel_music as rmu  # noqa: PLC0415
+            plan0 = rmu.plan
+            rmu.plan = lambda *a, **k: (_ for _ in ()).throw(ValueError("no bed"))
+            try:
+                mus, new = clipper._recaption_music(self.data, wd, {"music": rec}, ps, 0.22, "r1")
+            finally:
+                rmu.plan = plan0
+            self.assertIsNone(mus)
+            self.assertEqual(new, clipper.NO_MUSIC, "no music in the video: the pack credit is not kept")
         finally:
             self.ml.load_config = orig
 

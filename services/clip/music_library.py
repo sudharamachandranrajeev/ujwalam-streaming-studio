@@ -366,17 +366,72 @@ def pack_manifest(cfg):
         if not (isinstance(name, str) and name == os.path.basename(name) and name.lower().endswith(tuple(cfg["extensions"]))):
             continue
         credit = {"artist": f.get("artist"), "title": f.get("title"), "licence": f.get("licence"), "fma": f.get("fma")}
-        if all(isinstance(v, str) and v.strip() for v in credit.values()) and credit["fma"].startswith("https://"):
-            out[name] = dict(credit, bytes=f.get("bytes"))
+        sha = f.get("sha256")
+        if all(isinstance(v, str) and v.strip() for v in credit.values()) and credit["fma"].startswith("https://") \
+                and isinstance(sha, str) and len(sha) == 64 and isinstance(f.get("bytes"), int):
+            out[name] = dict(credit, bytes=f["bytes"], sha256=sha.lower())
     return out
+
+
+def pack_folder_ok(data_dir, cfg):
+    """True when the pack folder is a real folder at its expected place: no link or junction on any step from the data
+    root down, and its fully resolved path equals the expected one (Codex review: a junction to an outside folder with
+    its own marker never counts as the pack)."""
+    folder = pack_dir(data_dir, cfg)
+    p = os.path.abspath(data_dir)
+    for part in cfg["pack"]["folder"].split("/"):
+        p = os.path.join(p, part)
+        if is_link(p) or not os.path.isdir(p):
+            return False
+    try:
+        return os.path.normcase(os.path.realpath(folder)) == os.path.normcase(os.path.join(os.path.realpath(data_dir),
+                                                                                           *cfg["pack"]["folder"].split("/")))
+    except (OSError, ValueError):
+        return False
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def _verified(data_dir, cfg, p, name, want, st):
+    """True when the file's SHA-256 equals the manifest's. Hashed once per size + modified time (cache file
+    cfg.pack.hashes in the data root), so a run does not hash the pack again."""
+    cache_f = os.path.join(data_dir, *cfg["pack"]["hashes"].split("/"))
+    try:
+        cache = load_json(cache_f)
+        cache = cache if isinstance(cache, dict) else {}
+    except (OSError, ClipError, ValueError):
+        cache = {}
+    e = cache.get(name)
+    if isinstance(e, dict) and e.get("size") == st.st_size and e.get("mtimeNs") == st.st_mtime_ns and isinstance(e.get("sha256"), str):
+        return e["sha256"] == want
+    try:
+        got = _sha256(p)
+    except OSError:
+        return False
+    cache[name] = {"size": st.st_size, "mtimeNs": st.st_mtime_ns, "sha256": got}
+    try:
+        os.makedirs(os.path.dirname(cache_f), exist_ok=True)
+        write_json_atomic(cache_f, cache)
+    except OSError:
+        pass
+    return got == want
 
 
 def pack_files(data_dir, cfg=None):
     """{path: credit} of the pack tracks that count: in the manifest, a plain file inside the pack folder, and listed
-    in the download's marker with the file's own size (and the manifest's size). No marker: none (the download is not
+    in the download's marker with the file's own size (and the manifest's size), and its SHA-256 equals the manifest's.
+    The folder itself must be the real pack folder (pack_folder_ok). No marker: none (the download is not
     finished, or was never asked for)."""
     cfg = cfg or load_config()
     folder = pack_dir(data_dir, cfg)
+    if not pack_folder_ok(data_dir, cfg):
+        return {}
     try:
         marker = load_json(os.path.join(folder, cfg["pack"]["marker"]))
     except (OSError, ClipError, ValueError):
@@ -391,12 +446,14 @@ def pack_files(data_dir, cfg=None):
         if not isinstance(e, dict) or not inside(p, folder):
             continue
         try:
-            size = os.stat(p).st_size
+            st = os.stat(p)
         except OSError:
             continue
-        if e.get("size") != size or (credit.get("bytes") is not None and credit["bytes"] != size):
+        if e.get("size") != st.st_size or credit["bytes"] != st.st_size:
             continue
-        out[p] = {k: credit[k] for k in ("artist", "title", "licence", "fma")}
+        if not _verified(data_dir, cfg, p, name, credit["sha256"], st):  # Codex review: the bytes, not only the size
+            continue
+        out[p] = dict({k: credit[k] for k in ("artist", "title", "licence", "fma")}, file=name)
     return out
 
 

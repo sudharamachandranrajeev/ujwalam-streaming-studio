@@ -41,6 +41,13 @@ with the credit text, stamp and description check; missing, empty, bidi, markup,
 non-FMA link, over-long: refused; unknown source: held); countdown combine cases; the manifest's dest and marker
 match the music library config; `packReady` follows the marker.
 
+## Codex review fixes (second commit)
+
+SHA-256 check with a cache; the pack folder must be the real folder (junction test with `mklink /J`); posting binds
+the credit to the manifest row of `trackId` (real id, wrong pairing, missing and made-up ids tested); recaption
+rebuilds the pack record from the rendered track; the no-music branch records no music; the one-time settings move
+(Node and Python tests). Test counts are in the commit report.
+
 ## Licence evidence
 
 From the manifest `$comment`: every track CC0 1.0 per the FMA metadata (Hugging Face dataset

@@ -120,12 +120,26 @@ export function musicCredit(mm, cfg = montageCfg()) {
   return { use: 'credit', text };
 }
 /** FX5 (D427): a free-pack track (CC0) posts with its credit line anyway; a missing or unsafe credit is never sent. */
+const packCache = new Map();
+/** The free pack's manifest files by name (data/downloads/music-pack.json, item cfg.pack.item); {} when unreadable. */
+export function packTracks(p, repo = REPO) {
+  const file = path.join(repo, ...String(p.manifest).split('/'));
+  if (!packCache.has(file)) {
+    const it = (readJson(file)?.items ?? []).find((x) => isPlain(x) && x.id === p.item);
+    packCache.set(file, Object.fromEntries((Array.isArray(it?.files) ? it.files : []).filter((f) => isPlain(f) && typeof f.name === 'string').map((f) => [f.name, f])));
+  }
+  return packCache.get(file);
+}
 function packCredit(mm, cfg) {
   const p = cfg.pack;
   const c = mm.credit;
+  const own = typeof mm.trackId === 'string' && Object.hasOwn(packTracks(p), mm.trackId) ? packTracks(p)[mm.trackId] : null;
   const bad = creditProblem(isPlain(c) ? { artist: c.artist, title: c.title, link: c.link } : c, cfg)
     ?? (!isPlain(c) || typeof c.licence !== 'string' || !p.licences.includes(c.licence) ? 'the free-pack song has no known licence' : null)
-    ?? (typeof c.link !== 'string' || !c.link.startsWith(p.linkPrefix) ? "the free-pack song credit's link is not its Free Music Archive page" : null);
+    ?? (typeof c.link !== 'string' || !c.link.startsWith(p.linkPrefix) ? "the free-pack song credit's link is not its Free Music Archive page" : null)
+    // Codex review: the credit must be the very track's own (its manifest row), never another track's or a made-up one
+    ?? (!own ? 'the free-pack song is not a track of the pack' : null)
+    ?? (own.artist !== c.artist || own.title !== c.title || own.licence !== c.licence || own.fma !== c.link ? "the free-pack song credit does not match the pack's own record of the track" : null);
   if (bad) return { use: 'refuse', reason: `not sent: ${bad}. Download the free music pack again in Settings > Downloads.`, renderOnly: false };
   const v = { artist: c.artist.trim(), title: c.title.trim(), link: c.link.trim() };
   const text = p.template.map((s) => s.replace(/\{(artist|title|link)\}/g, (_m, k) => v[k])).filter((s) => s.trim()).join('\n');

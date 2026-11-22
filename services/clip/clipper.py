@@ -1354,7 +1354,7 @@ def _look_library(data_dir, look_now):
 def pack_record(track):
     """FX5 (D427): the render record fields of a pack track: source pack, its id and the credit posting carries."""
     c = track["pack"]
-    return {"source": "pack", "trackId": track["id"],
+    return {"source": "pack", "trackId": c["file"],  # the manifest file name: posting binds the credit to it
             "credit": {"artist": c["artist"], "title": c["title"], "licence": c["licence"], "link": c["fma"]}}
 
 
@@ -1760,6 +1760,17 @@ def cmd_montage(a):
 
 # ---------------------------------------------------------------- recaption (ED2, D353)
 
+NO_MUSIC = "no-music"  # _recaption_music: the reel's music record becomes None (no music in the video)
+
+
+def _no_music(mrec, why):
+    """The record when no music is left in the video: a pack track's record would credit music that is not there
+    (Codex review), so it becomes no music (NO_MUSIC); a folder record keeps its old form (never posted anyway)."""
+    if mrec.get("source") == "pack":
+        return NO_MUSIC
+    return dict(mrec, fallback=why, used="none")
+
+
 def _recaption_music(data_dir, wd, row, pieces, xd, rid):
     """The music of a reel rendered again by recaption (same timeline). A folder track: the stored plan rendered again
     from the same file. Gone (or unreadable): the made-here bed, and the record says so. -> (music dict for
@@ -1776,7 +1787,9 @@ def _recaption_music(data_dir, wd, row, pieces, xd, rid):
                 tracks = mlib.usable(mlib.load_library(data_dir, mcfg))
             track = next((t for t in tracks if t["id"] == mrec.get("track")), None)
             if track is not None:
-                return mlib.prepare(wd, mrec, track, mcfg, cfg_m["duck"]), None
+                mus = mlib.prepare(wd, mrec, track, mcfg, cfg_m["duck"])
+                # Codex review: a pack record is made again from the checked track that was rendered, never kept
+                return mus, (dict(mrec, **pack_record(track)) if kind == "pack" else None)
             why = f"the {kind} track is gone"
         except Exception as e:  # noqa: BLE001 - a broken track falls back to the made-here bed
             why = f"the {kind} track could not be read ({type(e).__name__})"
@@ -1784,11 +1797,11 @@ def _recaption_music(data_dir, wd, row, pieces, xd, rid):
         try:
             rec = rmu.plan(pieces, xd, None, cfg_m, rmu.seed_for(rid, "recaption"))
             if rec is None:
-                return None, dict(mrec, fallback=why, used="none")
+                return None, _no_music(mrec, why)
             return rmu.prepare(wd, rec, cfg_m), dict(rec, source="made-here", fallback=why, was=mrec.get("track"))
         except (OSError, ClipError, KeyError, TypeError, ValueError) as e:
             eprint(f"recaption {rid}: the music is not kept ({str(e)[-100:]})")
-            return None, dict(mrec, fallback=why, used="none")
+            return None, _no_music(mrec, why)
     try:  # RP3: the same made-here bed (its seed) on the same timeline
         rec = rmu.plan(pieces, xd, row.get("title") if isinstance(row.get("title"), dict) else None, cfg_m,
                        int(mrec["seed"]))
@@ -1861,7 +1874,7 @@ def cmd_recaption(a):
     if isinstance(row.get("music"), dict) and sinfo.get("has_audio"):
         mus, mrow = _recaption_music(data_dir, wd, row, pieces, xd, a.id)
         if mrow is not None:
-            row["music"] = mrow
+            row["music"] = None if mrow == NO_MUSIC else mrow
     if tr_now and isinstance(row.get("sfx"), dict) and sinfo.get("has_audio"):  # FX3: the join sounds again
         try:
             f = rsfx.prepare(wd, tr_now, pieces, xd, int((row.get("look") or {}).get("seed") or 0))
