@@ -2,6 +2,12 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.38 — 2026-11-22
+
+- Top bar: buttons no longer sit on top of the Ujwalam name. When the window is too narrow for the full labels, the bar switches to icons.
+- Help button: a clear drawn icon instead of a blurry question mark.
+- Review reads: the picture for each read shows again. The installed app was missing its JPEG reader, so every picture failed without a word; if a picture still cannot be shown, the window now says so.
+
 ## 0.1.0-alpha.37 — 2026-11-22
 
 - Long highlights video: one longer horizontal video per session from your best moments, posted like the other clips. It now shows captions word by word, numbered chapter cards, an enlarged kill feed after each medal and a drawn path of the enemy you tracked before the kill ("Long video teaching", on).

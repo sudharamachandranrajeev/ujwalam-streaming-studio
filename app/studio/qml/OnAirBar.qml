@@ -38,7 +38,16 @@ Rectangle {
     }
 
     // Narrow window (D389): the secondary buttons show their icon alone and the idle chips step aside, so nothing runs off the bar.
-    readonly property bool compact: width < 1500
+    // 2026-11-22 (user: buttons over the name): a fixed 1500 px no longer fit once Review reads and BeatDrop joined the bar,
+    // so the bar also goes compact at the width the full labels were measured to need (fullNeed only grows while full
+    // labels overlap the name, so the switch never flips back and forth).
+    property real fullNeed: 0
+    readonly property bool compact: width < Math.max(1500, fullNeed)
+    readonly property real nameEnd: brand.x + brand.implicitWidth + Theme.sp.l
+    function fitCheck() {
+        if (!compact && chips.x < nameEnd) fullNeed = width + (nameEnd - chips.x) + 1;
+    }
+    onWidthChanged: Qt.callLater(fitCheck)
     readonly property bool reviewShown: store.flags["learning-review"] === true && store.reviewCount > 0
     readonly property var oa: store.onAir || {}
     readonly property string mbps: typeof oa.kbps === "number" && oa.kbps > 0 ? (oa.kbps / 1000).toFixed(1) + " Mbps" : ""
@@ -47,8 +56,11 @@ Rectangle {
 
     Text {
         id: brand
+        objectName: "barBrand"
         anchors { left: parent.left; leftMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
         text: "Ujwalam"
+        // Even the compact bar can be wider than a very small window: the name steps aside rather than sit under a button.
+        visible: chips.x >= bar.nameEnd - Theme.sp.l
         color: Theme.c.text
         font.family: Theme.ty.displayFamily
         font.pixelSize: Theme.ty.title
@@ -70,6 +82,7 @@ Rectangle {
         id: chips
         anchors { right: controls.left; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
         spacing: Theme.sp.s
+        onXChanged: Qt.callLater(bar.fitCheck)
         // Update available (setup installer, 2026-11-18): only when the build folder has a newer verified package.
         UpdateButton {
             id: updateBtn
@@ -236,10 +249,10 @@ Rectangle {
             objectName: "helpBtn"
             bare: dock.look === "dock"
             onHoveredChanged: if (hovered) dock.hoverBtn = helpBtn; else if (dock.hoverBtn === helpBtn) dock.hoverBtn = null
-            text: "?"
-            implicitWidth: 34
-            leftPadding: 0
-            rightPadding: 0
+            // The drawn help icon (a question mark in a circle), not a "?" text glyph (user 2026-11-22: unclear icon).
+            text: "Help"
+            iconName: "help"
+            iconOnly: true
             tip: "Help: how clips are made, how posting works, and the welcome tour."
             onClicked: if (bar.guide) bar.guide.toggleHelp()
         }

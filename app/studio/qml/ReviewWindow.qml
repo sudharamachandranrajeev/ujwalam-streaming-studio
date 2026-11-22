@@ -114,7 +114,7 @@ Dialog {
     // ---- probe (tests): review-open, review-pick:<n>, review-confirm:<answer index>, review-type:<text>, review-close ----
     function probe() {
         return { open: opened, info: info, items: items.length, total: total, current: current, titles: items.map(titleOf),
-                 question: question(item), choices: choices, picture: picText !== "" ? picText : picSource !== "" ? "shown" : "", busy: busy };
+                 question: question(item), choices: choices, picture: picText !== "" ? picText : picSource !== "" && reviewPic.status === Image.Ready ? "shown" : picSource !== "" ? "loading" : "", busy: busy };
     }
     function probeAction(a) {
         if (a === "review-open") return show();
@@ -188,11 +188,15 @@ Dialog {
             id: picBox
             anchors { left: parent.left; right: parent.right; top: list.visible ? list.bottom : infoText.bottom; topMargin: 8; bottom: whatText.top; bottomMargin: 8 }
             Image {
+                id: reviewPic
                 objectName: "reviewPicture"
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectFit
                 source: dlg.picSource
                 visible: dlg.picSource !== ""
+                // User 2026-11-22 (review reads without pictures): the package had no JPEG decoder and the picture failed
+                // with nothing said. A picture that cannot be decoded now says so.
+                onStatusChanged: if (status === Image.Error && dlg.picSource !== "") { dlg.picSource = ""; dlg.picText = "The picture could not be shown (it could not be read)." }
             }
             Text {
                 anchors.centerIn: parent

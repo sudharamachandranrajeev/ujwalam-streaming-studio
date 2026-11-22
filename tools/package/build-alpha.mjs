@@ -43,6 +43,9 @@ export const STUDIO_QT = Object.freeze([
   ['studio/Qt6Core.dll', 'bin/Qt6Core.dll'], ['studio/Qt6Gui.dll', 'bin/Qt6Gui.dll'],
   ['studio/Qt6Widgets.dll', 'bin/Qt6Widgets.dll'], ['studio/Qt6Network.dll', 'bin/Qt6Network.dll'],
   ['studio/platforms/qwindows.dll', 'plugins/platforms/qwindows.dll'], ['studio/platforms/qoffscreen.dll', 'plugins/platforms/qoffscreen.dll'],
+  // JPEG decoding (2026-11-22, user: review reads without pictures): the review frames are JPEG; PNG is built into
+  // Qt Gui, JPEG needs this plugin, found in <exe dir>/imageformats like the platform plugins.
+  ['studio/imageformats/qjpeg.dll', 'plugins/imageformats/qjpeg.dll'],
   // Qt Quick (D360): the studio window is built in QML (the only studio since 2026-11-18), so it needs these.
   ...['Qml', 'QmlModels', 'QmlMeta', 'QmlWorkerScript', 'Quick', 'QuickControls2', 'QuickControls2Basic', 'QuickControls2BasicStyleImpl',
     'QuickControls2Impl', 'QuickTemplates2', 'OpenGL'].map((m) => [`studio/Qt6${m}.dll`, `bin/Qt6${m}.dll`]),
@@ -129,7 +132,8 @@ const COMPONENTS = [
   [/^(avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale)-\d+\.dll$/i, 'FFmpeg (OBS build)', 'GPL-3.0-or-later (verified 2026-11-05: build string has --enable-gpl --enable-version3, no --enable-nonfree; docs/evidence/2026-11-05-licence-verification.md)'],
   [/^libx264-\d+\.dll$/i, 'x264', 'GPL-2.0-or-later'],
   [/^[a-z0-9]+plugin\.dll$/i,'Qt 6.8.3 Qt Quick import plugins (studio shell, studio/qml/)', 'LGPL-3.0-only; relinking note docs/notices-qt-relinking.md, texts docs/licenses/{LGPL,GPL}-3.0.txt'],
-  [/^q(windows|offscreen)\.dll$/i, 'Qt 6.8.3 platform plugins (studio shell, studio/platforms/)', 'LGPL-3.0-only; relinking note docs/notices-qt-relinking.md, texts docs/licenses/{LGPL,GPL}-3.0.txt'],
+  [/^qjpeg\.dll$/i, 'Qt 6.8.3 JPEG image plugin (studio shell, studio/imageformats/; carries libjpeg-turbo)', 'LGPL-3.0-only (Qt; relinking note docs/notices-qt-relinking.md, texts docs/licenses/{LGPL,GPL}-3.0.txt) plus libjpeg-turbo: IJG, BSD-3-Clause and Zlib (UNVERIFIED: notice text not yet in docs/licenses/)'],
+  [/^q(windows|offscreen)\.dll$/i,'Qt 6.8.3 platform plugins (studio shell, studio/platforms/)', 'LGPL-3.0-only; relinking note docs/notices-qt-relinking.md, texts docs/licenses/{LGPL,GPL}-3.0.txt'],
   [/^Qt6[A-Za-z]+\.dll$/i, 'Qt 6.8.3 (obs/: OBS build, imported by obs-browser and obs-frontend-api; studio/: Qt kit build for the studio shell)', 'LGPL-3.0-only; relinking note docs/notices-qt-relinking.md, texts docs/licenses/{LGPL,GPL}-3.0.txt'],
   [/^(libcef\.dll|chrome_elf\.dll|.*\.pak|icudtl\.dat|v8_context_snapshot\.bin)$/i, 'Chromium Embedded Framework (CEF) and Chromium', 'BSD-3-Clause (CEF) plus Chromium third-party licences: UNVERIFIED, credits file not in the runtime'],
   [/^(libEGL|libGLESv2)\.dll$/i, 'ANGLE (part of CEF)', 'BSD-3-Clause: UNVERIFIED'],

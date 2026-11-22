@@ -68,7 +68,9 @@ describe('QML studio: tips, tours and help (headless probe)', { skip }, () => {
   const box = (r) => ({ x: r[0], y: r[1], w: r[2], h: r[3] });
 
   test('guide: text and choices load; the window has its named parts and the ? button; nothing starts by itself on a window that is not shown', async () => {
-    const { g, p } = await probe();
+    // 1920x1080: every part has its full label (at 1600 the bar is compact since BeatDrop and Review reads joined it, and
+    // the idle clips chip steps aside, D389)
+    const { g, p } = await probe({ env: { UJWALAM_STUDIO_PROBE_SIZE: '1920x1080' } });
     assert.equal(g.ready, true);
     assert.deepEqual(g.tours, ['welcome', 'clips', 'posting']);
     assert.equal(g.hintDefs, 6);
@@ -78,8 +80,24 @@ describe('QML studio: tips, tours and help (headless probe)', { skip }, () => {
     assert.equal(g.hint.showing, false, 'no tip at start: the previews the window opens are not a job');
     for (const a of ['scenes', 'layers', 'previewH', 'previewV', 'mixer', 'ctlStream', 'ctlRecord', 'ctlClip', 'ctlMark', 'chips', 'chipClips', 'taskChip', 'myClips', 'settings', 'more', 'help', 'layerAdd', 'sceneAdd']) assert.ok(g.anchors.includes(a), a);
     const help = node(p, 'helpBtn');
-    assert.deepEqual([help.text, help.visible, help.enabled], ['?', true, true]);
+    assert.deepEqual([help.text, help.visible, help.enabled], ['Help', true, true]);
     assert.ok(node(p, 'moreBtn').rect[0] < help.rect[0] && help.rect[0] < node(p, 'settingsBtn').rect[0], 'More, ?, Settings in the top bar');
+  });
+
+  // User 2026-11-22 (Tasks chip over the name): with every bar button on, no chip or button covers the name at any width;
+  // a window too small even for the icon-only bar hides the name rather than covering it.
+  test('top bar: nothing covers the name, wide or narrow, with Tasks, Review reads and BeatDrop all shown', async () => {
+    const parts = ['updateBtn', 'taskChip', 'chipLive', 'chipBitrate', 'chipRec', 'chipClips', 'clipsFolderBtn', 'reviewBtn', 'beatdropBtn', 'moreBtn', 'helpBtn'];
+    for (const size of ['1920x1080', '1600x900', '1366x768', '1100x700']) {
+      const { p } = await probe({ flagsOn: ['beatdrop', 'posting'], env: { UJWALAM_STUDIO_PROBE_SIZE: size } });
+      const brand = node(p, 'barBrand');
+      assert.ok(brand, size);
+      const shown = parts.map((n) => node(p, n)).filter((n) => n && n.visible !== false && n.rect[2] > 0);
+      assert.ok(shown.some((n) => n.name === 'beatdropBtn'), `${size}: BeatDrop shown`);
+      if (brand.visible === false) { assert.equal(size, '1100x700', 'the name hides only in a very small window'); continue; }
+      const end = brand.rect[0] + brand.rect[2];
+      for (const n of shown) assert.ok(n.rect[0] >= end, `${size}: ${n.name} at ${n.rect[0]} covers the name (ends ${end})`);
+    }
   });
 
   test('guide: the welcome tour starts, steps forward and back, and skips a step whose part is not shown', async () => {
@@ -116,7 +134,8 @@ describe('QML studio: tips, tours and help (headless probe)', { skip }, () => {
   });
 
   test('guide: a focused tour (clips) runs on the related controls and does not touch the welcome choice', async () => {
-    const { g } = await probe({ actions: ['guide-tour:start:clips', 'guide-tour:next', 'guide-tour:next', 'guide-tour:next', 'guide-tour:next', 'guide-tour:next'] });
+    // 1920x1080: the full bar, so the clips chip is shown (a compact bar hides it when idle and the tour skips it)
+    const { g } = await probe({ env: { UJWALAM_STUDIO_PROBE_SIZE: '1920x1080' }, actions: ['guide-tour:start:clips', 'guide-tour:next', 'guide-tour:next', 'guide-tour:next', 'guide-tour:next', 'guide-tour:next'] });
     const c = g.coach;
     assert.deepEqual([c.tour, c.of, c.step, c.next, c.neverOffered], ['clips', 6, 6, 'Done', false]);
     assert.equal(c.anchor, 'settings');

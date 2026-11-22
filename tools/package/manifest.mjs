@@ -332,6 +332,8 @@ export function allowProblems(paths) {
     || new RegExp(`^bin/(ujwalam-host\\.exe|${HELPER_EXES.map((h) => h.replace(/[.-]/g, '\\$&')).join('|')})$`).test(p)
     || /^obs\/bin\/64bit\/[^/]+\.(dll|exe)$/i.test(p)
     || /^studio\/(ujwalam-studio\.exe|Qt6(Core|Gui|Widgets|Network)\.dll|platforms\/q(windows|offscreen)\.dll)$/.test(p)
+    // JPEG decoder for the review frames (2026-11-22: without it Review reads showed no picture)
+    || /^studio\/imageformats\/qjpeg\.dll$/.test(p)
     // Qt Quick for the QML studio window (D360): its DLLs and the imports under studio/qml (QtQml, QtQuick only)
     || /^studio\/Qt6(Qml|QmlModels|QmlMeta|QmlWorkerScript|Quick|QuickControls2|QuickControls2Basic|QuickControls2BasicStyleImpl|QuickControls2Impl|QuickTemplates2|OpenGL)\.dll$/.test(p)
     || /^studio\/qml\/(QtQml|QtQuick)(\/[A-Za-z0-9_.-]+)*\/[A-Za-z0-9_.-]+\.(dll|qml|qmltypes|js|mjs|json|png|svg)$|^studio\/qml\/(QtQml|QtQuick)(\/[A-Za-z0-9_.-]+)*\/qmldir$/.test(p)

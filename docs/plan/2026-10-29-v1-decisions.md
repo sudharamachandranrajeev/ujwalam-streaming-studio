@@ -2802,3 +2802,19 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    recorder stops ffmpeg with `q` and only loses it hard on a crash. A driver reset after a hard kill is a driver
    fault on this laptop (Studio driver 32.0.16.2124); the earlier resets on 2026-11-19 to 11-21 (one during a
    capture-card recording) may share the cause. UNVERIFIED: the cause inside the driver.
+
+## D426 — Studio bar fits its buttons, Help draws its icon, review pictures decode (decided, 2026-11-22)
+
+1. **Reports** (user, alpha.37 screenshots): the Tasks chip sat over the "Ujwalam" name; the help button showed a
+   blurry "?" text glyph; Review reads said "The picture is from its end screen" but showed no picture.
+2. **Bar**: the bar went icon-only below a fixed 1500 px, measured before Review reads and BeatDrop joined it. It
+   now also goes icon-only at the width the full labels were measured to need (`fullNeed`, which only grows, so the
+   switch cannot flip back and forth). A window too small even for the icon-only bar hides the name rather than
+   cover it. Test: `top bar: nothing covers the name` probes 1920x1080, 1600x900, 1366x768 and 1100x700 with every
+   button on. Two older guide tests now probe at 1920x1080, where every chip has its full label.
+3. **Help**: the drawn `help` icon (icons.cpp) replaces the text glyph; the button keeps the name "Help".
+4. **Review pictures**: the package had no Qt JPEG decoder (`imageformats/qjpeg.dll`), so every frame failed to
+   decode silently. The package now ships it (allowlist and licence row; libjpeg-turbo notice text UNVERIFIED, not
+   yet in docs/licenses/). The window reports "shown" only when the image decoded, and says so when it could not.
+   The test fixture is now a real 16x9 JPEG. Check: the packaged studio passes the review test with the plugin and
+   fails it without.

@@ -24,8 +24,8 @@ const SHELL_EXE = PACKAGED ?? EXE;
 const QT = PACKAGED ? null : qtDir();
 const skip = !existsSync(SHELL_EXE) || (!PACKAGED && !QT) ? 'studio shell not built (npm run build:studio)' : false;
 const S = 'live-20261111-120000';
-// The smallest JPEG header bytes: the window only needs the server to hand back a frame.
-const JPEG = Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64');
+// A real 16x9 JPEG (2026-11-22): the window must decode it, not only receive it (the package once had no JPEG decoder).
+const JPEG = Buffer.from('/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYyLjI4LjEwMwD/2wBDAAgKCgsKCw0NDQ0NDRAPEBAQEBAQEBAQEBASEhIVFRUSEhIQEBISFBQVFRcXFxUVFRUXFxkZGR4eHBwjIyQrKzP/xABLAAEBAAAAAAAAAAAAAAAAAAAABQEBAAAAAAAAAAAAAAAAAAAABhABAAAAAAAAAAAAAAAAAAAAABEBAAAAAAAAAAAAAAAAAAAAAP/AABEIAAkAEAMBIgACEQADEQD/2gAMAwEAAhEDEQA/AIIB2OP/2Q==', 'base64');
 
 function runShell(env) {
   return new Promise((resolve) => {
@@ -126,7 +126,7 @@ describe('QML studio: Review reads (headless probe)', { skip }, () => {
     assert.equal(rv.items, 2);
     const pick = await probe({ flagOn: true, actions: ['review-open', 'review-pick:2'] });
     assert.match(pick.rv.question, /^Read as "DOUBLE KILL" with confidence 0\.41, below the game pack's 0\.60\./);
-    assert.equal(pick.rv.picture, 'shown', 'the frame came from the server');
+    assert.equal(pick.rv.picture, 'shown', 'the frame came from the server and was decoded');
     assert.ok(pick.rv.titles[2].endsWith('Unsure read: DOUBLE KILL'));
   });
 
