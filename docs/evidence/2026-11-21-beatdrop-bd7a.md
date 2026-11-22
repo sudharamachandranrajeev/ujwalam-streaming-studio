@@ -39,9 +39,14 @@ What the data tests show:
 - **Summary of the fixture**: `['kill on the first drop at 0:08', '45 kills on beats', '15 moves between beats (flicks, slides, jumps)', '5 third-person shots', 'slow intro: 4 shots at 0.75x', '68 shots, 0:50 long']`.
 - **V graph**: there is one blurred-fill chain per piece, with labels made unique per piece, and one audio encoder. The H graph is unchanged.
 
-## Not yet run: render tests
+## Render tests (2026-11-22, main session, below-normal priority)
 
-`test_beatdrop_retake.py -k RenderedRetakeTests` has not been run. The tool permission check refused the below-normal-priority launch, so it is left for the main session. It runs `clipper.py beatdrop` twice:
+On the BD7a branch first: `RenderedRetakeTests` ran 4, OK (299 s), after a test fix: the first render's videos are
+probed before the retake sweeps them. `RenderedMontageTests` ran 12, with 1 failure. The failure was an outdated
+assertion: a re-render now also writes the V file, so the folder holds both videos render.json lists. The test was
+fixed. The re-run on the fix branch is listed under "Codex review" below.
+
+`test_beatdrop_retake.py -k RenderedRetakeTests` runs `clipper.py beatdrop` twice:
 
 1. The first run uses a V canvas sibling.
 2. The second run is `--retake swap` with a V recording that does not exist, so it takes the blurred-fill fallback.
@@ -55,12 +60,41 @@ It asserts the following:
 - The V flash test passes.
 - After the retake, only the named piece changed, the song is the same, every file has a new name, the old files are swept and no temp files are left.
 
-The existing `test_beatdrop.py RenderedMontageTests` now also renders a V file through the CLI and should be re-run too.
+The existing `test_beatdrop.py RenderedMontageTests` now also renders a V file through the CLI.
+
+## Codex review (codex exec, read-only, medium effort), 2026-11-22
+
+First review of `git diff 12601ee 2b3bdf6`: six findings, all fixed on `claude/beatdrop-bd7-fix`:
+
+1. The plan was saved before the render. It is now written aside and moved in only after both videos are in place.
+   A failed move removes what that take moved, so the old plan stays with the old videos render.json names.
+2. A V source without sound gave a silent montage. `clip_montage.render_argv` now has a bed-only path: the music
+   (and sound effects) alone become the one audio track.
+3. A retake picked a new reel style and filled the titles again, which also duplicated `hero-bw`. A retake now
+   grades with the saved style (render.json `style.colour`, always written; None means no grade) and keeps the saved
+   titles.
+4. A made-here bed retake could get a different bed length. The music record now carries `bedSec`.
+5. The orphan sweep ran before the V render's stop and not-started check. The check now comes first.
+6. A swapped or re-chosen anchor kept the old moment's effects. `_refx` now drops them and gives the new on-beat
+   anchor the planner's effects, with the planner's kill count (the drop's kill is 1).
+
+Also: `clipper.py beatdrop` now validates its files and, with `--publish CLIPS`, publishes them like a montage (D419).
+Verify rounds 1–4: round 1 found the plan move and the grade of older renders; rounds 2–3 found the order of the plan
+and V moves and the cleanup; round 4: CLEAN.
+
+Accepted:
+- A swap leaves the other pieces' effects as they are, even when it changes the kill count ("a retake changes only
+  what it names"). another-take re-counts every piece.
+- A render made before the grade was saved (style id and name only) gets the style library's current grade on a
+  retake. That render never recorded its grade.
+
+New tests: swap effects follow the new moment; the planner's kill cadence after another-take; the bed alone for a
+silent source; made-here bed length kept; no plan file after a stopped render; one `hero-bw` and the same titles
+after a retake; `--publish` reaches `uploads.json` and the retake supersedes the first take.
 
 ## UNVERIFIED
 
 - Real footage and real songs (synthetic fixtures only).
 - NVENC (tests use libopenh264).
 - How the V framing looks to the user: the stream-v canvas and the blurred-fill fallback, and the letterbox effect on 9:16.
-- A made-here bed retake when `--max-sec` differs from the first render: the bed would differ.
 - The studio preview card (BD7b).

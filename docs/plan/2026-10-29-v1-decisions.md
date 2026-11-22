@@ -2676,7 +2676,13 @@ Evidence: `docs/evidence/2026-11-21-beatdrop-bd7a.md`. Plan: `docs/plan/2026-11-
 3. **Summary**: `beatdrop.summary(plan)` gives plain-word lines (for example "kill on the first drop at 0:08", "45 kills on beats", "5 third-person shots"). Calm pieces carry `near` (the calm moment kind they start at). The lines go into render.json `summary`.
 4. **V cut from the same plan**: a second ffmpeg run with the same pieces, bed, LUT, effects and slots. Framing reuses the clip layouts (`clip_render.layout_chain` wraps `layout_graph` per piece; no second framing system). It uses `stream-v` (the V canvas recording, as V clips are cut) when the session has one, else `blurred-fill` of the H recording (the whole picture fitted, nothing cut off). The V title is in screen space (the pin track is in H pixels); credits wrap per frame (BD5). Each output encodes its audio once. Each file gets its own new name and its own flash check. Both stay .part until both are measured. A V flash fail drops only the V file (render.json error `beatdrop-v`); an H fail drops both.
 5. **CLI**: `clipper.py beatdrop --retake <op> [--piece N] [--v-recording P]`. render.json lists files `beatdrop-h` and `beatdrop-v` (with geometry = layout id and its own flash), plus `summary` and `retakes`. Off air only, heavy-job lock, sweeps, music record and temp cleanup are unchanged.
-6. UNVERIFIED: real footage, NVENC, the look of the V framing to the user, a made-here retake when `--max-sec` differs from the first render.
+6. UNVERIFIED: real footage, NVENC, the look of the V framing to the user.
+7. **After the Codex review (2026-11-22):**
+   - A retake keeps everything it does not name: the saved grade (render.json `style.colour`), the saved titles and the made-here bed length (`bedSec`).
+   - The plan is saved only together with finished videos.
+   - A silent V source gets the music alone.
+   - A swap leaves the other pieces' effects as they are, even when it changes the kill count. another-take re-counts every piece.
+   - A render from before the grade was saved gets the style library's current grade.
 
 ## D419 — BeatDrop BD7c: a BeatDrop montage publishes and posts like a montage; a retake is a new video (decided, 2026-11-22)
 

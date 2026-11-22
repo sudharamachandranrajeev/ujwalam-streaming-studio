@@ -1,8 +1,9 @@
 # BeatDrop BD7c (publish and post a BeatDrop montage): evidence, 2026-11-22
 
 Decision: D419. Plan: `docs/plan/2026-11-21-beatdrop-montages.md` section 7 (BD7, publish part).
-Branch: `claude/beatdrop-bd7c` (from `claude/alpha0-d1` at 12601ee). Status: data tests only; a real BeatDrop render
-published and posted is UNVERIFIED (BD7a wires `clipper beatdrop` to validate and publish; done after the merge).
+Branch: `claude/beatdrop-bd7c` (from `claude/alpha0-d1` at 12601ee), merged into `claude/beatdrop-bd7-fix`, where
+`clipper beatdrop --publish CLIPS` validates and publishes; `RenderedRetakeTests` checks that both takes reach
+`uploads.json` and that the retake supersedes the first. Real footage published and posted: UNVERIFIED.
 
 ## What was built
 
