@@ -22,7 +22,7 @@ import { readChannelSchedule } from '../services/posting/schedule-read.mjs';
 
 const tmp = [];
 /** The random-daily card values shipped in data/posting/schedule.json (D403). */
-const RD = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 60, customTimes: {}, skipDates: [] }; // custom times: user 2026-11-20
+const RD = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: 60, customTimes: {}, skipDates: [], tierOffsets: [0, 15, 30, 45], gridGapMinutes: 15, readReuseMinutes: 120 }; // custom times: user 2026-11-20; grid keys: D434
 const mk = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'ujw-d375-')); tmp.push(d); return d; };
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 const HOUR = 3600 * 1000; const DAY = 24 * HOUR;
@@ -213,11 +213,10 @@ describe('auto-post card settings (auto-settings.mjs)', () => {
   test('defaults: upload on, every kind, the ranker floor, as many a day as the quota fits, 1 h gap, 60 days, random-daily 3-6 a day 09:00-23:00 90 min (D403)', () => {
     const d = defaultCard(mk());
     const q = loadQuota(mk());
-    // PT2 (D408): the upload bucket (100 a day, 50 units each for the cover) capped by the 24 the hour gap allows; with a
-    // whole-channel read of up to 401 units before each upload (D409, D430: 200 pages) the unit sum fits
-    // (10000 - 100) / (50 + 401) = 21.
-    assert.equal(q.model, 'upload-bucket'); assert.equal(q.uploadsPerDayFit, 21); assert.equal(q.uploadsCap, 100); assert.equal(q.perUploadUnits, 50);
-    assert.deepEqual(d, { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore(), maxPerDay: q.uploadsPerDayFit, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000, ...RD });
+    // D434: the upload bucket (100 a day, 50 units each for the cover), capped at 100 a day; one whole-channel read (up to
+    // 401 units, D430) serves 120 minutes, so at most 12 reads a day: 100 x 50 + 12 x 401 = 9812 <= 10000 - 100.
+    assert.equal(q.model, 'upload-bucket'); assert.equal(q.uploadsPerDayFit, 100); assert.equal(q.readsPerDayMax, 12); assert.equal(q.uploadsCap, 100); assert.equal(q.perUploadUnits, 50);
+    assert.deepEqual(d, { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore(), maxPerDay: q.uploadsPerDayFit, intervalHours: 1, maxAheadDays: 365, placement: 'grid-tiers', quotaUnitsPerDay: 10000, ...RD });
     assert.ok(RULE_KINDS.includes('impact-play'));
   });
   test('save: checked first, nothing written on a problem; then both files written whole, read back as the card', () => {
@@ -237,7 +236,7 @@ describe('auto-post card settings (auto-settings.mjs)', () => {
     assert.equal(s.custom, false); assert.equal(s.error, null);
     assert.deepEqual(s.card, { ...card, ...RD });
     assert.ok(Number.isInteger(sched.seed), 'D403: the random plan seed is made at the first save');
-    assert.equal(s.quota.uploadsPerDayFit, 24); assert.equal(s.quota.userSet, true);
+    assert.equal(s.quota.uploadsPerDayFit, 100); assert.equal(s.quota.userSet, true); // D434: the 100-a-day cap
   });
   test('a hand-written rules file shows as custom; a broken one is reported, the defaults still show', () => {
     const dataDir = mk(); mkdirSync(path.dirname(userRulesFile(dataDir)), { recursive: true });
@@ -290,7 +289,7 @@ describe('next posting times, move and remove (auto-settings.mjs)', () => {
     assert.equal(code('a', 'tomorrow'), 'bad-time');
     assert.equal(code('a', '2026-11-13T20:30:00Z'), 'off-grid');
     assert.equal(code('a', '2026-11-13T11:00:00Z'), 'too-soon');
-    assert.equal(code('a', '2027-02-01T10:00:00Z'), 'too-far');
+    assert.equal(code('a', '2028-02-01T10:00:00Z'), 'too-far'); // D434: 365 days ahead
     assert.equal(code('a', '2026-11-13T14:00:00Z'), 'taken', 'the channel post');
     assert.equal(code('a', '2026-11-13T15:00:00Z'), 'taken', 'an uploaded clip');
     assert.equal(code('a', '2026-11-13T20:00:00Z'), 'ok');

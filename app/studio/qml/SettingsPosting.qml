@@ -26,10 +26,10 @@ Column {
     property bool loaded: false
     property bool started: false          // the load is on its way or done (Settings starts it as soon as the flags are known)
     property int gen: 0                   // a newer load or reset drops older answers
-    property var card: ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 60, customTimes: ({}), skipDates: [] })
+    property var card: ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 365, placement: "grid-tiers", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 60, customTimes: ({}), skipDates: [], tierOffsets: [0, 15, 30, 45], gridGapMinutes: 15, readReuseMinutes: 120 })
     property string orig: ""              // the card as loaded, to see a change
     property var quota: ({})
-    property int maxPerDayLimit: 24
+    property int maxPerDayLimit: 100
     property string flagsText: ""
     property string timesInfo: "Loading..."
     property var times: []                // [{text, id, movable}]
@@ -72,6 +72,7 @@ Column {
     readonly property string problem: !rulesOwn && card.kinds.length === 0 ? "Choose at least one kind of clip to upload."
         : rulesOwn && rulesEdit.rules.some(r => r.kinds.length === 0) ? "Each rule needs at least one kind of clip."
         : customOn && weekDays.every(d => (card.customTimes[d.id] || []).length === 0) ? "Add at least one posting time to the week."
+        : gridProblem !== "" ? gridProblem
         : skipProblem !== "" ? skipProblem
         : tagsProblem !== "" ? tagsProblem
         : prefsLoaded && shareSum !== 100 ? "The shares of each kind add up to " + shareSum + " %; make them add up to 100 %."
@@ -79,21 +80,48 @@ Column {
         : minutesOf(card.windowEnd, 0) <= minutesOf(card.windowStart, 0) ? "The posting window must end after it starts." : ""
     readonly property bool blocksSave: dirty && problem !== ""
     readonly property string fit: {
-        // Same sum as the server (quota-budget.mjs loadQuota): (quota - read reserve) / (upload + thumbnail units); 0 is
-        // possible and is said plainly (the daily budget then stops every upload).
-        // D430: each upload also carries one full channel read (readUnitsPerUpload), as the server counts it; without it the
-        // card said 24 fit while the sender allowed 21.
-        const per = (typeof quota.perUploadUnits === "number" ? quota.perUploadUnits : 0)
-            + (typeof quota.readUnitsPerUpload === "number" ? quota.readUnitsPerUpload : 0);
+        // Same sum as the server (quota-budget.mjs uploadsFit): the most uploads n a day with
+        // n x (upload + thumbnail units) + reads(n) x (one full channel read) <= quota - read reserve, where reads(n) is one
+        // read per "reuse the channel read" period (ceil(1440 / minutes)), never more than n; 0 minutes = a read per upload.
+        // 0 is possible and is said plainly (the daily budget then stops every upload).
+        const per = typeof quota.perUploadUnits === "number" ? quota.perUploadUnits : 0;
+        const read = typeof quota.readUnitsPerRead === "number" ? quota.readUnitsPerRead : 0;
         const reserve = typeof quota.readReserveUnits === "number" ? quota.readReserveUnits : 0;
         const q = card.quotaUnitsPerDay;
-        // PT2: the upload bucket caps the count too (uploadsCap), and never more than the 24 the hour gap allows.
-        const cap = typeof quota.uploadsCap === "number" ? quota.uploadsCap : maxPerDayLimit;
-        const n = Math.min(maxPerDayLimit, cap, per > 0 ? Math.max(0, Math.floor((q - reserve) / per)) : maxPerDayLimit);
+        const reuse = card.readReuseMinutes;
+        const readsMax = reuse > 0 ? Math.ceil(1440 / reuse) : -1;
+        // PT2: the upload bucket caps the count too (uploadsCap), and never more than the per-day limit (100, D434).
+        const cap = Math.min(maxPerDayLimit, typeof quota.uploadsCap === "number" ? quota.uploadsCap : maxPerDayLimit);
+        let n = 0;
+        while (n < cap) {
+            const m = n + 1, reads = readsMax < 0 ? m : Math.min(m, readsMax);
+            if (m * per + reads * read > q - reserve) break;
+            n = m;
+        }
         const model = typeof quota.modelText === "string" && quota.modelText !== "" ? quota.modelText + " " : "";
         if (n === 0) return model + "No upload fits in a quota of " + q.toLocaleString(Qt.locale("en_US"), "f", 0) + " units a day (one upload needs "
-            + (per + reserve).toLocaleString(Qt.locale("en_US"), "f", 0) + "): nothing uploads until the quota is raised.";
+            + (per + read + reserve).toLocaleString(Qt.locale("en_US"), "f", 0) + "): nothing uploads until the quota is raised.";
         return model + "About " + n + (n === 1 ? " upload a day fits" : " uploads a day fit") + " in the quota." + (card.maxPerDay > n ? " More than that a day stop at the quota and wait for the next day." : "");
+    }
+    // D434: the slot minutes and the gap, checked like the server (schedule.mjs gridProblem)
+    readonly property string gridProblem: {
+        const o = card.tierOffsets || [], g = card.gridGapMinutes;
+        if (offsetsProblem !== "") return offsetsProblem;
+        if (o.length === 0 || o.some(x => x < 0 || x > 59)) return "Slot minutes: list whole minutes from 0 to 59, like 0, 15, 30, 45.";
+        if (o.some((x, i) => o.indexOf(x) !== i)) return "Slot minutes: a minute is listed twice.";
+        const s = o.slice().sort((a, b) => a - b);
+        let d = 60 - (s[s.length - 1] - s[0]);
+        for (let k = 1; k < s.length; k++) d = Math.min(d, s[k] - s[k - 1]);
+        return g > d ? "The gap between slots (" + g + " min) is wider than the smallest distance between your slot minutes (" + d + " min)." : "";
+    }
+    property string offsetsText: "0, 15, 30, 45"
+    property string offsetsProblem: ""
+    function setOffsets(text) {
+        offsetsText = text;
+        const parts = String(text).split(/[\s,]+/).filter(x => x !== "");
+        if (parts.length === 0 || parts.some(x => !/^\d{1,2}$/.test(x))) { offsetsProblem = "Slot minutes: list whole minutes from 0 to 59, like 0, 15, 30, 45."; return false }
+        offsetsProblem = "";
+        return set("tierOffsets", parts.map(x => parseInt(x, 10)));
     }
 
     // PT5: the quota model in use and why, in plain words
@@ -109,7 +137,8 @@ Column {
     visible: active
     enabled: loaded
 
-    readonly property var placements: ["random-daily", "custom", "fill-gaps", "after-last"]
+    readonly property var placements: ["grid-tiers", "random-daily", "custom", "fill-gaps", "after-last"]
+    readonly property bool gridTiers: card.placement === "grid-tiers"
     readonly property bool randomDaily: card.placement === "random-daily"
     // "HH:MM" <-> minutes after midnight (the window boxes count in minutes, 30-minute steps)
     function minutesOf(s, def) { const m = /^(\d{2}):(\d{2})$/.exec(String(s || "")); return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : def }
@@ -126,7 +155,7 @@ Column {
         gen++;
         started = false;
         loaded = false;
-        card = ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 60, placement: "random-daily", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 60, customTimes: ({}), skipDates: [] });
+        card = ({ autoUpload: true, kinds: [], minScore: 0, maxPerDay: 1, intervalHours: 1, maxAheadDays: 365, placement: "grid-tiers", quotaUnitsPerDay: 10000, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: "09:00", windowEnd: "23:00", minGapMinutes: 60, customTimes: ({}), skipDates: [], tierOffsets: [0, 15, 30, 45], gridGapMinutes: 15, readReuseMinutes: 120 });
         orig = "";
         quota = ({});
         flagsText = "";
@@ -141,6 +170,8 @@ Column {
         rulesProblem = "";
         notices = [];
         skipText = "";
+        offsetsText = "0, 15, 30, 45";
+        offsetsProblem = "";
         prefs = JSON.parse(JSON.stringify(prefsDefault));
         prefsOrig = "";
         prefsLoaded = false;
@@ -241,8 +272,8 @@ Column {
             minScore: round1(clamp(c.minScore, 0, 100, 0)),
             maxPerDay: clamp(c.maxPerDay, 1, maxPerDayLimit, 1),
             intervalHours: clamp(c.intervalHours, 1, 48, 1),
-            maxAheadDays: clamp(c.maxAheadDays, 1, 730, 60),
-            placement: placements.includes(c.placement) ? c.placement : "random-daily",
+            maxAheadDays: clamp(c.maxAheadDays, 1, 730, 365),
+            placement: placements.includes(c.placement) ? c.placement : "grid-tiers",
             quotaUnitsPerDay: clamp(c.quotaUnitsPerDay, 1000, 10000000, 10000),
             postsPerDayMin: clamp(c.postsPerDayMin, 1, 24, 3),
             postsPerDayMax: clamp(c.postsPerDayMax, 1, 24, 6),
@@ -250,9 +281,14 @@ Column {
             windowEnd: hhmm(minutesOf(c.windowEnd, 1380)),
             minGapMinutes: clamp(c.minGapMinutes, 60, 1440, 60),
             customTimes: cleanWeek(c.customTimes),
-            skipDates: Array.isArray(c.skipDates) ? c.skipDates.filter(s => /^\d{4}-\d{2}-\d{2}$/.test(String(s))).map(String) : []
+            skipDates: Array.isArray(c.skipDates) ? c.skipDates.filter(s => /^\d{4}-\d{2}-\d{2}$/.test(String(s))).map(String) : [],
+            tierOffsets: Array.isArray(c.tierOffsets) && c.tierOffsets.length ? c.tierOffsets.map(x => Number(x)) : [0, 15, 30, 45],
+            gridGapMinutes: clamp(c.gridGapMinutes, 1, 60, 15),
+            readReuseMinutes: clamp(c.readReuseMinutes, 0, 1440, 120)
         };
         skipText = card.skipDates.join(", ");
+        offsetsText = card.tierOffsets.join(", ");
+        offsetsProblem = "";
         const off = [];
         if (fl.autoPost !== true) off.push("Auto post");
         if (fl.schedule !== true) off.push("Scheduled posting");
@@ -290,7 +326,7 @@ Column {
             info = "The channel has not been read yet; the times below may move once it is.";
         else
             info = "Channel read " + (b.channelReadAt ? localTime(b.channelReadAt) : "earlier") + ". Times are in your time zone; each post is at least "
-                + (b.placement === "random-daily" ? (b.minGapMinutes || 0) + " min" : (b.intervalHours || 0) + " h") + " from the next.";
+                + (b.placement === "random-daily" ? (b.minGapMinutes || 0) + " min" : b.placement === "grid-tiers" ? (b.gridGapMinutes || 0) + " min" : (b.intervalHours || 0) + " h") + " from the next.";
         if (live === "schedule-scope-missing") info += " Could not read the channel: sign in again so YouTube allows reading scheduled posts.";
         else if (live !== "") info += " Could not read the channel just now (" + live + ").";
         timesInfo = info;
@@ -698,6 +734,7 @@ Column {
                     want: ap.card.maxPerDay
                     onValueModified: ap.setNum("maxPerDay", value, 1, ap.maxPerDayLimit)
                 }
+                Quiet { text: "What it does: the most clips uploaded in one day (YouTube allows up to " + ap.maxPerDayLimit + "). What it changes: more a day empties the backlog faster. What it could break: past what the quota fits (the line under the settings), uploads stop for the day and wait." }
             }
             Field {
                 label: "Time between posts:"
@@ -707,11 +744,11 @@ Column {
                     suffix: " h"
                     from: 1
                     to: 48
-                    enabled: !ap.randomDaily
+                    enabled: !ap.randomDaily && !ap.gridTiers
                     want: ap.card.intervalHours
                     onValueModified: ap.setNum("intervalHours", value, 1, 48)
                 }
-                Quiet { text: ap.randomDaily ? "Not used with a few a day at random times: the gap below is used instead." : "Every post, yours from Ujwalam or already on the channel, is at least this far from the next." }
+                Quiet { text: ap.randomDaily ? "Not used with a few a day at random times: the gap below is used instead." : ap.gridTiers ? "Not used with hourly slots: the gap between slots below is used instead." : "Every post, yours from Ujwalam or already on the channel, is at least this far from the next." }
             }
             Field {
                 label: "Schedule up to:"
@@ -724,7 +761,7 @@ Column {
                     want: ap.card.maxAheadDays
                     onValueModified: ap.setNum("maxAheadDays", value, 1, 730)
                 }
-                Quiet { text: "A clip whose next free time is further ahead waits until it fits." }
+                Quiet { text: "How far into the future posts may be scheduled, always counted from today (365 = one year). A clip whose next free time is further ahead waits until a slot opens. A longer reach lets a big backlog be scheduled at once; a shorter one keeps more room for posts you add later." }
             }
             Field {
                 label: "Where new posts go:"
@@ -733,10 +770,60 @@ Column {
                     objectName: "autopostPlacement"
                     width: parent.width
                     label: "Where new posts go"
-                    model: [{ value: "random-daily", text: "Random each day" }, { value: "custom", text: "Custom times" }, { value: "fill-gaps", text: "Fill gaps between posts" }, { value: "after-last", text: "Always after the last scheduled post" }]
+                    model: [{ value: "grid-tiers", text: "Hourly slots, a year ahead" }, { value: "random-daily", text: "Random each day" }, { value: "custom", text: "Custom times" }, { value: "fill-gaps", text: "Fill gaps between posts" }, { value: "after-last", text: "Always after the last scheduled post" }]
                     want: Math.max(0, ap.placements.indexOf(ap.card.placement))
                     onChose: (v) => ap.set("placement", v)
                 }
+                Quiet {
+                    objectName: "autopostPlacementHelp"
+                    text: ap.gridTiers ? "Hourly slots: each clip takes the earliest free hour slot (12:00, 13:00, 14:00 ...) from today up to the days-ahead limit. Only when every hour slot in that whole time is taken does it use the next slot minute (12:15, 13:15 ...), then the next (12:30 ...), and so on. Times follow this PC's clock. Changing to this moves no clip that already has a time."
+                        : ap.randomDaily ? "Random each day: a few posts a day at random times inside the posting window below."
+                        : ap.customOn ? "Custom times: the exact times you list for each weekday."
+                        : ap.card.placement === "fill-gaps" ? "Fill gaps: the earliest whole hour that keeps the time between posts from every other post."
+                        : "After the last: each new post goes after the latest one already scheduled."
+                }
+            }
+            Field {
+                label: "Slot minutes, in order:"
+                width: 330
+                UField {
+                    objectName: "autopostTierOffsets"
+                    width: 200
+                    label: "Slot minutes, in order"
+                    enabled: ap.gridTiers
+                    placeholderText: "0, 15, 30, 45"
+                    text: ap.offsetsText
+                    onTextEdited: ap.setOffsets(text)
+                }
+                Quiet { text: "Hourly slots only. What it does: the minute past each hour that is filled first, then the next one, and so on (0, 15, 30, 45 = 12:00 first, then 12:15, then 12:30, then 12:45). What it changes: more minutes = more slots a day (4 minutes give 96 a day). What it could break: minutes closer together than the gap below are refused." }
+            }
+            Field {
+                label: "Gap between slots:"
+                SpinBox2 {
+                    objectName: "autopostGridGap"
+                    label: "Gap between slots"
+                    enabled: ap.gridTiers
+                    suffix: " min"
+                    from: 1
+                    to: 60
+                    want: ap.card.gridGapMinutes
+                    onValueModified: ap.setNum("gridGapMinutes", value, 1, 60)
+                }
+                Quiet { text: "Hourly slots only. What it does: no new post goes up closer than this to any other post, yours from Ujwalam or already on the channel. What it changes: a slot within this many minutes of another post is skipped. What it could break: a small gap lets posts land close together, so viewers see several at once; the old one-hour rule does not apply in this mode." }
+            }
+            Field {
+                label: "Reuse the channel read for:"
+                SpinBox2 {
+                    objectName: "autopostReadReuse"
+                    label: "Reuse the channel read for"
+                    suffix: " min"
+                    from: 0
+                    to: 1440
+                    stepSize: 15
+                    want: ap.card.readReuseMinutes
+                    onValueModified: ap.setNum("readReuseMinutes", value, 0, 1440)
+                }
+                Quiet { text: "What it does: before uploading, Ujwalam reads every post on your channel so no time is doubled. One read can cost up to 401 quota units, so it is used again for this long instead of reading before each upload. What it changes: longer = more uploads a day fit in the quota (120 min lets 100 a day fit; 0 = read before every upload, about 21 a day). What it could break: a post you schedule by hand in YouTube Studio during this time is not seen until the next read, so a new post could land within the gap of it." }
             }
             Field {
                 label: "Posts a day, fewest:"
@@ -1111,7 +1198,7 @@ Column {
             rulesOwn: rulesOwn, rulesProblem: rulesProblem, rules: JSON.parse(JSON.stringify(rulesEdit)), notices: notices.slice(), customNext: customNext.slice(),
             timesInfo: timesInfo, times: times.map(t => t.text), message: message, stuckLockId: stuckLockId,
             prefsLoaded: prefsLoaded, prefs: JSON.parse(JSON.stringify(prefs)), prefsDirty: prefsDirty, prefsError: prefsError, shareSum: shareSum, quotaModel: quotaModel,
-            previewInfo: previewInfo, preview: previewItems.map(i => String(i.title)) };
+            previewInfo: previewInfo, preview: previewItems.map(i => String(i.title)), gridProblem: gridProblem, offsetsText: offsetsText };
     }
 
     // ap-upload:<on|off> | ap-kind:<id>:<on|off> | ap-score:<n> | ap-perday:<n> | ap-gap:<h> | ap-days:<n> | ap-placement:<id>
@@ -1132,6 +1219,10 @@ Column {
         if (a === "ap-daymin" && !isNaN(n)) return setNum("postsPerDayMin", n, 1, 24);
         if (a === "ap-daymax" && !isNaN(n)) return setNum("postsPerDayMax", n, 1, 24);
         if (a === "ap-gapmin" && !isNaN(n)) return setNum("minGapMinutes", n, 60, 1440);
+        // D434: ap-gridgap:<min> | ap-reuse:<min> | ap-tiers:<minutes, comma>
+        if (a === "ap-gridgap" && !isNaN(n)) return setNum("gridGapMinutes", n, 1, 60);
+        if (a === "ap-reuse" && !isNaN(n)) return setNum("readReuseMinutes", n, 0, 1440);
+        if (a === "ap-tiers") return setOffsets(p.slice(1).join(":"));
         if (a === "ap-window" && p.length >= 3) { // ap-window:<from minutes>:<until minutes>
             const s = parseInt(p[1], 10), e = parseInt(p[2], 10);
             if (isNaN(s) || isNaN(e)) return false;

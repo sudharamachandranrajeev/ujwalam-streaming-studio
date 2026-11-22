@@ -51,7 +51,30 @@ export const userScheduleFile = (dataDir) => path.join(dataDir, 'posting', USER_
 // 'custom' (user 2026-11-20: "add the ability to setup custom schedule in app as well"): a weekly plan of exact local times
 // per weekday (customTimes { mon: ['18:00', ...], ... }), DST-safe, filled in order; a time too close to a channel post or
 // already taken is skipped, never moved; skipDates ['YYYY-MM-DD'] are days off. See planCustom below.
-export const PLACEMENTS = Object.freeze(['random-daily', 'fill-gaps', 'after-last', 'custom']);
+// 'grid-tiers' (D434, user 2026-11-22: "upload up to 100 each day ... starting today at 12:00, 13:00, 14:00 ... If those
+// slots get filled, use the quarter slot next (12:15, 13:15 ...), then ... the half mark"): candidate times at every local
+// hour (this PC's clock, DST-safe) at minute tierOffsets[0], over the rolling window floor..now + maxAheadDays; a clip takes
+// the EARLIEST free one; only when no slot of that tier is free anywhere in the window does the next tier
+// (tierOffsets[1], ...) open. Free = no taken time within gridGapMinutes. The 60-minute HARD_GAP floor does not apply in
+// this mode (the user reversed D408 for it); the floor is gridGapMinutes (at most the smallest distance between offsets).
+export const PLACEMENTS = Object.freeze(['grid-tiers', 'random-daily', 'fill-gaps', 'after-last', 'custom']);
+/** Shipped grid-tiers defaults (the user's 2026-11-22 pattern), used when neither file sets them. */
+export const GRID_DEFAULTS = Object.freeze({ tierOffsets: Object.freeze([0, 15, 30, 45]), gridGapMinutes: 15 });
+/** readReuseMinutes when no file sets it: 0 = a channel read before every upload session (the D409 rule, safest). The
+ *  shipped data/posting/schedule.json sets 120 (D434). */
+export const READ_REUSE_DEFAULT = 0;
+/** Checks a tier list and gap together. -> problem text or null. Offsets: unique whole minutes 0..59 (1 to 60 of them);
+ *  the gap may not be wider than the smallest distance between two offsets (counting round the hour). Pure. */
+export function gridProblem(offsets, gap) {
+  if (!Array.isArray(offsets) || !offsets.length || offsets.length > 60 || offsets.some((o) => !Number.isInteger(o) || o < 0 || o > 59)) return 'slot minutes must be whole minutes from 0 to 59';
+  if (new Set(offsets).size !== offsets.length) return 'a slot minute is listed twice';
+  if (!Number.isInteger(gap) || gap < 1 || gap > 60) return 'the gap between slots must be a whole number of minutes from 1 to 60';
+  const s = [...offsets].sort((a, b) => a - b);
+  let d = 60 - (s[s.length - 1] - s[0]);
+  for (let k = 1; k < s.length; k++) d = Math.min(d, s[k] - s[k - 1]);
+  if (gap > d) return `the gap between slots (${gap} min) is wider than the smallest distance between your slot minutes (${d} min)`;
+  return null;
+}
 export const WEEKDAYS = Object.freeze(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
 export const CUSTOM_LIMITS = Object.freeze({ timesPerDay: 24, skipDates: 400 });
 /** PT2 (D408, user 2026-11-21: "only not allowed rule should be ... 1 hr before or after the already scheduled one"): the
@@ -68,8 +91,12 @@ export const USER_LIMITS = Object.freeze({
   postsPerDayMax: { min: 1, max: 24 },
   minGapMinutes: { min: HARD_GAP_MINUTES, max: 1440 },
   seed: { min: 0, max: 2147483647 },
+  // D434: grid-tiers gap (1..60 min; also checked against the slot minutes) and how long one complete channel read is
+  // reused for upload sessions (0 = read again before every session, the D409 behaviour; at most a day).
+  gridGapMinutes: { min: 1, max: 60 },
+  readReuseMinutes: { min: 0, max: 1440 },
 });
-export const USER_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed', 'customTimes', 'skipDates']);
+export const USER_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed', 'customTimes', 'skipDates', 'tierOffsets', 'gridGapMinutes', 'readReuseMinutes']);
 /** The keys the random-daily placement reads (shipped defaults in data/posting/schedule.json, replaced by the user's). */
 export const RANDOM_KEYS = Object.freeze(['postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'seed']);
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -117,6 +144,16 @@ export function checkUserSchedule(j, { strict = false } = {}) {
     const ok = Array.isArray(j.skipDates) && j.skipDates.length <= CUSTOM_LIMITS.skipDates && j.skipDates.every((s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && realDate(s));
     if (ok) values.skipDates = [...new Set(j.skipDates)].sort(); else problems.push({ key: 'skipDates', text: `days off must be dates like 2026-12-25 (up to ${CUSTOM_LIMITS.skipDates})` });
   }
+  if (j.tierOffsets !== undefined) {
+    // Order matters (tier 0 first), so it is kept as given. The gap is checked against them below (and again at load,
+    // with the shipped gap when the user saved none).
+    const p = gridProblem(j.tierOffsets, 1);
+    if (p) problems.push({ key: 'tierOffsets', text: p }); else values.tierOffsets = [...j.tierOffsets];
+  }
+  if (values.tierOffsets && values.gridGapMinutes !== undefined) {
+    const p = gridProblem(values.tierOffsets, values.gridGapMinutes);
+    if (p) problems.push({ key: 'gridGapMinutes', text: p });
+  }
   return { values, problems };
 }
 const ALIGN_STEPS = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60];
@@ -134,7 +171,7 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
     if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) throw new ScheduleError('schedule-config-bad', `schedule setting ${k} must be a number from ${min} to ${max}`);
     return v;
   };
-  const placement = j?.placement ?? 'random-daily';
+  const placement = j?.placement ?? 'grid-tiers';
   if (!PLACEMENTS.includes(placement)) throw new ScheduleError('schedule-config-bad', `schedule setting placement must be one of ${PLACEMENTS.join(', ')}`);
   const alignMinutes = num('alignMinutes', 1, 60);
   if (!ALIGN_STEPS.includes(alignMinutes)) throw new ScheduleError('schedule-config-bad', `schedule setting alignMinutes must divide an hour (${ALIGN_STEPS.join(', ')})`);
@@ -157,8 +194,16 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
     try { u = JSON.parse(readFileSync(userFile, 'utf8')); } catch { throw new ScheduleError('schedule-config-bad', 'your schedule settings file (posting/schedule.json in the data folder) could not be read'); }
     const { values, problems } = checkUserSchedule(u);
     if (problems.length) throw new ScheduleError('schedule-config-bad', `your schedule settings: ${problems.map((p) => p.text).join('; ')}`);
-    for (const k of ['intervalHours', 'maxAheadDays', 'placement', ...RANDOM_KEYS, 'customTimes', 'skipDates']) if (values[k] !== undefined) { cfg[k] = values[k]; cfg.userKeys.push(k); }
+    for (const k of ['intervalHours', 'maxAheadDays', 'placement', ...RANDOM_KEYS, 'customTimes', 'skipDates', 'tierOffsets', 'gridGapMinutes', 'readReuseMinutes']) if (values[k] !== undefined) { cfg[k] = values[k]; cfg.userKeys.push(k); }
   }
+  // grid-tiers (D434): the user's values, else the shipped file's, else GRID_DEFAULTS; then checked together.
+  cfg.tierOffsets ??= Array.isArray(j?.tierOffsets) ? [...j.tierOffsets] : [...GRID_DEFAULTS.tierOffsets];
+  cfg.gridGapMinutes ??= j?.gridGapMinutes ?? GRID_DEFAULTS.gridGapMinutes;
+  cfg.readReuseMinutes ??= j?.readReuseMinutes ?? READ_REUSE_DEFAULT;
+  const gp = gridProblem(cfg.tierOffsets, cfg.gridGapMinutes);
+  if (gp) throw new ScheduleError('schedule-config-bad', `schedule setting ${gp}`);
+  const rr = USER_LIMITS.readReuseMinutes;
+  if (!Number.isInteger(cfg.readReuseMinutes) || cfg.readReuseMinutes < rr.min || cfg.readReuseMinutes > rr.max) throw new ScheduleError('schedule-config-bad', `schedule setting readReuseMinutes must be a whole number from ${rr.min} to ${rr.max}`);
   // random-daily (D403): shipped defaults (a missing key = the user's 2026-11-19 choice), then the checks across keys.
   const rd = { postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', minGapMinutes: HARD_GAP_MINUTES, seed: 0 };
   for (const k of RANDOM_KEYS) if (cfg[k] === undefined) cfg[k] = j?.[k] ?? rd[k];
@@ -175,8 +220,15 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
   }
   // A chunk may only start with at least marginMinutes left, and must end chunkDeadlineSeconds before the time:
   // a deadline at or past the margin would stop every final chunk.
-  // PT2 hard rule: whatever the placement, the gap in use is never under HARD_GAP_MINUTES.
-  if (cfg.intervalHours * 60 < HARD_GAP_MINUTES) cfg.intervalHours = HARD_GAP_MINUTES / 60;
+  if (cfg.placement === 'grid-tiers') {
+    // D434: whole local minutes; every gap (channel posts, the queue, a moved clip) is gridGapMinutes. The user reversed
+    // the 60-minute floor for this mode only.
+    cfg.alignMinutes = 1;
+    cfg.intervalHours = cfg.gridGapMinutes / 60;
+  } else if (cfg.intervalHours * 60 < HARD_GAP_MINUTES) {
+    // PT2 hard rule: in every other placement the gap in use is never under HARD_GAP_MINUTES.
+    cfg.intervalHours = HARD_GAP_MINUTES / 60;
+  }
   cfg.recheckMaxAgeMinutes = typeof j?.recheckMaxAgeMinutes === 'number' && j.recheckMaxAgeMinutes >= 1 && j.recheckMaxAgeMinutes <= 240 ? j.recheckMaxAgeMinutes : 10;
   if (cfg.chunkDeadlineSeconds >= cfg.marginMinutes * 60) throw new ScheduleError('schedule-config-bad', 'schedule setting chunkDeadlineSeconds must be less than marginMinutes');
   return cfg;
@@ -444,6 +496,71 @@ function customKeeps(cfg) {
   return (t) => customDayTimes(localDayKey(t, tz), cfg).includes(t);
 }
 
+// ---------------------------------------------------------------- grid-tiers (D434, user 2026-11-22)
+
+/**
+ * The tier's candidate times (UTC ms, ascending) in [fromMs, toMs]: every local hour of this PC's clock at minute
+ * `offset`. DST-safe: a day of exactly 24 hours that starts at local 00:00 gets its 24 times by adding hours (one zone
+ * lookup per day, so a year is about a thousand lookups, not tens of thousands); a day with a clock change goes hour by
+ * hour through zonedToUtc: a time that does not exist (spring forward) is skipped, a repeated autumn time is the first.
+ */
+export function gridCandidates(fromMs, toMs, offset, cfg) {
+  const tz = zoneOf(cfg); const out = [];
+  if (!(toMs >= fromMs)) return out;
+  let key = localDayKey(fromMs, tz); const lastKey = localDayKey(toMs, tz);
+  while (key <= lastKey) {
+    const [y, m, d] = key.split('-').map(Number);
+    const nk = nextDayKey(key); const [y2, m2, d2] = nk.split('-').map(Number);
+    const s = zonedToUtc(y, m, d, 0, 0, tz); const e = zonedToUtc(y2, m2, d2, 0, 0, tz);
+    const p0 = zonedParts(s, tz);
+    if (e - s === 24 * HOUR_MS && p0.h === 0 && p0.min === 0 && p0.d === d) {
+      for (let h = 0; h < 24; h++) { const t = s + h * HOUR_MS + offset * MINUTE_MS; if (t >= fromMs && t <= toMs) out.push(t); }
+    } else {
+      for (let h = 0; h < 24; h++) {
+        let t = zonedToUtc(y, m, d, h, offset, tz);
+        const same = (x) => { const q = zonedParts(x, tz); return q.y === y && q.m === m && q.d === d && q.h === h && q.min === offset; };
+        if (same(t - HOUR_MS)) t -= HOUR_MS;
+        if (same(t) && t >= fromMs && t <= toMs && (!out.length || t > out[out.length - 1])) out.push(t);
+      }
+    }
+    key = nk;
+  }
+  return out;
+}
+
+/**
+ * grid-tiers slots. slots: the slotter with every kept time (its gap is gridGapMinutes). Each item, in queue order, gets
+ * the earliest free candidate of tier 0 at or after its floor; only when tier 0 has none free in the whole window,
+ * tier 1, and so on; none in any tier = waits (at null). The candidates are built once per pass. Per (tier, floor) a
+ * cursor remembers where the last search ended (candidates before it were taken then, and taken times only grow), so a
+ * pass over a big backlog is about O((candidates + items) x log taken), never a scan per clip from the start. Pure.
+ */
+function planGridTiers(moving, slots, nowMs, cfg) {
+  const cap = maxAheadMs(nowMs, cfg);
+  const floorOf = (i) => {
+    const retry = isRetry(i, nowMs, cfg);
+    const next = retry && typeof i.nextAt === 'string' ? Date.parse(i.nextAt) : NaN;
+    return floorFrom(Number.isFinite(next) && next > nowMs ? next : nowMs, cfg);
+  };
+  const floors = moving.map(floorOf);
+  if (!moving.length) return [];
+  const start = Math.min(...floors);
+  const tiers = cfg.tierOffsets.map((o) => gridCandidates(start, cap, o, cfg));
+  const lowerBound = (a, v) => { let lo = 0; let hi = a.length; while (lo < hi) { const md = (lo + hi) >> 1; if (a[md] < v) lo = md + 1; else hi = md; } return lo; };
+  const cursor = new Map();
+  return moving.map((i, n) => {
+    const f = floors[n]; const retry = isRetry(i, nowMs, cfg);
+    for (let k = 0; k < tiers.length; k++) {
+      const c = tiers[k]; const ck = `${k}:${f}`;
+      let x = Math.max(cursor.get(ck) ?? 0, lowerBound(c, f));
+      while (x < c.length && slots.conflict(c[x]) !== null) x++;
+      cursor.set(ck, x);
+      if (x < c.length) { slots.add(c[x]); return { id: i.id, at: c[x], retry }; }
+    }
+    return { id: i.id, at: null, retry };
+  });
+}
+
 export function planQueueSlots({ items, channelLast = null, channelTimes = [], nowMs, cfg }) {
   const list = (items ?? []).filter(isPlain);
   const needs = (i) => i.state === 'queued' && (!i.publishAt || isRetry(i, nowMs, cfg));
@@ -463,6 +580,7 @@ export function planQueueSlots({ items, channelLast = null, channelTimes = [], n
   const moving = list.filter((i) => needs(i) || reval.has(i.id));
   if (cfg.placement === 'random-daily') return planRandomDaily(moving, slots, nowMs, cfg).map((p) => ({ ...p, reval: reval.has(p.id) }));
   if (cfg.placement === 'custom') return planRandomDaily(moving, slots, nowMs, cfg, customPicks(cfg)).map((p) => ({ ...p, reval: reval.has(p.id) }));
+  if (cfg.placement === 'grid-tiers') return planGridTiers(moving, slots, nowMs, cfg).map((p) => ({ ...p, reval: reval.has(p.id) }));
   const cap = maxAheadMs(nowMs, cfg);
   const gap = cfg.intervalHours * HOUR_MS;
   const out = [];
@@ -507,7 +625,8 @@ export function savedChannelTimes(queueDoc, nowMs) {
 export function slotClash({ item, items = [], channelTimes = [], cfg }) {
   const t = ms(item?.publishAt);
   if (t === null) return null;
-  const gap = Math.max(cfg.intervalHours * 60, HARD_GAP_MINUTES) * MINUTE_MS;
+  // D434: grid-tiers uses its own gap (the user's minimum); every other placement keeps the 60-minute floor.
+  const gap = (cfg.placement === 'grid-tiers' ? cfg.intervalHours * 60 : Math.max(cfg.intervalHours * 60, HARD_GAP_MINUTES)) * MINUTE_MS;
   const others = [...channelTimes, ...items.filter((i) => isPlain(i) && i.id !== item.id).flatMap(itemTimes)];
   for (const x of others) if (Number.isFinite(x) && Math.abs(x - t) < gap) return x;
   return null;

@@ -7,9 +7,9 @@
 //            counts insert + thumbnail units (quota.json), every API read (schedule reads, status checks for the
 //            delete) 1 unit.
 // Admission: an upload may start only while units + one upload <= quotaUnitsPerDay - readReserveUnits; reads may use the
-// whole quota. The "uploads a day fit" number counts each upload as its own units plus one full channel read at its
-// worst (1 + 2 x maxPages; the channel is read again before every upload session, Codex review 2026-11-21), so a fit of
-// 0 never uploads. After YouTube's quotaExceeded nothing uploads before the next Pacific midnight (quota-model.json
+// whole quota. The "uploads a day fit" number counts each upload as its own units plus the day's channel reads at their
+// worst (1 + 2 x maxPages each): one read per readReuseMinutes period, never more than one per upload (D434; with
+// readReuseMinutes 0 a read before every upload session, D409), so a fit of 0 never uploads. After YouTube's quotaExceeded nothing uploads before the next Pacific midnight (quota-model.json
 // exhaustedUntil), and under the fallback the day's earlier bucket-model uploads are recounted at insertUnits each.
 // Every check and its charge run in ONE transaction (BEGIN IMMEDIATE ... COMMIT, busy timeout BUSY_WAIT_MS), so the
 // chain and the studio server never lose a charge or both pass the same last slot. SQLite's file lock is held by the OS
@@ -43,7 +43,7 @@ export const QUOTA_MODELS = Object.freeze(['upload-bucket', 'unit-sum']);
 /** Plain words for the Settings quota line and the task bar. */
 export const QUOTA_MODEL_TEXT = Object.freeze({
   'upload-bucket': "Uploads use YouTube's own upload allowance (up to 100 a day); each one still costs 50 quota units for its cover picture.",
-  'unit-sum': 'Uploads are counted the old way: 1,650 quota units each, plus a channel read before each one, so about 5 a day fit in 10,000 units.',
+  'unit-sum': 'Uploads are counted the old way: 1,650 quota units each, plus the channel reads, so only a few a day fit in 10,000 units.',
   fallback: 'YouTube said the upload quota was used up, so uploads wait for tomorrow and are counted the old way (1,650 units each) until then.',
 });
 export const BUSY_WAIT_MS = 3 * 1000;
@@ -92,26 +92,43 @@ export function loadQuota(dataDir, file = DEFAULT_QUOTA, { nowMs = Date.now() } 
   const insert = model === 'upload-bucket' ? (Number.isFinite(j?.insertUnits) && j.insertUnits >= 0 ? j.insertUnits : null) : n('insertUnits');
   const perUpload = model === 'upload-bucket' ? thumb : insert + thumb;
   const bucket = model === 'upload-bucket' ? Math.floor(n('uploadBucketPerDay')) : null;
-  // Codex review 2026-11-21 (D409): the channel is read again before every upload session, so each upload's share of the
-  // sum also carries one full read at its worst (1 + 2 x maxPages units, the amount reserved before the read).
-  const readPerUpload = readUnitsPerSession(dataDir);
-  const each = perUpload + readPerUpload;
-  let fit = Math.max(0, each > 0 ? Math.floor((quota - reserve) / each) : MAX_PER_DAY);
-  if (bucket !== null) fit = Math.min(fit, bucket);
+  // D434: one complete channel read (1 + 2 x maxPages units at its worst, the amount reserved before it) serves every
+  // upload session while it is younger than readReuseMinutes, so a day pays at most ceil(1440 / readReuseMinutes) reads
+  // (and never more reads than uploads). readReuseMinutes 0 = a read before every session (D409): one read per upload.
+  const { readUnits, readReuseMinutes } = readModel(dataDir);
+  const readsPerDayMax = readReuseMinutes > 0 ? Math.ceil(1440 / readReuseMinutes) : null;
+  const fit = uploadsFit({ quota, reserve, perUpload, readUnits, readsPerDayMax, cap: bucket === null ? MAX_PER_DAY : Math.min(bucket, MAX_PER_DAY) });
   const ex = exhaustedUntil(dataDir, nowMs);
-  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, readUnitsPerUpload: readPerUpload, insertUnits: insert, readReserveUnits: reserve, uploadsPerDayFit: Math.min(fit, MAX_PER_DAY), userSet: user.quotaUnitsPerDay !== undefined,
+  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, readUnitsPerRead: readUnits, readReuseMinutes, readsPerDayMax, insertUnits: insert, readReserveUnits: reserve, uploadsPerDayFit: fit, maxPerDay: MAX_PER_DAY, userSet: user.quotaUnitsPerDay !== undefined,
     model, uploadsCap: bucket, fallback: fb, exhaustedUntil: ex, modelText: fb ? QUOTA_MODEL_TEXT.fallback : QUOTA_MODEL_TEXT[model] };
 }
 
-/** The units one channel schedule read may use at most: 1 + 2 x maxPages (the user's schedule settings, else the shipped
- *  file). Throws QuotaError when neither gives a valid maxPages. */
-export function readUnitsPerSession(dataDir) {
+/** The most uploads n (0..cap) a day with n x perUpload + reads(n) x readUnits <= quota - reserve, where reads(n) = n
+ *  (readsPerDayMax null: a read per upload) or min(n, readsPerDayMax). The Settings card does the same sum. Pure. */
+export function uploadsFit({ quota, reserve, perUpload, readUnits, readsPerDayMax = null, cap }) {
+  const room = quota - reserve;
+  let n = 0;
+  while (n < cap) {
+    const m = n + 1;
+    const reads = readsPerDayMax === null ? m : Math.min(m, readsPerDayMax);
+    if (m * perUpload + reads * readUnits > room) break;
+    n = m;
+  }
+  return n;
+}
+
+/** The units one channel schedule read may use at most (1 + 2 x maxPages) and readReuseMinutes (the user's schedule
+ *  settings, else the shipped file). Throws QuotaError when neither gives a valid maxPages. */
+export function readModel(dataDir) {
   let cfg = null;
   try { cfg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: typeof dataDir === 'string' ? userScheduleFile(dataDir) : null }); } catch { cfg = readJson(DEFAULT_SCHEDULE); }
   const p = cfg?.maxPages;
   if (!Number.isInteger(p) || p < 1) throw new QuotaError('quota-unreadable', 'schedule setting maxPages is not valid');
-  return 1 + 2 * p;
+  const r = cfg?.readReuseMinutes;
+  return { readUnits: 1 + 2 * p, readReuseMinutes: Number.isInteger(r) && r >= 0 && r <= 1440 ? r : 0 };
 }
+/** The units one channel schedule read may use at most: 1 + 2 x maxPages. */
+export const readUnitsPerSession = (dataDir) => readModel(dataDir).readUnits;
 
 /** The first moment of the next Pacific day after t (ms): Google resets the quota at midnight Pacific time. */
 export function nextPacificMidnight(t) {

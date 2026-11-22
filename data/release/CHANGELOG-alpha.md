@@ -2,6 +2,10 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.41 — 2026-11-22
+
+- Auto-post: up to 100 uploads a day, YouTube's own limit. The new "Hourly slots, a year ahead" schedule fills every hour (12:00, 13:00 ...) from today up to a year ahead, then the quarter past (12:15 ...), then the half hour, keeping each post 15 minutes from any other. It always counts from today. Slot minutes, the gap, how far ahead and how long one channel read is reused are on the Auto-post card, each with what it does and what it could break. Your saved schedule stays as it is until you pick the new one.
+
 ## 0.1.0-alpha.40 — 2026-11-22
 
 - Settings no longer freezes the window. Opening it built every page and every button shadow at once (about 11 s measured); pages are now made when first shown and shadows when first on screen (well under 1 s). The download list no longer rebuilds every row each second, and the status check no longer redraws panels when nothing changed.

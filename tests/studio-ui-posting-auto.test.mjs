@@ -71,9 +71,9 @@ describe('auto-post settings routes (D375)', () => {
     const r = await t.get('/ui/api/posts/auto/settings');
     assert.equal(r.status, 200);
     const j = r.json();
-    assert.equal(j.exists, false); assert.equal(j.card.intervalHours, 1); assert.equal(j.card.maxAheadDays, 60);
-    assert.equal(j.quota.uploadsPerDayFit, 21); // D430: (10000 - 100) / (50 + 401)
-    assert.equal(j.limits.maxPerDay, 24); assert.equal(j.quota.model, 'upload-bucket'); // PT2 (D408)
+    assert.equal(j.exists, false); assert.equal(j.card.intervalHours, 1); assert.equal(j.card.maxAheadDays, 365);
+    assert.equal(j.quota.uploadsPerDayFit, 100); // D434: 100 x 50 + 12 reads x 401 (one per 120 min) <= 10000 - 100
+    assert.equal(j.limits.maxPerDay, 100); assert.equal(j.quota.model, 'upload-bucket'); // D434 (was 24, PT2 D408)
     assert.deepEqual(j.flags, { autoPost: false, schedule: false, deleteUploaded: false });
   });
 

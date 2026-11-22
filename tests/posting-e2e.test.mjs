@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
-import { createPostChain, createUploadQueue, readQueueSummary, requestRunNow } from '../services/posting/auto-chain.mjs';
+import { QUEUE_NAME, createPostChain, createUploadQueue, readQueueSummary, requestRunNow } from '../services/posting/auto-chain.mjs';
 import { createPostStore } from '../services/posting/index.mjs';
 import { videoBinding } from '../services/posting/clips-source.mjs';
 import { checkPostStatus } from '../services/posting/youtube.mjs';
@@ -838,6 +838,36 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     const second = e.queue().items()[1];
     assert.equal(second.state, 'queued'); assert.equal(second.reason, 'schedule-read-failed'); assert.equal(second.attempts, 0);
     assert.equal(g.count('channels'), 2, 'read again right before the second session');
+  });
+
+  // ---- D434 read reuse (user 2026-11-22: up to 100 uploads a day) ----
+  test('D434: one complete read serves the next session while it is younger than readReuseMinutes; older = read again', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0], ROWS[2]]); g.opt.hideOwnUploads = true;
+    const c = schedChain(e, g, { scheduleFile: schedFile(e, { readReuseMinutes: 120 }) });
+    await c.afterRun(e.runDir, IDLE);
+    assert.equal(g.videos.length, 2, 'both went up');
+    assert.equal(g.count('channels'), 1, 'one read served both sessions');
+    const [a, b] = e.queue().items();
+    assert.ok(Math.abs(Date.parse(a.sentPublishAt) - Date.parse(b.sentPublishAt)) >= 6 * HOUR, 'the slot given out since the read stayed taken');
+    // A saved read older than the reuse time is never used: the next session reads again.
+    const e2 = setup([ROWS[0]]); const g2 = await fakeGoogle(); g2.opt.hideOwnUploads = true;
+    const qf = path.join(e2.dataDir, 'posting', QUEUE_NAME);
+    mkdirSync(path.dirname(qf), { recursive: true });
+    writeFileSync(qf, JSON.stringify({ version: 1, items: {}, note: null, schedule: { channelLast: null, channelTimes: [], recentTimes: [], truncated: false, readAt: iso(e2.clock.t - 121 * MIN) } }));
+    await schedChain(e2, g2, { scheduleFile: schedFile(e2, { readReuseMinutes: 120 }) }).afterRun(e2.runDir, IDLE);
+    assert.equal(g2.count('channels'), 1, 'read again'); assert.equal(g2.videos.length, 1);
+  });
+
+  test('D434: an incomplete (page cap) read is never reused: nothing uploads, and the next pass reads again', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]);
+    g.opt.channel = Array.from({ length: 120 }, (_, k) => vid(`p${k}`, 'public', null));
+    const c = schedChain(e, g, { scheduleFile: schedFile(e, { maxPages: 2, pageSize: 50, readReuseMinutes: 120 }) });
+    await c.afterRun(e.runDir, IDLE);
+    assert.equal(g.count('init'), 0); assert.equal(e.queue().items()[0].reason, 'schedule-read-incomplete');
+    const before = g.count('channels');
+    e.clock.t += 31 * MIN; await c.tick(IDLE);
+    assert.equal(g.count('init'), 0, 'still nothing uploads');
+    assert.ok(g.count('channels') > before, 'the truncated read was not reused: read again');
   });
 
   test('D409: an incomplete (page cap) read right before a session: nothing uploads', async () => {

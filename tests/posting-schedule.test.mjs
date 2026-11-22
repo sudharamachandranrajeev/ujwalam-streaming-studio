@@ -39,17 +39,18 @@ const minGap = (times) => { const s = [...times].sort((a, b) => a - b); let m = 
 describe('slot math (UTC, pure)', () => {
   test('settings come from data/posting/schedule.json (random-daily since D403; fill-gaps keeps 1 h gap, whole hours; 2 months ahead, with source and date)', () => {
     const cfg = loadScheduleConfig();
-    // D403: the shipped placement is random-daily, whose gap is minGapMinutes on the minute grid (PT2, D408: 60, the floor).
-    assert.equal(cfg.placement, 'random-daily'); assert.equal(cfg.intervalHours, 1); assert.equal(cfg.alignMinutes, 1);
+    // D434: the shipped placement is grid-tiers, whose gap is gridGapMinutes (15) on the minute grid (no 60-minute floor).
+    assert.equal(cfg.placement, 'grid-tiers'); assert.equal(cfg.intervalHours, 0.25); assert.equal(cfg.alignMinutes, 1);
+    assert.deepEqual([cfg.tierOffsets, cfg.gridGapMinutes, cfg.readReuseMinutes], [[0, 15, 30, 45], 15, 120]);
     const d0 = mk(); const u0 = userScheduleFile(d0); mkdirSync(path.dirname(u0), { recursive: true }); writeFileSync(u0, JSON.stringify({ placement: 'fill-gaps' }));
     const fg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: u0 });
     assert.equal(fg.intervalHours, 1); assert.equal(fg.placement, 'fill-gaps'); assert.equal(fg.alignMinutes, 60);
-    assert.equal(cfg.maxAheadDays, 60); assert.ok(cfg.lookbackDays >= cfg.maxAheadDays);
+    assert.equal(cfg.maxAheadDays, 365); // D434: a year ahead, rolling
     assert.ok(cfg.minLeadHours > 0 && cfg.marginMinutes > 0 && cfg.maxPages >= 1 && cfg.pageSize <= 50);
     assert.equal(cfg.chunkDeadlineSeconds, 120); assert.ok(cfg.chunkDeadlineSeconds < cfg.marginMinutes * 60 && cfg.fallbackKbps >= 64);
     assert.deepEqual(cfg.userKeys, []);
     const raw = JSON.parse(readFileSync(DEFAULT_SCHEDULE, 'utf8'));
-    assert.match(raw.source, /user 2026-11-13/); assert.match(raw.source, /every one hour for the next 2 months/); assert.equal(raw.checked, '2026-11-21');
+    assert.match(raw.source, /user 2026-11-13/); assert.match(raw.source, /every one hour for the next 2 months/); assert.equal(raw.checked, '2026-11-22'); assert.match(raw.source, /user 2026-11-22/);
     assert.match(raw.source, /user 2026-11-19/); assert.match(raw.source, /user 2026-11-21/);
     assert.equal(raw.minGapMinutes, 60, 'PT2 (D408): the one hard rule, 60 min, is the default and the floor');
   });
@@ -66,7 +67,7 @@ describe('slot math (UTC, pure)', () => {
   test("the user's own settings file (<data>/posting/schedule.json) replaces gap, days ahead and placement; a bad one is refused", () => {
     const d = mk(); const u = userScheduleFile(d);
     assert.equal(u, path.join(d, 'posting', 'schedule.json'));
-    assert.equal(loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: u }).placement, 'random-daily', 'no user file: the shipped values');
+    assert.equal(loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: u }).placement, 'grid-tiers', 'no user file: the shipped values');
     mkdirSync(path.dirname(u), { recursive: true });
     writeFileSync(u, JSON.stringify({ intervalHours: 6, maxAheadDays: 730, placement: 'after-last', quotaUnitsPerDay: 20000 }));
     const c = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: u });

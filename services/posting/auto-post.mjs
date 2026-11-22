@@ -23,10 +23,16 @@ export const UPLOAD_TARGET = 'youtube-shorts';
 /** Targets the auto chain may upload (private YouTube). youtube-video is for finished videos that are not Shorts (D301). */
 export const UPLOAD_TARGETS = Object.freeze(['youtube-shorts', 'youtube-video']);
 export const RULE_KINDS = Object.freeze(['short', 'montage', 'won-reel', 'impact-play', 'long-highlights']); // D406: the long highlights video
-/** Highest allowed uploads per day (a rule's or the global cap). PT2 (D408): the one hard rule (60 min between any two
- *  scheduled posts, schedule.mjs HARD_GAP_MINUTES) allows at most 24 a day; YouTube's own videos.insert ceiling is 100 a
- *  day (developers.google.com/youtube/v3/determine_quota_cost, fetched 2026-11-13), so the gap is the ceiling here. */
-export const MAX_PER_DAY = 24;
+/** Highest allowed uploads per day (a rule's or the global cap): maxUploadsPerDay in data/posting/quota.json (D434, user
+ *  2026-11-22: "YouTube allows me to upload 100 videos/reels a day - that's the max"; YouTube's own videos.insert ceiling).
+ *  PT2 (D408) held it at 24 for the 60-minute gap; the grid-tiers placement (15-minute gap) can fill 96 a day and more
+ *  with more slot minutes. A missing or bad value falls back to 24 (lower, never higher). */
+export const MAX_PER_DAY = (() => {
+  try {
+    const v = JSON.parse(readFileSync(new URL('../../data/posting/quota.json', import.meta.url), 'utf8'))?.maxUploadsPerDay;
+    return Number.isInteger(v) && v >= 1 && v <= 1000 ? v : 24;
+  } catch { return 24; }
+})();
 /** Rules files written before PT2 allowed up to 100 a day; such a value reads as MAX_PER_DAY (lower, never higher). */
 const LEGACY_MAX_PER_DAY = 100;
 const liftCap = (v) => (Number.isInteger(v) && v > MAX_PER_DAY && v <= LEGACY_MAX_PER_DAY ? MAX_PER_DAY : v);

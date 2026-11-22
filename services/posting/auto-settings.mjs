@@ -24,7 +24,7 @@ export { DEFAULT_QUOTA, loadQuota };
 /** The two rules the card writes: one per YouTube target (the target is chosen by length and aspect, limits.json). */
 export const CARD_RULES = Object.freeze([{ id: 'auto-shorts', target: 'youtube-shorts' }, { id: 'auto-videos', target: 'youtube-video' }]);
 /** The schedule settings the card shows and saves (D375, D403); the seed is never on the card (made once, kept). */
-export const CARD_SCHEDULE_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'customTimes', 'skipDates']);
+export const CARD_SCHEDULE_KEYS = Object.freeze(['intervalHours', 'maxAheadDays', 'placement', 'quotaUnitsPerDay', 'postsPerDayMin', 'postsPerDayMax', 'windowStart', 'windowEnd', 'minGapMinutes', 'customTimes', 'skipDates', 'tierOffsets', 'gridGapMinutes', 'readReuseMinutes']);
 export const KIND_LABELS = Object.freeze({ short: 'Short clips', montage: 'Montages', 'won-reel': 'Won-round reels', 'impact-play': 'Impact plays', 'long-highlights': 'Long highlights videos' });
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
@@ -56,8 +56,9 @@ export function defaultCard(dataDir) {
   let cfg; // a broken user file is reported by readAutoPostSettings; the defaults still come from the shipped one
   try { cfg = scheduleConfigFor(dataDir); } catch { cfg = loadScheduleConfig(DEFAULT_SCHEDULE); }
   return { autoUpload: true, kinds: [...RULE_KINDS], minScore: rankerMinScore() ?? 0, maxPerDay: Math.max(1, q.uploadsPerDayFit),
-    intervalHours: cfg.placement === 'random-daily' || cfg.placement === 'custom' ? userOr(dataDir, 'intervalHours', cfg) : cfg.intervalHours, maxAheadDays: cfg.maxAheadDays, placement: cfg.placement, quotaUnitsPerDay: q.quotaUnitsPerDay,
-    postsPerDayMin: cfg.postsPerDayMin, postsPerDayMax: cfg.postsPerDayMax, windowStart: cfg.windowStart, windowEnd: cfg.windowEnd, minGapMinutes: cfg.minGapMinutes, customTimes: cfg.customTimes ?? {}, skipDates: cfg.skipDates ?? [] };
+    intervalHours: cfg.placement === 'random-daily' || cfg.placement === 'custom' || cfg.placement === 'grid-tiers' ? userOr(dataDir, 'intervalHours', cfg) : cfg.intervalHours, maxAheadDays: cfg.maxAheadDays, placement: cfg.placement, quotaUnitsPerDay: q.quotaUnitsPerDay,
+    postsPerDayMin: cfg.postsPerDayMin, postsPerDayMax: cfg.postsPerDayMax, windowStart: cfg.windowStart, windowEnd: cfg.windowEnd, minGapMinutes: cfg.minGapMinutes, customTimes: cfg.customTimes ?? {}, skipDates: cfg.skipDates ?? [],
+    tierOffsets: [...cfg.tierOffsets], gridGapMinutes: cfg.gridGapMinutes, readReuseMinutes: cfg.readReuseMinutes };
 }
 
 /** intervalHours as saved or shipped (random-daily replaces the one in use by minGapMinutes; the card still shows the
@@ -260,7 +261,7 @@ export function schedulePreview(dataDir, { nowMs = Date.now(), count = 10, chann
     queue: items.filter((i) => i.state === 'queued' || i.state === 'uploading' || (i.state === 'done' && ms(shown(i)) > nowMs))
       .map((i) => ({ id: i.id, state: i.state, publishAt: shown(i), reason: i.reason ?? null, movable: i.state === 'queued' && !i.session }))
       .sort((a, b) => (ms(a.publishAt) ?? Infinity) - (ms(b.publishAt) ?? Infinity)),
-    next, intervalHours: cfg.intervalHours, placement: cfg.placement, maxAheadDays: cfg.maxAheadDays, minGapMinutes: cfg.minGapMinutes,
+    next, intervalHours: cfg.intervalHours, placement: cfg.placement, maxAheadDays: cfg.maxAheadDays, minGapMinutes: cfg.minGapMinutes, gridGapMinutes: cfg.gridGapMinutes, tierOffsets: cfg.tierOffsets,
     channelReadAt: channel ? (channel.readAt ?? toIso(nowMs)) : (doc.schedule?.readAt ?? null),
     source: channel ? 'live' : doc.schedule ? 'saved' : 'none',
   };
@@ -287,7 +288,7 @@ export function moveQueueItem(dataDir, id, at, { nowMs = Date.now() } = {}) {
   const doc = { schedule: q.schedule() };
   const others = q.items().filter((i) => i.id !== id).flatMap(itemTimes);
   const gap = cfg.intervalHours * HOUR_MS;
-  if ([...savedChannelTimes(doc, nowMs), ...others].some((x) => Math.abs(x - t) < gap)) return no('taken', `another post is less than ${cfg.intervalHours} h from that time`);
+  if ([...savedChannelTimes(doc, nowMs), ...others].some((x) => Math.abs(x - t) < gap)) return no('taken', `another post is less than ${Math.round(cfg.intervalHours * 60)} min from that time`);
   const item = q.patch(id, { publishAt: toIso(t), slotAt: toIso(nowMs), reslot: null, movedByUser: true,
     ...(typeof it.reason === 'string' && (it.reason.startsWith('schedule-') || SCHEDULE_REASONS.has(it.reason)) ? { reason: null, nextAt: null } : {}) });
   return { ok: true, item };

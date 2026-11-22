@@ -75,7 +75,7 @@ describe('PT2 the one hard rule', () => {
   });
 
   test('slotClash: the check right before an upload session starts', () => {
-    const cfg = cfgWith({ minGapMinutes: 60 });
+    const cfg = cfgWith({ placement: 'random-daily', minGapMinutes: 60 }); // D434: grid-tiers (the shipped placement) has its own gap
     const t = Date.parse('2026-11-22T12:00:00Z');
     const item = { id: 'a', state: 'queued', publishAt: new Date(t).toISOString() };
     assert.equal(slotClash({ item, items: [item], channelTimes: [t + 61 * MIN, t - 60 * MIN], cfg }), null);
@@ -85,23 +85,25 @@ describe('PT2 the one hard rule', () => {
   });
 });
 
-describe('PT2 posts a day up to 24 everywhere', () => {
-  test('rules: 1..24; a value from before PT2 (25..100) reads as 24', () => {
-    assert.equal(MAX_PER_DAY, 24);
+describe('D434 uploads a day up to 100 (was 24 in PT2)', () => {
+  test('rules: 1..100 (data/posting/quota.json maxUploadsPerDay); 101 is refused', () => {
+    assert.equal(MAX_PER_DAY, 100);
+    assert.equal(JSON.parse(readFileSync(new URL('../data/posting/quota.json', import.meta.url), 'utf8')).maxUploadsPerDay, 100);
     const r = validateRules({ maxUploadsPerDay: 60, rules: [{ id: 'a', target: 'youtube-shorts', minScore: 0, maxPerDay: 100 }] });
-    assert.equal(r.maxUploadsPerDay, 24); assert.equal(r.rules[0].maxPerDay, 24);
+    assert.equal(r.maxUploadsPerDay, 60); assert.equal(r.rules[0].maxPerDay, 100);
     assert.equal(validateRules({ rules: [{ id: 'a', target: 'youtube-shorts', minScore: 0, maxPerDay: 24 }] }).rules[0].maxPerDay, 24);
     assert.throws(() => validateRules({ rules: [{ id: 'a', target: 'youtube-shorts', minScore: 0, maxPerDay: 101 }] }), { code: 'bad-rules' });
-    assert.ok(checkCard({ autoUpload: true, kinds: ['short'], minScore: 0, maxPerDay: 25 }).problems.some((p) => p.key === 'maxPerDay'));
+    assert.ok(checkCard({ autoUpload: true, kinds: ['short'], minScore: 0, maxPerDay: 101 }).problems.some((p) => p.key === 'maxPerDay'));
+    assert.equal(checkCard({ autoUpload: true, kinds: ['short'], minScore: 0, maxPerDay: 100 }).problems.length, 0);
     assert.equal(checkCard({ autoUpload: true, kinds: ['short'], minScore: 0, maxPerDay: 24, postsPerDayMax: 24, postsPerDayMin: 1 }).problems.length, 0);
   });
 });
 
 describe('PT2 quota: the upload bucket by default, the unit sum after quotaExceeded', () => {
-  test('bucket by default: 21 a day fit ((10000 - 100) / (50 + 401 read units), D430), covers cost 50 units each; the line says which model', () => {
+  test('bucket by default: 100 a day fit (100 x 50 + 12 reads x 401 <= 10000 - 100, D434 read reuse 120 min), covers cost 50 units each; the line says which model', () => {
     const d = mk();
     const q = loadQuota(d, undefined, { nowMs: NOW });
-    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.perUploadUnits], ['upload-bucket', 21, 100, 50]);
+    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.perUploadUnits, q.readsPerDayMax], ['upload-bucket', 100, 100, 50, 12]);
     assert.match(q.modelText, /up to 100 a day/);
     assert.equal(quotaFallback(d, NOW), null);
   });
@@ -111,9 +113,8 @@ describe('PT2 quota: the upload bucket by default, the unit sum after quotaExcee
     const s = recordQuotaExceeded(d, NOW);
     assert.equal(s.model, 'unit-sum');
     const q = loadQuota(d, undefined, { nowMs: NOW });
-    // (10000 - 100) / (1650 + 401 read units a session) = 4 (Codex review 2026-11-21: a channel read before each upload;
-    // D430: 200 pages)
-    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.readUnitsPerUpload], ['unit-sum', 4, null, 401]);
+    // 4 x 1650 + 4 reads x 401 = 8204 <= 9900; 5 would need 10255 (D430: 200 pages; D434: reads per 120 min, never more than uploads)
+    assert.deepEqual([q.model, q.uploadsPerDayFit, q.uploadsCap, q.readUnitsPerRead], ['unit-sum', 4, null, 401]);
     assert.match(q.modelText, /used up/);
     assert.equal(loadQuota(d, undefined, { nowMs: NOW + 24 * HOUR }).model, 'unit-sum', 'the next day still counts the old way');
     assert.equal(loadQuota(d, undefined, { nowMs: NOW + 48 * HOUR }).model, 'upload-bucket', 'then the bucket is tried again');

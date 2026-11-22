@@ -356,6 +356,23 @@ function writeJsonAtomic(file, obj) {
 }
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 
+/** D434: the saved channel read when it may be used again now, else null. Only a complete read (truncated exactly false,
+ *  every list present) saved less than cfg.readReuseMinutes ago (and not in the future: a clock moved back never makes
+ *  an old read look new) qualifies. -> { times, recent, last } (ms). Pure. */
+export function reusableRead(s, nowMs, cfg) {
+  const reuse = cfg?.readReuseMinutes;
+  if (!Number.isInteger(reuse) || reuse <= 0 || !isPlain(s) || s.truncated !== false) return null;
+  const at = typeof s.readAt === 'string' ? Date.parse(s.readAt) : NaN;
+  if (!Number.isFinite(at) || at > nowMs + 60 * 1000 || nowMs - at >= reuse * 60 * 1000) return null;
+  if (!Array.isArray(s.channelTimes) || !Array.isArray(s.recentTimes)) return null;
+  const list = (a) => a.map((v) => Date.parse(v));
+  const times = list(s.channelTimes); const recent = list(s.recentTimes);
+  if (![...times, ...recent].every(Number.isFinite)) return null;
+  const last = typeof s.channelLast === 'string' ? Date.parse(s.channelLast) : null;
+  if (last !== null && !Number.isFinite(last)) return null;
+  return { times, recent, last };
+}
+
 // ---------------------------------------------------------------- queue
 
 export function createUploadQueue(file, now = () => Date.now()) {
@@ -602,7 +619,8 @@ export function createPostChain(opts) {
   // D409 (second Codex review): state of the CURRENT schedule-lock hold (reset when a hold starts; a pass runs in one).
   //   holdTimes: channel times of the last complete read made in this hold (null = none yet); a resumed session's
   //     publishAt is checked against it.
-  //   freshUnused: that read has not served a new upload session yet (one read serves at most one new session).
+  //   freshUnused: that read has not served a new upload session yet (one read serves at most one new session; D434: a
+  //     saved complete read younger than readReuseMinutes counts as a new read, so it can serve the next session too).
   //   readFail: the reason code of the last read that failed or was incomplete in this hold.
   //   curHold: the current hold ({ held() }); every channel read is followed by an ownership check.
   let holdTimes = null; let freshUnused = false; let readFail = null; let curHold = null;
@@ -630,6 +648,15 @@ export function createPostChain(opts) {
       for (const i of recheck) queue.patch(i.id, { reason: code, nextAt: new Date(t + delay).toISOString() });
       log(`posting: ${REASON_TEXT[code] ?? code}; ${need.length + recheck.length} clip(s) wait for a checked publish time`);
     };
+    // D434 (user 2026-11-22, up to 100 uploads a day): a COMPLETE channel read saved by this chain less than
+    // readReuseMinutes ago is used again instead of a new read (a read can cost 401 units; one before every session
+    // capped the day at 21). Slots given out since that read are in the queue, so they stay taken. An incomplete
+    // (truncated) read is never reused: it blocks as before. readReuseMinutes 0 = always read (D409).
+    const saved = reusableRead(queue.schedule(), t, cfg);
+    if (saved) {
+      if (curHold && !curHold.held()) { wait('schedule-busy', BASE_DELAY_MS); return cfg; }
+      return planFrom(saved, t, cfg);
+    }
     // The read costs 1 unit per call: channels.list + 2 per page at most (a quick look first; reserved below).
     const readWhy = budget.readBlock(1 + 2 * cfg.maxPages);
     if (readWhy) { wait(readWhy, SIGNIN_WAIT_MS); return cfg; }
@@ -657,10 +684,15 @@ export function createPostChain(opts) {
       count: read.count, scanned: read.scanned, truncated: read.truncated, readAt: toIso(tr) });
     // Page cap hit: an older scheduled post could be past the pages read, so no slot is given out (never a guess).
     if (read.truncated) { wait('schedule-read-incomplete', SIGNIN_WAIT_MS); return cfg; }
-    holdTimes = [...(read.times ?? []), ...(read.recent ?? []), ...(read.last !== null && read.last !== undefined ? [read.last] : [])];
+    return planFrom({ times: read.times ?? [], recent: read.recent ?? [], last: read.last ?? null }, tr, cfg, t);
+  }
+
+  /** Plans slots from a complete channel read (fresh, or a saved one young enough to reuse). tr: the planning time. */
+  function planFrom(read, tr, cfg, t = tr) {
+    holdTimes = [...read.times, ...read.recent, ...(read.last !== null ? [read.last] : [])];
     freshUnused = true; readFail = null;
     // D375 slots for new items and D314 retries: the gaps around the channel's scheduled and recent posts (schedule.mjs).
-    const plan = planQueueSlots({ items: queue.items(), channelLast: read.last, channelTimes: [...(read.times ?? []), ...(read.recent ?? [])], nowMs: tr, cfg });
+    const plan = planQueueSlots({ items: queue.items(), channelLast: read.last, channelTimes: [...read.times, ...read.recent], nowMs: tr, cfg });
     let given = 0; let moved = 0; let capped = 0;
     for (const p of plan) {
       const i = queue.get(p.id); if (!i || i.state !== 'queued') continue; // moved or removed by the card meanwhile
@@ -675,7 +707,7 @@ export function createPostChain(opts) {
       if (i.publishAt) moved++; else given++;
       queue.patch(i.id, { publishAt: at, slotAt: toIso(tr), reslot: null, ...(clear ? { reason: null, nextAt: null } : {}) });
     }
-    if (given || moved) log(`posting: gave ${given} clip(s) a publish time and moved ${moved} (at least ${cfg.intervalHours} h apart)`);
+    if (given || moved) log(`posting: gave ${given} clip(s) a publish time and moved ${moved} (at least ${Math.round(cfg.intervalHours * 60)} min apart)`);
     if (capped) log(`posting: ${REASON_TEXT['schedule-beyond-cap']}; ${capped} clip(s) wait`);
     return cfg;
   }

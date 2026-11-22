@@ -2985,3 +2985,41 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    counted, never applied).
 4. **Not done**: no Battle Royale mode or map names exist in the pack, so Battle Royale matches are not asked about at
    all. Adding them needs names read from real end screens (AGENTS.md: names come from footage, not invented).
+
+## D434 — Auto-post: hourly slot tiers a year ahead, up to 100 uploads a day, one channel read reused (decided, 2026-11-22)
+
+1. **User**: "YouTube allows me to upload 100 videos/reels a day - that's the max. Ujwalam should upload up to 100 each
+   day if enough reels are available, spread out across the future with one gap/window. Can do up to a year in
+   advance. Pattern: starting today at 12:00, 13:00, 14:00 ... up to 22 Nov 2027 12:00. If those slots get filled, use
+   the quarter slot next (12:15, 13:15 ...), then if those fill use the half mark, and so on. The logic must always
+   follow the current date ... Add these settings to the app so they can be customised."
+2. **New placement `grid-tiers`** (the shipped default, `data/posting/schedule.json`): candidate times at every local hour
+   of this PC's clock (DST-safe) at minute `tierOffsets[0]`, over the rolling window now + minLeadHours + marginMinutes
+   to now + `maxAheadDays` (shipped 365). A clip takes the earliest free candidate; only when tier 0 has no free slot
+   anywhere in the window does tier 1 (`tierOffsets[1]`) open, and so on (shipped `[0, 15, 30, 45]`). Free = no taken
+   time (channel scheduled and recently public posts, queue times, slots given in the same pass) within
+   `gridGapMinutes` (shipped 15). No free slot: the clip waits, as before. Candidates are built once per pass (one
+   zone lookup per day), with a cursor per tier and binary search over the sorted taken times.
+3. **Reverses D408 for this mode only**: the 60-minute floor (`HARD_GAP_MINUTES`) does not apply to grid-tiers; its
+   floor is `gridGapMinutes` (1..60, and no wider than the smallest distance between the slot minutes, counted round
+   the hour). The other placements keep the 60-minute floor. `slotClash` uses the grid gap in grid-tiers.
+4. **100 a day**: `MAX_PER_DAY` comes from `data/posting/quota.json` `maxUploadsPerDay` (100, YouTube's own upload
+   limit; was 24 in PT2). A missing or bad value falls back to 24.
+5. **Channel read reuse** (`readReuseMinutes`, shipped 120; agent default, not a user instruction): one complete channel
+   read serves every upload session while it is younger than this; older = read again. D409 read before every session,
+   and at up to 401 units a read that capped the day at 21 uploads. Slots given out since that read are queue times, so
+   they stay taken. A truncated or incomplete read is never reused (fail closed, as before). 0 = the D409 rule. A file
+   that does not set the key reads 0. 120 because 100 x 50 + 12 reads x 401 = 9812 fits 10000 - 100; 60 minutes would
+   fit 21.
+6. **Fit model** (`quota-budget.mjs uploadsFit`, the same sum on the Settings card): the most uploads n with
+   n x cover units + min(n, ceil(1440 / readReuseMinutes)) x (1 + 2 x maxPages) <= quota - read reserve, capped by the
+   upload bucket and `MAX_PER_DAY`.
+7. **Settings > Posting & growth > Auto-post**: placement "Hourly slots, a year ahead", slot minutes, gap between slots,
+   reuse the channel read for, uploads at most (1..100), schedule up to (days). Each says what it does, what it changes
+   and what it could break.
+8. **Trade-off (said on the card)**: a post scheduled by hand in YouTube Studio during the reuse time is not seen until
+   the next read, so a new post could land within the gap of it.
+9. **UNVERIFIED**: YouTube's 100-a-day upload bucket for this project (no day above 21 uploads has run yet); the real
+   channel's read cost per read (about 81 units at the current size, 401 at the cap); the card on the laptop's screen.
+   The user's own saved settings (placement random-daily, maxUploadsPerDay 6 in the rules) override the shipped
+   defaults until changed on the card.

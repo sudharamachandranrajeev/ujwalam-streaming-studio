@@ -17,7 +17,7 @@ after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); 
 
 const TZ = 'Europe/London'; // a zone with DST (29 Mar and 25 Oct 2026); fixed so the test does not depend on this PC
 // The user's D403 choice (90 min apart) as the test plan; PT2 (D408) made 60 the shipped default and the floor.
-const base = (over = {}) => ({ ...loadScheduleConfig(DEFAULT_SCHEDULE), timeZone: TZ, seed: 20261119, minGapMinutes: 90, intervalHours: 1.5, ...over });
+const base = (over = {}) => ({ ...loadScheduleConfig(DEFAULT_SCHEDULE), placement: 'random-daily', timeZone: TZ, seed: 20261119, minGapMinutes: 90, intervalHours: 1.5, ...over });
 const NOW = Date.parse('2026-11-20T08:00:00Z');
 const queued = (n) => Array.from({ length: n }, (_, k) => ({ id: `c${k}`, state: 'queued', publishAt: null, session: null }));
 const MIN = 60 * 1000;
@@ -45,8 +45,11 @@ function checkPlan(plan, cfg, { nowMs, channel = [] } = {}) {
 }
 
 describe('random-daily placement (D403)', () => {
-  test('shipped defaults: random-daily, 3-6 a day, 09:00-23:00, 60 min (PT2 floor); gap and grid follow it', () => {
-    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE);
+  test('shipped random-daily values: 3-6 a day, 09:00-23:00, 60 min (PT2 floor); gap and grid follow it when chosen', () => {
+    // D434: grid-tiers is the shipped placement now; random-daily keeps its shipped values for a user who picks it.
+    const dir = mk(); mkdirSync(path.join(dir, 'posting'), { recursive: true });
+    writeFileSync(userScheduleFile(dir), JSON.stringify({ placement: 'random-daily' }));
+    const cfg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: userScheduleFile(dir) });
     assert.equal(cfg.placement, 'random-daily');
     assert.deepEqual([cfg.postsPerDayMin, cfg.postsPerDayMax, cfg.windowStart, cfg.windowEnd, cfg.minGapMinutes], [3, 6, '09:00', '23:00', 60]);
     assert.equal(cfg.intervalHours, 1); assert.equal(cfg.alignMinutes, 1);
@@ -145,8 +148,8 @@ describe('random-daily placement (D403)', () => {
     const saved = JSON.parse(readFileSync(userScheduleFile(dir), 'utf8'));
     assert.equal(saved.intervalHours, 2); assert.equal(saved.seed, 42);
     const cfg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: userScheduleFile(dir) });
-    assert.deepEqual([cfg.postsPerDayMax, cfg.windowEnd, cfg.seed, cfg.placement], [4, '22:30', 42, 'random-daily']);
-    // An existing file without a placement gets random-daily; one with fill-gaps keeps it.
+    assert.deepEqual([cfg.postsPerDayMax, cfg.windowEnd, cfg.seed, cfg.placement], [4, '22:30', 42, 'grid-tiers']);
+    // An existing file without a placement gets the shipped one (grid-tiers since D434); one with fill-gaps keeps it.
     writeFileSync(userScheduleFile(dir), JSON.stringify({ placement: 'fill-gaps', intervalHours: 2 }));
     const fg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: userScheduleFile(dir) });
     assert.equal(fg.placement, 'fill-gaps'); assert.equal(fg.intervalHours, 2); assert.equal(fg.alignMinutes, 60);

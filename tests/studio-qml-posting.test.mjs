@@ -30,6 +30,7 @@ const SHELL_EXE = PACKAGED ?? EXE;
 const QT = PACKAGED ? null : qtDir();
 const skip = !existsSync(SHELL_EXE) || (!PACKAGED && !QT) ? 'studio shell not built (npm run build:studio)' : false;
 const NOW = Date.parse('2026-11-13T10:00:00Z');
+const GRID = { tierOffsets: [0, 15, 30, 45], gridGapMinutes: 15, readReuseMinutes: 120 }; // D434 shipped
 
 function runShell(env) {
   return new Promise((resolve) => {
@@ -92,10 +93,11 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(ap.loaded, true);
     assert.equal(ap.dirty, false);
     assert.equal(s.settings.dirty, false);
-    // D405: random-daily is the shipped placement; the card also carries the random-daily and custom-times fields.
-    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 3, maxPerDay: 21, intervalHours: 1, maxAheadDays: 60, placement: 'random-daily', quotaUnitsPerDay: 10000,
-      minGapMinutes: 60, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, skipDates: [] });
-    assert.match(ap.fit, /About 21 uploads a day fit/); assert.match(ap.fit, /own upload allowance/); // PT2 (D408): the upload bucket
+    // D434: grid-tiers is the shipped placement (a year ahead, 100 a day); the card also carries the random-daily,
+    // custom-times and grid-tiers fields.
+    assert.deepEqual(ap.card, { autoUpload: true, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 3, maxPerDay: 100, intervalHours: 1, maxAheadDays: 365, placement: 'grid-tiers', quotaUnitsPerDay: 10000,
+      minGapMinutes: 60, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, skipDates: [], ...GRID });
+    assert.match(ap.fit, /About 100 uploads a day fit/); assert.match(ap.fit, /own upload allowance/); // PT2 (D408): the upload bucket
     assert.match(ap.flags, /Auto post and Scheduled posting are on/);
     assert.match(ap.flags, /stay in the clips folder/);
     assert.ok(ap.times.length >= 11, ap.times.join(' | '));
@@ -142,10 +144,10 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     const sched = JSON.parse(readFileSync(userScheduleFile(r.dataDir), 'utf8'));
     assert.equal(sched.intervalHours, 6);
     assert.equal(sched.placement, 'after-last');
-    assert.equal(sched.maxAheadDays, 60);
+    assert.equal(sched.maxAheadDays, 365);
     const rules = JSON.parse(readFileSync(userRulesFile(r.dataDir), 'utf8'));
     assert.deepEqual(rules.rules[0].kinds, ['short', 'montage', 'won-reel', 'long-highlights']);
-    assert.equal(rules.maxUploadsPerDay, 21);
+    assert.equal(rules.maxUploadsPerDay, 100);
     assert.equal(r.s.flagsInSettings, false, 'Settings closed');
     assert.match(r.s.note, /Settings saved\.|Auto-post settings saved; the next upload pass uses them\./);
   });
@@ -160,11 +162,32 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     // D405: the card also carries the random-daily and custom-times fields (defaults here, untouched by these actions).
     const empty = { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] };
     assert.deepEqual(r.ap.card, { autoUpload: false, kinds: ['short', 'montage', 'won-reel', 'impact-play', 'long-highlights'], minScore: 50, maxPerDay: 2, intervalHours: 48, maxAheadDays: 5, placement: 'after-last', quotaUnitsPerDay: 20000,
-      minGapMinutes: 60, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: empty, skipDates: [] });
+      minGapMinutes: 60, postsPerDayMin: 3, postsPerDayMax: 6, windowStart: '09:00', windowEnd: '23:00', customTimes: empty, skipDates: [], ...GRID });
     assert.equal(r.ap.dirty, true);
     assert.equal(node(r.p, 'autopostUpload').checked, false);
     assert.equal(node(r.p, 'autopostPlacement').text, 'Always after the last scheduled post');
     assert.equal(node(r.p, 'autopostKind_short').checked, true);
+  });
+
+  // ---- D434 grid-tiers and 100 a day ----
+  test('D434: hourly slots: slot minutes, gap and read reuse are edited, explained and checked; the fit follows the reuse time', async () => {
+    let r = await probe({ actions: [...open, ...WAIT] });
+    assert.equal(node(r.p, 'autopostPlacement').text, 'Hourly slots, a year ahead');
+    assert.match(node(r.p, 'autopostPlacementHelp').text, /earliest free hour slot \(12:00, 13:00, 14:00 \.\.\.\)/);
+    assert.equal(node(r.p, 'autopostTierOffsets').text, '0, 15, 30, 45');
+    r = await probe({ actions: [...open, ...WAIT, 'ap-tiers:0 30', 'ap-gridgap:30', 'ap-reuse:0', ...WAIT, 'settings-save'], ms: 12000 });
+    assert.ok(Object.values(done(r.p)).every(Boolean), JSON.stringify(r.p.actions));
+    const sched = JSON.parse(readFileSync(userScheduleFile(r.dataDir), 'utf8'));
+    assert.deepEqual([sched.placement, sched.tierOffsets, sched.gridGapMinutes, sched.readReuseMinutes], ['grid-tiers', [0, 30], 30, 0]);
+    r = await probe({ actions: [...open, ...WAIT, 'ap-reuse:0', ...WAIT] });
+    assert.match(r.ap.fit, /About 21 uploads a day fit/, 'a read before every upload: (10000 - 100) / (50 + 401)');
+    r = await probe({ actions: [...open, ...WAIT, 'ap-gridgap:20', ...WAIT, 'settings-save'] });
+    assert.match(r.ap.problem, /wider than the smallest distance between your slot minutes \(15 min\)/);
+    assert.equal(done(r.p)['settings-save'], false, 'Save is refused');
+    r = await probe({ actions: [...open, ...WAIT, 'ap-tiers:0 99', ...WAIT] });
+    assert.match(r.ap.problem, /Slot minutes/);
+    r = await probe({ actions: [...open, ...WAIT, 'ap-perday:100', 'ap-perday:101', ...WAIT] });
+    assert.equal(r.ap.card.maxPerDay, 100, 'at most 100 a day');
   });
 
   test('a change put back to what was loaded is no change', async () => {
