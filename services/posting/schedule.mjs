@@ -196,6 +196,8 @@ export function loadScheduleConfig(file = DEFAULT_SCHEDULE, { userFile = null } 
     if (problems.length) throw new ScheduleError('schedule-config-bad', `your schedule settings: ${problems.map((p) => p.text).join('; ')}`);
     for (const k of ['intervalHours', 'maxAheadDays', 'placement', ...RANDOM_KEYS, 'customTimes', 'skipDates', 'tierOffsets', 'gridGapMinutes', 'readReuseMinutes']) if (values[k] !== undefined) { cfg[k] = values[k]; cfg.userKeys.push(k); }
   }
+  // Codex D434: a user file saved before D434 without a placement keeps the old default (random-daily), never the new one.
+  if (cfg.userKeys.length && !cfg.userKeys.includes('placement') && j?.placement === 'grid-tiers') cfg.placement = 'random-daily';
   // grid-tiers (D434): the user's values, else the shipped file's, else GRID_DEFAULTS; then checked together.
   cfg.tierOffsets ??= Array.isArray(j?.tierOffsets) ? [...j.tierOffsets] : [...GRID_DEFAULTS.tierOffsets];
   cfg.gridGapMinutes ??= j?.gridGapMinutes ?? GRID_DEFAULTS.gridGapMinutes;

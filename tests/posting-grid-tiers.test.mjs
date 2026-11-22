@@ -150,7 +150,7 @@ describe('grid-tiers settings (D434)', () => {
     // the user's offsets with the shipped 15-min gap: [0, 10] is 10 min apart, refused at load (fail closed)
     writeFileSync(u, JSON.stringify({ tierOffsets: [0, 10] }));
     assert.throws(() => loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: u }), (e) => e.code === 'schedule-config-bad');
-    writeFileSync(u, JSON.stringify({ tierOffsets: [0, 10], gridGapMinutes: 10, readReuseMinutes: 30 }));
+    writeFileSync(u, JSON.stringify({ placement: 'grid-tiers', tierOffsets: [0, 10], gridGapMinutes: 10, readReuseMinutes: 30 }));
     const c = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: u });
     assert.deepEqual([c.tierOffsets, c.gridGapMinutes, c.readReuseMinutes, c.intervalHours * 60], [[0, 10], 10, 30, 10]);
     // An older user file (before D434) without the new keys still loads, with the shipped values.
@@ -158,6 +158,15 @@ describe('grid-tiers settings (D434)', () => {
     const old = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: u });
     assert.deepEqual([old.placement, old.tierOffsets, old.readReuseMinutes, old.intervalHours], ['random-daily', [0, 15, 30, 45], 120, 1]);
   });
+});
+
+test('Codex D434: a partial card save that would mix slot minutes with a too-wide saved gap is refused, nothing written', async () => {
+  const { saveAutoPostSettings } = await import('../services/posting/auto-settings.mjs');
+  const d = mk(); const u = userScheduleFile(d); mkdirSync(path.dirname(u), { recursive: true });
+  writeFileSync(u, JSON.stringify({ gridGapMinutes: 15 }));
+  const r = saveAutoPostSettings(d, { card: { autoUpload: true, kinds: ['short'], minScore: 0, maxPerDay: 5, tierOffsets: [0, 10] }, keepRules: true });
+  assert.equal(r.ok, false); assert.match(r.problems[0].text, /wider/);
+  assert.deepEqual(JSON.parse((await import('node:fs')).readFileSync(u, 'utf8')), { gridGapMinutes: 15 });
 });
 
 describe('100 a day: quota fit and channel read reuse (D434)', () => {
@@ -186,6 +195,7 @@ describe('100 a day: quota fit and channel read reuse (D434)', () => {
     assert.equal(reusableRead(s({ truncated: true }), now, cfg), null, 'truncated: never');
     assert.equal(reusableRead(s({ truncated: undefined }), now, cfg), null, 'unknown: never');
     assert.equal(reusableRead(s({ readAt: new Date(now + 10 * MIN).toISOString() }), now, cfg), null, 'future: never');
+    assert.equal(reusableRead(s({ readAt: new Date(now + 1000).toISOString() }), now, cfg), null, 'even a second ahead (clock moved back)');
     assert.equal(reusableRead(s({ channelTimes: ['nope'] }), now, cfg), null);
     assert.equal(reusableRead(s(), now, { readReuseMinutes: 0 }), null, '0 = always read');
     assert.equal(reusableRead(null, now, cfg), null);

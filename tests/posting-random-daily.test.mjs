@@ -148,8 +148,8 @@ describe('random-daily placement (D403)', () => {
     const saved = JSON.parse(readFileSync(userScheduleFile(dir), 'utf8'));
     assert.equal(saved.intervalHours, 2); assert.equal(saved.seed, 42);
     const cfg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: userScheduleFile(dir) });
-    assert.deepEqual([cfg.postsPerDayMax, cfg.windowEnd, cfg.seed, cfg.placement], [4, '22:30', 42, 'grid-tiers']);
-    // An existing file without a placement gets the shipped one (grid-tiers since D434); one with fill-gaps keeps it.
+    assert.deepEqual([cfg.postsPerDayMax, cfg.windowEnd, cfg.seed, cfg.placement], [4, '22:30', 42, 'random-daily']);
+    // An existing file without a placement keeps random-daily (Codex D434: never moved to grid-tiers); one with fill-gaps keeps it.
     writeFileSync(userScheduleFile(dir), JSON.stringify({ placement: 'fill-gaps', intervalHours: 2 }));
     const fg = loadScheduleConfig(DEFAULT_SCHEDULE, { userFile: userScheduleFile(dir) });
     assert.equal(fg.placement, 'fill-gaps'); assert.equal(fg.intervalHours, 2); assert.equal(fg.alignMinutes, 60);

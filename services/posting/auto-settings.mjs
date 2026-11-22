@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { AutoPostError, MAX_PER_DAY, NOTICE_TEXT, RULE_KINDS, rankerMinScore, rulesFileFor, userRulesFile, validateRules } from './auto-post.mjs';
-import { DEFAULT_SCHEDULE, HOUR_MS, PLACEMENTS, USER_LIMITS, ScheduleError, alignUp, checkUserSchedule, floorFrom, itemTimes, loadScheduleConfig, maxAheadMs, nextFreeSlots, savedChannelTimes, toIso, userScheduleFile } from './schedule.mjs';
+import { DEFAULT_SCHEDULE, HOUR_MS, PLACEMENTS, USER_LIMITS, ScheduleError, alignUp, checkUserSchedule, floorFrom, gridProblem, itemTimes, loadScheduleConfig, maxAheadMs, nextFreeSlots, savedChannelTimes, toIso, userScheduleFile } from './schedule.mjs';
 import { QUEUE_NAME, createUploadQueue } from './auto-chain.mjs';
 import { READONLY_SCOPE } from './oauth.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
@@ -163,6 +163,10 @@ export function saveAutoPostSettings(dataDir, body) {
   if (doc) validateRules(doc); // the card's own shape always passes; checked again so a bad file can never be written
   const sched = { ...readUserSchedule(dataDir) };
   for (const k of CARD_SCHEDULE_KEYS) if (card[k] !== undefined) sched[k] = card[k];
+  // Codex D434: the slot minutes and gap are checked as merged (saved or shipped), so a partial save never writes a file
+  // that the loader refuses.
+  { const shipped = loadScheduleConfig(DEFAULT_SCHEDULE); const gp = gridProblem(sched.tierOffsets ?? shipped.tierOffsets, sched.gridGapMinutes ?? shipped.gridGapMinutes);
+    if (gp) return { ok: false, problems: [{ key: 'gridGapMinutes', text: gp }] }; }
   writeJsonAtomic(userScheduleFile(dataDir), {
     $comment: 'Your posting schedule (Settings > Posting & growth > Auto-post, D375). Replaces the shipped values in data/posting/schedule.json and data/posting/quota.json.',
     ...sched,

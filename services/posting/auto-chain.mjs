@@ -363,7 +363,7 @@ export function reusableRead(s, nowMs, cfg) {
   const reuse = cfg?.readReuseMinutes;
   if (!Number.isInteger(reuse) || reuse <= 0 || !isPlain(s) || s.truncated !== false) return null;
   const at = typeof s.readAt === 'string' ? Date.parse(s.readAt) : NaN;
-  if (!Number.isFinite(at) || at > nowMs + 60 * 1000 || nowMs - at >= reuse * 60 * 1000) return null;
+  if (!Number.isFinite(at) || at > nowMs || nowMs - at >= reuse * 60 * 1000) return null; // Codex D434: never a future time
   if (!Array.isArray(s.channelTimes) || !Array.isArray(s.recentTimes)) return null;
   const list = (a) => a.map((v) => Date.parse(v));
   const times = list(s.channelTimes); const recent = list(s.recentTimes);
@@ -623,7 +623,7 @@ export function createPostChain(opts) {
   //     saved complete read younger than readReuseMinutes counts as a new read, so it can serve the next session too).
   //   readFail: the reason code of the last read that failed or was incomplete in this hold.
   //   curHold: the current hold ({ held() }); every channel read is followed by an ownership check.
-  let holdTimes = null; let freshUnused = false; let readFail = null; let curHold = null;
+  let holdTimes = null; let holdReadAt = null; let freshUnused = false; let readFail = null; let curHold = null;
   async function ensureSlots(auth, dueIds = new Set(), { force = false } = {}) {
     const t = nowMs();
     const queued = queue.items().filter((i) => i.state === 'queued');
@@ -640,7 +640,7 @@ export function createPostChain(opts) {
     const recheck = queued.filter((i) => dueIds.has(i.id) && i.publishAt && !i.session && !isRetry(i, t, cfg));
     if (!force && !need.some((i) => !capWait(i)) && !recheck.length) return cfg;
     const wait = (code, delay) => {
-      readFail = code; freshUnused = false;
+      readFail = code; freshUnused = false; holdTimes = null; holdReadAt = null; // Codex D434: a failed read voids the older one
       if (NOTICE_TEXT[code]) notice(code);
       // A too-close slot is dropped here (it can no longer be used) and marked for the D314 retry; nothing else is released.
       for (const i of need) queue.patch(i.id, { publishAt: null, reason: code, nextAt: new Date(t + delay).toISOString(), ...(isRetry(i, t, cfg) ? { reslot: true } : {}) });
@@ -655,7 +655,7 @@ export function createPostChain(opts) {
     const saved = reusableRead(queue.schedule(), t, cfg);
     if (saved) {
       if (curHold && !curHold.held()) { wait('schedule-busy', BASE_DELAY_MS); return cfg; }
-      return planFrom(saved, t, cfg);
+      return planFrom({ ...saved, readAt: Date.parse(queue.schedule().readAt) }, t, cfg);
     }
     // The read costs 1 unit per call: channels.list + 2 per page at most (a quick look first; reserved below).
     const readWhy = budget.readBlock(1 + 2 * cfg.maxPages);
@@ -684,12 +684,12 @@ export function createPostChain(opts) {
       count: read.count, scanned: read.scanned, truncated: read.truncated, readAt: toIso(tr) });
     // Page cap hit: an older scheduled post could be past the pages read, so no slot is given out (never a guess).
     if (read.truncated) { wait('schedule-read-incomplete', SIGNIN_WAIT_MS); return cfg; }
-    return planFrom({ times: read.times ?? [], recent: read.recent ?? [], last: read.last ?? null }, tr, cfg, t);
+    return planFrom({ times: read.times ?? [], recent: read.recent ?? [], last: read.last ?? null, readAt: tr }, tr, cfg, t);
   }
 
   /** Plans slots from a complete channel read (fresh, or a saved one young enough to reuse). tr: the planning time. */
   function planFrom(read, tr, cfg, t = tr) {
-    holdTimes = [...read.times, ...read.recent, ...(read.last !== null ? [read.last] : [])];
+    holdTimes = [...read.times, ...read.recent, ...(read.last !== null ? [read.last] : [])]; holdReadAt = read.readAt;
     freshUnused = true; readFail = null;
     // D375 slots for new items and D314 retries: the gaps around the channel's scheduled and recent posts (schedule.mjs).
     const plan = planQueueSlots({ items: queue.items(), channelLast: read.last, channelTimes: [...read.times, ...read.recent], nowMs: tr, cfg });
@@ -837,7 +837,10 @@ export function createPostChain(opts) {
         if (clashOf(again) !== null) { await reslot(item.id); continue; }
         freshUnused = false; checkedFor = publishAt; // this read now serves this session only
       } else {
-        if (holdTimes === null) {
+        // Codex D434: a read reused past readReuseMinutes during a long pass is stale: read again before the resume.
+        const stale = holdTimes !== null && cfg.readReuseMinutes > 0 && !(nowMs() - holdReadAt < cfg.readReuseMinutes * 60 * 1000);
+        if (holdTimes === null || stale) {
+          holdTimes = null;
           await ensureSlots(auth, new Set([item.id]), { force: true });
           if (holdTimes === null) { queue.patch(item.id, { reason: readFail ?? 'schedule-read-failed', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() }); continue; }
         }
