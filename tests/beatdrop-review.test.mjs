@@ -224,6 +224,7 @@ test('Codex BD7b: a waiting retake is never written over; a deleted recording tu
     const first = readFileSync(path.join(s.dataDir, 'clips', RETAKE_FILE), 'utf8');
     const again = r.retake({ run: 'run-a', op: 'slower-intro' });
     assert.equal(again.status, 409, 'the first request is still waiting for the queue');
+    assert.equal(r.info().body.busy, true, 'a waiting request shows as busy (the card keeps polling)');
     assert.equal(readFileSync(path.join(s.dataDir, 'clips', RETAKE_FILE), 'utf8'), first, 'and it is kept as it was');
     rmSync(path.join(s.dataDir, 'clips', RETAKE_FILE));
     rmSync(path.join(s.dataDir, 'rec-h.mkv')); // Delete clipped recordings removed it

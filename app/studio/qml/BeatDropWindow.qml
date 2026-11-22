@@ -19,14 +19,15 @@ Dialog {
     title: "BeatDrop montage"
     closePolicy: Popup.CloseOnEscape
 
-    property var data: ({ run: null, made: false, busy: false, summary: [], blocks: [], total: 0, retakes: [], h: null, v: null, source: false })
+    property var review: (  // not "data": Popup already has that property (Codex BD7b)
+        { run: null, made: false, busy: false, summary: [], blocks: [], total: 0, retakes: [], h: null, v: null, source: false })
     property bool loaded: false
     property string note: ""
     property int selected: -1          // the piece picked on the strip (for "Swap this clip")
     property int gen: 0
-    readonly property bool busy: data.busy === true
-    readonly property bool made: data.made === true
-    readonly property bool canRetake: made && !busy && data.source === true  // the recording it came from is still there
+    readonly property bool busy: review.busy === true
+    readonly property bool made: review.made === true
+    readonly property bool canRetake: made && !busy && review.source === true  // the recording it came from is still there
 
     function show() {
         gen++;
@@ -43,19 +44,19 @@ Dialog {
             if (g !== gen) return;
             loaded = true;
             if (!ok) { note = "Not available: " + err; return; }
-            const wasBusy = data.busy === true;
-            data = b;
+            const wasBusy = review.busy === true;
+            review = b;
             if (selected >= (b.blocks || []).length) selected = -1;
             if (wasBusy && !b.busy) note = b.made ? "Your new take is ready." : "";
         });
     }
     function retake(op, piece) {
         if (!canRetake) return false;
-        const b = { run: data.run, op: op };
+        const b = { run: review.run, op: op };
         if (op === "swap") b.piece = piece;
         const g = gen;
         note = "Making a new take...";
-        data = Object.assign({}, data, { busy: true });
+        review = Object.assign({}, review, { busy: true });
         Api.post("ui/api/beatdrop/retake", b, (ok, r, err) => {
             if (g !== gen) return;
             if (!ok) { note = "Could not start a new take: " + err; load(); }
@@ -64,7 +65,7 @@ Dialog {
     }
     function play(layout) {
         if (!made) return false;
-        Api.post("ui/api/beatdrop/play", { run: data.run, layout: layout }, (ok, r, err) => {
+        Api.post("ui/api/beatdrop/play", { run: review.run, layout: layout }, (ok, r, err) => {
             if (!ok) note = "Could not open the video: " + err;
         });
         return true;
@@ -82,7 +83,7 @@ Dialog {
 
     // ---- probe (tests): beatdrop-open, beatdrop-retake:<op>, beatdrop-swap:<piece>, beatdrop-close ----
     function probe() {
-        return { open: opened, run: data.run, made: made, busy: busy, summary: data.summary, blocks: (data.blocks || []).length, selected: selected, note: note };
+        return { open: opened, run: review.run, made: made, busy: busy, summary: review.summary, blocks: (review.blocks || []).length, selected: selected, note: note };
     }
     function probeAction(a) {
         if (a === "beatdrop-open") return show();
@@ -124,7 +125,7 @@ Dialog {
                 : dlg.note !== "" ? dlg.note
                 : !dlg.loaded ? "Loading..."
                 : !dlg.made ? "No BeatDrop montage yet. One is made after the clips of each stream or recording."
-                : dlg.data.source !== true ? "The recording this montage came from was deleted, so no new takes can be made."
+                : dlg.review.source !== true ? "The recording this montage came from was deleted, so no new takes can be made."
                 : "Pick a piece on the strip to swap it, or tap a button for a new take."
         }
         // The song strip: one block per piece, as wide as it plays.
@@ -139,12 +140,12 @@ Dialog {
             border.color: Theme.c.border
             clip: true
             Repeater {
-                model: dlg.made ? dlg.data.blocks : []
+                model: dlg.made ? dlg.review.blocks : []
                 delegate: Rectangle {
                     id: blk
                     required property var modelData
                     objectName: "beatdropBlock:" + modelData.n
-                    readonly property real pxPerSec: dlg.data.total > 0 ? (strip.width - 2) / dlg.data.total : 0
+                    readonly property real pxPerSec: dlg.review.total > 0 ? (strip.width - 2) / dlg.review.total : 0
                     x: 1 + modelData.start * pxPerSec
                     y: 1
                     width: Math.max(3, modelData.length * pxPerSec - 2)
@@ -181,7 +182,7 @@ Dialog {
             objectName: "beatdropSummary"
             anchors { left: parent.left; right: parent.right; top: key.bottom; topMargin: 8; bottom: parent.bottom }
             clip: true
-            model: dlg.made ? dlg.data.summary : [] // the engine's summary already ends with the retakes made
+            model: dlg.made ? dlg.review.summary : [] // the engine's summary already ends with the retakes made
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
             delegate: Text {
@@ -201,8 +202,8 @@ Dialog {
         Flow {
             anchors { left: parent.left; right: closeBtn.left; leftMargin: 18; rightMargin: 10; top: parent.top; topMargin: 8 }
             spacing: 8
-            UButton { objectName: "beatdropPlayH"; text: "Play H video"; enabled: dlg.made && dlg.data.h !== null; tip: "Open the wide video in your video player."; onClicked: dlg.play("h") }
-            UButton { objectName: "beatdropPlayV"; text: "Play V video"; enabled: dlg.made && dlg.data.v !== null; tip: "Open the tall video in your video player."; onClicked: dlg.play("v") }
+            UButton { objectName: "beatdropPlayH"; text: "Play H video"; enabled: dlg.made && dlg.review.h !== null; tip: "Open the wide video in your video player."; onClicked: dlg.play("h") }
+            UButton { objectName: "beatdropPlayV"; text: "Play V video"; enabled: dlg.made && dlg.review.v !== null; tip: "Open the tall video in your video player."; onClicked: dlg.play("v") }
         }
         Flow {
             anchors { left: parent.left; right: closeBtn.left; leftMargin: 18; rightMargin: 10; bottom: parent.bottom; bottomMargin: 10 }

@@ -89,6 +89,9 @@ export function createBeatdropReview({ dataDir, flagOn = () => true, openFile = 
   const busyRun = (run) => {
     const s = readJson(path.join(dataDir, 'clips', 'status.json'));
     const mine = (j) => isObj(j) && j.type === 'beatdrop' && j.name === run;
+    // a request the queue has not taken yet counts too (it ticks every few seconds; Codex BD7b: else the card says done)
+    const waiting = readJson(path.join(dataDir, 'clips', RETAKE_FILE));
+    if (isObj(waiting) && waiting.run === run) return true;
     return !!s && (mine(s.running) || (Array.isArray(s.queued) && s.queued.some(mine)));
   };
   const load = (run) => {
