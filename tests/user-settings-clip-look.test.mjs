@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lookDefaults, lookInfo, lookOverrideProblems, lookProblems, readSettings, settingsProblems, writeSettings } from '../services/studio-ui/user-settings.mjs';
+import { lookDefaults, lookInfo, lookOverrideProblems, musicAiReady, lookProblems, readSettings, settingsProblems, writeSettings } from '../services/studio-ui/user-settings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'ujw-look-'));
@@ -34,7 +34,7 @@ test('defaults: every style ticked, randomise on, -16 dB, no blur option', () =>
 
 test('free music pack (D427): ticked by default, offered, and packReady follows the download marker', () => withDir((d) => {
   const def = lookDefaults();
-  assert.deepEqual(def.defaults.music.sources, ['folder', 'pack']);
+  assert.deepEqual(def.defaults.music.sources, ['folder', 'pack', 'ai']);
   assert.equal(def.sources.find((s) => s.id === 'pack').available, true);
   assert.equal(lookInfo(d).packReady, false);
   const pk = JSON.parse(readFileSync(path.join(here, '..', 'data', 'clip', 'music-library.json'), 'utf8')).pack;
@@ -46,13 +46,31 @@ test('free music pack (D427): ticked by default, offered, and packReady follows 
 
 test('free music pack (D427): saved sources get the pack once; a later untick stays off', () => withDir((d) => {
   writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ clips: { look: { music: { sources: ['folder'] } } } }));
-  assert.deepEqual(readSettings(d).clips.look.music, { sources: ['folder', 'pack'], packOffered: true });
-  assert.deepEqual(lookInfo(d).look.music.sources, ['folder', 'pack']);
+  assert.deepEqual(readSettings(d).clips.look.music, { sources: ['folder', 'pack', 'ai'], packOffered: true, aiOffered: true });
+  assert.deepEqual(lookInfo(d).look.music.sources, ['folder', 'pack', 'ai']);
   writeSettings(d, { clips: { look: { transitions: { sfx: false } } } }); // any save stores the move
   assert.equal(JSON.parse(readFileSync(path.join(d, 'settings.json'), 'utf8')).clips.look.music.packOffered, true);
   writeSettings(d, { clips: { look: { music: { sources: ['folder'] } } } });
   assert.deepEqual(readSettings(d).clips.look.music.sources, ['folder'], 'unticked by the user: stays off');
   assert.deepEqual(lookProblems({ music: { packOffered: 'yes' } }), ['clips.look.music.packOffered must be true or false']);
+}));
+
+test('AI music (D429): ticked by default, aiReady only with the runtime Python, aiOffered checked', () => withDir((d) => {
+  assert.equal(lookDefaults().sources.find((s) => s.id === 'ai').available, true);
+  const none = path.join(d, 'none.json');
+  assert.equal(musicAiReady({}, none), false, 'no profile, no env: unavailable');
+  assert.equal(musicAiReady({ UJWALAM_ACESTEP_RUNTIME: path.join(d, 'rt') }, none), false, 'folder without Python');
+  const py = JSON.parse(readFileSync(path.join(here, '..', 'data', 'clip', 'music-gen.json'), 'utf8')).python;
+  mkdirSync(path.join(d, 'rt', ...py.split('/').slice(0, -1)), { recursive: true });
+  writeFileSync(path.join(d, 'rt', ...py.split('/')), '');
+  assert.equal(musicAiReady({ UJWALAM_ACESTEP_RUNTIME: path.join(d, 'rt') }, none), true);
+  const prof = path.join(d, 'profile.json');
+  writeFileSync(prof, JSON.stringify({ paths: { acestep_runtime: path.join(d, 'rt') } }));
+  assert.equal(musicAiReady({}, prof), true, 'from the profile');
+  writeFileSync(prof, JSON.stringify({ paths: { acestep_runtime: '<ace-step-1.5-folder-or-remove-for-no-ai-music>' } }));
+  assert.equal(musicAiReady({}, prof), false, 'a placeholder is not set');
+  assert.equal(typeof lookInfo(d).aiReady, 'boolean');
+  assert.deepEqual(lookProblems({ music: { aiOffered: 1 } }), ['clips.look.music.aiOffered must be true or false']);
 }));
 
 test('free music pack (D427): shared cases with the Python side, validated first, then moved', () => {

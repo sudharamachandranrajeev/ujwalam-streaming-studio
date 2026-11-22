@@ -2875,3 +2875,32 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    missing.
 4. **Live risk**: none; retries run off air and stop on air as the first try does. UNVERIFIED: a real retry run on
    the user's clips (the main session runs it).
+
+## D429 — Local AI music for clips that nothing fits (FX6, decided, 2026-11-22)
+
+1. **What**: when the clip look's AI source is ticked and no folder or pack track reaches the match threshold, one
+   instrumental is made for the reel's target with ACE-Step 1.5 on this PC (`services/clip/music_gen.py`, worker
+   `services/clip/ace_worker.py` run with the runtime's own Python, no window, below-normal priority, in a
+   kill-on-close job, so the model is unloaded when it ends). Recipes per mood (tempo, caption words), energy words,
+   length range and the free-memory floor are data in `data/clip/music-gen.json`.
+2. **Runtime path is local data**: env `UJWALAM_ACESTEP_RUNTIME`, else `data/profile.local.json` `paths.acestep_runtime`
+   (placeholder in `data/profile.example.json`). No folder or no Python in it: the source is unavailable, Settings
+   says so in plain words and the switch is greyed out.
+3. **Guards**: never while live or when the live state is unknown (also stopped if a stream starts mid-run); one heavy
+   clip job (HeavyJobLock "music-gen"; busy = fall back); free GPU memory checked first. The brief asked for 5.5 GB
+   free; the card has 6141 MB and the desktop alone uses about 660 MB, so 5.5 GB free never happens. The floor is
+   5000 MB from the measured whole-GPU peak (5497 MB with the desktop's 659 MB: about 4.85 GB for the job). Any
+   failure falls back to the made-here bed.
+4. **Storage and reuse**: `<data>/music/generated/<id>.wav` + `<id>.json` (caption, seed, tempo, mood, code and model
+   revisions, licence note "made on this PC with ACE-Step 1.5, MIT"). The id is a hash of the request, so the same
+   target reuses its stored track without the runtime. The track's mood is the one asked for; the measured tempo is
+   doubled or halved when that matches the asked tempo within 3 % (the real run measured 70.31 for 140).
+5. **Posting**: the record is `source: "made-here"` with `generator: "ace-step-1.5"` plus a `generated` block, so
+   posting, the music sidecar and the countdown combine treat it exactly like the made-here bed (no credit line).
+   Recaption renders the stored track again; if it is gone, the made-here bed.
+6. **Default ON** (user-requested): `ai` is in the default sources; saved sources from before FX6 get it once
+   (`aiOffered`, same pattern as `packOffered`, Python and Node).
+7. **UNVERIFIED**: musical quality for the user; YouTube Content ID on generated tracks; the installed app reading
+   the profile path (the dev checkout was used); generation while the studio is merely open. Open: the laptop's
+   profile does not set the folder yet, because every profile value is a private term and the handover names that
+   folder (private scan fails); the user decides whether the scan should skip `paths.acestep_runtime`

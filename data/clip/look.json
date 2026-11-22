@@ -1,5 +1,5 @@
 {
-  "$comment": "Clip look (plan docs/plan/2026-11-21-clip-music-name-transitions.md, D408/D411; user 2026-11-20: 'need more options ... and a randomise these effects options in settings'). Each reel gets one seeded pick of music mode, transition set and name style from the user's ticks in <data>/settings.json clips.look (Settings > Clips > Clip look). Read by services/clip/clip_look.py and services/studio-ui/user-settings.mjs (same rules). A lock always uses its one choice; randomise off uses the first tick. An empty tick list switches that part off. The last picks live in <data>/clips/look-history.json; a pick never repeats the last historyN of its group while another tick is free. Behind the flag clip-look (on: the user asked for it).",
+  "$comment": "Clip look (plan docs/plan/2026-11-21-clip-music-name-transitions.md, D408/D411; user 2026-11-20: 'need more options ... and a randomise these effects options in settings'). Each reel gets one seeded pick of music mode, transition set and name style from the user's ticks in <data>/settings.json clips.look (Settings > Clips > Clip look). Read by services/clip/clip_look.py and services/studio-ui/user-settings.mjs (same rules). A lock always uses its one choice; randomise off uses the first tick. An empty tick list switches that part off. The last picks live in <data>/clips/look-history.json; a pick never repeats the last historyN of its group while another tick is free. Behind the flag clip-look (on: the user asked for it). FX6 (D429): the ai source makes a track on this PC (data/clip/music-gen.json) only when the ACE-Step runtime folder is set (data/profile.local.json paths.acestep_runtime); without it the tick does nothing. Saved sources from before FX6 (no aiOffered) get ai added once, like packOffered.",
   "version": "1.0.0",
   "status": "proposed",
   "checked": "2026-11-21",
@@ -35,7 +35,7 @@
   "sources": [
     { "id": "folder", "label": "My music folder", "available": true },
     { "id": "pack", "label": "Free music pack (download it in Settings > Downloads)", "available": true },
-    { "id": "ai", "label": "Made on this PC by AI (install, asks you first)", "available": false }
+    { "id": "ai", "label": "Make music on this PC when nothing fits", "available": true, "needs": "acestep_runtime" }
   ],
   "positions": ["auto", "top-left", "top-right", "bottom-left", "bottom-right", "upper-third", "lower-third"],
   "levelDb": { "min": -24, "max": -10 },
@@ -44,7 +44,7 @@
   "folderMaxChars": 400,
   "defaults": {
     "randomise": true,
-    "music": { "modes": ["intro-outro", "drop", "full-bed"], "sources": ["folder", "pack"], "folder": "", "levelDb": -16, "lock": null },
+    "music": { "modes": ["intro-outro", "drop", "full-bed"], "sources": ["folder", "pack", "ai"], "folder": "", "levelDb": -16, "lock": null },
     "transitions": { "styles": ["punchy", "cinematic", "clean"], "sfx": true, "beatSync": true, "lock": null },
     "name": { "styles": ["lower-third", "corner-tag", "kinetic"], "position": "auto", "colour": "theme", "sizePct": 100,
               "durationSec": 2.0, "logo": true, "lock": null }

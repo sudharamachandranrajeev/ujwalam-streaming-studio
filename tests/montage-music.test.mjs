@@ -176,6 +176,14 @@ describe('free music pack (D427)', () => {
     assert.equal(musicOf({ kind: 'short', music: { source: 'pack-x', trackId: 'p1', credit } }), 'unknown');
     assert.deepEqual(renderMusic({ musicRecords: 1, clips: [{ id: 'c1', music: { source: 'packs' } }] }, 'c1'), { source: 'unknown' });
   });
+  test('FX6 (D429): an AI track made on this PC posts exactly like the made-here bed (no credit line)', () => {
+    const rec = { source: 'made-here', generator: 'ace-step-1.5', track: 'gen-0011223344556677', mode: 'full-bed',
+      generated: { caption: 'x', seed: 1, bpm: 140, mood: 'phonk', modelRevision: 'r', licence: 'made on this PC with ACE-Step 1.5, MIT' } };
+    const prov = renderMusic({ musicRecords: 1, clips: [{ id: 'c1', music: rec }] }, 'c1');
+    assert.deepEqual(prov, { source: 'generated' });
+    assert.equal(musicOf({ kind: 'short', music: prov }), undefined, 'made here: postable, nothing to credit');
+    assert.deepEqual(musicCredit(musicOf({ kind: 'short', music: prov })), { use: 'none' });
+  });
 });
 
 describe('posting', () => {

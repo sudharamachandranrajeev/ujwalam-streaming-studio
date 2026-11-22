@@ -87,7 +87,7 @@ def look_problems(v, cfg=None):
             out.append(f"unknown clips.look setting {k}")
     if "randomise" in v and not isinstance(v["randomise"], bool):
         out.append("clips.look.randomise must be true or false")
-    keys = {"music": ("modes", "sources", "folder", "levelDb", "lock", "packOffered"),
+    keys = {"music": ("modes", "sources", "folder", "levelDb", "lock", "packOffered", "aiOffered"),
             "transitions": ("styles", "sfx", "beatSync", "lock"),
             "name": ("styles", "position", "colour", "sizePct", "durationSec", "logo", "lock")}
     for g in GROUPS:
@@ -114,8 +114,9 @@ def look_problems(v, cfg=None):
         out.append(f"clips.look.music.folder must be a folder path up to {cfg['folderMaxChars']} characters")
     if "levelDb" in m:
         out += _range(m["levelDb"], cfg["levelDb"], "clips.look.music.levelDb")
-    if "packOffered" in m and not isinstance(m["packOffered"], bool):
-        out.append("clips.look.music.packOffered must be true or false")
+    for b in ("packOffered", "aiOffered"):
+        if b in m and not isinstance(m[b], bool):
+            out.append(f"clips.look.music.{b} must be true or false")
     n = v.get("name") if isinstance(v.get("name"), dict) else {}
     if "position" in n and n["position"] not in cfg["positions"]:
         out.append(f"clips.look.name.position must be one of {', '.join(cfg['positions'])}")
@@ -151,19 +152,28 @@ def effective(data_dir=None, cfg=None):
             v = None
     if isinstance(v, dict) and look_problems(v, cfg):  # validated first, as Node readLook: a bad value is the defaults
         v = None
-    return merge(cfg, migrate_pack(v, cfg))
+    return merge(cfg, migrate_ai(migrate_pack(v, cfg), cfg))
+
+
+def _migrate_source(v, cfg, sid, mark):
+    m = v.get("music") if isinstance(v, dict) else None
+    if not isinstance(m, dict) or m.get(mark) is True or not isinstance(m.get("sources"), list):
+        return v
+    v = copy.deepcopy(v)
+    v["music"]["sources"] = [s["id"] for s in cfg["sources"] if s["id"] == sid or s["id"] in m["sources"]]
+    v["music"][mark] = True
+    return v
 
 
 def migrate_pack(v, cfg):
     """D427 one-time move (same rule as services/studio-ui/user-settings.mjs migrateLookPack): music sources saved
     before the free pack existed (no packOffered) get the pack added; packOffered true keeps the user's choice."""
-    m = v.get("music") if isinstance(v, dict) else None
-    if not isinstance(m, dict) or m.get("packOffered") is True or not isinstance(m.get("sources"), list):
-        return v
-    v = copy.deepcopy(v)
-    v["music"]["sources"] = [s["id"] for s in cfg["sources"] if s["id"] == "pack" or s["id"] in m["sources"]]
-    v["music"]["packOffered"] = True
-    return v
+    return _migrate_source(v, cfg, "pack", "packOffered")
+
+
+def migrate_ai(v, cfg):
+    """D429 one-time move, the same for the FX6 AI source (aiOffered; user-settings.mjs migrateLookAi)."""
+    return _migrate_source(v, cfg, "ai", "aiOffered")
 
 
 def override_from_env(cfg=None, env=None):

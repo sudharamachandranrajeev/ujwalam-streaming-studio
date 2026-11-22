@@ -345,6 +345,18 @@ Column {
             checked: srcs.includes("pack")
             onToggled: cp.box.setLook("music", "sources", ((cp.box.info.look || {}).sources || []).map(s => s.id).filter(x => x === "pack" ? checked : srcs.includes(x)))
         }
+        USwitch {
+            objectName: "lookMusicAi"
+            readonly property var srcs: cp.d.look ? (cp.d.look.music.sources || []) : []
+            width: parent.width
+            text: "Make music on this PC when nothing fits"
+            hint: (cp.box.info.look || {}).aiReady === true
+                  ? "Make music on this PC when nothing fits. Takes about 10 s per clip, never while live."
+                  : "Not set up on this PC: the AI music program is not installed. Clips use your folder, the pack or the simple made-here music."
+            enabled: (cp.box.info.look || {}).aiReady === true
+            checked: srcs.includes("ai")
+            onToggled: cp.box.setLook("music", "sources", ((cp.box.info.look || {}).sources || []).map(s => s.id).filter(x => x === "ai" ? checked : srcs.includes(x)))
+        }
         Words { text: "My music folder (tracks are picked to fit each clip; nothing is downloaded)" }
         UField {
             objectName: "lookMusicFolder"

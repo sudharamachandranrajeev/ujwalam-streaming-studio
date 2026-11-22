@@ -97,6 +97,7 @@ import game_pack  # noqa: E402
 import learning_capture as lcap  # noqa: E402
 import learning_mix as lmix  # noqa: E402
 import match_gate as mg  # noqa: E402
+import music_gen as mgen  # noqa: E402
 import music_library as mlib  # noqa: E402
 from clip_common import (  # noqa: E402
     CLIP_DATA, EXIT_FLAG_OFF, EXIT_NOT_STARTED, EXIT_ON_AIR, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
@@ -1118,9 +1119,10 @@ def _reel_extras(a, data_dir):
     lcfg = look.load_config() if look.on(data_dir) else None  # FX1 (D411): the clip look, picked per reel
     look_now = look.effective(data_dir, lcfg) if lcfg else None
     tracks, mlcfg = _look_library(data_dir, look_now) if lcfg else ([], None)  # FX4: the user's music folder
+    ai = bool(lcfg and mlcfg and mgen.SOURCE in (look_now["music"].get("sources") or []) and _ai_ready())  # FX6
     return {"hooks": rh.active(data_dir, hcfg), "hcfg": hcfg, "cap_on": cap_on, "ccfg": ccfg,
             "look": ({"cfg": lcfg, "look": look_now, "override": look.override_from_env(lcfg), "tracks": tracks,
-                      "mlcfg": mlcfg, "dataDir": data_dir, "history": look.load_history(data_dir),
+                      "mlcfg": mlcfg, "dataDir": data_dir, "history": look.load_history(data_dir), "ai": ai,
                       # each part of the look obeys its own switch (Codex review): music = reel-music, transitions =
                       # reel-transitions, name = the clip-look switch itself (the old reel-title switch is retired)
                       "gates": {"music": mu_on, "transitions": flag_on(data_dir, rt.FLAG), "name": True}} if lcfg else None),
@@ -1351,6 +1353,14 @@ def _look_library(data_dir, look_now):
     return tracks, mcfg
 
 
+def _ai_ready():
+    """FX6 (D429): True when the ACE-Step runtime folder is set and has its Python (else the AI source is unavailable)."""
+    try:
+        return mgen.runtime_python() is not None
+    except (OSError, ClipError, KeyError, ValueError):
+        return False
+
+
 def pack_record(track):
     """FX5 (D427): the render record fields of a pack track: source pack, its id and the credit posting carries."""
     c = track["pack"]
@@ -1363,15 +1373,19 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
     beatSync, the joins moved onto its beats (full-bed and intro-outro: the bed is anchored at the reel start). ->
     (pieces, plan or None)."""
     lk = ex.get("look")
-    if not (lk and pk and pk.get("music") and lk.get("tracks")):
+    if not (lk and pk and pk.get("music") and (lk.get("tracks") or lk.get("ai"))):
         return pieces, None
     mv, mcfg = lk["look"]["music"], lk["mlcfg"]
     total = sum(float(p["end"]) - float(p["start"]) for p in pieces) - (len(pieces) - 1) * xd
     target = mlib.target_for(reel, typ, mcfg)
     if reel.get("styleMusicEnergy") is not None:  # RS4 (D412): the reel style's music energy target
         target = dict(target, energy=round(float(reel["styleMusicEnergy"]), 3))
-    track, sc = mlib.match(lk["tracks"], target, total, seed_parts, lk["history"].get("track") or [], mcfg,
+    track, sc = mlib.match(lk.get("tracks") or [], target, total, seed_parts, lk["history"].get("track") or [], mcfg,
                            n_avoid=int(lk["cfg"]["historyN"]["track"]), prefer_long=pk["music"] != "intro-outro")
+    if track is None and lk.get("ai"):  # FX6 (D429): nothing fits, so one track is made on this PC (off air)
+        track, why = mgen.make(lk["dataDir"], target, total, mcfg)
+        if track is None:
+            eprint(f"music: no AI track ({why}); the made-here bed is used")
     if track is None:
         return pieces, None
     if track.get("pack") and not mlib.verify_pick(track):  # D427: the bytes must be the pack's own before any credit
@@ -1393,7 +1407,7 @@ def _look_music_plan(ex, pk, pieces, xd, tr, reel, typ, ass, *seed_parts):
             pieces = synced
             rec = mk(pieces)
     record = {k: v for k, v in rec.items() if k != "beats"}
-    origin = pack_record(track) if track.get("pack") else {"source": "folder"}
+    origin = pack_record(track) if track.get("pack") else mgen.record(track) if track.get("generated") else {"source": "folder"}
     return pieces, {"rec": rec, "track": track,
                     "record": dict(record, **origin, score=sc, target=target, beatShifts=shifts, beats=len(rec["beats"]))}
 
@@ -1780,11 +1794,14 @@ def _recaption_music(data_dir, wd, row, pieces, xd, rid):
     render_argv or None, new record or None = unchanged)."""
     mrec = row["music"]
     cfg_m = rmu.load_config()
-    if mrec.get("source") in ("folder", "pack"):  # FX5 (D427): a pack track the same way, from the pack's library
-        kind = "pack" if mrec["source"] == "pack" else "folder"
+    gen = mrec.get("source") == "made-here" and bool(mrec.get("generator"))  # FX6 (D429): a stored generated track
+    if mrec.get("source") in ("folder", "pack") or gen:  # FX5 (D427): a pack track the same way, from the pack's library
+        kind = "pack" if mrec["source"] == "pack" else "generated" if gen else "folder"
         try:
             mcfg = mlib.load_config()
-            if kind == "pack":
+            if kind == "generated":
+                tracks = mgen.stored(data_dir)
+            elif kind == "pack":
                 tracks = mlib.usable_pack(mlib.load_library(data_dir, mcfg, mcfg["pack"]["library"]), data_dir, mcfg)
             else:
                 tracks = mlib.usable(mlib.load_library(data_dir, mcfg))

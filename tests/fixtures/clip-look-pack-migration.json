@@ -1,8 +1,10 @@
 [
-  [{"music": {"sources": ["folder"]}}, ["folder", "pack"]],
-  [{"music": {"sources": ["folder"], "packOffered": true}}, ["folder"]],
-  [{"music": {"sources": ["unknown"]}}, ["folder", "pack"]],
-  [{"music": {"sources": []}}, ["pack"]],
-  [{"music": {"sources": ["pack", "folder"]}}, ["folder", "pack"]],
-  [null, ["folder", "pack"]]
+  [{"music": {"sources": ["folder"]}}, ["folder", "pack", "ai"]],
+  [{"music": {"sources": ["folder"], "packOffered": true}}, ["folder", "ai"]],
+  [{"music": {"sources": ["unknown"]}}, ["folder", "pack", "ai"]],
+  [{"music": {"sources": []}}, ["pack", "ai"]],
+  [{"music": {"sources": ["pack", "folder"]}}, ["folder", "pack", "ai"]],
+  [{"music": {"sources": ["folder"], "packOffered": true, "aiOffered": true}}, ["folder"]],
+  [{"music": {"sources": ["pack"], "aiOffered": true}}, ["pack"]],
+  [null, ["folder", "pack", "ai"]]
 ]

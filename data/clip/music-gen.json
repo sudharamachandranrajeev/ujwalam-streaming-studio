@@ -1,0 +1,32 @@
+{
+  "$comment": "FX6 local AI music (plan docs/plan/2026-11-21-clip-music-name-transitions.md 3.4; spike docs/evidence/2026-11-22-fx6-ace-step-spike.md; user 2026-11-20 'find, generate and pick musics based on game clips'). When the AI source is ticked and no folder or pack track reaches the match threshold, one instrumental is made for the reel's target with ACE-Step 1.5 on this PC, off air, as its own heavy job. The runtime folder is local data: data/profile.local.json paths.acestep_runtime (or env UJWALAM_ACESTEP_RUNTIME); absent = the source is unavailable. Tempo and caption per mood are the agent's proposal; minFreeMB is from the spike and the FX6 run (whole-GPU peak 5497 MB with 659 MB used by the desktop: about 4.85 GB for the job, plus a margin). Read by services/clip/music_gen.py.",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-22",
+  "generator": "ace-step-1.5",
+  "codeRevision": "ca1e85fe9430179831e6bc6be790c332190a3866",
+  "modelRevision": "19671f406d603126926c1b7e2adc169acbcade22",
+  "config": "acestep-v15-turbo",
+  "quantization": "int8_weight_only",
+  "offloadToCpu": true,
+  "python": ".venv/Scripts/python.exe",
+  "folder": "music/generated",
+  "minFreeMB": 5000,
+  "timeoutSec": 300,
+  "seconds": { "min": 30, "max": 60 },
+  "licence": "made on this PC with ACE-Step 1.5, MIT",
+  "caption": "{style}, {energy}, instrumental",
+  "energy": [
+    { "below": 0.45, "words": "calm, soft dynamics" },
+    { "below": 0.7, "words": "driving groove, steady build" },
+    { "below": 1.01, "words": "aggressive, high energy, big drop" }
+  ],
+  "moods": {
+    "phonk": { "bpm": 140, "style": "dark phonk, cowbell melody, distorted 808 bass, drift phonk" },
+    "trap": { "bpm": 140, "style": "hard trap beat, rolling hi-hats, deep 808, dark synth" },
+    "edm": { "bpm": 128, "style": "energetic EDM, punchy kick, supersaw lead, festival build-up" },
+    "cinematic": { "bpm": 100, "style": "epic cinematic hybrid, big drums, strings and brass, trailer" },
+    "lo-fi": { "bpm": 85, "style": "chill lo-fi hip hop beat, dusty drums, mellow keys, vinyl crackle" },
+    "chill": { "bpm": 90, "style": "chill electronic, soft pads, warm bass, relaxed groove" }
+  }
+}
