@@ -57,7 +57,18 @@ function mgr(dataRoot, items, { live = () => false, hashBetween } = {}) {
 
 test('manifests: every item is complete and safe; the Face AI item equals data/models/face-ai.json', () => {
   const items = loadItems(REPO);
-  assert.deepEqual(items.map((i) => i.id).sort(), ['face-ai-models', 'speech-captions']);
+  assert.deepEqual(items.map((i) => i.id).sort(), ['face-ai-models', 'music-pack', 'speech-captions']);
+  // FX5 (D427): the free music pack lands where services/clip/music_library.py pack_files reads it, with its marker
+  const ml = JSON.parse(readFileSync(path.join(REPO, 'data', 'clip', 'music-library.json'), 'utf8')).pack;
+  const pack = items.find((i) => i.id === 'music-pack');
+  assert.equal(pack.dest, ml.folder);
+  assert.equal(ml.marker, MARKER);
+  assert.equal(`downloads/${path.basename(ml.manifest)}`, ml.manifest);
+  for (const f of pack.files) {
+    assert.match(f.name, /^pack-\d{2}-[a-z0-9-]+\.mp3$/, f.name);
+    assert.equal(f.licence, 'CC0-1.0', f.name);
+    assert.ok(f.fma.startsWith('https://freemusicarchive.org/') && f.artist.trim() && f.title.trim(), f.name);
+  }
   for (const it of items) assert.deepEqual(itemProblems(it), [], it.id);
   const face = JSON.parse(readFileSync(path.join(REPO, 'data', 'models', 'face-ai.json'), 'utf8'));
   const want = face.models.flatMap((m) => [[m.file, m.bytes, m.sha256], ...(m.extra ?? []).map((x) => [x.file, x.bytes, x.sha256])]).sort();

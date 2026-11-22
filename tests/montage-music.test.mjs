@@ -117,6 +117,37 @@ describe('ncs-filename credit (D417)', () => {
   });
 });
 
+describe('free music pack (D427)', () => {
+  const credit = { artist: 'TRG Banks', title: 'Night Sun', licence: 'CC0-1.0', link: 'https://freemusicarchive.org/music/TRG_Banks/Return_to_Dreamland/Night_Sun/' };
+  const rec = { source: 'pack', trackId: 'p1', credit, track: 'p1', segments: [] };
+  const PACK_TEXT = `Music: TRG Banks - Night Sun (CC0, Free Music Archive)\n${credit.link}`;
+  test('renderMusic and musicOf keep the pack and its credit', () => {
+    const r = renderMusic({ musicRecords: 1, clips: [{ id: 'c1', music: rec }] }, 'c1');
+    assert.deepEqual(r, { source: 'pack', trackId: 'p1', credit });
+    assert.deepEqual(musicOf({ kind: 'short', music: r }), { library: 'pack', trackId: 'p1', credit });
+  });
+  test('a pack track posts with its credit line; the stamp and the description check hold it', () => {
+    const mm = musicOf({ kind: 'short', music: { source: 'pack', trackId: 'p1', credit } });
+    const c = musicCredit(mm);
+    assert.deepEqual(c, { use: 'credit', text: PACK_TEXT });
+    assert.deepEqual(musicStamp(mm, c), { checked: 1, use: 'credit', library: 'pack', trackId: 'p1' });
+    assert.equal(creditMissing({ source: { music: musicStamp(mm, c), musicCredit: c.text }, description: `Hi\n${c.text}` }), null);
+    assert.equal(creditMissing({ source: { music: musicStamp(mm, c), musicCredit: c.text }, description: 'Hi' }), 'music-credit-missing');
+  });
+  test('a missing, unsafe or odd credit is never sent', () => {
+    const bad = [null, 'x', { ...credit, artist: '' }, { ...credit, title: 'a\u202Eb' }, { ...credit, artist: '<b>x</b>' },
+      { ...credit, licence: 'CC-BY-4.0' }, { ...credit, licence: undefined }, { ...credit, link: 'http://freemusicarchive.org/x' },
+      { ...credit, link: 'https://example.com/x' }, { ...credit, title: 'x'.repeat(161) }];
+    for (const cr of bad) {
+      const r = musicCredit(musicOf({ kind: 'short', music: { source: 'pack', trackId: 'p1', credit: cr } }));
+      assert.equal(r.use, 'refuse', JSON.stringify(cr));
+      assert.equal(r.renderOnly, false);
+    }
+    assert.equal(musicOf({ kind: 'short', music: { source: 'pack-x', trackId: 'p1', credit } }), 'unknown');
+    assert.deepEqual(renderMusic({ musicRecords: 1, clips: [{ id: 'c1', music: { source: 'packs' } }] }, 'c1'), { source: 'unknown' });
+  });
+});
+
 describe('posting', () => {
   test('musicCredit: library track with a credit, without one, and a song from elsewhere', () => {
     assert.deepEqual(musicCredit(undefined), { use: 'none' });

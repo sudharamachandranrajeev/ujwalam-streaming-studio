@@ -2,12 +2,18 @@
 """FX4 music library (D411, plan docs/plan/2026-11-21-clip-music-name-transitions.md 3.4): tracks from the user's own
 music folder, analysed once off air with PyAV + numpy, matched to each reel by energy and mood, and laid under the reel
 as one WAV in one of three modes (intro-outro, drop, full-bed) at the user's level (default -16 LUFS integrated, of the
-music where it plays). No network: nothing is downloaded (the free pack and local AI music are FX5/FX6, later, and need
-the user's yes). Data: data/clip/music-library.json; library: <data>/music/library.json.
+music where it plays). No network: nothing is downloaded here. FX5 (D427): the free music pack the user downloads in
+Settings > Downloads (item music-pack, <data>/music/pack) is a second library with its own file; only tracks listed in
+the pack's manifest, present in the pack folder and recorded in the download's marker count, and each carries its
+credit (artist, title, licence, track page) from the manifest. Local AI music is FX6, later. Data:
+data/clip/music-library.json; libraries: <data>/music/library.json and <data>/music/pack-library.json.
 
   analyse(path, cfg)                         -> track facts (bpm, beat offset, energy curve, drop, loudness, mood, ...)
   refresh(data_dir, folder, cfg, live=None)  -> library (new files analysed, gone files dropped; never while live)
   load_library(data_dir)                     -> library dict
+  pack_files(data_dir, cfg)                  -> {path: credit} of the downloaded pack (manifest + marker)
+  refresh_pack(data_dir, cfg, live=None)     -> the pack's library (same analysis and limits as the folder)
+  usable_pack(lib, data_dir, cfg)            -> the pack tracks that can be used, each with its credit
   target_for(reel, typ, cfg)                 -> {"energy", "moods"}
   match(tracks, target, need_sec, seed_parts, recent, cfg) -> (track or None, score)
   strongest_reel_time(reel, pieces, xd)      -> reel time of the strongest moment
@@ -245,14 +251,14 @@ def analyse(path, cfg, root=None, open_kw=None, guard=None):
 
 # ---------------------------------------------------------------- the library file
 
-def _lib_path(data_dir, cfg):
-    return os.path.join(data_dir, *cfg["library"].split("/"))
+def _lib_path(data_dir, cfg, rel=None):
+    return os.path.join(data_dir, *(rel or cfg["library"]).split("/"))
 
 
-def load_library(data_dir, cfg=None):
+def load_library(data_dir, cfg=None, rel=None):
     cfg = cfg or load_config()
     try:
-        j = load_json(_lib_path(data_dir, cfg))
+        j = load_json(_lib_path(data_dir, cfg, rel))
     except (OSError, ClipError):
         return {"version": 1, "folder": None, "tracks": []}
     return j if isinstance(j, dict) and isinstance(j.get("tracks"), list) else {"version": 1, "folder": None, "tracks": []}
@@ -284,6 +290,13 @@ def list_files(folder, cfg):
     return out
 
 
+def _on_air(live):
+    try:
+        return bool(live()) if live else False
+    except Exception:  # noqa: BLE001 - cannot tell: treat as live
+        return True
+
+
 def refresh(data_dir, folder, cfg=None, live=None):
     """Adds new tracks of the folder (at most maxNewPerRun per call), drops gone ones, keeps the user's moods. Nothing
     is analysed while live (live() true or unknown): the library is returned as it is."""
@@ -291,15 +304,16 @@ def refresh(data_dir, folder, cfg=None, live=None):
     lib = load_library(data_dir, cfg)
     if not folder or not os.path.isdir(folder):
         return lib
-    try:
-        on_air = bool(live()) if live else False
-    except Exception:  # noqa: BLE001 - cannot tell: treat as live
-        on_air = True
-    if on_air:
+    if _on_air(live):
         return lib
+    return _scan(data_dir, folder, list_files(folder, cfg), lib, cfg, cfg["library"], cfg["licence"])
+
+
+def _scan(data_dir, folder, files, lib, cfg, rel, licence, extra=None):
+    """The shared refresh of one library file: files (inside folder) analysed when new, gone ones dropped."""
     old = {t["id"]: t for t in lib["tracks"] if lib.get("folder") == folder}
     tracks, new = [], 0
-    for p in list_files(folder, cfg):
+    for p in files:
         try:
             if not inside(p, folder):
                 continue
@@ -313,7 +327,9 @@ def refresh(data_dir, folder, cfg=None, live=None):
         if new >= int(cfg["maxNewPerRun"]):
             continue
         new += 1
-        row = {"id": tid, "file": p, "name": os.path.splitext(os.path.basename(p))[0], "licence": cfg["licence"]}
+        row = {"id": tid, "file": p, "name": os.path.splitext(os.path.basename(p))[0], "licence": licence}
+        if extra:
+            row.update(extra(p))
         try:
             row.update(analyse(p, cfg, folder))
         except (ClipError, OSError, ValueError, MemoryError) as e:
@@ -322,9 +338,95 @@ def refresh(data_dir, folder, cfg=None, live=None):
             row["error"] = f"{type(e).__name__}: {str(e)[-120:]}"
         tracks.append(row)
     lib = {"version": 1, "folder": folder, "tracks": tracks}
-    os.makedirs(os.path.dirname(_lib_path(data_dir, cfg)), exist_ok=True)
-    write_json_atomic(_lib_path(data_dir, cfg), lib)
+    os.makedirs(os.path.dirname(_lib_path(data_dir, cfg, rel)), exist_ok=True)
+    write_json_atomic(_lib_path(data_dir, cfg, rel), lib)
     return lib
+
+
+# ---------------------------------------------------------------- the free music pack (FX5, D427)
+
+def pack_dir(data_dir, cfg):
+    return os.path.join(data_dir, *cfg["pack"]["folder"].split("/"))
+
+
+def pack_manifest(cfg):
+    """{file name: credit + bytes} from the pack's download manifest (repo data/downloads): only rows with a plain file
+    name of a known sound type and a plain artist, title, licence and https track page."""
+    pk = cfg["pack"]
+    try:
+        doc = load_json(os.path.join(os.path.dirname(CLIP_DATA), *pk["manifest"].split("/")))
+    except (OSError, ClipError, ValueError):
+        return {}
+    item = next((i for i in doc.get("items") or [] if isinstance(i, dict) and i.get("id") == pk["item"]), None)
+    out = {}
+    for f in (item or {}).get("files") or []:
+        if not isinstance(f, dict):
+            continue
+        name = f.get("name")
+        if not (isinstance(name, str) and name == os.path.basename(name) and name.lower().endswith(tuple(cfg["extensions"]))):
+            continue
+        credit = {"artist": f.get("artist"), "title": f.get("title"), "licence": f.get("licence"), "fma": f.get("fma")}
+        if all(isinstance(v, str) and v.strip() for v in credit.values()) and credit["fma"].startswith("https://"):
+            out[name] = dict(credit, bytes=f.get("bytes"))
+    return out
+
+
+def pack_files(data_dir, cfg=None):
+    """{path: credit} of the pack tracks that count: in the manifest, a plain file inside the pack folder, and listed
+    in the download's marker with the file's own size (and the manifest's size). No marker: none (the download is not
+    finished, or was never asked for)."""
+    cfg = cfg or load_config()
+    folder = pack_dir(data_dir, cfg)
+    try:
+        marker = load_json(os.path.join(folder, cfg["pack"]["marker"]))
+    except (OSError, ClipError, ValueError):
+        return {}
+    done = marker.get("files") if isinstance(marker, dict) else None
+    if not isinstance(done, dict):
+        return {}
+    out = {}
+    for name, credit in pack_manifest(cfg).items():
+        p = os.path.join(folder, name)
+        e = done.get(name)
+        if not isinstance(e, dict) or not inside(p, folder):
+            continue
+        try:
+            size = os.stat(p).st_size
+        except OSError:
+            continue
+        if e.get("size") != size or (credit.get("bytes") is not None and credit["bytes"] != size):
+            continue
+        out[p] = {k: credit[k] for k in ("artist", "title", "licence", "fma")}
+    return out
+
+
+def refresh_pack(data_dir, cfg=None, live=None):
+    """The pack's library (its own file, cfg.pack.library): the same analysis and limits as the folder, never while
+    live. A pack that is not downloaded leaves the library as it is (usable_pack then gives no tracks)."""
+    cfg = cfg or load_config()
+    rel = cfg["pack"]["library"]
+    lib = load_library(data_dir, cfg, rel)
+    files = pack_files(data_dir, cfg)
+    if not files or _on_air(live):
+        return lib
+    return _scan(data_dir, pack_dir(data_dir, cfg), sorted(files), lib, cfg, rel, cfg["pack"]["licence"],
+                 extra=lambda p: {"pack": files[p]})
+
+
+def usable_pack(lib, data_dir, cfg=None):
+    """The pack tracks that can be used now (usable() and still counted by pack_files), each with its credit from the
+    manifest as it is now."""
+    cfg = cfg or load_config()
+    norm = lambda p: os.path.normcase(os.path.abspath(p))  # noqa: E731
+    if not lib.get("folder") or norm(lib["folder"]) != norm(pack_dir(data_dir, cfg)):
+        return []
+    files = {norm(p): c for p, c in pack_files(data_dir, cfg).items()}
+    out = []
+    for t in usable(lib):
+        c = files.get(norm(t.get("file", "")))
+        if c:
+            out.append(dict(t, pack=c))
+    return out
 
 
 def usable(lib):

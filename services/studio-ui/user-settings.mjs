@@ -282,7 +282,14 @@ export function lookInfo(dataDir) {
   if ('randomise' in mine) look.randomise = mine.randomise;
   for (const g of LOOK_GROUPS) Object.assign(look[g], mine[g] ?? {});
   return { flag: d.flag, groups: d.groups, sources: d.sources, positions: d.positions, levelDb: d.levelDb, sizePct: d.sizePct,
-    durationSec: d.durationSec, defaults: d.defaults, look };
+    durationSec: d.durationSec, defaults: d.defaults, look, packReady: musicPackReady(dataDir) };
+}
+/** FX5 (D427): true when the free music pack's download finished (its marker is in the pack folder). */
+export function musicPackReady(dataDir) {
+  try {
+    const pk = JSON.parse(readFileSync(path.join(path.dirname(CLIP_LOOK_FILE), 'music-library.json'), 'utf8')).pack;
+    return typeof dataDir === 'string' && existsSync(path.join(dataDir, ...pk.folder.split('/'), pk.marker));
+  } catch { return false; }
 }
 // ---- clip look end
 // ---- reel styles (RS3, D412) begin: clips.reelStyles checks and read; also marked "reel styles" in readSettings,

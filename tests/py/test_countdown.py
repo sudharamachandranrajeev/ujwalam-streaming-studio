@@ -194,6 +194,27 @@ class MusicTests(unittest.TestCase):
         self.assertEqual(cd.combined_music([none, {}]), {"source": "unknown"})
         self.assertEqual(pub.music_provenance({"music": {"source": "unknown"}}, True), {"source": "unknown"})
 
+    def test_combined_free_pack(self):
+        """D427: reels with the same free-pack track (each planned its own way) post with its credit; two pack
+        tracks, or a pack track next to an NCS one or a folder track, stay unknown."""
+        import clip_publish as pub
+        credit = {"artist": "A", "title": "T", "licence": "CC0-1.0", "link": "https://freemusicarchive.org/music/a/"}
+
+        def pk(tid, seg, cr=credit):
+            raw = {"source": "pack", "trackId": tid, "credit": cr, "track": tid, "segments": [seg], "score": 0.7}
+            return {"music": pub.music_provenance({"music": raw}, True), "musicRaw": raw}
+        g = {"music": {"source": "generated"}, "musicRaw": {"source": "made-here", "seed": 1}}
+        none = {"music": {"source": "none"}, "musicRaw": None}
+        a1, a2, b = pk("p1", {"at": 0}), pk("p1", {"at": 3}), pk("p2", {"at": 0})
+        got = cd.combined_music([none, a1, g, a2])
+        self.assertEqual(got, {"source": "pack", "trackId": "p1", "credit": credit})
+        self.assertEqual(pub.music_provenance({"music": got}, True), {"source": "pack", "trackId": "p1", "credit": credit})
+        self.assertEqual(cd.combined_music([a1, b]), {"source": "unknown"})
+        self.assertEqual(cd.combined_music([a1, pk("p1", {"at": 0}, None)]), {"source": "unknown"})
+        ncs = {"music": {"source": "ncs", "trackId": "t1", "credit": "c"}, "musicRaw": {"source": "ncs", "trackId": "t1", "credit": "c"}}
+        self.assertEqual(cd.combined_music([a1, ncs]), {"source": "unknown"})
+        self.assertEqual(cd.combined_music([a1, {"music": {"source": "user-folder", "track": "x"}}]), {"source": "unknown"})
+
 
 ITEMS = [{"file": "c.mp4", "name": "Three"}, {"file": "b.mp4", "name": "Two"}, {"file": "a.mp4", "name": "One"}]
 

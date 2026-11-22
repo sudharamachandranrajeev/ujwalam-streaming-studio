@@ -4,7 +4,7 @@
 // tests/fixtures/clip-look-cases.json (tests/py/test_clip_look.py). Also the one-clip choice of "Make clips?".
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,18 @@ test('defaults: every style ticked, randomise on, -16 dB, no blur option', () =>
   assert.equal(d.defaults.music.levelDb, -16);
   assert.equal(JSON.stringify(d.defaults).includes('blur'), false);
 });
+
+test('free music pack (D427): ticked by default, offered, and packReady follows the download marker', () => withDir((d) => {
+  const def = lookDefaults();
+  assert.deepEqual(def.defaults.music.sources, ['folder', 'pack']);
+  assert.equal(def.sources.find((s) => s.id === 'pack').available, true);
+  assert.equal(lookInfo(d).packReady, false);
+  const pk = JSON.parse(readFileSync(path.join(here, '..', 'data', 'clip', 'music-library.json'), 'utf8')).pack;
+  const dir = path.join(d, ...pk.folder.split('/'));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, pk.marker), '{"files":{}}');
+  assert.equal(lookInfo(d).packReady, true);
+}));
 
 test('round trip: saved group by group, read back, a bad stored value reads as the defaults', () => withDir((d) => {
   assert.equal('look' in readSettings(d).clips, false);

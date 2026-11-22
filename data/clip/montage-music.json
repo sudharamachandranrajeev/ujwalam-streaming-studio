@@ -29,5 +29,12 @@
     "line": "Music provided by NoCopyrightSounds",
     "linkPrefix": "https://youtu.be/",
     "template": ["Music: {artist} - {title} [NCS Release]", "{line}", "Watch: {link}"]
+  },
+  "pack": {
+    "$comment": "FX5 (D427): a clip whose music is a track of the free music pack (CC0 1.0 on the Free Music Archive, data/downloads/music-pack.json). CC0 needs no credit; the post credits the artist and track anyway. The record's credit (artist, title, licence, link = the FMA track page) gets the same text checks as an NCS credit; a missing or unsafe credit is never sent.",
+    "library": "pack",
+    "licences": ["CC0-1.0"],
+    "linkPrefix": "https://freemusicarchive.org/",
+    "template": ["Music: {artist} - {title} (CC0, Free Music Archive)", "{link}"]
   }
 }

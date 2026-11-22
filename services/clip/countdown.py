@@ -153,16 +153,16 @@ def pick_items(data_dir, cfg):
              "musicRaw": r["musicRaw"]} for r in reversed(rows)]
 
 
-CREDITED = ("ncs", "ncs-filename")
+CREDITED = ("ncs", "ncs-filename", "pack")  # FX5 (D427): a pack track is credited like an NCS one
 
 
 def combined_music(items):
     """The countdown's own music record (D414), in the raw form clipper writes (clip_publish.music_provenance reads
     it), from its entries' records ("music": the provenance; "musicRaw": the entry's raw record). The reel carries
     every entry's sound, so it is only as postable as its least known entry. All none (or no entries): None. None and
-    made-here beds only: a made-here record. One NCS record, the same on every entry that has one (the rest none or
-    made here): that record, so posting carries its credit. Anything else (a user-folder track, two different NCS
-    records, an unknown or missing record, a user's own list): unknown, held."""
+    made-here beds only: a made-here record. One NCS (or, D427, free-pack) record, the same on every entry that has one
+    (the rest none or made here): that record, so posting carries its credit. Anything else (a user-folder track, two
+    different credited records, an unknown or missing record, a user's own list): unknown, held."""
     provs = [it.get("music", {"source": "unknown"}) for it in items]
     if any(not isinstance(p, dict) for p in provs):  # None: an older render without records (fail closed)
         return {"source": "unknown"}
@@ -172,6 +172,9 @@ def combined_music(items):
     if all(s in ("none", "generated") for s in srcs):
         return {"source": "made-here"}
     raw = [it.get("musicRaw") for it, s in zip(items, srcs) if s in CREDITED]
+    if raw and all(isinstance(r, dict) and r.get("source") == "pack" for r in raw):
+        # D427: each reel plans the same pack track its own way; what posting needs is the track and its credit
+        raw = [{k: r.get(k) for k in ("source", "trackId", "credit")} for r in raw]
     if all(s in ("none", "generated") + CREDITED for s in srcs) and isinstance(raw[0], dict)             and all(r == raw[0] for r in raw):
         return json.loads(json.dumps(raw[0]))
     return {"source": "unknown"}
