@@ -1,0 +1,23 @@
+{
+  "$comment": "RR1 (D424): the Top 5 countdown reel (plan docs/plan/2026-11-21-beatdrop-montages.md RR1, reference 2), read by services/clip/countdown.py. A vertical reel: for each rank from the lowest to #1, a rank card (a still of the clip, blurred and darkened, a huge numeral in the rank's colour, the item's name letters flying in and assembling) then the clip itself; whip joins (a short directional slide) between every part. Items are the best rendered vertical clips across the runs (score, then kills) or the user's own list. Overlay rule: entrances under 600 ms, exits under 400 ms. Values are the agent's proposal, tunable here.",
+  "version": "1.0.0",
+  "status": "proposed",
+  "approved": "user 2026-11-21 approved RR1 in the BeatDrop plan; the look, timings and colours are the agent's proposal",
+  "checked": "2026-11-22",
+  "flag": "countdown-reel",
+  "frame": { "width": 1080, "height": 1920 },
+  "items": 5,
+  "minItems": 3,
+  "cardSec": 1.6,
+  "clipMaxSec": 7.0,
+  "clipMinSec": 2.0,
+  "join": { "ms": 220, "kinds": ["slideup", "slideleft", "slidedown", "slideright"] },
+  "still": { "blur": 24, "darken": 0.35, "$comment": "gblur sigma and the share of brightness taken off (lutyuv; the ffmpeg in use has no eq or boxblur, GPL filters)" },
+  "rankColours": ["#FFD400", "#FF3B5C", "#2EE6D6", "#7C5CFF", "#3DFF6E", "#FF8A00", "#38B6FF", "#FF5CF0", "#C8FF00", "#FFFFFF"],
+  "numeral": { "fontFile": "Anton-Regular.ttf", "fontFamily": "Anton", "sizeOfHeight": 0.26, "y": 0.36, "popMs": 380, "outlinePx": 10, "outlineColour": "#101014" },
+  "name": { "fontFile": "Anton-Regular.ttf", "fontFamily": "Anton", "sizeOfHeight": 0.07, "y": 0.58, "colour": "#FFE14D", "outlinePx": 7, "outlineColour": "#101014", "assembleMs": 500, "scatterPx": 260, "maxChars": 22, "widthOfFrame": 0.88 },
+  "exitMs": 250,
+  "flash": { "maxPerSec": 3, "sample": { "width": 108, "height": 192 }, "$comment": "the rendered reel is measured with tools/fx-test.mjs analyseVideo at `sample` (as BeatDrop, D415); above maxPerSec it is not kept" },
+  "safe": { "left": 64, "right": 64, "top": 160, "bottom": 300 },
+  "seed": 0
+}

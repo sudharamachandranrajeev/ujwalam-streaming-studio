@@ -2090,6 +2090,65 @@ def cmd_beatdrop(a):
     return rc
 
 
+def cmd_countdown(a):
+    """RR1 (D424): the Top N countdown reel (flag countdown-reel) -> DIR/clips/R1/countdown.mp4 + DIR/render.json
+    (tool clipper.countdown, one vertical clip, its entries). Items: --items (a JSON list [{file, name}], #1 first)
+    or the best rendered vertical clips across the runs under the data folder. Off air only, one heavy job at a time;
+    then validate and, with --publish CLIPS, published as kind countdown."""
+    import countdown as cd  # noqa: PLC0415
+    data_dir = resolve_data_dir(a.data_dir)
+    cfg = cd.load_config()
+    if not flag_on(data_dir, cfg["flag"]):
+        eprint(f"countdown: off (the '{cfg['flag']}' flag)")
+        return EXIT_FLAG_OFF
+    if a.width and a.height:  # a smaller test frame
+        cfg = dict(cfg, frame={"width": int(a.width) // 2 * 2, "height": int(a.height) // 2 * 2})
+    # Codex RR1: publishing keys on the run folder, clip id and layout, so one countdown reel per folder; the clip
+    # folder is reserved atomically (two commands with the same --out: the second stops here)
+    wd = os.path.join(a.out, "clips", cd.CLIP_ID)
+    if os.path.exists(os.path.join(a.out, RENDER)):
+        raise ClipError("countdown: --out must be a new folder (one countdown reel per folder)")
+    try:
+        os.makedirs(wd)
+    except FileExistsError:
+        raise ClipError("countdown: --out must be a new folder (one countdown reel per folder)") from None
+    progress_line("montage", 0, 1, "making the countdown reel")
+    ffmpeg, ffprobe = _tools(a)
+    items = cd.user_items(a.items, cfg) if a.items else cd.pick_items(data_dir, cfg)
+    encoder = rnd.pick_encoder(a.encoder)
+    res = cd.make(items, wd, ffmpeg, ffprobe, rnd.ENCODERS[encoder], rnd.AUDIO, cfg)
+    if res["status"] == cd.STOPPED_ON_AIR:
+        eprint(f"countdown {cd.CLIP_ID}: {cd.STOPPED_ON_AIR} ({res['reason']})")
+        return EXIT_ON_AIR
+    if res["status"] == cd.NOT_STARTED:
+        eprint(f"countdown {cd.CLIP_ID}: {cd.NOT_STARTED} ({res['reason']})")
+        return EXIT_NOT_STARTED
+    entries = [{"rank": len(items) - i, "name": it["name"], "source": os.path.basename(it["file"])}
+               for i, it in enumerate(items)]
+    row = {"id": cd.CLIP_ID, "kind": "countdown", "start": 0.0, "end": res["total"] or 0.0,
+           "labels": [], "countdown": entries, "flash": res["flash"], "music": cd.combined_music(items),
+           "files": [{"layout": cd.LAYOUT, "file": res["file"], "geometry": "canvas", "frame": dict(cfg["frame"])}]
+           if res["file"] else [],
+           "errors": [] if res["file"] else [{"layout": cd.LAYOUT, "error": (res["reason"] or "")[:300]}],
+           "fileStamp": _file_stamp(os.path.join(wd, res["file"])) if res["file"] else None}
+    write_json_atomic(os.path.join(a.out, RENDER), {
+        "tool": cd.TOOL, "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": "countdown",
+        "musicRecords": 1,  # D414: the reel's record is combined from its entries' (countdown.combined_music)
+        "encoder": encoder, "frame": cfg["frame"],
+        "countdown": {"flag": cfg["flag"], "version": cfg["version"], "status": cfg["status"]},
+        "failed": 0 if res["file"] else 1, "clips": [row]})
+    if not res["file"]:
+        eprint(f"countdown {cd.CLIP_ID}: FAILED: {res['reason']}")
+        return 1
+    print(f"countdown {cd.CLIP_ID}: {res['total']:.1f} s, {len(items)} entries, "
+          f"flash {res['flash']['peakFlashesPerSecond']}/s")
+    progress_line("montage", 1, 1, "countdown reel done")
+    rc = cmd_validate(a)
+    if a.publish:
+        _publish(a, a.out, run_name=os.path.basename(os.path.normpath(a.out)))
+    return rc
+
+
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -2190,6 +2249,13 @@ def build_parser():
     s.add_argument("--piece", type=int, help="the piece number for --retake swap (1-based)")
     s.add_argument("--record-start"); s.add_argument("--no-decode", action="store_true"); publish_arg(s)
     s.set_defaults(fn=cmd_beatdrop)
+    s = sub.add_parser("countdown", help="the Top N countdown reel (RR1, D424; flag countdown-reel) from the best clips")
+    common(s, recording=False)
+    s.add_argument("--items", type=os.path.abspath, help="a JSON list [{file, name}], #1 first (default: the best "
+                   "rendered vertical clips across the runs)")
+    s.add_argument("--encoder", default="auto"); s.add_argument("--width", type=int); s.add_argument("--height", type=int)
+    s.add_argument("--record-start"); s.add_argument("--no-decode", action="store_true"); publish_arg(s)
+    s.set_defaults(fn=cmd_countdown)
     s = sub.add_parser("recaption", help="render one reel again with its edited transcript (ED2, flag reel-captions)")
     common(s, recording=False)
     s.add_argument("--id", required=True); s.add_argument("--source", type=os.path.abspath)
