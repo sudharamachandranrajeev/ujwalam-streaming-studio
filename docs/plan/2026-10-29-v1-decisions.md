@@ -2846,7 +2846,10 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    rendered; when the pack track is gone and the made-here bed also fails, the record becomes no music. Posting reads
    the manifest on every call and refuses when it is gone, broken or not a list. A junction at the data root itself
    (or above it) is accepted on purpose: the data root is the app's own trusted place and a user may move it with a
-   junction; the check guards the folders below it.
+   junction; the check guards the folders below it. Also accepted on purpose: the short gap between the picked
+   track's hash check and its decode at render (a file swapped in that moment would carry the credit). Only something
+   already able to write into the user's own data folder during a render could use it, and that already controls the
+   machine; a private verified copy per render is not worth the cost (Codex verify round 2, 2026-11-22).
 5. **Settings move**: sources saved before the pack existed could not be a choice against it. A one-time move adds
    `pack` to saved `clips.look.music.sources` that have no `packOffered`, and sets `packOffered: true` (Node
    `migrateLookPack`, Python `clip_look.migrate_pack`, same rule; both validate the stored value first and a bad value
