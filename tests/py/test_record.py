@@ -166,6 +166,11 @@ class RecordingTests(unittest.TestCase):
         print(f"\nKILLTEST encoder {cls.vcodec}", file=sys.stderr, flush=True)
 
     def setUp(self):
+        # 2026-11-22: a hard kill of an ffmpeg holding an NVENC session, right after the host tests, reset this
+        # laptop's NVIDIA driver (nvlddmkm 153) in three runs out of three; segment recovery after a kill does not
+        # depend on the encoder, so the kill tests use the software one unless UJWALAM_KILLTEST_NVENC=1
+        if "_kill_" in self._testMethodName and os.environ.get("UJWALAM_KILLTEST_NVENC") != "1":
+            self.vcodec = "libopenh264"
         self.dir = tempfile.mkdtemp(prefix="ujw-rec-")
         self.addCleanup(shutil.rmtree, self.dir, True)
 

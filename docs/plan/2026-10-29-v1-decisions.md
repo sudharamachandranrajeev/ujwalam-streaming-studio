@@ -2787,3 +2787,18 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    → none; made-here beds only → generated; one NCS track → that record; anything else, or a user's own list →
    unknown (held).
 5. Not built: the loadout screenshot pop-in, the face-cam part, the notes box (reference 2), a studio button.
+
+## D425 — Capture kill tests use the software encoder: a hard kill of an NVENC ffmpeg reset the GPU driver (decided, 2026-11-22)
+
+1. **Seen**: three full or partial CI runs on 2026-11-22 (02:04:53, 03:01:14, 03:12:55) logged an NVIDIA driver reset
+   (nvlddmkm 153) during `test-capture` when it ran right after `test-host`. The capture suite alone, each capture
+   test alone, and the two steps with a short gap did not. The reset times fall on the hard kills of an ffmpeg that
+   holds an NVENC session (`test_kill_recorder_tree_hard`, `test_kill_ffmpeg_only_restarts_into_the_next_segment`).
+2. **Check**: the same `test-host,test-capture` run with the two kill tests on `libopenh264` logged no reset.
+3. **Change**: the kill tests use the software encoder unless `UJWALAM_KILLTEST_NVENC=1`; the clean-stop test keeps
+   NVENC. What they check (closed segments pass verify, at most the segment in flight is lost, restart numbering and
+   the gap record) does not depend on the encoder.
+4. **Live risk**: the live path encodes inside the host (libobs), not through this recorder. The reference-footage
+   recorder stops ffmpeg with `q` and only loses it hard on a crash. A driver reset after a hard kill is a driver
+   fault on this laptop (Studio driver 32.0.16.2124); the earlier resets on 2026-11-19 to 11-21 (one during a
+   capture-card recording) may share the cause. UNVERIFIED: the cause inside the driver.
