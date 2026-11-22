@@ -2925,3 +2925,20 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    capped by the 1 h gap) and 4 in the quotaExceeded fallback (was 5). The user's rules allow 6 a day.
 4. **Needs**: a new Setup for the installed app (the deadline is code, the page count is shipped data).
    UNVERIFIED: the real read time on the user's channel at 200 pages; the channel's real upload count.
+
+## D431 — BD6 replay alignment engine: passes lined up by game audio, HUD clock as the second check (decided, 2026-11-22)
+
+1. **What**: `services/clip/replay_align.py` lines up replay passes recorded from the capture card (first or third
+   person, HUD on or clean, 1x or 0.5x) with each other: onset envelopes of the game audio at 100 frames per second,
+   cross-correlated, best placement by significance; the rate is searched (1.0 and 0.5) unless given. A pass map
+   gives pass time, replay time (the reference pass at 1x) and match time.
+2. **Match time** comes from the HUD clocks read by RapidOCR where a pass shows them (spectator match clock, player
+   HUD clock, replay control bar position). The regions are game data in `data/games/codm/replay-align.json`, status
+   unverified. On the real fixtures the two HUD clocks agreed within 0.42 s through the audio map.
+3. **Pauses**: a silent (or frozen) stretch is kept as a pause only when the whole pass fits clearly better with the
+   replay standing still there. A windowed search was rejected: repeating game sounds gave chance matches.
+   Seeks are not modelled.
+4. **The full-match recording did not align by audio** (r 0.23, no margin); it is reported, not used, until the cause
+   is known.
+5. **No user-facing entry point**, so no flag; the guided-capture UI is a later BD6 step. Evidence:
+   `docs/evidence/2026-11-22-bd6-replay-align.md`.

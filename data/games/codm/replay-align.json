@@ -1,0 +1,12 @@
+{
+  "$comment": "HUD clocks the replay aligner (services/clip/replay_align.py, BD6, D431) can read by OCR as a second check on the audio alignment. Boxes are fractions of the full capture frame (pillarbox included), x0/y0 top-left, x1/y1 bottom-right. Measured by the agent on one frame each of two 2026-11-21 replay passes (spectator HUD with replay controls, and player HUD) (frame kept local, not committed). Status unverified: one recording, one match mode, default replay control layout. slope: +1 when the clock counts up with the replay, -1 when it counts down.",
+  "game": "codm",
+  "version": "0.1.0",
+  "status": "unverified",
+  "checked": "2026-11-22",
+  "clocks": [
+    { "id": "match-time", "name": "MATCH TIME clock (top centre, HUD on)", "box": { "x0": 0.45, "y0": 0.0, "x1": 0.58, "y1": 0.04 }, "pattern": "(?P<m>\\d{1,2}):(?P<s>\\d{2})", "slope": -1 },
+    { "id": "player-hud-time", "name": "Match clock under the team badge (top left, player HUD in first person)", "box": { "x0": 0.1, "y0": 0.105, "x1": 0.16, "y1": 0.15 }, "pattern": "(?P<m>\\d{1,2}):(?P<s>\\d{2})", "slope": -1 },
+    { "id": "replay-position", "name": "Replay control bar position (first clock, left of the slash; controls shown)", "box": { "x0": 0.585, "y0": 0.835, "x1": 0.68, "y1": 0.885 }, "pattern": "(?P<m>\\d{1,2}):(?P<s>\\d{2})", "slope": 1 }
+  ]
+}
