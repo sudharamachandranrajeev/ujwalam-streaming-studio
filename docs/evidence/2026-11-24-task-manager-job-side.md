@@ -142,3 +142,15 @@ Nine items were fixed and one was accepted as a residual. Tests are in `tests/ta
 | R3-8 | Stale caption sidecars could be certified. | Invalidating a row also removes `transcript.json`, `captions.srt` and `captions.vtt`, so the marker binds only files this render made. | `test_invalidating_a_row_clears_its_caption_files` |
 | R3-9 | Kept rows broke the look pool's no-repeat. | A review run saves the look history it started from (`look-history-start.json` in its output folder). A resumed run starts from that copy and replays each kept clip's picks and music track in clip order. The copy is removed when the run completes. | `test_marker_keeps_the_look_track_for_replay` (the full replay in a review run is UNVERIFIED by a test) |
 | R3-10 | A caption model replaced by one with the same size and mtime is not noticed. | Accepted residual, as decided by the main session. The key holds names, sizes and mtimes, not a full hash. | none |
+### Codex review, round 4 (b7c5c667..6e7f8bca, 9 items)
+
+Main-session decisions applied. Tests are in `tests/task-manager-jobs.test.mjs` ("Codex round 4 #N").
+
+| Item | Finding | Outcome | Test |
+|---|---|---|---|
+| R4-a (Codex 700, 703, 718, 815; round-3 R3-9) | The round-3 look-history snapshot and replay had its own defects. | Removed (main-session decision). A kept row keeps its look as rendered; only newly rendered clips add to the history, as before D442. Accepted residual: after a resume, a look may repeat sooner than the no-repeat window. Cosmetic only. | none |
+| R4-b (server.mjs:1023) | The route answers 202 for a job the launcher just dropped after a failed commit. | Accepted (main-session decision). 202 means "request delivered". The launcher ignores ids it no longer has, and the task list shows the truth. | none |
+| R4-1 (record-clips.mjs:598) | The fresh reply was checked against the job asked for, not the job picked later. | The reply is kept for 1 s. After the controls are applied and a job is picked again, it is checked against that job: a job that waits for idle outputs needs no recording; any other needs no stream. | #1 |
+| R4-2 (record-clips.mjs:616) | A spawn that fails later (child `error`) was not handled. | The `error` listener is attached at spawn. It clears the launch state, keeps the job queued and adds the typed `not-started` event. The later `exit` of that child is ignored. | #2 (a missing program, real `spawn`) |
+| R4-3 (record-clips.mjs:451) | Only some saved choices replayed a pending Next start. | Pending Next start requests are read at construction and applied to restored jobs of any saved choice, Run included, before the wait is set. Their keys are kept, so the first dispatch skips them. This replaces round 3's `awaitFromNext`. | #3 (Run, then a pending Ask: it waits) and round-3 #3 |
+| R4-4 (record-clips.mjs:781) | Applied keys were pruned even when the folder listing failed. | Keys are pruned only after a good listing (`listTaskControls`: ok plus every key present). A failed listing keeps all keys; a missing folder counts as a good, empty listing. | #4 |
