@@ -1,0 +1,18 @@
+{
+  "$comment": "D443 T1: the local text and vision model that Ujwalam starts itself after a stream (services/local-model/runner.mjs). Files come from Settings > Downloads (data/downloads/local-model.json): items serverItem and modelItem land in <models>/<dest>. gpuLayers: 'auto' offloads all layers when free VRAM >= vramNeedMiB, a share of them when at least minGpuMiB is free, else none (CPU). A start on the GPU that fails is tried once more on the CPU. vramNeedMiB measured in docs/evidence/2026-11-24-d443-t1-model-runner.md.",
+  "serverItem": "local-model-server",
+  "modelItem": "local-model-qwen3-vl",
+  "serverExe": "llama-server.exe",
+  "model": "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+  "mmproj": "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+  "layers": 37,
+  "ctx": 8192,
+  "gpuLayers": "auto",
+  "vramNeedMiB": 4200,
+  "minGpuMiB": 1500,
+  "threads": 4,
+  "startTimeoutMs": 180000,
+  "idleMs": 120000,
+  "callTimeoutMs": 120000,
+  "watchMs": 2000
+}
