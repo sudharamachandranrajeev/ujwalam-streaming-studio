@@ -38,3 +38,18 @@ recorded) to edit reels, and to learn the audience's and the streamer's trends o
 | T7 | Audience learning: Analytics read (views, average view duration, retention) per post stored locally; scoring favours the title styles, looks and moments that did well. No model retraining. | Sonnet, Codex review |
 
 Every phase: tests and evidence in docs/evidence/, a switch in Settings.
+
+## Release items (user, 2026-11-24 evening)
+
+- Installer stays one file (Ujwalam-Setup-<version>.exe, tools/package/single-setup.mjs). Verified on a clean
+  Windows in Windows Sandbox (user approved enabling it) for every release build: install, first start, model download,
+  uninstall.
+- Downloads: every model and optional part goes through the in-app download manager (services/studio-ui/downloads.mjs:
+  queue, pause/resume with Range, SHA-256 check, never while live). The D443 model and server items join it; verified
+  end to end from the studio (start, pause, resume, cancel, bad hash, offline).
+- Backup and restore in the app (user choices): settings and data without media (scenes, settings, presets, posting
+  queue and schedules, learning data, sign-in state kept encrypted); one password-protected file per backup in a
+  folder the user picks; restore shows what it replaces and keeps a safety copy first. Verified by a round trip on a
+  second data folder and in Sandbox.
+- A new alpha build ships when T2-T4 are done, so the user can check managing the already scheduled and future posts
+  from Ujwalam.
