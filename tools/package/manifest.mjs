@@ -31,6 +31,7 @@ export const REPO_DIRS = Object.freeze([
   'services/bots', 'services/common', 'services/event-core', 'services/flags', 'services/learning', 'services/outputs', 'services/overlay-server', 'services/platform-connect', 'services/posting', 'services/project', 'services/studio-ui',
   'services/scene-builder', // studio-ui's scene builder routes import read.mjs and build.mjs (flag scene-builder)
   'services/supervisor', // launch.mjs imports the LU3 swap fronts and slots (D337)
+  'services/local-model', // posting's AI text, cover and rewrite run the local model through runner.mjs (D443 T1-T4)
   'ui', 'registry', 'tools/diag',
 ]);
 // Bundled open-licence fonts (D344, 2026-11-11; replaces the blanket font ban). Only these exact files ship, each pinned by
@@ -92,6 +93,7 @@ export const REPO_FILES = Object.freeze([
   'data/release/alpha.json',
   // posting text style and growth timing (PT1/PT5, D409/D410): read at run time, missing from the package until now
   'data/posting/text-style.json', 'data/posting/growth-timing.json',
+  'data/posting/ai-text.json', 'data/posting/ai-text-vocab.json', // AI post text prompt and checker vocabulary (D443 T2)
   'tools/package/run-installed.mjs', 'tools/package/zip.mjs',
   'tools/package/settings-backup.mjs', // settings backup before an update, restore on rollback (Install-Ujwalam.ps1)
   // Qt shell exe path (services/studio-ui/launch.mjs imports EXE and qtDir)
