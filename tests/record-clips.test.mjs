@@ -20,6 +20,9 @@ const st = (state, { stream = 'stopped', h = 'C:/r/practice-h-1.mkv', v = 'C:/r/
   ],
 });
 
+// D442 (Codex review): a task id ends in its job's own id (8 hex), so tests find the task by its name part.
+const readTask = (dataDir, prefix) => { const dir = path.join(dataDir, 'tasks'); const all = readdirSync(dir).filter((x) => new RegExp(`^${prefix.replace(/[.]/g, '\\.')}-[0-9a-f]{8}\\.json$`).test(x)).map((x) => JSON.parse(readFileSync(path.join(dir, x), 'utf8'))); if (!all.length) throw new Error(`no task ${prefix}`); return all.sort((a, b) => a.updatedAt - b.updatedAt).at(-1); }; // the newest job of that name
+
 test('finishedRecording: active then stopped gives the H and V files; anything else gives null', () => {
   assert.deepEqual(finishedRecording(st('live'), st('stopped')), { h: 'C:/r/practice-h-1.mkv', v: 'C:/r/practice-v-1.mkv' });
   assert.equal(finishedRecording(null, st('stopped')), null);
@@ -383,7 +386,7 @@ test('task panel: a long montage (no progress lines) is never called stuck; a si
   const s = setup();
   const { PassThrough } = await import('node:stream');
   const spawnFn = (exe, argv, o) => { const c = new EventEmitter(); c.stderr = new PassThrough(); c.kill = () => {}; s.spawned.push({ exe, argv, o, c }); return c; };
-  const task = () => JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'clip-practice-h-1.json'), 'utf8'));
+  const task = () => readTask(s.dataDir, 'clip-practice-h-1');
   try {
     writeSettings(s.dataDir, { clips: { recording: 'after', live: 'off' } });
     const rc = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn, now: s.now });
@@ -400,7 +403,7 @@ test('task panel: a long montage (no progress lines) is never called stuck; a si
 
 test('tasks: a queued run shows as waiting while the stream is live, then running', () => {
   const s = setup();
-  const task = () => JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'clip-practice-h-1.json'), 'utf8'));
+  const task = () => readTask(s.dataDir, 'clip-practice-h-1');
   try {
     writeSettings(s.dataDir, { clips: { recording: 'after', live: 'after' } });
     const rc = make(s);
@@ -417,7 +420,7 @@ test('tasks: stderr progress lines drive the task title and bar; exit makes it d
   const s = setup();
   const { PassThrough } = await import('node:stream');
   const spawnFn = (exe, argv, o) => { const c = new EventEmitter(); c.stderr = new PassThrough(); c.kill = () => { c.killed = true; setImmediate(() => c.emit('exit', 1)); }; s.spawned.push({ exe, argv, o, c }); return c; };
-  const task = () => JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'clip-practice-h-1.json'), 'utf8'));
+  const task = () => readTask(s.dataDir, 'clip-practice-h-1');
   try {
     writeSettings(s.dataDir, { clips: { recording: 'after', live: 'off' } });
     const rc = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn, now: s.now });
@@ -553,7 +556,7 @@ test('LC1: status.json and the task panel show the live clipper while a stream i
     const lout = path.join(s.dataDir, 'clips', 'runs', 'practice-h-1', 'long'); // D406: the long video was made
     mkdirSync(lout, { recursive: true }); writeFileSync(path.join(lout, 'long.json'), JSON.stringify({ status: 'made' }));
     s.spawned[0].c.emit('exit', 0);
-    const done = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'clip-practice-h-1.json'), 'utf8'));
+    const done = readTask(s.dataDir, 'clip-practice-h-1');
     assert.equal(done.state, 'done');
     assert.equal(done.note, '0 clips made. Reels not made: there is no portrait (V) recording of this stream');
     assert.equal(s.status().last.reelsNotMade, 'there is no portrait (V) recording of this stream');
@@ -602,7 +605,7 @@ test('LL4 (D342): after a stream clip job the game pack check runs last, hidden 
     mkdirSync(path.dirname(out), { recursive: true });
     writeFileSync(out, JSON.stringify({ candidate: { id: '20261111-200000-0.8.1', version: '0.8.1' }, values: [] }));
     again.c.emit('exit', 0);
-    const task = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', `clip-${path.basename(path.dirname(out))}.json`), 'utf8'));
+    const task = readTask(s.dataDir, `clip-${path.basename(path.dirname(out))}`);
     assert.deepEqual([task.state, task.title], ['done', 'Game pack check done']);
     assert.match(task.note, /Game pack 0\.8\.1 proposed \(status unverified\); it waits for your approval/);
     assert.equal(s.status().last.kind, 'live', 'the check does not replace the last clip run');
@@ -771,7 +774,7 @@ test('D406: the long video is its own job after the clip job; it waits while rec
     s.spawned[0].c.emit('exit', 0); await tick();
     assert.equal(s.spawned.length, 1, 'the long job waits while the recording runs');
     assert.equal(s.status().queued.filter((j) => j.type === 'long').length, 1);
-    const waiting = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'long-practice-h-1.json'), 'utf8'));
+    const waiting = readTask(s.dataDir, 'long-practice-h-1');
     assert.equal(waiting.note, 'Waiting until the recording ends');
     rc.feed(s.S('stopped', { h: 'C:/other/x-h.mkv', v: null })); // that recording stops (no file: no new clip job)
     const longs = s.spawned.filter((x) => x.argv.includes('long'));
@@ -782,6 +785,10 @@ test('D406: the long video is its own job after the clip job; it waits while rec
     assert.equal(s.spawned.filter((x) => x.argv.includes('long')).length, 1, 'nothing starts again while recording');
     rc.feed(s.S('stopped', { h: 'C:/other/y-h.mkv' }));
     rc.feed(s.S('stopped', { h: 'C:/other/y-h.mkv' }));
+    // Codex round 2: the long job's exit runs dispatch, so the x-h clip job (allowed beside a plain recording) started
+    // then; the long job, a continuation, waits for idle outputs and its turn
+    const xh = s.spawned.find((x) => /x-h/.test(x.argv.join(' ')));
+    if (xh) { xh.c.emit('exit', 0); await tick(); rc.feed(s.S('stopped', { h: 'C:/other/y-h.mkv' })); }
     const again = s.spawned.filter((x) => x.argv.includes('long'));
     assert.equal(again.length, 2, 'it runs again once off air');
     rc.feed(s.S('stopped', { stream: 'live', h: 'C:/other/y-h.mkv' }));
@@ -809,7 +816,7 @@ test('D406: a long video alone reaches auto-post (countClips counts long/publish
     assert.equal(countClips(out), 1);
     long.c.emit('exit', 0); await tick();
     assert.deepEqual(runs, [out]);
-    const task = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'long-practice-h-1.json'), 'utf8'));
+    const task = readTask(s.dataDir, 'long-practice-h-1');
     assert.deepEqual([task.state, task.title], ['done', 'Long highlights video done for practice-h-1']);
     // the job records stay the clip job's only (the cleanup reads long.json itself)
     const recs = readFileSync(path.join(s.dataDir, 'clips', 'jobs.jsonl'), 'utf8').trim().split('\n');
@@ -819,8 +826,11 @@ test('D406: a long video alone reaches auto-post (countClips counts long/publish
     const before = runs.length; // the second clip job's run folder holds the first long video: packaged again, deduplicated there
     writeFileSync(path.join(out, 'long', 'long.json'), JSON.stringify({ status: 'failed', reason: 'the parts did not join' }));
     s.spawned.at(-1).c.emit('exit', 1); await tick();
-    const t2 = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'long-practice-h-1.json'), 'utf8'));
-    assert.deepEqual([t2.state, t2.note], ['failed', 'Not made: the parts did not join']);
+    // two long jobs of one name: two tasks (Codex review 10); the second one's says why it was not made
+    const dir2 = path.join(s.dataDir, 'tasks');
+    const longs2 = readdirSync(dir2).filter((x) => /^long-practice-h-1-[0-9a-f]{8}\.json$/.test(x)).map((x) => JSON.parse(readFileSync(path.join(dir2, x), 'utf8')));
+    assert.equal(longs2.length, 2);
+    assert.ok(longs2.some((t2) => t2.state === 'failed' && t2.note === 'Not made: the parts did not join'));
     assert.equal(runs.length, before, 'a failed long video posts nothing');
     rc.stop();
   } finally { rmSync(s.d, { recursive: true, force: true }); }

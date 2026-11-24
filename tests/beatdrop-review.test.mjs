@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { clipRunSpec, createRecordClips, hasHits, jobStages } from '../services/studio-ui/record-clips.mjs';
@@ -38,6 +38,8 @@ function setup() {
 }
 const make = (s, extra = {}) => createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: () => {}, spawnFn: s.spawnFn, now: s.now, beatdropFlag: () => true, ...extra });
 
+// D442 (Codex review): a task id ends in its job's own id (8 hex), so tests find the task by its name part.
+const readTask = (dataDir, prefix) => { const dir = path.join(dataDir, 'tasks'); const all = readdirSync(dir).filter((x) => new RegExp(`^${prefix.replace(/[.]/g, '\\.')}-[0-9a-f]{8}\\.json$`).test(x)).map((x) => JSON.parse(readFileSync(path.join(dir, x), 'utf8'))); if (!all.length) throw new Error(`no task ${prefix}`); return all.sort((a, b) => a.updatedAt - b.updatedAt).at(-1); }; // the newest job of that name
 test('beatdrop job argv: moments (with hits only when they exist), render (V only when it exists), retake', () => {
   const root = 'C:/clip'; const py = path.join(root, '.venv', 'Scripts', 'python.exe');
   const script = path.join(root, 'services', 'clip', 'clipper.py'); const mom = path.join(root, 'services', 'clip', 'moments.py');
@@ -81,7 +83,7 @@ test('a BeatDrop job is queued after a full job only with the flag on and detect
     assert.ok(s.spawned[1].argv.some((a) => a.endsWith('moments.py')));
     assert.equal(s.spawned[1].o.windowsHide, true);
     assert.equal(s.status().running.type, 'beatdrop');
-    const task = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'beatdrop-practice-h-1.json'), 'utf8'));
+    const task = readTask(s.dataDir, 'beatdrop-practice-h-1');
     assert.equal(task.title, 'BeatDrop montage from practice-h-1');
     s.spawned[1].c.emit('exit', 0); await tick();
     assert.equal(s.spawned.length, 3, 'then the render');
@@ -117,7 +119,7 @@ test('a failed moment finder ends the job: no render', async () => {
     await fullJob(s, rc, { hits: true });
     s.spawned[1].c.emit('exit', 1); await tick();
     assert.equal(s.spawned.length, 2);
-    assert.equal(JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'beatdrop-practice-h-1.json'), 'utf8')).state, 'failed');
+    assert.equal(readTask(s.dataDir, 'beatdrop-practice-h-1').state, 'failed');
     rc.stop();
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
@@ -202,7 +204,7 @@ test('a retake request becomes a retake job; one at a time per run; the video ro
     assert.equal(s.spawned.length, 1);
     assert.deepEqual(s.spawned[0].argv.slice(-4), ['--retake', 'swap', '--piece', '2']);
     assert.ok(s.spawned[0].argv.includes('--retake') && s.spawned[0].argv.includes('swap'));
-    const task = JSON.parse(readFileSync(path.join(s.dataDir, 'tasks', 'beatdrop-practice-h-1.json'), 'utf8'));
+    const task = readTask(s.dataDir, 'beatdrop-practice-h-1');
     assert.equal(task.title, 'New BeatDrop take from practice-h-1');
     assert.equal(r.retake({ run: 'practice-h-1', op: 'another-take' }).status, 409, 'busy: one take at a time');
     s.spawned[0].c.emit('exit', 0); await tick();

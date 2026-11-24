@@ -6,6 +6,7 @@
 // atomic), and in-memory tasks of the UI server for its own long actions (createTasks().track). Finished or silent
 // tasks are dropped after PRUNE_MS. Text only: no chat text, no viewer names, no paths beyond the clips folder.
 
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,30 +33,56 @@ export const DEFAULT_NEXT_START = 'notify';
 export const TASK_CONTROLS = Object.freeze(['stop', 'pause', 'resume', 'next']);
 export const LOG_TAIL_LINES = 8;
 const LOG_LINE_MAX = 160;
-// A log line can carry chat text, viewer names, paths or secrets (the clipper prints file names and tool errors):
-// a line that mentions chat, viewers, users, messages or an @name is dropped whole; paths, URLs, long tokens and
-// key=value secrets are masked; quotes (where quoted text sits) are cut out.
-const UNSAFE_LINE = /chat|viewer|user|message|comment|author|@\w/i;
-/** One log line made safe for the task window, or null (dropped). */
-export function safeLogLine(line) {
-  if (typeof line !== 'string') return null;
-  let s = line.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
-  if (!s || s.startsWith('ujwalam-progress')) return null;
-  s = s.replace(/\b(access_token|refresh_token|token|api[_-]?key|key|secret|password|authorization)\b\s*[:=]\s*\S+/gi, '$1=[hidden]')
-    .replace(/\bbearer\s+\S+/gi, 'Bearer [hidden]')
-    .replace(/https?:\/\/\S+/gi, '[link]')
-    .replace(/(?:[A-Za-z]:|\\\\)[\\/][^\s"']*/g, '[path]')
-    .replace(/(?:^|\s)\/[^\s"']*\/[^\s"']*/g, ' [path]')
-    .replace(/\b[A-Za-z0-9+/_=-]{24,}\b/g, '[hidden]')
-    .replace(/"[^"]*"|'[^']*'|“[^”]*”/g, '[text]')
-    .replace(/\s+/g, ' ').trim();
-  // checked after the masking, so a folder name (C:\Users) does not drop the line; the text left is what is shown
-  if (!s || UNSAFE_LINE.test(s)) return null;
-  return s.slice(0, LOG_LINE_MAX);
+// D442 log tail (Codex review: the deny-list leaked): an ALLOWLIST. The task shows only typed events the job emits,
+// turned into fixed text here: progress (stage, done, total), a safe point, the parts it runs (from its own list)
+// and how it ended (known codes, fixed plain-language text). Raw tool output never leaves the launcher: it stays in
+// the job's local log file only.
+// Codex round 2: a stage is shown only when it is one of the known values, as fixed text (anything else: dropped).
+export const LOG_STAGE_TEXT = Object.freeze({
+  detect: 'Reading the game screen', candidates: 'Finding the moments', gate: 'Sorting by match', render: 'Making clip videos',
+  review: 'Making clips from live saves', validate: 'Checking the clips', publish: 'Saving to your clips folder',
+  montage: 'Making the montage', long: 'Making the long video', train: 'Checking the game pack',
+});
+const PART_NAMES = Object.freeze(['Clip maker (Python)', 'Screen reader (OCR)', 'Video tools (ffmpeg)']);
+export const END_TEXT = Object.freeze({
+  done: 'Finished', failed: 'Stopped with an error; the full log is on this computer', stopped: 'Stopped by you',
+  paused: 'Paused by you', 'paused-live': 'Paused while the stream runs', 'paused-rec': 'Paused while recording',
+  'not-started': 'Could not start; it tries again shortly',
+});
+export const LOG_EVENT_VERSION = 1;
+const n = (v) => (Number.isSafeInteger(v) && v >= 0 && v <= 1e6 ? v : null);
+const stageText = (s) => (typeof s === 'string' && Object.hasOwn(LOG_STAGE_TEXT, s) ? LOG_STAGE_TEXT[s] : null);
+/** A clean, versioned log event { v, type, ... } with known values only, or null. */
+export function cleanLogEvent(ev) {
+  if (!ev || typeof ev !== 'object' || ev.v !== LOG_EVENT_VERSION) return null;
+  if ((ev.type === 'progress' || ev.type === 'safepoint') && stageText(ev.stage)) {
+    return { v: LOG_EVENT_VERSION, type: ev.type, stage: ev.stage, done: n(ev.done), ...(ev.type === 'progress' ? { total: n(ev.total) || null } : {}) };
+  }
+  if (ev.type === 'part' && PART_NAMES.includes(ev.name)) return { v: LOG_EVENT_VERSION, type: 'part', name: ev.name };
+  if (ev.type === 'end' && typeof ev.code === 'string' && Object.hasOwn(END_TEXT, ev.code)) return { v: LOG_EVENT_VERSION, type: 'end', code: ev.code };
+  return null;
 }
-/** The last LOG_TAIL_LINES safe lines of an array of raw lines. */
-export const safeLogTail = (lines) => (Array.isArray(lines) ? lines.map(safeLogLine).filter(Boolean).slice(-LOG_TAIL_LINES) : []);
-
+/** The fixed text of one allowed event, or null (not shown). */
+export function logEventText(ev) {
+  const e = cleanLogEvent(ev && typeof ev === 'object' ? { v: LOG_EVENT_VERSION, ...ev } : ev);
+  if (!e) return null;
+  if (e.type === 'progress') return `${stageText(e.stage)}${e.done === null ? '' : `: ${e.done}${e.total ? ` of ${e.total}` : ''}`}`;
+  if (e.type === 'safepoint') return `Safe point: ${stageText(e.stage)}${e.done === null ? '' : ` ${e.done}`}`;
+  if (e.type === 'part') return `Running: ${e.name}`;
+  return END_TEXT[e.code];
+}
+/** Adds an allowed event to a job's event list (at most LOG_TAIL_LINES); a repeat of the last one's text is skipped. */
+export function pushLogEvent(events, ev) {
+  const e = cleanLogEvent({ ...ev, v: LOG_EVENT_VERSION });
+  if (!e) return events;
+  if (events.length && logEventText(events.at(-1)) === logEventText(e)) return events;
+  events.push(e);
+  while (events.length > LOG_TAIL_LINES) events.shift();
+  return events;
+}
+// Task files keep the structured events (logEvents); the text tail (logTail) is made from them on every read. A plain
+// string tail (older files) is dropped, never shown.
+const cleanEvents = (evs) => (Array.isArray(evs) ? evs.map(cleanLogEvent).filter(Boolean).slice(-LOG_TAIL_LINES) : []);
 /** A clean task from untrusted input (a file or a caller), or null. */
 export function cleanTask(t, id = t?.id) {
   if (!t || typeof t !== 'object' || typeof id !== 'string' || !ID.test(id)) return null;
@@ -89,7 +116,8 @@ function controlFields(t) {
     nextStart: NEXT_START.includes(t.nextStart) ? t.nextStart : null,
     question: cut(t.question, 160),
     parts: Array.isArray(t.parts) ? t.parts.slice(0, 6).map((p) => cut(p, 40)).filter(Boolean) : [],
-    logTail: safeLogTail(t.logTail),
+    logEvents: cleanEvents(t.logEvents),
+    logTail: cleanEvents(t.logEvents).map(logEventText),
   };
 }
 
@@ -128,29 +156,46 @@ export function writeTaskControl(dataDir, id, req) {
   if (typeof id !== 'string' || !ID.test(id) || !c) return false;
   const dir = controlDir(dataDir);
   mkdirSync(dir, { recursive: true });
-  const f = path.join(dir, `${id}~${c.atMs}-${String(controlSeq++).padStart(6, '0')}.json`);
+  // Codex round 2: a random part makes each request's key unique (a UI server restart starts its seq again)
+  const f = path.join(dir, `${id}~${c.atMs}-${String(controlSeq++).padStart(6, '0')}-${randomBytes(3).toString('hex')}.json`);
   writeFileSync(`${f}.tmp`, JSON.stringify(c));
   renameSync(`${f}.tmp`, f);
   return true;
 }
 
-/** Takes (reads and removes) the waiting control requests: [{ id, op, nextStart?, atMs }]; bad files are removed. */
-export function takeTaskControls(dataDir) {
+/** Reads the waiting control requests without removing them: [{ id, op, nextStart?, atMs, file }], in the order they
+ *  were asked. Codex review: the reader removes a request (ackTaskControls) only after its effect is committed to
+ *  status.json, so a close in between applies it again at the next start. Unreadable files are removed. */
+export function peekTaskControls(dataDir) { return listTaskControls(dataDir).reqs; }
+/** Codex round 4: the requests plus whether the folder could be listed (ok) and the keys of every request file
+ *  there (keys), so a reader forgets an applied key only once a good listing shows its file gone. No folder: ok. */
+export function listTaskControls(dataDir) {
   const dir = controlDir(dataDir);
   let names;
-  try { names = readdirSync(dir); } catch { return []; }
+  try { names = readdirSync(dir); } catch (e) { return { ok: e?.code === 'ENOENT', keys: new Set(), reqs: [] }; }
+  const keys = new Set();
+  for (const nm of names) { const k = /^[A-Za-z0-9._-]{1,80}~(.+)\.json$/.exec(nm); if (k) keys.add(k[1]); }
   const out = [];
-  for (const n of names) {
-    if (!n.endsWith('.json')) continue;
-    const m = /^([A-Za-z0-9._-]{1,80})~(\d{1,16})-(\d{1,9})\.json$/.exec(n);
-    const id = m ? m[1] : '';
-    const f = path.join(dir, n);
+  for (const nm of names) {
+    if (!nm.endsWith('.json')) continue;
+    const m = /^([A-Za-z0-9._-]{1,80})~(\d{1,16})-(\d{1,9})(?:-[0-9a-f]{6})?\.json$/.exec(nm);
+    const f = path.join(dir, nm);
     let c = null;
     try { c = cleanControl(JSON.parse(readFileSync(f, 'utf8'))); } catch { c = null; }
-    try { rmSync(f, { force: true }); } catch { continue; } // not removed: read again next tick, not applied twice
-    if (c && m) out.push({ id, ...c, seq: Number(m[3]) });
+    if (c && m) out.push({ id: m[1], ...c, seq: Number(m[3]), key: nm.slice(0, -5).slice(m[1].length + 1), file: f });
+    else try { rmSync(f, { force: true }); } catch { /* next tick */ }
   }
-  return out.sort((a, b) => a.atMs - b.atMs || a.seq - b.seq).map(({ seq: _s, ...r }) => r);
+  return { ok: true, keys, reqs: out.sort((a, b) => a.atMs - b.atMs || a.seq - b.seq).map(({ seq: _s, ...r }) => r) };
+}
+/** Removes applied requests (their files). */
+export function ackTaskControls(reqs) {
+  for (const r of reqs) try { rmSync(r.file, { force: true }); } catch { /* read again next tick; the reader skips a request it applied (its key) */ }
+}
+/** Reads and removes the waiting requests at once (no state to commit in between). */
+export function takeTaskControls(dataDir) {
+  const reqs = peekTaskControls(dataDir);
+  ackTaskControls(reqs);
+  return reqs.map(({ file: _f, key: _k, ...r }) => r);
 }
 
 export function removeTaskFile(dataDir, id) {
@@ -318,4 +363,16 @@ export function createTasks({ dataDir = null, now = Date.now, stallAfterMs = loa
     return out;
   }
   return { start, track, list, isFinished: (t) => FINISHED.has(t.state) };
+}
+
+/** D442: the task id of a clip-queue job (record-clips writes it; the control route checks requests against it). */
+export const clipJobTaskId = (j) => `${j.type === 'long' ? 'long' : j.type === 'beatdrop' ? 'beatdrop' : 'clip'}-${String(j.name ?? 'run').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60)}-${j.jobId ?? 'x'}`;
+/** Codex round 3: the task ids of the jobs the launcher has running or queued now (its clips/status.json). A task row
+ *  left over from a job that is gone is not one of them. Unreadable: none. */
+export function currentClipTaskIds(dataDir) {
+  try {
+    const s = JSON.parse(readFileSync(path.join(dataDir, 'clips', 'status.json'), 'utf8'));
+    return new Set([s?.running, ...(Array.isArray(s?.queued) ? s.queued : [])]
+      .filter((j) => j && typeof j === 'object' && typeof j.jobId === 'string' && /^[0-9a-f]{8}$/.test(j.jobId)).map(clipJobTaskId));
+  } catch { return new Set(); }
 }

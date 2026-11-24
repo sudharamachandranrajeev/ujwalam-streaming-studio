@@ -45,7 +45,7 @@ import g1_scan
 import g1_text as gt
 import game_pack
 import match_gate
-from clip_common import CLIP_DATA, LOCK_NAME, ClipError, HeavyJobLock, REPO_ROOT, load_json, write_json_atomic  # noqa: F401 - HeavyJobLock, LOCK_NAME: re-exported (clipper, tests)
+from clip_common import CLIP_DATA, LOCK_NAME, ClipError, HeavyJobLock, REPO_ROOT, load_json, safepoint_line, write_json_atomic  # noqa: F401 - HeavyJobLock, LOCK_NAME: re-exported (clipper, tests)
 
 TOOL_VERSION = 1
 HITS = "detector-hits.jsonl"
@@ -896,16 +896,19 @@ def _run_pass(recording, out_dir, settings, pack, names, layout, threads, durati
     last_ck = time.monotonic()
 
     def checkpoint_now():
+        """-> True when a checkpoint was committed now (D442: only then is it a safe point)."""
         nonlocal ck
         if reader.ambiguous:
-            return  # which frame comes next is not known: the last good checkpoint stays as it is
+            return False  # which frame comes next is not known: the last good checkpoint stays as it is
         try:
             frames, pts = reader.position()
             ck.save(frames, pts, rows, scanner)
+            return True
         except (OSError, TypeError, ValueError) as e:
             if progress:
                 progress(f"detect: resume checkpoint off ({type(e).__name__})")
             ck = None
+            return False
 
     def on_event(kind, info):
         # watchdog and decoder changes (frame_reader): one plain line in the job log, and a progress line, so the
@@ -923,8 +926,10 @@ def _run_pass(recording, out_dir, settings, pack, names, layout, threads, durati
         for t, img in reader:
             rows.extend(scanner.scan(t, img))
             if ck and time.monotonic() - last_ck >= CHECKPOINT_EVERY_SEC:
-                checkpoint_now()
+                saved = checkpoint_now()
                 last_ck = time.monotonic()
+                if saved and progress_line:  # D442: only a pass run for the studio (with progress lines) tells it the safe point
+                    safepoint_line("detect", scanner.stats["frames"])
             step(scanner.stats, t)
     except ClipError:
         if ck:
