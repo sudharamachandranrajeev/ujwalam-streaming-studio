@@ -25,7 +25,7 @@
 //   loadQuota(dataDir, file?) -> { quotaUnitsPerDay, perUploadUnits, readReserveUnits, uploadsPerDayFit, userSet }
 //   createQuotaBudget({ dataDir, nowMs?, quota?, busyWaitMs? }) -> { state(), uploadBlock(maxPerDay),
 //     reserveUpload(maxPerDay), readBlock(units), reserveRead(units), refundRead(units, day), reserveScan(units, fetchImpl),
-//     meter(fetchImpl), chargeUpload(), chargeRead(units) }
+//     meter(fetchImpl), chargeUpload(), chargeRead(units), reserveCaption() }
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -99,7 +99,9 @@ export function loadQuota(dataDir, file = DEFAULT_QUOTA, { nowMs = Date.now() } 
   const readsPerDayMax = readReuseMinutes > 0 ? Math.ceil(1440 / readReuseMinutes) : null;
   const fit = uploadsFit({ quota, reserve, perUpload, readUnits, readsPerDayMax, cap: bucket === null ? MAX_PER_DAY : Math.min(bucket, MAX_PER_DAY) });
   const ex = exhaustedUntil(dataDir, nowMs);
-  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, readUnitsPerRead: readUnits, readReuseMinutes, readsPerDayMax, insertUnits: insert, readReserveUnits: reserve, uploadsPerDayFit: fit, maxPerDay: MAX_PER_DAY, userSet: user.quotaUnitsPerDay !== undefined,
+  // C1: captions.insert units (the long video's caption track); null = not known, the track is skipped (fail closed)
+  const caption = Number.isFinite(j?.captionUnits) && j.captionUnits >= 0 ? j.captionUnits : null;
+  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, captionUnits: caption, readUnitsPerRead: readUnits, readReuseMinutes, readsPerDayMax, insertUnits: insert, readReserveUnits: reserve, uploadsPerDayFit: fit, maxPerDay: MAX_PER_DAY, userSet: user.quotaUnitsPerDay !== undefined,
     model, uploadsCap: bucket, fallback: fb, exhaustedUntil: ex, modelText: fb ? QUOTA_MODEL_TEXT.fallback : QUOTA_MODEL_TEXT[model] };
 }
 
@@ -325,6 +327,11 @@ export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = n
     return null;
   };
   const readWhy = (s, q, units) => (s.units.n + units > q.quotaUnitsPerDay ? 'quota-day-used' : null);
+  // C1: a write that is not an upload (the caption track): after quotaExceeded nothing; never into the read reserve.
+  const writeWhy = (s, q, units) => {
+    if (Number.isFinite(q.exhaustedUntil) && q.exhaustedUntil > nowMs()) return 'quota-exceeded';
+    return s.units.n + units > q.quotaUnitsPerDay - q.readReserveUnits ? 'quota-day-used' : null;
+  };
   const peek = (decide) => step(decide, () => {});
   const refuse = (why) => { throw Object.assign(new Error(why), { code: why }); };
   const chargeUploadRow = (db, d, q) => {
@@ -347,6 +354,9 @@ export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = n
     uploadBlock: (maxPerDay = null) => peek((s, q) => uploadWhy(s, q, maxPerDay)),
     /** Check and charge one upload attempt in one transaction: null (charged, go) or why not (nothing charged). */
     reserveUpload: (maxPerDay = null) => step((s, q) => uploadWhy(s, q, maxPerDay), chargeUploadRow),
+    /** C1: check and charge one caption track (quota.json captionUnits) in one transaction: null (charged) or why not. */
+    reserveCaption: () => step((s, q) => (Number.isFinite(q.captionUnits) ? writeWhy(s, q, q.captionUnits) : 'quota-unreadable'),
+      (db, d, q) => add(db, 'units', d.pacific, q.captionUnits)),
     /** Read-only check for `units` of reads. */
     readBlock: (units = 1) => peek((s, q) => readWhy(s, q, units)),
     /** Check and charge `units` of reads in one transaction: null (charged) or why not (nothing charged). */

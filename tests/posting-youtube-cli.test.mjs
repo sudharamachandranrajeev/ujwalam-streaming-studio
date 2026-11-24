@@ -57,10 +57,22 @@ test('youtube signin/status/signout: call through to the injected auth, print a 
   assert.equal(await cli(['youtube', 'signin', '--data-dir', data], (s) => lines.push(s), quiet, { createYoutubeAuth: () => auth }), 0);
   assert.ok(signedIn);
   assert.match(lines[0], /signed in/);
+  assert.match(lines[1], /adding captions was not allowed/, 'C1: a sign-in without force-ssl says the caption track waits');
   assert.equal(await cli(['youtube', 'status', '--data-dir', data], (s) => lines.push(s), quiet, { createYoutubeAuth: () => auth }), 0);
-  assert.match(lines[1], /signed in: true/);
+  assert.match(lines.at(-1), /signed in: true/);
   assert.equal(await cli(['youtube', 'signout', '--data-dir', data], (s) => lines.push(s), quiet, { createYoutubeAuth: () => auth }), 0);
   assert.ok(signedOut);
+});
+
+test('C1: sign-in asks for the caption permission (youtube.force-ssl, user yes 2026-11-24); granted = no warning', async () => {
+  const data = mk(); flagOn(data);
+  const asked = [];
+  const scope = 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl';
+  const lines = [];
+  const make = (o) => { asked.push(o.scope); return fakeAuth({ signIn: async () => ({ scope }) }); };
+  assert.equal(await cli(['youtube', 'signin', '--data-dir', data], (s) => lines.push(s), quiet, { createYoutubeAuth: make }), 0);
+  assert.ok(asked[0].split(' ').includes('https://www.googleapis.com/auth/youtube.force-ssl'));
+  assert.deepEqual(lines.filter((l) => /captions/.test(l)), []);
 });
 
 test('youtube signin: a missing OAuth client gives a clear one-line error, not a stack trace', async () => {

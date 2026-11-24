@@ -63,8 +63,8 @@ import { outputsOnAir } from '../studio-ui/record-clips.mjs';
 import { DELETED_LOG_NAME, DELETE_FLAG, FINAL_KEEP, deleteUploadedFile } from './delete-uploaded.mjs';
 import { clipsFolder } from '../studio-ui/user-settings.mjs';
 import { createDataNotifier } from '../common/data-reload.mjs';
-import { READONLY_SCOPE, createYoutubeAuth } from './oauth.mjs';
-import { UploadError, checkUploadStatus, uploadPost } from './youtube.mjs';
+import { CAPTIONS_SCOPE, READONLY_SCOPE, createYoutubeAuth } from './oauth.mjs';
+import { UploadError, checkUploadStatus, uploadCaptions, uploadPost } from './youtube.mjs';
 import { DEFAULT_SCHEDULE, SCHEDULE_FLAG, ScheduleError, chunkDeadlineMs, fallbackBps, isRetry, loadScheduleConfig, marginMs, minLeadMs, planQueueSlots, slotClash, toIso, userScheduleFile } from './schedule.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
 import { ensureScheduleSeed } from './schedule-seed.mjs';
@@ -318,6 +318,26 @@ export async function withScheduleLock(dataDir, fn, { waitMs = 30 * 1000, maxHol
 }
 
 /**
+ * C1 (user 2026-11-24: long video captions "burned in and uploaded"): after a video's upload, its package's caption
+ * file (captions.srt, long highlights only) goes up as the video's caption track. Needs the youtube.force-ssl
+ * permission and quota.json captionUnits from today's budget, reserved right before the request (a sent request keeps
+ * its charge). Never fails or repeats the upload: -> null (no caption file) | 'sent' | why not.
+ */
+export async function sendCaptions({ store, id, videoId, auth, budget, fetchImpl, signal = null }) {
+  const sub = store.media(id, 'subtitles');
+  if (!sub) return null;
+  let accessToken;
+  try {
+    const scopes = typeof auth.grantedScopes === 'function' ? await auth.grantedScopes() : null;
+    if (!Array.isArray(scopes) || !scopes.includes(CAPTIONS_SCOPE)) return 'captions-scope-missing';
+    accessToken = await auth.accessToken();
+  } catch { return 'not-signed-in'; }
+  const why = budget.reserveCaption();
+  if (why) return why;
+  try { await uploadCaptions({ videoId, accessToken, srtPath: sub.file, fetchImpl, signal }); return 'sent'; } catch (e) { return String(e?.code ?? 'captions-failed'); }
+}
+
+/**
  * D409 (second Codex review): the ONE function every upload goes through. It checks and charges today's upload budget
  * (quota-budget.mjs reserveUpload) right before the send, and records YouTube's quotaExceeded answer
  * (recordQuotaExceeded: the wait until the next Pacific midnight, persisted for every pass and the studio).
@@ -416,6 +436,18 @@ export function createUploadQueue(file, now = () => Date.now()) {
     },
   };
 }
+
+/** C1: why a long video's caption track was not added, in plain words (the auto-post log). */
+const CAPTION_TEXT = {
+  'captions-scope-missing': 'sign in again and allow Ujwalam to manage your YouTube account (node services/posting/cli.mjs youtube signin)',
+  'captions-not-permitted': 'YouTube refused; sign in again and allow managing your YouTube account',
+  'not-signed-in': 'not signed in to YouTube',
+  'quota-day-used': "today's YouTube quota has no room left for it",
+  'quota-exceeded': 'the YouTube quota is used up for today',
+  'quota-unreadable': 'the quota settings could not be read',
+  'quota-busy': 'the quota counter was busy',
+  'captions-failed': 'YouTube did not accept the caption file',
+};
 
 const REASON_TEXT = {
   'no-oauth-client': 'Not signed in to YouTube: the Google sign-in client is not set up yet',
@@ -911,6 +943,12 @@ export function createPostChain(opts) {
         if (sent) { try { store.ledger.annotate(sha, post.target, { publishAt: sent }); } catch { /* the delete check then keeps the file */ } }
         await markPosted({ dataDir, run, sha256: sha, postIdValue: item.id, videoId: r.videoId, at: new Date(nowMs()).toISOString(), target: post.target, publishAt: sent });
         log(`posting: uploaded ${item.id} (private${sent ? `, goes public ${sent}` : ''}${early ? '; its time had passed, check it in YouTube Studio' : ''})`);
+        // C1: the long video's caption track (one try; the video stays uploaded whatever this answers)
+        const cap = await sendCaptions({ store, id: item.id, videoId: r.videoId, auth, budget, fetchImpl: opts.fetchImpl, signal: hold.signal });
+        if (cap) {
+          queue.patch(item.id, { captions: cap });
+          log(cap === 'sent' ? `posting: ${item.id}: captions added` : `posting: ${item.id}: captions not added (${CAPTION_TEXT[cap] ?? cap})`);
+        }
       } catch (e) {
         const code = String(e?.code ?? 'error');
         if (code === 'already-uploaded') {

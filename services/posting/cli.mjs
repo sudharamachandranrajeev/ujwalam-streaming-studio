@@ -12,7 +12,7 @@ import { dataDirNote, resolveCliDataDir } from '../event-core/config.mjs';
 import { createFlags } from '../flags/index.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { LEDGER_NAME, POSTING_FLAG, PostingError, createPostStore, packageRun } from './index.mjs';
-import { ANALYTICS_SCOPE, READONLY_SCOPE, SCOPE, createYoutubeAuth, joinScopes } from './oauth.mjs';
+import { ANALYTICS_SCOPE, CAPTIONS_SCOPE, READONLY_SCOPE, SCOPE, createYoutubeAuth, joinScopes } from './oauth.mjs';
 import { UploadError } from './youtube.mjs';
 import { SCHEDULE_FLAG } from './schedule.mjs';
 import { GROWTH_FLAG } from '../analytics/index.mjs';
@@ -192,13 +192,15 @@ async function youtubeMain(a, out, err, deps) {
   const scheduled = flags.isOn(SCHEDULE_FLAG);
   // growth on: also ask to read the channel's analytics and each video's public state (AN1, D371).
   const growth = flags.isOn(GROWTH_FLAG);
-  const scope = joinScopes(SCOPE, (scheduled || growth) && READONLY_SCOPE, growth && ANALYTICS_SCOPE);
+  // C1 (user yes 2026-11-24): also the permission to add caption files to the long highlights video
+  const scope = joinScopes(SCOPE, CAPTIONS_SCOPE, (scheduled || growth) && READONLY_SCOPE, growth && ANALYTICS_SCOPE);
   const auth = (deps.createYoutubeAuth ?? createYoutubeAuth)({ browserOpen: deps.browserOpen ?? defaultBrowserOpen, scope });
   const sub = a._[1];
   try {
     if (sub === 'signin') {
       const r = await auth.signIn();
       out(`youtube: signed in (scope: ${r.scope})`);
+      if (!String(r.scope ?? '').split(/\s+/).includes(CAPTIONS_SCOPE)) out('youtube: adding captions was not allowed, so long videos go up without their caption track; sign in again and allow it');
       if (scheduled && !String(r.scope ?? '').split(/\s+/).includes(READONLY_SCOPE)) out('youtube: reading scheduled posts was not allowed, so scheduled posting waits; sign in again and allow it');
       if (growth && !String(r.scope ?? '').split(/\s+/).includes(ANALYTICS_SCOPE)) out('youtube: reading statistics was not allowed, so the Growth section waits; sign in again and allow it');
       return 0;

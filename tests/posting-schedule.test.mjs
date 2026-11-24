@@ -9,7 +9,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { main as cli } from '../services/posting/cli.mjs';
-import { READONLY_SCOPE, SCHEDULE_SCOPES, SCOPE, authUrl, createYoutubeAuth } from '../services/posting/oauth.mjs';
+import { CAPTIONS_SCOPE, READONLY_SCOPE, SCHEDULE_SCOPES, SCOPE, authUrl, createYoutubeAuth, joinScopes } from '../services/posting/oauth.mjs';
 import { formatPreview, previewRules } from '../services/posting/preview.mjs';
 import {
   DEFAULT_SCHEDULE, HOUR_MS, SCHEDULE_FLAG, checkUserSchedule, createSlotter, earliestFree, floorFrom, latestFutureSchedule, loadScheduleConfig, leadOk,
@@ -241,10 +241,11 @@ describe('optional readonly scope', () => {
       const code = await cli(['youtube', 'signin', '--data-dir', d], (s) => lines.push(s), () => {}, { createYoutubeAuth: (o) => { seen.push(o.scope); return { signIn: async () => ({ scope }) }; } });
       return { code, text: lines.join('\n') };
     };
-    let r = await run({ posting: true }, SCOPE);
-    assert.equal(r.code, 0); assert.equal(seen.at(-1), SCOPE); assert.doesNotMatch(r.text, /scheduled/);
-    r = await run({ posting: true, [SCHEDULE_FLAG]: true }, SCHEDULE_SCOPES);
-    assert.equal(seen.at(-1), SCHEDULE_SCOPES); assert.doesNotMatch(r.text, /not allowed/);
+    // C1 (user yes 2026-11-24): the caption permission is always asked as well
+    let r = await run({ posting: true }, joinScopes(SCOPE, CAPTIONS_SCOPE));
+    assert.equal(r.code, 0); assert.equal(seen.at(-1), joinScopes(SCOPE, CAPTIONS_SCOPE)); assert.doesNotMatch(r.text, /scheduled/);
+    r = await run({ posting: true, [SCHEDULE_FLAG]: true }, joinScopes(SCHEDULE_SCOPES, CAPTIONS_SCOPE));
+    assert.equal(seen.at(-1), joinScopes(SCOPE, CAPTIONS_SCOPE, READONLY_SCOPE)); assert.doesNotMatch(r.text, /not allowed/);
     r = await run({ posting: true, [SCHEDULE_FLAG]: true }, SCOPE);
     assert.match(r.text, /reading scheduled posts was not allowed/);
   });

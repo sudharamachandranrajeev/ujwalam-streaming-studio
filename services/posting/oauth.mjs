@@ -35,6 +35,9 @@ export const SCHEDULE_SCOPES = `${SCOPE} ${READONLY_SCOPE}`;
 // retention, likes, shares, subscribers per video) and, with READONLY_SCOPE, each video's public state and counts.
 // Read only: neither scope can upload, change or delete anything.
 export const ANALYTICS_SCOPE = 'https://www.googleapis.com/auth/yt-analytics.readonly';
+// C1 (user 2026-11-24: "yes Ujwalam can ask for the broader YouTube permission (youtube.force-ssl, manage your
+// account) so it can upload caption files with each video"): captions.insert needs it. Always asked at sign-in.
+export const CAPTIONS_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
 /** One space-separated scope string, each scope once, in the order given (falsy entries skipped). */
 export const joinScopes = (...scopes) => [...new Set(scopes.flatMap((s) => (typeof s === 'string' ? s.split(/\s+/) : [])).filter(Boolean))].join(' ');
 export const REFRESH_TARGET = 'Ujwalam/posting/youtube-refresh';

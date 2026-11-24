@@ -254,6 +254,34 @@ async function setThumbnail(fetchImpl, accessToken, videoId, coverPath, net = {}
   } catch { return false; }
 }
 
+// C1 (user 2026-11-24: "burned in and uploaded" for the long video): captions.insert, multipart (metadata + the .srt).
+// Needs the youtube.force-ssl permission (oauth.mjs CAPTIONS_SCOPE; UNVERIFIED against real Google). Quota: quota.json
+// captionUnits, reserved by the caller before this request.
+const CAPTIONS_URL = 'https://www.googleapis.com/upload/youtube/v3/captions?uploadType=multipart&part=snippet';
+/** The track's language tag and the name viewers see in the player's CC menu. Manglish is mostly English words with
+ *  Malayalam ones mixed in (agent choice 2026-11-24; UNVERIFIED as the best tag for it). */
+export const CAPTION_TRACK = Object.freeze({ language: 'en', name: 'Captions' });
+
+/** Uploads one .srt as a caption track of videoId. -> { id } or throws UploadError: 'captions-not-permitted' (401/403
+ *  without a quota reason: sign in again and allow managing the account), 'quota-exceeded', 'captions-failed'. */
+export async function uploadCaptions({ videoId, accessToken, srtPath, fetchImpl, requestMs = REQUEST_MS, signal = null }) {
+  const f = fetchImpl ?? fetch;
+  const srt = readFileSync(srtPath);
+  const boundary = `ujwalam-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const meta = JSON.stringify({ snippet: { videoId, language: CAPTION_TRACK.language, name: CAPTION_TRACK.name, isDraft: false } });
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`),
+    srt, Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const r = await timedFetch(f, CAPTIONS_URL, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}`, 'Content-Length': String(body.length) }, body },
+    requestMs, { outer: signal, read: async (res) => ({ status: res.status, json: await res.json().catch(() => null) }) });
+  if (r.status >= 200 && r.status < 300 && typeof r.json?.id === 'string') return { id: r.json.id };
+  const reasons = (r.json?.error?.errors ?? []).map((e) => e?.reason);
+  if (reasons.includes('quotaExceeded') || reasons.includes('dailyLimitExceeded')) throw new UploadError('quota-exceeded', 'YouTube quota used up; the captions were not sent');
+  if (r.status === 401 || r.status === 403) throw new UploadError('captions-not-permitted', 'sign in again and allow Ujwalam to manage your YouTube account to send captions');
+  throw new UploadError('captions-failed', `captions upload answered ${r.status}`);
+}
+
 /** true when uploads.json marks the package's clips-folder file superseded (clip_publish.py supersede_uploads); null
  *  when the list exists but cannot be read (the caller waits and tries again, never sends blind); else false. */
 export function supersededSource(dataDir, source) {

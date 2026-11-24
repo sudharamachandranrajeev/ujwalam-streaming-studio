@@ -45,7 +45,11 @@ const SHA = /^[0-9a-f]{64}$/;
 const POST_ID = /^[0-9a-f]{16}\.[a-z][a-z0-9-]{0,31}$/;
 const UNRESOLVED = /\{[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+\}/g;
 export const EDIT_LIMITS = Object.freeze({ title: 300, description: 8000, tags: 30, tagChars: 60, hashtags: 60, hashtagChars: 80 });
-const MEDIA = Object.freeze({ video: { ext: '.mp4', type: 'video/mp4' }, cover: { ext: '.jpg', type: 'image/jpeg' } });
+const MEDIA = Object.freeze({ video: { ext: '.mp4', type: 'video/mp4' }, cover: { ext: '.jpg', type: 'image/jpeg' },
+  subtitles: { ext: '.srt', type: 'application/x-subrip' } }); // C1: the long video's caption file (post.captions)
+/** C1 (user 2026-11-24: long video captions "burned in and uploaded"): kinds whose package carries <video>.srt as
+ *  captions.srt, uploaded as the video's caption track. Shorts and reels only burn theirs in (a track would show twice). */
+export const CAPTION_UPLOAD_KINDS = Object.freeze(['long-highlights']);
 
 export class PostingError extends Error {
   constructor(code, message) { super(message ?? code); this.name = 'PostingError'; this.code = code; }
@@ -476,6 +480,9 @@ export async function packageUploads(opts) {
     if (music.use === 'credit') post.description = post.description ? `${post.description}\n\n${music.text}` : music.text; // D414: last, after the prefs
     const at = uploadCoverAt(row, seconds);
     const coverOk = await extractCover(ffmpeg, dst, at, path.join(dir, 'cover.jpg'));
+    const srt = CAPTION_UPLOAD_KINDS.includes(row.kind) ? `${file.slice(0, -path.extname(file).length)}.srt` : null;
+    let captions = null;
+    if (srt && isRealFile(srt)) { copyFileSync(srt, path.join(dir, 'captions.srt'), FS.COPYFILE_EXCL); captions = 'captions.srt'; }
     const stamp = now().toISOString();
     const clipId = `${row.kind}-${sha.slice(0, 12)}`;
     const full = {
@@ -495,7 +502,7 @@ export async function packageUploads(opts) {
         ...(madeAtOf(path.basename(file)) ? { madeAt: madeAtOf(path.basename(file)) } : {}), file: path.resolve(file) },
       video: { file: videoName, bytes: statSync(dst).size },
       cover: coverOk ? { file: 'cover.jpg', atSec: Number(at.toFixed(3)) } : null,
-      captions: null,
+      captions,
       limits: checkLimits(post, limits),
       unresolved: unresolvedKeys(post.title, post.description, ...post.tags, ...post.hashtags),
       createdAt: stamp,
@@ -697,13 +704,13 @@ export function createPostStore(opts) {
       ledger.setStatus(e.sha256, e.target, status, p.updatedAt);
       return view({ ...e, status }, p);
     },
-    /** -> { file, type, size } for kind video|cover, or null. Name comes from post.json, must be a plain file
+    /** -> { file, type, size } for kind video|cover|subtitles (.srt only), or null. Name comes from post.json, must be a plain file
      *  with the allowlisted extension, inside the package folder (real path), no link. */
     media(id, kind) {
       const e = find(id); const p = e && load(e);
       const m = Object.hasOwn(MEDIA, kind) ? MEDIA[kind] : null;
       if (!p || !m) return null;
-      const name = kind === 'video' ? p.video?.file : p.cover?.file;
+      const name = kind === 'video' ? p.video?.file : kind === 'cover' ? p.cover?.file : p.captions;
       if (typeof name !== 'string' || !SAFE_NAME.test(name) || path.extname(name).toLowerCase() !== m.ext) return null;
       const file = path.join(e.dir, name);
       if (!isRealFile(file)) return null;
