@@ -28,10 +28,26 @@ export function testFiles(root = ROOT) {
  *  set of heavy files (event-core swaps, hard kills, soak, launcher restarts) that all pass alone (2026-11-20, 3 runs). */
 export const SPARE_CORES = 2;
 
-/** How many of the other files run at once: node's default total (cores - 1) minus the studio group and the spare
- *  cores, at least 1. */
-export function otherAtOnce(cores = os.availableParallelism()) {
-  return Math.max(1, cores - 1 - STUDIO_AT_ONCE - SPARE_CORES);
+/** How many of the other files run at once: node's default total (cores - 1) minus the studio group, the spare
+ *  cores and the cores other programs already keep busy (busyCores, measured at the start), at least 1. With ~50 %
+ *  CPU from other apps on 16 cores, 9 files at once plus 4 studio files oversubscribed the machine: each full CI run
+ *  failed a different single file that passes alone, and below-normal children (soak core, ffmpeg cover) were
+ *  starved past their ceilings (2026-11-24, 3 runs). */
+export function otherAtOnce(cores = os.availableParallelism(), busyCores = 0) {
+  return Math.max(1, cores - 1 - STUDIO_AT_ONCE - SPARE_CORES - Math.round(busyCores));
+}
+
+const cpuTimes = () => os.cpus().reduce((a, c) => { const t = c.times; a.idle += t.idle; a.all += t.user + t.nice + t.sys + t.idle + t.irq; return a; }, { idle: 0, all: 0 });
+
+/** Cores busy with other programs right now: the machine's busy share over `ms`, times the core count. Measured
+ *  before any test starts, so it is load from outside this run (other apps, Defender). */
+export async function busyCoresNow(ms = 2000) {
+  const a = cpuTimes();
+  await new Promise((r) => setTimeout(r, ms));
+  const b = cpuTimes();
+  const all = b.all - a.all;
+  if (all <= 0) return 0;
+  return (1 - (b.idle - a.idle) / all) * os.cpus().length;
 }
 
 /** The tests/helpers files that start the studio exe themselves (they import the build tool). */
@@ -76,13 +92,16 @@ async function main() {
   const extra = process.argv.slice(2);
   const { studio, other } = splitFiles(testFiles());
   const base = ['--test', '--test-timeout=300000', ...extra];
+  const busy = await busyCoresNow();
+  const atOnce = otherAtOnce(os.availableParallelism(), busy);
+  process.stdout.write(`run-tests: ${busy.toFixed(1)} core(s) busy with other programs; other files ${atOnce} at once\n`);
   const [o, s] = await Promise.all([
-    run([...base, `--test-concurrency=${otherAtOnce()}`, ...other]),
+    run([...base, `--test-concurrency=${atOnce}`, ...other]),
     studio.length ? run([...base, `--test-concurrency=${STUDIO_AT_ONCE}`, ...studio]) : Promise.resolve({ code: 0, out: '' }),
   ]);
   process.stdout.write(o.out);
   process.stdout.write(s.out);
-  const sum = [...summaryOf(`other files (${other.length})`, o.out), ...summaryOf(`studio files (${studio.length}, ${STUDIO_AT_ONCE} at once)`, s.out)];
+  const sum = [...summaryOf(`other files (${other.length}, ${atOnce} at once)`, o.out), ...summaryOf(`studio files (${studio.length}, ${STUDIO_AT_ONCE} at once)`, s.out)];
   process.stdout.write(`\nrun-tests:\n${sum.join('\n')}\n`);
   process.exitCode = o.code === 0 && s.code === 0 ? 0 : 1;
 }

@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { otherAtOnce, splitFiles, summaryOf, testFiles } from '../tools/run-tests.mjs';
+import { busyCoresNow, otherAtOnce, splitFiles, summaryOf, testFiles } from '../tools/run-tests.mjs';
 
 test('every test file is in exactly one group; the studio files are the ones that start the studio exe', () => {
   const files = testFiles();
@@ -44,6 +44,17 @@ test('both groups together stay at node\'s default total: the other files get th
   assert.equal(otherAtOnce(16), 9); // 15 - 4 studio - 2 spare
   assert.equal(otherAtOnce(4), 1);
   assert.equal(otherAtOnce(1), 1);
+});
+
+test('cores other programs keep busy are left to them: 8 busy of 16 -> 1 other file at once, 2.6 busy -> 6', () => {
+  assert.equal(otherAtOnce(16, 8), 1);
+  assert.equal(otherAtOnce(16, 2.6), 6);
+  assert.equal(otherAtOnce(16, 0), 9);
+});
+
+test('busyCoresNow: a share of the cores between 0 and the core count', async () => {
+  const b = await busyCoresNow(100);
+  assert.ok(b >= 0 && b <= os.cpus().length, String(b));
 });
 
 test('the summary repeats the counts and the failing tests\' names', () => {
