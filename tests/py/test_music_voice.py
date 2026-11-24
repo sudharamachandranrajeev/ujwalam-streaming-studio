@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "services
 import music_voice as mv  # noqa: E402
 
 HAVE_VAD = importlib.util.find_spec("faster_whisper") is not None
+HAVE_NP = importlib.util.find_spec("numpy") is not None  # CI's plain Python has none (use the project venv)
 
 
 def tone(sec, db, sr=48000):
@@ -26,6 +27,7 @@ def tone(sec, db, sr=48000):
     return np.stack([x, x], axis=1)
 
 
+@unittest.skipUnless(HAVE_NP, "numpy missing (use the project venv)")
 class VoiceTests(unittest.TestCase):
     VC = {"threshold": 0.5, "minSpeechSec": 0.25, "mergeGapSec": 0.4, "depthDb": 8, "attackSec": 0.2, "releaseSec": 0.3}
 
@@ -94,6 +96,7 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(m["spans"], [], "a steady tone is not speech")
 
 
+@unittest.skipUnless(HAVE_NP, "numpy missing (use the project venv)")
 class ClipperLevelTests(unittest.TestCase):
     def test_off_bed_action_cannot_raise_partial_music(self):
         import numpy as np
