@@ -132,15 +132,39 @@ if ($installed) {
     Get-ChildItem $data -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($root.Length) } | Set-Content (Join-Path $Out 'data-files.txt')
     $running = @(Our-Processes | ForEach-Object { "$($_.ProcessName) $($_.Id)" })
     $studio = @(Our-Processes | Where-Object { $_.MainWindowHandle -ne 0 -and $_.ProcessName -like 'ujwalam-studio*' })
-    foreach ($s in $studio) { [void]$s.CloseMainWindow() }
+    # The first start opens Settings (modal) over the main window, which disables it, and CloseMainWindow refuses a
+    # disabled window (alpha.42 runs: 0 closes). So post WM_CLOSE to every visible top-level window of the studio, the
+    # dialog first in z-order, every 3 s until it is gone, like a user closing each window's X.
+    if (-not ('UjwWin' -as [type])) {
+      Add-Type -TypeDefinition @'
+using System; using System.Collections.Generic; using System.Runtime.InteropServices;
+public static class UjwWin {
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public static int CloseAll(uint pid) {
+    var hits = new List<IntPtr>();
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) hits.Add(h); return true; }, IntPtr.Zero);
+    foreach (var h in hits) PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero); // WM_CLOSE
+    return hits.Count;
+  }
+}
+'@
+    }
     $stopDeadline = (Get-Date).AddSeconds(60)
-    while ((Get-Date) -lt $stopDeadline -and @(Our-Processes).Count -gt 0) { Start-Sleep -Seconds 2 }
+    $closes = 0
+    while ((Get-Date) -lt $stopDeadline -and @(Our-Processes).Count -gt 0) {
+      foreach ($s in @(Our-Processes | Where-Object { $_.ProcessName -like 'ujwalam-studio*' })) { $closes += [UjwWin]::CloseAll([uint32]$s.Id) }
+      Start-Sleep -Seconds 3
+    }
     $left = @(Our-Processes | ForEach-Object { "$($_.ProcessName) $($_.Id)" })
     Our-Processes | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-ChildItem $root -Recurse -Filter '*.log' -ErrorAction SilentlyContinue | Copy-Item -Destination $logOut -Force -ErrorAction SilentlyContinue
     $hostOk = [bool]($hostLine -and $hostLine -match 'host started')
     @{ ok = ($ui -and $hostOk -and $studio.Count -gt 0 -and $left.Count -eq 0); ui = $ui; hostLine = $hostLine; startExit = $startExit;
-       studioWindows = $studio.Count; running = $running; leftAfterClose = $left; shortcut = $sc
+       studioWindows = $studio.Count; closeRequests = $closes; running = $running; leftAfterClose = $left; shortcut = $sc
        launcherLog = if ($launchLog) { $launchLog.Name } else { $null } }
   })
 }

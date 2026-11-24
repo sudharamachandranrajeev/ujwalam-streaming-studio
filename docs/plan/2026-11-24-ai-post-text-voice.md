@@ -15,6 +15,11 @@ recorded) to edit reels, and to learn the audience's and the streamer's trends o
 - Live voice markers: yes. Exact phrases are not fixed yet; words the user says on stream include "adipoli",
   "polich"/"pwolich", "super", "scene", "scene item". These start as excitement words (below), not as fixed commands.
 - Plan and order approved ("yes - go ahead and start").
+- Later answers (2026-11-24 night):
+  - T6 audio-event model download: yes. The model is pinned with a SHA-256 and goes through the download manager.
+  - Live clip-marker phrases: "adipoli", "polich" (Malayalam), "scene", "super". Each is matched as said in Malayalam,
+    Manglish and English: Malayalam script, Latin spellings (incl. "pwolich"), and English for "scene" and "super".
+    A marker phrase marks the moment; it never acts on the stream. The phrases live in data, not in code.
 
 ## Findings
 
