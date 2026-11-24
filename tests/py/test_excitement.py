@@ -15,7 +15,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "services", "clip"))
 
-import numpy as np  # noqa: E402
+try:  # the CI runner's Python has no numpy: signal tests skip, phrase and ranking tests still run
+    import numpy as np  # noqa: E402
+except ImportError:
+    np = None
 
 import clip_rank as rank  # noqa: E402
 import excitement as exc  # noqa: E402
@@ -28,6 +31,8 @@ SR = 16000
 
 
 def tone(hz, db, sec=1.0):
+    if np is None:
+        raise unittest.SkipTest("numpy is not installed in this Python")
     t = np.arange(int(SR * sec)) / SR
     return (10 ** (db / 20) * np.sqrt(2) * np.sin(2 * np.pi * hz * t)).astype(np.float32)
 
@@ -200,6 +205,7 @@ class Ranking(unittest.TestCase):
         self.assertEqual(exc.moment_score([], 0, 5), 0.0)
 
 
+@unittest.skipIf(np is None, "numpy is not installed in this Python (the analysis reads audio with numpy)")
 class Analyse(unittest.TestCase):
     def setUp(self):
         self.wd = tempfile.mkdtemp()

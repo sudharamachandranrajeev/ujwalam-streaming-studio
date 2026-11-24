@@ -6,7 +6,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { busyCoresNow, otherAtOnce, splitFiles, summaryOf, testFiles } from '../tools/run-tests.mjs';
+import { appGuard, busyCoresNow, otherAtOnce, splitFiles, summaryOf, testFiles } from '../tools/run-tests.mjs';
+
+test('npm test refuses while the installed app runs (2026-11-24: it made the open studio unresponsive)', () => {
+  assert.equal(appGuard(() => [], {}), null);
+  assert.match(appGuard(() => [{ pid: 7, name: 'ujwalam-studio.exe' }], {}), /refused: your installed Ujwalam is running \(ujwalam-studio\.exe pid 7\)/);
+  assert.match(appGuard(() => null, {}), /could not check/);
+  assert.equal(appGuard(() => [{ pid: 7, name: 'ujwalam-host.exe' }], { UJWALAM_TESTS_BESIDE_APP: '1' }), null);
+});
 
 test('every test file is in exactly one group; the studio files are the ones that start the studio exe', () => {
   const files = testFiles();

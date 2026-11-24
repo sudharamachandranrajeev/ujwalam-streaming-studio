@@ -14,6 +14,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { installedUjwalamProcesses } from './ci.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STUDIO_AT_ONCE = 4;
@@ -88,8 +89,22 @@ function run(args) {
   });
 }
 
+/** Message when the user's installed Ujwalam runs (2026-11-24: a full `npm test` beside the open studio, 4 test studio
+ *  windows plus the other files, made the user's app "extremely unresponsive"); else null. A failed check counts as
+ *  running. UJWALAM_TESTS_BESIDE_APP=1 is the user's override. */
+export function appGuard(find = installedUjwalamProcesses, env = process.env) {
+  if (env.UJWALAM_TESTS_BESIDE_APP === '1') return null;
+  const busy = find();
+  if (busy === null) return 'run-tests: refused: could not check whether your installed Ujwalam is running. Set UJWALAM_TESTS_BESIDE_APP=1 to run anyway.';
+  if (!busy.length) return null;
+  return `run-tests: refused: your installed Ujwalam is running (${busy.map((b) => `${b.name} pid ${b.pid}`).join(', ')}). `
+    + 'The full test run starts test studio windows and many files at once and slows the app. Close Ujwalam first, or run single files with node --test.';
+}
+
 async function main() {
   const extra = process.argv.slice(2);
+  const refused = appGuard();
+  if (refused) { process.stdout.write(`${refused}\n`); process.exitCode = 3; return; }
   const { studio, other } = splitFiles(testFiles());
   const base = ['--test', '--test-timeout=300000', ...extra];
   const busy = await busyCoresNow();

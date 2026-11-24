@@ -3204,3 +3204,13 @@ force a clip (`voice.phrase`, passes ranking minScore). Latin/English "scene" an
 teammates) and only add score (`voice.word`). Latin words fold only runs of 3+ equal letters ("supper" is not
 "super"); Malayalam phrases match at a word start, and scene/super also at a word end. Live voice marks come back
 post-stream as these same kinds, never as a force-kept `marker.audio`.
+
+## D444 — Instagram Reels autopost (decided, 2026-11-24)
+
+Plan: [2026-11-24-instagram-autopost](2026-11-24-instagram-autopost.md). The user approved the plan and chose: the same
+clips as YouTube Shorts go to Instagram Reels; as many posts a day as Meta allows (100 per moving 24 h, read live from
+`content_publishing_limit`), at least the auto-post gap apart, never while live. Upload through the Instagram Graph API
+with Facebook Login and a resumable upload from this PC (no public video URL). Instagram has no scheduled publish, so
+Ujwalam publishes at the time itself. Tokens and the app secret in Windows Credential Manager only. A clip file is
+deleted (post-delete-uploaded) only after every target that wants it has posted it. Flag `instagram-autopost` ON
+(user-requested); it does nothing until connected. The first real post waits for the user's yes.
