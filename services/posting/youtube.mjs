@@ -282,6 +282,42 @@ export async function uploadCaptions({ videoId, accessToken, srtPath, fetchImpl,
   throw new UploadError('captions-failed', `captions upload answered ${r.status}`);
 }
 
+// D443 T4: rewrite the text of a scheduled video. videos.list part=snippet,status (1 unit) then videos.update part=snippet
+// (50 units, quota.json updateUnits; UNVERIFIED against real Google). videos.update REPLACES the whole snippet, so the caller
+// reads it first, keeps every writable field and changes only title, description and tags.
+const VIDEO_SNIPPET_URL = (videoId) => `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${encodeURIComponent(videoId)}`;
+const VIDEO_UPDATE_URL = 'https://www.googleapis.com/youtube/v3/videos?part=snippet';
+/** The snippet fields videos.update accepts back; the rest of a read snippet (publishedAt, channelId, thumbnails, ...) is read only. */
+export const WRITABLE_SNIPPET = Object.freeze(['title', 'description', 'tags', 'categoryId', 'defaultLanguage', 'defaultAudioLanguage']);
+// definite = YouTube answered 4xx (not 408/429): nothing was written. A timeout, a dropped connection or a 5xx may have applied it.
+const quotaOrDenied = (r, what) => Object.assign(quotaOrDenied0(r, what), { definite: r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429 });
+const quotaOrDenied0 = (r, what) => {
+  const reasons = (r.json?.error?.errors ?? []).map((e) => e?.reason);
+  if (reasons.includes('quotaExceeded') || reasons.includes('dailyLimitExceeded')) return new UploadError('quota-exceeded', 'YouTube quota used up; nothing more is sent');
+  if (r.status === 401 || r.status === 403) return new UploadError('update-not-permitted', 'sign in again and allow Ujwalam to manage your YouTube account');
+  return new UploadError(`${what}-failed`, `${what} answered ${r.status}`);
+};
+/** -> { found, snippet, privacyStatus, publishAt } (snippet complete as YouTube sent it) or throws UploadError. */
+export async function getVideoSnippet({ videoId, accessToken, fetchImpl, requestMs = REQUEST_MS, signal = null }) {
+  const r = await timedFetch(fetchImpl ?? fetch, VIDEO_SNIPPET_URL(videoId), { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } },
+    requestMs, { outer: signal, read: async (res) => ({ status: res.status, json: await res.json().catch(() => null) }) });
+  if (r.status < 200 || r.status >= 300) throw quotaOrDenied(r, 'read');
+  const it = r.json?.items?.[0];
+  if (!it) return { found: false, snippet: null, privacyStatus: null, publishAt: null };
+  return { found: true, snippet: it.snippet ?? null, privacyStatus: it.status?.privacyStatus ?? null, publishAt: it.status?.publishAt ?? null };
+}
+/** Sends `snippet` (writable fields only, whole) for videoId. -> { ok: true } or throws UploadError. */
+export async function updateVideoSnippet({ videoId, snippet, accessToken, fetchImpl, requestMs = REQUEST_MS, signal = null }) {
+  const body = {};
+  for (const k of WRITABLE_SNIPPET) if (snippet?.[k] !== undefined) body[k] = snippet[k];
+  if (typeof body.title !== 'string' || !body.title || typeof body.categoryId !== 'string') throw new UploadError('bad-snippet', 'a title and a category are required; nothing was sent');
+  const text = JSON.stringify({ id: videoId, snippet: body });
+  const r = await timedFetch(fetchImpl ?? fetch, VIDEO_UPDATE_URL, { method: 'PUT', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' }, body: text },
+    requestMs, { outer: signal, read: async (res) => ({ status: res.status, json: await res.json().catch(() => null) }) });
+  if (r.status >= 200 && r.status < 300) return { ok: true };
+  throw quotaOrDenied(r, 'update');
+}
+
 /** true when uploads.json marks the package's clips-folder file superseded (clip_publish.py supersede_uploads); null
  *  when the list exists but cannot be read (the caller waits and tries again, never sends blind); else false. */
 export function supersededSource(dataDir, source) {

@@ -101,7 +101,9 @@ export function loadQuota(dataDir, file = DEFAULT_QUOTA, { nowMs = Date.now() } 
   const ex = exhaustedUntil(dataDir, nowMs);
   // C1: captions.insert units (the long video's caption track); null = not known, the track is skipped (fail closed)
   const caption = Number.isFinite(j?.captionUnits) && j.captionUnits >= 0 ? j.captionUnits : null;
-  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, captionUnits: caption, readUnitsPerRead: readUnits, readReuseMinutes, readsPerDayMax, insertUnits: insert, readReserveUnits: reserve, uploadsPerDayFit: fit, maxPerDay: MAX_PER_DAY, userSet: user.quotaUnitsPerDay !== undefined,
+  // D443 T4: videos.update units (the scheduled-post rewrite); null = not known, no rewrite runs (fail closed)
+  const update = Number.isFinite(j?.updateUnits) && j.updateUnits >= 0 ? j.updateUnits : null;
+  return { quotaUnitsPerDay: quota, perUploadUnits: perUpload, captionUnits: caption, updateUnits: update, readUnitsPerRead: readUnits, readReuseMinutes, readsPerDayMax, insertUnits: insert, readReserveUnits: reserve, uploadsPerDayFit: fit, maxPerDay: MAX_PER_DAY, userSet: user.quotaUnitsPerDay !== undefined,
     model, uploadsCap: bucket, fallback: fb, exhaustedUntil: ex, modelText: fb ? QUOTA_MODEL_TEXT.fallback : QUOTA_MODEL_TEXT[model] };
 }
 
@@ -357,6 +359,17 @@ export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = n
     /** C1: check and charge one caption track (quota.json captionUnits) in one transaction: null (charged) or why not. */
     reserveCaption: () => step((s, q) => (Number.isFinite(q.captionUnits) ? writeWhy(s, q, q.captionUnits) : 'quota-unreadable'),
       (db, d, q) => add(db, 'units', d.pacific, q.captionUnits)),
+    /** D443 T4 review: `units` of reads inside a write flow are charged like a write, so they never eat the read reserve. */
+    reserveWriteRead: (units = 1) => step((s, q) => writeWhy(s, q, units), (db, d) => add(db, 'units', d.pacific, units)),
+    /** D443 T4: check and charge one videos.update (quota.json updateUnits) like a caption track: never into the read reserve. */
+    reserveUpdate: () => step((s, q) => (Number.isFinite(q.updateUnits) ? writeWhy(s, q, q.updateUnits) : 'quota-unreadable'),
+      (db, d, q) => add(db, 'units', d.pacific, q.updateUnits)),
+    /** Read-only: how many more writes of `units` fit today before the read reserve -> { fit, why }. */
+    writeRoom(units) {
+      let fit = 0;
+      const why = peek((s, q) => { const w = writeWhy(s, q, units); if (!w) fit = Math.max(0, Math.floor((q.quotaUnitsPerDay - q.readReserveUnits - s.units.n) / Math.max(1, units))); return w; });
+      return { fit, why };
+    },
     /** Read-only check for `units` of reads. */
     readBlock: (units = 1) => peek((s, q) => readWhy(s, q, units)),
     /** Check and charge `units` of reads in one transaction: null (charged) or why not (nothing charged). */

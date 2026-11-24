@@ -11,9 +11,13 @@ import { fileURLToPath } from 'node:url';
 import { dataDirNote, resolveCliDataDir } from '../event-core/config.mjs';
 import { createFlags } from '../flags/index.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
-import { LEDGER_NAME, POSTING_FLAG, PostingError, createPostStore, packageRun } from './index.mjs';
+import { LEDGER_NAME, POSTING_FLAG, PostingError, createPostStore, findFfmpeg, packageRun } from './index.mjs';
 import { ANALYTICS_SCOPE, CAPTIONS_SCOPE, READONLY_SCOPE, SCOPE, createYoutubeAuth, joinScopes } from './oauth.mjs';
 import { UploadError } from './youtube.mjs';
+import { REWRITE_FLAG, runRewrite, runUndo } from './rewrite.mjs';
+import { AI_TEXT_FLAG } from './ai-text.mjs';
+import { createQuotaBudget } from './quota-budget.mjs';
+import { FLAG as LOCAL_MODEL_FLAG, createModelRunner } from '../local-model/runner.mjs';
 import { SCHEDULE_FLAG } from './schedule.mjs';
 import { GROWTH_FLAG } from '../analytics/index.mjs';
 import { requestRunNow, streamOnly } from './auto-chain.mjs';
@@ -207,6 +211,24 @@ async function youtubeMain(a, out, err, deps) {
     }
     if (sub === 'status') { const s = await auth.status(); out(`youtube: signed in: ${s.signedIn}, OAuth client set: ${s.hasClient}`); return 0; }
     if (sub === 'signout') { await auth.signOut(); out('youtube: signed out'); return 0; }
+    if (sub === 'rewrite' || sub === 'rewrite-undo') {
+      // D443 T4: new AI text for scheduled, not yet public videos in Ujwalam's own list; undo puts the saved original back.
+      // The rewrite switch (flag post-rewrite-scheduled, off by default) must be on; undo works without it.
+      const only = typeof a.only === 'string' ? a.only.split(',').filter(Boolean) : null;
+      const budget = deps.budget ?? createQuotaBudget({ dataDir });
+      const store = createPostStore({ ledgerFile: path.join(dataDir, 'posting', LEDGER_NAME), dataDir });
+      const common = { dataDir, store, auth: deps.auth ?? auth, budget, flags, fetchImpl: deps.fetchImpl, only, outputsStatus: deps.outputsStatus ? streamOnly(deps.outputsStatus) : undefined };
+      let r;
+      if (sub === 'rewrite') {
+        const runner = deps.runner ?? createModelRunner({ isOn: () => flags.isOn(LOCAL_MODEL_FLAG) });
+        r = await runRewrite({ ...common, ffmpeg: deps.ffmpeg ?? findFfmpeg(typeof a.ffmpeg === 'string' ? a.ffmpeg : undefined), aiDeps: { runner, isOn: () => flags.isOn(AI_TEXT_FLAG), ...(deps.aiDeps ?? {}) } });
+      } else r = await runUndo({ ...common, force: a.force === true });
+      if (r.refused) { err(`youtube: ${sub} refused (${r.refused}); nothing was changed${r.refused === 'flag-off' ? ` (switch '${REWRITE_FLAG}' on first)` : ''}`); return 1; }
+      const done = r.rewritten ?? r.restored;
+      const why = {}; for (const s of r.skipped) why[s.why] = (why[s.why] ?? 0) + 1;
+      out(`youtube: ${sub}: ${done.length} ${sub === 'rewrite' ? 'rewritten' : 'restored'}, ${r.skipped.length} skipped ${JSON.stringify(why)}${r.stopped ? `; stopped (${r.stopped}), ${r.left} left for another day` : ''}`);
+      return 0;
+    }
     if (sub === 'upload') {
       if (typeof a.id !== 'string') { err('usage: node services/posting/cli.mjs youtube upload --id <post id> [--data-dir DIR]'); return 2; }
       const ledgerFile = path.join(dataDir, 'posting', LEDGER_NAME);
@@ -224,7 +246,7 @@ async function youtubeMain(a, out, err, deps) {
       out(`youtube: queued ${a.id}; goes public ${r.item.publishAt}. The studio's auto-post queue uploads it as private when no stream is live (auto-post must be on).`);
       return 0;
     }
-    err('usage: node services/posting/cli.mjs youtube signin|status|signout|upload --id <post id>');
+    err('usage: node services/posting/cli.mjs youtube signin|status|signout|upload --id <post id>|rewrite [--only ids]|rewrite-undo [--only ids] [--force]');
     return 2;
   } catch (e) {
     if (e?.code === 'oauth-no-client') { err('youtube: no OAuth client set yet (see docs/plan/2026-11-03-p16b-youtube-private-upload-plan.md: "Needs from the user")'); return 1; }
