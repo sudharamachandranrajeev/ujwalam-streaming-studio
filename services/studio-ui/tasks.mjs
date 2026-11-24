@@ -32,30 +32,40 @@ export const DEFAULT_NEXT_START = 'notify';
 export const TASK_CONTROLS = Object.freeze(['stop', 'pause', 'resume', 'next']);
 export const LOG_TAIL_LINES = 8;
 const LOG_LINE_MAX = 160;
-// A log line can carry chat text, viewer names, paths or secrets (the clipper prints file names and tool errors):
-// a line that mentions chat, viewers, users, messages or an @name is dropped whole; paths, URLs, long tokens and
-// key=value secrets are masked; quotes (where quoted text sits) are cut out.
-const UNSAFE_LINE = /chat|viewer|user|message|comment|author|@\w/i;
-/** One log line made safe for the task window, or null (dropped). */
-export function safeLogLine(line) {
-  if (typeof line !== 'string') return null;
-  let s = line.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
-  if (!s || s.startsWith('ujwalam-progress')) return null;
-  s = s.replace(/\b(access_token|refresh_token|token|api[_-]?key|key|secret|password|authorization)\b\s*[:=]\s*\S+/gi, '$1=[hidden]')
-    .replace(/\bbearer\s+\S+/gi, 'Bearer [hidden]')
-    .replace(/https?:\/\/\S+/gi, '[link]')
-    .replace(/(?:[A-Za-z]:|\\\\)[\\/][^\s"']*/g, '[path]')
-    .replace(/(?:^|\s)\/[^\s"']*\/[^\s"']*/g, ' [path]')
-    .replace(/\b[A-Za-z0-9+/_=-]{24,}\b/g, '[hidden]')
-    .replace(/"[^"]*"|'[^']*'|“[^”]*”/g, '[text]')
-    .replace(/\s+/g, ' ').trim();
-  // checked after the masking, so a folder name (C:\Users) does not drop the line; the text left is what is shown
-  if (!s || UNSAFE_LINE.test(s)) return null;
-  return s.slice(0, LOG_LINE_MAX);
+// D442 log tail (Codex review: the deny-list leaked): an ALLOWLIST. The task shows only typed events the job emits,
+// turned into fixed text here: progress (stage, done, total, step), a safe point, the parts it runs (from its own list)
+// and how it ended (known codes, fixed plain-language text). Raw tool output never leaves the launcher: it stays in
+// the job's local log file only.
+const STAGE_WORD = /^[a-z][a-z0-9-]{0,23}$/;
+const PART_NAMES = Object.freeze(['Clip maker (Python)', 'Screen reader (OCR)', 'Video tools (ffmpeg)']);
+export const END_TEXT = Object.freeze({
+  done: 'Finished', failed: 'Stopped with an error; the full log is on this computer', stopped: 'Stopped by you',
+  paused: 'Paused by you', 'paused-live': 'Paused while the stream runs', 'paused-rec': 'Paused while recording',
+});
+const n = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+/** The fixed text of one allowed event, or null (not shown). */
+export function logEventText(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  if (ev.type === 'progress' && STAGE_WORD.test(ev.stage ?? '')) {
+    const d = n(ev.done); const t = n(ev.total);
+    const step = STAGE_WORD.test(ev.step ?? '') ? ` (${ev.step})` : '';
+    return `${ev.stage}${step}${d === null ? '' : `: ${d}${t ? ` of ${t}` : ''}`}`;
+  }
+  if (ev.type === 'safepoint' && STAGE_WORD.test(ev.stage ?? '')) return `Safe point: ${ev.stage} ${n(ev.done) ?? ''}`.trim();
+  if (ev.type === 'part' && PART_NAMES.includes(ev.name)) return `Running: ${ev.name}`;
+  if (ev.type === 'end' && Object.hasOwn(END_TEXT, ev.code)) return END_TEXT[ev.code];
+  return null;
 }
-/** The last LOG_TAIL_LINES safe lines of an array of raw lines. */
-export const safeLogTail = (lines) => (Array.isArray(lines) ? lines.map(safeLogLine).filter(Boolean).slice(-LOG_TAIL_LINES) : []);
-
+/** Adds an allowed event to a tail (array of at most LOG_TAIL_LINES strings); a repeat of the last line is skipped. */
+export function pushLogEvent(tail, ev) {
+  const s = logEventText(ev);
+  if (!s || tail.at(-1) === s) return tail;
+  tail.push(s);
+  while (tail.length > LOG_TAIL_LINES) tail.shift();
+  return tail;
+}
+const cleanTail = (lines) => (Array.isArray(lines)
+  ? lines.filter((l) => typeof l === 'string').map((l) => cut(l.replace(/[\u0000-\u001f\u007f]/g, ' '), LOG_LINE_MAX)).filter(Boolean).slice(-LOG_TAIL_LINES) : []);
 /** A clean task from untrusted input (a file or a caller), or null. */
 export function cleanTask(t, id = t?.id) {
   if (!t || typeof t !== 'object' || typeof id !== 'string' || !ID.test(id)) return null;
@@ -89,7 +99,7 @@ function controlFields(t) {
     nextStart: NEXT_START.includes(t.nextStart) ? t.nextStart : null,
     question: cut(t.question, 160),
     parts: Array.isArray(t.parts) ? t.parts.slice(0, 6).map((p) => cut(p, 40)).filter(Boolean) : [],
-    logTail: safeLogTail(t.logTail),
+    logTail: cleanTail(t.logTail),
   };
 }
 
@@ -134,23 +144,34 @@ export function writeTaskControl(dataDir, id, req) {
   return true;
 }
 
-/** Takes (reads and removes) the waiting control requests: [{ id, op, nextStart?, atMs }]; bad files are removed. */
-export function takeTaskControls(dataDir) {
+/** Reads the waiting control requests without removing them: [{ id, op, nextStart?, atMs, file }], in the order they
+ *  were asked. Codex review: the reader removes a request (ackTaskControls) only after its effect is committed to
+ *  status.json, so a close in between applies it again at the next start. Unreadable files are removed. */
+export function peekTaskControls(dataDir) {
   const dir = controlDir(dataDir);
   let names;
   try { names = readdirSync(dir); } catch { return []; }
   const out = [];
-  for (const n of names) {
-    if (!n.endsWith('.json')) continue;
-    const m = /^([A-Za-z0-9._-]{1,80})~(\d{1,16})-(\d{1,9})\.json$/.exec(n);
-    const id = m ? m[1] : '';
-    const f = path.join(dir, n);
+  for (const nm of names) {
+    if (!nm.endsWith('.json')) continue;
+    const m = /^([A-Za-z0-9._-]{1,80})~(\d{1,16})-(\d{1,9})\.json$/.exec(nm);
+    const f = path.join(dir, nm);
     let c = null;
     try { c = cleanControl(JSON.parse(readFileSync(f, 'utf8'))); } catch { c = null; }
-    try { rmSync(f, { force: true }); } catch { continue; } // not removed: read again next tick, not applied twice
-    if (c && m) out.push({ id, ...c, seq: Number(m[3]) });
+    if (c && m) out.push({ id: m[1], ...c, seq: Number(m[3]), file: f });
+    else try { rmSync(f, { force: true }); } catch { /* next tick */ }
   }
   return out.sort((a, b) => a.atMs - b.atMs || a.seq - b.seq).map(({ seq: _s, ...r }) => r);
+}
+/** Removes applied requests (their files). */
+export function ackTaskControls(reqs) {
+  for (const r of reqs) try { rmSync(r.file, { force: true }); } catch { /* read again next tick; applying it twice is harmless */ }
+}
+/** Reads and removes the waiting requests at once (no state to commit in between). */
+export function takeTaskControls(dataDir) {
+  const reqs = peekTaskControls(dataDir);
+  ackTaskControls(reqs);
+  return reqs.map(({ file: _f, ...r }) => r);
 }
 
 export function removeTaskFile(dataDir, id) {

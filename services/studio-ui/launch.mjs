@@ -1186,6 +1186,12 @@ function superviseHost(o) {
       if (busy || !sample || sample.child !== ch || hasExited(ch) || Date.now() - sample.at > maxAgeMs) return null;
       return sample.outputs;
     },
+    // The same with the time the host gave it (the clip queue starts a job only on a status at most one tick old).
+    recentSample: (maxAgeMs) => {
+      const ch = getChild();
+      if (busy || !sample || sample.child !== ch || hasExited(ch) || Date.now() - sample.at > maxAgeMs) return null;
+      return { outputs: sample.outputs, at: sample.at };
+    },
     // check(): the candidate's last hash, run after the old host has exited and right before the new one is spawned
     // (Codex re-review). candidateFailed in the answer: the candidate itself failed (check, readiness, project load);
     // without it nothing of the candidate ran (it is kept for a retry). running (Codex review of the merge): which host
@@ -1664,11 +1670,12 @@ export async function main(argv = process.argv.slice(2)) {
         syncWorkersWhenDue();
         try {
           // The host watch loop reads outputs.status every 2 s; a fresh answer from it is used (one call fewer).
-          const recent = hostSup?.recentOutputs?.(2500);
-          if (recent) { recordClips.feed(recent); syncWorkersWhenDue(recent); return; }
+          // Codex review: the clip queue gets the time of the answer, so a job never starts on an old status.
+          const recent = hostSup?.recentSample?.(2500);
+          if (recent) { recordClips.feed(recent.outputs, recent.at); syncWorkersWhenDue(recent.outputs); return; }
           const d = JSON.parse(readFileSync(hostDiscovery, 'utf8'));
           const st = await new HostClient({ port: d.port, token: hostToken }).call('outputs.status');
-          recordClips.feed(st);
+          recordClips.feed(st, Date.now());
           syncWorkersWhenDue(st);
         } catch { /* host restarting: next tick */ }
       };
