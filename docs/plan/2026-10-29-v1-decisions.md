@@ -3175,3 +3175,11 @@ User 2026-11-22: "use OCR to figure out" the Battle Royale end screens. Evidence
    VERDANSK and BR modes other than Battle Royale (added when read on real end screens); whether the HUD counter shows a
    teammate's kills while spectating; the strip's per-teammate KILLS N (the text does not tell which card is the
    streamer). All values stay unverified until checked on more matches.
+## D443 — Local text model for post text, thumbnails, captions and voice (decided, 2026-11-24)
+
+Plan: [2026-11-24-ai-post-text-voice](2026-11-24-ai-post-text-voice.md). The user chose: the model runs inside Ujwalam
+(llama.cpp server + Qwen3-VL-4B, download approved, pinned with SHA-256), post-stream only; AI text goes into scheduled
+posts automatically; English hype tone; already scheduled reels are rewritten automatically; the YouTube Analytics
+read-only scope is added; live voice markers yes, phrases not fixed yet (seed excitement words: adipoli, polich,
+pwolich, super, scene). Every AI result passes a checker (limits, schema, privacy, facts); any failure keeps the
+template text. Phases T1-T7 in the plan.
