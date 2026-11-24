@@ -57,7 +57,7 @@ function mgr(dataRoot, items, { live = () => false, hashBetween } = {}) {
 
 test('manifests: every item is complete and safe; the Face AI item equals data/models/face-ai.json', () => {
   const items = loadItems(REPO);
-  assert.deepEqual(items.map((i) => i.id).sort(), ['face-ai-models', 'music-pack', 'speech-captions', 'speech-captions-turbo']);
+  assert.deepEqual(items.map((i) => i.id).sort(), ['face-ai-models', 'local-model-qwen3-vl', 'local-model-server', 'music-pack', 'speech-captions', 'speech-captions-turbo']);
   // FX5 (D427): the free music pack lands where services/clip/music_library.py pack_files reads it, with its marker
   const ml = JSON.parse(readFileSync(path.join(REPO, 'data', 'clip', 'music-library.json'), 'utf8')).pack;
   const pack = items.find((i) => i.id === 'music-pack');

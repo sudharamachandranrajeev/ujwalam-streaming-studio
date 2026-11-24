@@ -1,0 +1,349 @@
+{
+  "$comment": "D443 T1 (downloads approved by the user 2026-11-24). local-model-server: llama.cpp build b12675 (commit c212d25a, GitHub release ggml-org/llama.cpp b12675, 2026-11-24), Windows CUDA 12.4 x64 build plus its CUDA 12.4 runtime zip; archive SHA-256 equal to the GitHub release asset digests and measured after download; only the members llama-server needs are kept (server, its DLLs, the ggml CPU and CUDA backends, the CUDA runtime). local-model-qwen3-vl: Qwen/Qwen3-VL-4B-Instruct-GGUF at revision 1cd86afb (Hugging Face API 2026-11-24), Q4_K_M weights and the Q8_0 vision projector; SHA-256 equal to the LFS hashes and measured after download. Read by services/local-model/runner.mjs (data/ai/local-model.json).",
+  "items": [
+    {
+      "id": "local-model-server",
+      "name": "Local AI model server",
+      "purpose": "Runs the local AI model on this PC after a stream (llama.cpp server, NVIDIA graphics card or CPU). Used to write post text; without it the template text is used.",
+      "neededBy": "Local AI model",
+      "licence": "MIT (llama.cpp, ggml); CUDA runtime DLLs under the NVIDIA CUDA EULA (redistributable); LLVM OpenMP: Apache-2.0 WITH LLVM-exception",
+      "licenceSource": "github.com/ggml-org/llama.cpp LICENSE (MIT); the release zip carries LICENSE-LLVM-OpenMP",
+      "checked": "2026-11-24",
+      "dest": "models/llama-server",
+      "files": [
+        {
+          "name": "LICENSE-LLVM-OpenMP",
+          "bytes": 19741,
+          "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "LICENSE-LLVM-OpenMP"
+          }
+        },
+        {
+          "name": "cublas64_12.dll",
+          "bytes": 100033536,
+          "sha256": "e40202fe4223c1cd2d2dce7beec59e1ed61c7801bd827309183be9b50e358f4c",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/cudart-llama-bin-win-cuda-12.4-x64.zip",
+            "bytes": 391443627,
+            "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+            "member": "cublas64_12.dll"
+          }
+        },
+        {
+          "name": "cublasLt64_12.dll",
+          "bytes": 473551360,
+          "sha256": "2a896460bef60ed57ef32b0875812f355a6984e671d638bb632f5e8c1d7a831f",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "cublasLt64_12.dll"
+          }
+        },
+        {
+          "name": "cudart64_12.dll",
+          "bytes": 553984,
+          "sha256": "d28e42265da7462162a54da6b7a99ea4fa2caf8139d862bb500db875d0b32dfc",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/cudart-llama-bin-win-cuda-12.4-x64.zip",
+            "bytes": 391443627,
+            "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+            "member": "cudart64_12.dll"
+          }
+        },
+        {
+          "name": "ggml-base.dll",
+          "bytes": 843264,
+          "sha256": "c9e20c0aba4768b7038d933bea2f490fdde62ef815e7e05e271771e63bcbde22",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-base.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-alderlake.dll",
+          "bytes": 1500160,
+          "sha256": "f065f6f708af959f98d5308b7d2a938aebd2e3a9e62947309f8f8f96409b8c6e",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-alderlake.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-cannonlake.dll",
+          "bytes": 1735168,
+          "sha256": "8de4c9c432a403f395f0acfbaca10ab83686cca643fb691396e2618740e93e1c",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-cannonlake.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-cascadelake.dll",
+          "bytes": 1703936,
+          "sha256": "d20a3c11bc8005fcef879d778167589c7d1625a1590bf97ee3ef1f7e33626420",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-cascadelake.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-cooperlake.dll",
+          "bytes": 1713664,
+          "sha256": "2c7eadce8ba85b2064e276c5e31bb6f870194617693103b4da5ff35a94880fc8",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-cooperlake.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-haswell.dll",
+          "bytes": 1506304,
+          "sha256": "b60f14e73be34550cc9b574271272c39922c1cbd1d97dc8331026eac8d049167",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-haswell.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-icelake.dll",
+          "bytes": 1712640,
+          "sha256": "6d56a59053be2be69a76ce4f8587d3bf4d2e0d011440488cd92c1866d555b0cc",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-icelake.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-ivybridge.dll",
+          "bytes": 1374208,
+          "sha256": "bac7d541fbd17a9bcb46786e88c7a1dd47a87029e74d992d2f2f04d57d970abc",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-ivybridge.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-piledriver.dll",
+          "bytes": 1369088,
+          "sha256": "a67af590bcd4102fce7ca57521870f9ec78888658d167fbda9604fbd61c86c80",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-piledriver.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-sandybridge.dll",
+          "bytes": 1343488,
+          "sha256": "4d6222e09c34e0e559d3d99311092ee90ccd8ef47c23f84659ffe061d26f7fc3",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-sandybridge.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-sapphirerapids.dll",
+          "bytes": 1992192,
+          "sha256": "addd590dcb8ca486aafe0bb012bf95b15d8deb40d8033726ee9b0cffc19549dc",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-sapphirerapids.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-skylakex.dll",
+          "bytes": 1726976,
+          "sha256": "27c56520765ed1103dba0a822a98fecf35034de5e8b3c9ecfca2c901d20b8698",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-skylakex.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-sse42.dll",
+          "bytes": 966656,
+          "sha256": "855f250fa220ef3f3c8f6d01c2c5c6bad5f7353c017607815247f6fa46f5deb6",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-sse42.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-x64.dll",
+          "bytes": 960000,
+          "sha256": "759538e362a7144ddab84ecc8ff8cfdb1dfd701ce4d294a685a7c17306c7aa10",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-x64.dll"
+          }
+        },
+        {
+          "name": "ggml-cpu-zen4.dll",
+          "bytes": 1721856,
+          "sha256": "c7f68ea1bfe74f9a5b484c854bc3bef8878fc85c1980e699780f21d7b2fb6293",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cpu-zen4.dll"
+          }
+        },
+        {
+          "name": "ggml-cuda.dll",
+          "bytes": 767643136,
+          "sha256": "1ff989e52a7e39c8104253ad499a4fad914f07ec05609c1a91429db99f51f16e",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-cuda.dll"
+          }
+        },
+        {
+          "name": "ggml-rpc.dll",
+          "bytes": 241664,
+          "sha256": "2de419b62cd35acf1311a49ec62a9d48edb9daed65fcfe3053d2b85c6299aad4",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml-rpc.dll"
+          }
+        },
+        {
+          "name": "ggml.dll",
+          "bytes": 78848,
+          "sha256": "fda5f325265311413ebb09944841587b610de2c414801472e3fcfa9bbc634615",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "ggml.dll"
+          }
+        },
+        {
+          "name": "libomp.dll",
+          "bytes": 856064,
+          "sha256": "1e4222f195d84e7355109d778e751dfe3c085e42c947f7fe3d7853181329dd40",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "libomp.dll"
+          }
+        },
+        {
+          "name": "llama-common.dll",
+          "bytes": 8729600,
+          "sha256": "5b05e90bc95dd89331f375dc28b8bcbdb9769948984a63d408d7e839f4f2b3f6",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "llama-common.dll"
+          }
+        },
+        {
+          "name": "llama-server-impl.dll",
+          "bytes": 9893376,
+          "sha256": "a3d4700a523fc523ea6317625d040c58434c21158da990895a8aaf18a4793cfc",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "llama-server-impl.dll"
+          }
+        },
+        {
+          "name": "llama-server.exe",
+          "bytes": 10240,
+          "sha256": "d2000e5a50364b36c7127ca39933986d09da95b81c8b0912d4b76ee2001d23ce",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "llama-server.exe"
+          }
+        },
+        {
+          "name": "llama.dll",
+          "bytes": 4171264,
+          "sha256": "aea2238a007faf1d6b44edadb53e66be6962a93186bc76946be587b6ccd188ec",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "llama.dll"
+          }
+        },
+        {
+          "name": "mtmd.dll",
+          "bytes": 3043840,
+          "sha256": "952d45be53d28e0a3dc160cc23572ec6b61fc025d90c45dc1690efcd522febfa",
+          "archive": {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
+            "bytes": 358131652,
+            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "member": "mtmd.dll"
+          }
+        }
+      ]
+    },
+    {
+      "id": "local-model-qwen3-vl",
+      "name": "Local AI model (Qwen3-VL 4B)",
+      "purpose": "The local text and picture model (Qwen3-VL-4B-Instruct, 4-bit) that reads frames of a clip and writes its post text, after the stream only. Needs the local AI model server.",
+      "neededBy": "Local AI model",
+      "licence": "Apache-2.0",
+      "licenceSource": "Hugging Face model card Qwen/Qwen3-VL-4B-Instruct-GGUF (license: apache-2.0)",
+      "checked": "2026-11-24",
+      "dest": "models/qwen3-vl-4b",
+      "files": [
+        {
+          "name": "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/1cd86afb9a95c410a6038ab3b40d8b578c892266/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+          "bytes": 2497281664,
+          "sha256": "66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a"
+        },
+        {
+          "name": "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/1cd86afb9a95c410a6038ab3b40d8b578c892266/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+          "bytes": 453974304,
+          "sha256": "30ba2c7dd3127a4561b6cba9d13d0f711c91bdb38742e2f56d73c8cb596bd06d"
+        }
+      ]
+    }
+  ]
+}
