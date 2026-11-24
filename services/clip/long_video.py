@@ -266,7 +266,8 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
             ov = (overlay(chunk, first, adir) if overlay else None) or {}
             first += len(chunk)
             key = part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov, src=src, encoder=encoder, base=adir)
-            if part_done(adir, name, key, part_ok):
+            # Codex round 3: a degraded overlay is checked first: its batch never reuses a manifest and is no safe point
+            if ov.get("degraded") is not True and part_done(adir, name, key, part_ok):
                 parts.append(name)
                 expected += seconds
                 if on_part:

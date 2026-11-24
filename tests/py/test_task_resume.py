@@ -221,5 +221,46 @@ class RoundTwo(unittest.TestCase):
             self.assertFalse(os.path.exists(adir) and any(n.endswith(long_video.MANIFEST_SUFFIX) for n in os.listdir(adir)))
 
 
+class RoundThree(unittest.TestCase):
+    """Codex review round 3."""
+
+    def test_degraded_batch_never_reuses_a_manifest(self):
+        class R:
+            returncode, stderr = 0, ""
+        made, seen = [], []
+
+        def render_job(mk, enc, adir, part, what):
+            made.append(part)
+            _write(os.path.join(adir, part))
+            return R(), enc
+        old = long_video.part_done
+        long_video.part_done = lambda *a, **k: True  # a manifest that would match
+        try:
+            with tempfile.TemporaryDirectory() as wd:
+                ov = lambda chunk, first, folder: {"ass": None, "degraded": True}  # noqa: E731
+                fail_join = lambda argv, cwd, timeout: type("F", (), {"returncode": 1, "stderr": "x"})()  # noqa: E731
+                long_video.render("ffmpeg", "src.mkv", [{"start": 0, "end": 1, "kills": 1}], {"w": 1}, "x", wd, 1, 0,
+                                  None, 10, render_job, fail_join, {"x": []}, [], overlay=ov, on_part=seen.append)
+        finally:
+            long_video.part_done = old
+        self.assertEqual(len(made), 1, "made again, not taken from the manifest")
+        self.assertEqual(seen, [], "and no safe point")
+
+    def test_invalidating_a_row_clears_its_caption_files(self):
+        with tempfile.TemporaryDirectory() as wd:
+            for n in (clipper.DONE_ROW, "captions.srt", "captions.vtt", "transcript.json"):
+                _write(os.path.join(wd, n))
+            clipper._drop_done_row(wd)
+            self.assertEqual(os.listdir(wd), [], "an old subtitle file is never bound to a new render")
+
+    def test_marker_keeps_the_look_track_for_replay(self):
+        with tempfile.TemporaryDirectory() as wd:
+            _write(os.path.join(wd, "v.mp4"))
+            row = {"id": "c", "files": [{"layout": "v", "file": "v.mp4"}], "errors": [], "look": {"music": "m"}}
+            self.assertTrue(clipper._save_done_row(wd, "k", row, track="t1"))
+            self.assertEqual(clipper._done_track(wd), "t1")
+            self.assertEqual(clipper._done_row(wd, "k")["look"], {"music": "m"})
+
+
 if __name__ == "__main__":
     unittest.main()
