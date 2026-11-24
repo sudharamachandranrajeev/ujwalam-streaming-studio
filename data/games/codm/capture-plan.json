@@ -112,11 +112,11 @@
       "mode": "br",
       "detector": null,
       "what": "BR win (#1 placement and end screen)",
-      "why": "BR winning end screen; only a non-win placement (#48/50) is covered. No BR end-screen detector yet (M1 runs in MP only)",
+      "why": "BR winning end screen. D441: S2 reads the BR end card and a win (#1/51, MISSION COMPLETED) was seen on 2026-11-22 (docs/evidence/2026-11-24-br-end-screen.md); S2 is unverified, so the item stays manual.",
       "status": "missing",
       "match": {
         "confirm": "manual",
-        "reason": "No BR end-screen detector exists (M1 runs in MP only) and the br_placement cue (GAME OVER) is unverified with no position; the #1 placement is not read. The user marks it."
+        "reason": "S2 (D441) reads #1 on the BR end card, but its ROIs are unverified and the coverage tracker does not take S2 readings, so the user marks it."
       }
     },
     {
