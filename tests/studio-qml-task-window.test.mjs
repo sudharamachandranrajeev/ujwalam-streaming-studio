@@ -171,11 +171,12 @@ describe('QML studio: task manager window (headless probe)', { skip }, () => {
 
   test('"N tasks are waiting for you" notice at the start opens the task manager window', async () => {
     const waiting = (n) => (d) => { set(d); mkdirSync(path.join(d, 'clips'), { recursive: true }); writeFileSync(path.join(d, 'clips', 'status.json'), JSON.stringify({ available: true, waitingForYou: n })); };
-    const a = await probe({ prepare: waiting(2), actions: ['tasks:toast-click'] });
+    // tasks:notice-click clicks the notice itself (by its action), whenever it shows; see TaskCenter.qml noticeClick.
+    const a = await probe({ prepare: waiting(2), actions: ['tasks:notice-click'] });
     assert.equal(a.t.waitingForYou, 2);
     assert.equal(a.t.waitNotices, 1);
     assert.ok(a.t.toastLog.includes('2 tasks are waiting for you'), JSON.stringify(a.t.toastLog));
-    assert.deepEqual([a.t.windowOpen, a.t.panelOpen, a.t.toastClicks], [true, false, 1], 'a click on the notice opens the window');
+    assert.deepEqual([a.t.windowOpen, a.t.panelOpen, a.t.toastClicks], [true, false, 1], `a click on the notice opens the window ${JSON.stringify({ log: a.t.toastLog, actions: a.p.actions, toasts: a.t.toasts })}`);
     const one = await probe({ prepare: waiting(1) });
     assert.ok(one.t.toastLog.includes('1 task is waiting for you'), JSON.stringify(one.t.toastLog));
     const none = await probe({ prepare: set });
