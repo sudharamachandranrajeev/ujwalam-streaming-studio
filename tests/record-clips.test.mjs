@@ -153,6 +153,8 @@ function setup() {
 }
 const tick = () => new Promise((r) => setImmediate(r));
 const make = (s) => createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now });
+/** D442: sets the next-start choice of every unfinished job in status.json (as the control route would). */
+const setNext = (s, v) => { const f = path.join(s.dataDir, 'clips', 'status.json'); const j = JSON.parse(readFileSync(f, 'utf8')); for (const q of [j.running, ...(j.queued ?? [])]) if (q) q.nextStart = v; writeFileSync(f, JSON.stringify(j)); };
 
 test('after: a stopped recording is clipped whole, hidden, then counted; off: nothing', async () => {
   const s = setup();
@@ -283,9 +285,13 @@ test('a stream that starts pauses the run; it runs again after; closing Ujwalam 
     assert.equal(s.status().running.h, s.h, 'the killed run stays in the status');
     assert.equal(s.worker().on, false);
     const rc2 = make(s);
-    assert.ok(s.lines.some((l) => /1 unfinished clip job\(s\)/.test(l)));
+    assert.ok(s.lines.some((l) => /1 unfinished clip job\(s\).*0 run again, 1 wait until you start them/.test(l)));
     rc2.feed(s.S('stopped'));
-    assert.equal(s.spawned.length, 3);
+    assert.equal(s.spawned.length, 2, 'D442: next start "notify" (default): it waits until you start it');
+    setNext(s, 'run'); rc2.stop();
+    const rc3 = make(s);
+    rc3.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 3, 'next start "run": it runs again as before');
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
 
@@ -298,6 +304,7 @@ test('start-up time: a job left from the last session waits resumeHoldMs; a job 
     assert.equal(s.spawned.length, 1);
     rc.stop();
     await tick(); await tick();
+    setNext(s, 'run'); // D442: these jobs were set to run again by themselves
     const rc2 = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, resumeHoldMs: 60_000 });
     rc2.feed(s.S('stopped'));
     assert.equal(s.spawned.length, 1, 'held while the studio opens');
@@ -318,6 +325,7 @@ test('start-up time: a job of this session starts at once even with a held job a
     assert.equal(s.spawned.length, 1);
     rc.stop();
     await tick(); await tick();
+    setNext(s, 'run'); // D442: these jobs were set to run again by themselves
     const rc2 = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, resumeHoldMs: 60_000 });
     rc2.feed(s.S('stopped'));
     assert.equal(s.spawned.length, 1, 'the old job is held');
@@ -604,6 +612,7 @@ test('LL4 (D342): after a stream clip job the game pack check runs last, hidden 
     assert.equal(s.status().running.type, 'train');
     rc.stop();
     await tick(); await tick();
+    setNext(s, 'run'); // D442: set to run again by itself (the default, notify, waits for you)
     const rc2 = createRecordClips({ clipRoot: s.root, dataDir: s.dataDir, log: s.log, spawnFn: s.spawnFn, now: s.now, trainFlag: () => on });
     const n = s.spawned.length;
     rc2.feed(s.S('stopped'));

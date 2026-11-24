@@ -34,7 +34,7 @@ import path from 'node:path';
 import { PARENT_PIPE_ENV } from '../common/parent-pipe.mjs';
 import { killChildTree } from '../common/kill-tree.mjs';
 import { clipsFolder, readSettings, writeSettings } from './user-settings.mjs';
-import { writeTaskFile } from './tasks.mjs';
+import { DEFAULT_NEXT_START, LOG_TAIL_LINES, NEXT_START, safeLogLine, takeTaskControls, writeTaskFile } from './tasks.mjs';
 import { RETAKE_FILE, RETAKE_OPS, knownRuns, pieceBlocks, retakeProblems, runsDir, sourceOf } from './beatdrop-review.mjs';
 import { CLEANUP_FLAG, appendJobRecord, fileIdentity, runRecordingCleanup } from './recording-cleanup.mjs';
 
@@ -346,9 +346,32 @@ export function parseProgress(line) {
   return { stage: j.stage, done, total, note: note || null };
 }
 
+// ---- task manager, job side (D442) ----
+/** The task manager category of a clip queue job. */
+export const jobCategory = (j) => (j?.type === 'train' ? 'learning' : j?.type === 'long' ? 'long-video' : j?.type === 'beatdrop' ? 'reels' : 'clips');
+/** { pausable, reason }: a job pauses only at a safe point (clip jobs between pieces, the long video between batches). */
+export function pauseInfo(job) {
+  if (job?.type === 'beatdrop') return { pausable: false, reason: 'The BeatDrop montage is made in one piece: it can be stopped, not paused' };
+  if (job?.type === 'train') return { pausable: false, reason: 'The game pack check has no point where it can wait: it can be stopped, not paused' };
+  return { pausable: true, reason: null };
+}
+// Progress lines that come right after a piece of work is saved: a screen-reading step (its checkpoint resumes it),
+// a match sorted, a clip made or checked. The long video: its per-batch line (clipper on_part: total 0 = null here).
+const SAFE_STAGES = new Set(['detect', 'gate', 'render', 'review', 'validate']);
+/** Is this progress line a point where the job may be ended for a pause? */
+export function isSafePoint(p, job) {
+  if (!p || !pauseInfo(job).pausable || !(Number(p.done) >= 1)) return false;
+  if (job.type === 'long') return (p.stage === 'long' && p.total === null) || p.stage === 'detect';
+  return SAFE_STAGES.has(p.stage);
+}
+const VIDEO_STAGES = new Set(['render', 'review', 'validate', 'publish', 'montage', 'long']);
+/** The parts of a running job, in plain names. */
+export const partsOf = (stage) => ['Clip maker (Python)', ...(stage === 'detect' ? ['Screen reader (OCR)'] : VIDEO_STAGES.has(stage) ? ['Video tools (ffmpeg)'] : [])];
+export const ASK_TEXT = 'This did not finish last time. Run it now?';
+
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
 const iso = (ms) => new Date(ms).toISOString();
-const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes', 'look', 'step', 'retake', 'piece']; // look: FX (D411) clip look for this job only
+const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes', 'look', 'step', 'retake', 'piece', 'paused', 'nextStart']; // look: FX (D411) clip look for this job only; paused, nextStart: D442
 const pickJob = (j) => Object.fromEntries(JOB_KEYS.filter((k) => j[k] !== undefined).map((k) => [k, j[k]]));
 
 /** The queue and the child. feed(status) is called with each outputs.status. */
@@ -382,28 +405,51 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   try {
     const old = JSON.parse(readFileSync(statusFile, 'utf8'));
     last = old.last ?? null;
+    // D442: each job's next-start choice: "run" comes back as before (after resumeHoldMs); "notify" (default) and "ask"
+    // wait until the user starts it ("ask" also puts its question in the task); a job paused by the user stays paused.
     for (const j of [old.running, ...(old.queued ?? [])]) {
-      if (j && (j.type === 'review' || j.type === 'train' || (typeof j.h === 'string' && existsSync(j.h)))) queue.push({ ...pickJob(j), resumed: true });
+      if (j && (j.type === 'review' || j.type === 'train' || (typeof j.h === 'string' && existsSync(j.h)))) {
+        const nextStart = NEXT_START.includes(j.nextStart) ? j.nextStart : DEFAULT_NEXT_START;
+        const job = { ...pickJob(j), nextStart, resumed: true };
+        if (j.paused === true) job.paused = true; else { delete job.paused; if (nextStart !== 'run') job.awaitStart = true; }
+        queue.push(job);
+      }
     }
     asks = (old.asks ?? []).filter((a) => a && typeof a.id === 'string' && typeof a.h === 'string' && existsSync(a.h));
-    if (queue.length) log(`clips: ${queue.length} unfinished clip job(s) from the last session will run again`);
+    if (queue.length) {
+      const wait = queue.filter((j) => j.awaitStart || j.paused).length;
+      log(`clips: ${queue.length} unfinished clip job(s) from the last session: ${queue.length - wait} run again, ${wait} wait until you start them`);
+    }
   } catch { /* no status yet */ }
 
   // Task bar (tasks.mjs): one task file per clip job, rewritten with every status write (that also keeps it fresh).
   const taskId = (j) => `${j.type === 'long' ? 'long' : j.type === 'beatdrop' ? 'beatdrop' : 'clip'}-${String(j.name ?? 'run').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 70)}`;
+  // D442: the task manager fields of a queue job (category, controls, pause, next start, question, log tail).
+  const ctl = (j) => {
+    const pi = pauseInfo(j);
+    const held = j.paused === true || j.awaitStart === true;
+    return { category: jobCategory(j), controls: ['stop', ...(pi.pausable && !held ? ['pause'] : []), ...(held || j.pauseAt ? ['resume'] : []), 'next'],
+      pausable: pi.pausable, pauseReason: pi.reason, paused: j.paused === true, pausing: j.pauseAt === true && !j.paused,
+      nextStart: NEXT_START.includes(j.nextStart) ? j.nextStart : DEFAULT_NEXT_START,
+      question: j.awaitStart === true && !j.paused && j.nextStart === 'ask' ? ASK_TEXT : null, logTail: j.logTail ?? [] };
+  };
   const taskFor = (j, p) => {
     const nm = j.type === 'train' ? 'your answers from the streams' : j.name ?? 'the stream';
-    const base = { id: taskId(j), kind: 'clips', startedAt: j.taskStart ?? now(), updatedAt: now() };
+    const base = { id: taskId(j), kind: 'clips', startedAt: j.taskStart ?? now(), updatedAt: now(), ...ctl(j) };
     if (j === current && !j.pausedForLive) {
       const st = p?.stage ?? jobStages(j)[0];
       // No progress line yet: the stage is the first one expected, with no count (the panel says "Starting").
       const words = p ? stageWords(st, j) : { stageText: 'Starting', unit: null, measured: true };
       return { ...base, title: j.type === 'beatdrop' ? beatdropTitle(j) : `${STAGE_TITLE[st]} ${nm}`, state: 'running', stage: st, done: p?.done ?? null, total: p?.total ?? null, note: p?.note ?? null,
-        ...(p?.note ? {} : { note: j.captionsOk === false ? CAPTIONS_SKIPPED : null }), stages: jobStages(j), ...words, activeAt: j.activeAt ?? null, progressAt: j.progressAt ?? null };
+        ...(p?.note ? {} : { note: j.captionsOk === false ? CAPTIONS_SKIPPED : null }), ...(j.pauseAt ? { note: 'Pausing at the next safe point' } : {}),
+        stages: jobStages(j), ...words, activeAt: j.activeAt ?? null, progressAt: j.progressAt ?? null, parts: partsOf(p ? st : null) };
     }
     return { ...base, title: j.type === 'train' ? 'Game pack check' : j.type === 'beatdrop' ? beatdropTitle(j) : j.type === 'long' ? `Long highlights video from ${nm}` : `Clips from ${nm}`, state: 'waiting', stage: null, done: null, total: null,
-      note: j === current ? (liveNow ? 'Paused while the stream runs' : 'Paused while recording') : liveNow ? 'Waiting until the stream ends'
-        : (j.type === 'long' || j.type === 'beatdrop') && recNow ? 'Waiting until the recording ends' : 'Waiting for its turn' };
+      note: j === current ? (liveNow ? 'Paused while the stream runs' : 'Paused while recording')
+        : j.paused ? 'Paused by you; press Resume to continue'
+        : j.awaitStart ? (j.nextStart === 'ask' ? ASK_TEXT : 'Did not finish last time; it waits until you start it')
+        : liveNow ? 'Waiting until the stream ends'
+        : ((j.type === 'long' || j.type === 'beatdrop') || j.resumed || j.userStarted) && recNow ? 'Waiting until the recording ends' : 'Waiting for its turn' };
   };
   const writeTasks = () => {
     if (halted) return; // stopped by the user: the task files say so; the jobs run again at the next start
@@ -415,7 +461,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     if (t) writeTaskFile(dataDir, t);
     watchEnded = false;
   };
-  const finishTask = (j, ok, note) => writeTaskFile(dataDir, { id: taskId(j), kind: 'clips', title: j.type === 'beatdrop' ? (ok ? `${beatdropTitle(j)} done` : `${beatdropTitle(j)} not made`) : j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : j.type === 'long' ? (ok ? `Long highlights video done for ${j.name}` : `Long highlights video from ${j.name} not made`) : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
+  const finishTask = (j, ok, note) => writeTaskFile(dataDir, { id: taskId(j), kind: 'clips', category: jobCategory(j), logTail: j.logTail ?? [], title: j.type === 'beatdrop' ? (ok ? `${beatdropTitle(j)} done` : `${beatdropTitle(j)} not made`) : j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : j.type === 'long' ? (ok ? `Long highlights video done for ${j.name}` : `Long highlights video from ${j.name} not made`) : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
   const trainOn = () => { try { return trainFlag() === true; } catch { return false; } };
 
   const write = () => {
@@ -427,7 +473,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     const liveClipperOut = lc ? { ...lc, watching, since: watchSince === null ? null : iso(watchSince), saves: savesNow } : null;
     const out = { liveClipper: liveClipperOut, at: iso(now()), state: current && !halted ? 'running' : queue.length ? 'queued' : 'idle', available: !!t.py, reason: t.reason, fix: t.fix, missing: t.missing,
       settings: s.clips, folder: clipsFolder(dataDir, s),
-      running: current ? pickJob(current) : null, queued: queue.filter((q) => q !== current).map(pickJob), asks, last };
+      running: current ? pickJob(current) : null, queued: queue.filter((q) => q !== current).map(pickJob), asks, last,
+      // D442: unfinished jobs that wait for the user (the studio's notice at start)
+      waitingForYou: queue.filter((q) => q !== current && (q.paused === true || q.awaitStart === true)).length };
     try {
       mkdirSync(stateDir, { recursive: true });
       writeFileSync(`${statusFile}.tmp`, JSON.stringify(out, null, 2));
@@ -441,14 +489,18 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     try { mkdirSync(stateDir, { recursive: true }); writeFileSync(workerFile, JSON.stringify({ on, atMs: now() })); } catch { /* next tick */ }
     if (on !== workerOn) log(`clips: watching for moments ${on ? 'on' : 'off'}`);
   };
-  const add = (job, why) => { queue.push(job); log(`clips: ${why}`); };
+  const add = (job, why) => { job.nextStart ??= DEFAULT_NEXT_START; queue.push(job); log(`clips: ${why}`); };
   const start = () => {
     if (child || stopped || !queue.length) return;
     // Start-up time (2026-11-19): a job carried over from the last session waits resumeHoldMs after this start, so its
     // ffmpeg and Python do not compete with the studio opening. A job of this session starts at once, also when held
     // jobs are ahead of it in the queue (Codex: no head-of-line block); the held ones keep their order after the hold.
     // D406 (Codex P1): the long highlights video never starts while a recording runs (live never reaches start()).
-    const held = (j) => (j.resumed === true && now() - createdAt < resumeHoldMs) || ((j.type === 'long' || j.type === 'beatdrop') && (recNow || liveNow));
+    // D442: a job paused by the user, or carried over with next start "notify"/"ask", waits until the user starts it;
+    // carried-over or user-started work never starts while a recording runs (live never reaches start()).
+    const held = (j) => j.paused === true || j.awaitStart === true
+      || (j.resumed === true && !j.userStarted && now() - createdAt < resumeHoldMs) || ((j.type === 'long' || j.type === 'beatdrop') && (recNow || liveNow))
+      || ((j.resumed === true || j.userStarted === true) && (recNow || liveNow));
     const at = queue.findIndex((j) => !held(j));
     if (at < 0) return;
     const job = queue[at];
@@ -495,8 +547,16 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       pending += String(chunk);
       let i;
       while ((i = pending.indexOf(String.fromCharCode(10))) >= 0) {
-        const p = parseProgress(pending.slice(0, i)); pending = pending.slice(i + 1);
-        if (p) { progress = p; job.progressAt = now(); }
+        const line = pending.slice(0, i); pending = pending.slice(i + 1);
+        const p = parseProgress(line);
+        if (p) {
+          progress = p; job.progressAt = now();
+          // D442: a pause asked for ends the job's whole tree at the next safe point; it stays in the queue, paused.
+          if (job.pauseAt && !job.pausing && job === current && child && isSafePoint(p, job)) { job.pausing = true; log(`clips: pausing ${job.name} (safe point: ${p.stage})`); killTreeFn(child); }
+        } else {
+          const s = safeLogLine(line); // D442 log tail: sanitised, bounded, in memory only
+          if (s) { (job.logTail ??= []).push(s); if (job.logTail.length > LOG_TAIL_LINES) job.logTail.shift(); }
+        }
       }
       if (pending.length > 4000) pending = '';
       if (progress && now() - lastWrite >= 0) { lastWrite = now(); writeTasks(); }
@@ -507,8 +567,16 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     child.once('exit', (code) => {
       if (stopped) return; // Ujwalam closing: the status keeps this job, so the next start runs it again
       const done = current; child = null; current = null;
-      if (done.pausedForLive) { delete done.pausedForLive; log(`clips: ${done.name} paused for the ${liveNow ? 'stream' : 'recording'}; it continues after`); write(); return; } // the next status tick starts what may run
-      queue.shift(); progress = null;
+      const drop = () => { const i = queue.indexOf(done); if (i >= 0) queue.splice(i, 1); };
+      if (done.stopping) { delete done.stopping; delete done.pausedForLive; drop(); progress = null; finishTask(done, false, 'Stopped by you'); log(`clips: ${done.name} stopped by you`); write(); if (!liveNow) start(); return; }
+      if (done.pausedForLive) {
+        delete done.pausedForLive;
+        if (done.pauseAt) { delete done.pauseAt; done.paused = true; } // D442: the user's pause stands after the stream
+        log(`clips: ${done.name} paused for the ${liveNow ? 'stream' : 'recording'}; it continues after`); write(); return; // the next status tick starts what may run
+      }
+      // D442: paused by the user at a safe point (kept in the queue), or stopped by the user (dropped; runs no more).
+      if (done.pausing) { delete done.pausing; delete done.pauseAt; done.paused = true; progress = null; log(`clips: ${done.name} paused by you`); write(); if (!liveNow) start(); return; }
+      drop(); progress = null;
       if (done.type === 'train') {
         const note = trainNote(code, spec.out);
         log(`clips: game pack check ${code === 0 ? 'done' : `ended (exit ${code})`}: ${note}`);
@@ -603,6 +671,33 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     log(`clips: stopped by you (${queue.length} job(s) run again at the next start)`);
     postChain?.stopTasks?.();
   };
+  // D442: per-task controls from the task manager (<dataDir>/clips/control/<task id>.json, written by the UI server).
+  // stop: the job's whole tree ends now (or a waiting job leaves the queue); it does not run again.
+  // pause: a waiting job is paused at once; the running one at its next safe point (isSafePoint). A job with no safe
+  // point (pauseInfo) is not paused. resume: a paused or waiting-for-you job may run again (never while live or
+  // recording: held()). next: its next-start choice (run | ask | notify), kept in status.json.
+  const readControls = () => {
+    for (const r of takeTaskControls(dataDir)) {
+      if (!(r.atMs >= createdAt)) continue; // a leftover from an earlier launcher
+      const j = queue.find((q) => taskId(q) === r.id);
+      if (!j) { log(`clips: task ${r.id}: ${r.op} ignored (it is not waiting or running)`); continue; }
+      if (halted && r.op !== 'next') continue; // Stop all: nothing more runs in this session
+      if (r.op === 'next') j.nextStart = r.nextStart;
+      else if (r.op === 'stop') {
+        if (j === current && child) { j.stopping = true; killTreeFn(child); } else {
+          queue.splice(queue.indexOf(j), 1);
+          finishTask(j, false, 'Stopped by you');
+        }
+      } else if (r.op === 'pause') {
+        if (!pauseInfo(j).pausable) { log(`clips: ${j.name} cannot be paused: ${pauseInfo(j).reason}`); continue; }
+        if (j === current && child) j.pauseAt = true; else j.paused = true;
+      } else if (r.op === 'resume') {
+        delete j.paused; delete j.awaitStart; delete j.pauseAt; j.userStarted = true;
+      }
+      log(`clips: ${j.name}: ${r.op}${r.op === 'next' ? ` ${r.nextStart}` : ''} (asked by you)`);
+      write();
+    }
+  };
   // BD7b (D420): a retake asked in the studio (beatdrop-review.mjs writes <dataDir>/clips/retake.json); checked again here.
   const readRetake = () => {
     let r = null;
@@ -687,6 +782,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       readAnswer(s);
       readRetake();
       readStop();
+      readControls();
       if (live && child && current && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); } // the whole tree: ffmpeg must not encode while live
       // D406 (Codex P1): the long highlights video also stops (whole tree) when a recording starts; it runs again after.
       // Only that job: the other clip stages keep running beside a plain local recording, as before.
