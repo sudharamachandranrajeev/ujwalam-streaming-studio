@@ -8,7 +8,7 @@
   "layers": 37,
   "ctx": 8192,
   "gpuLayers": "auto",
-  "vramNeedMiB": 4200,
+  "vramNeedMiB": 4700,
   "minGpuMiB": 1500,
   "threads": 4,
   "startTimeoutMs": 180000,
