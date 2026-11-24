@@ -3129,3 +3129,20 @@ Plan: `docs/plan/2026-11-21-beatdrop-montages.md` RR1 (reference 2; user-approve
    "missed" and how close it got.
 7. **BeatDrop** (own audio target) and single short clips (clip_render) are left as they are (reported in the
    evidence file).
+
+## D442 — Task manager window (decided, 2026-11-24)
+
+User request 2026-11-22 (`docs/backlog/2026-11-22-task-manager-window.md`); plan approved by the user 2026-11-24.
+
+1. **Job side**: every task carries a category (clips, reels and montages, long video, posting, learning, downloads,
+   maintenance). Per-task stop, pause and resume replace the single "Stop all" as the only control. Pause takes
+   effect at the job's next safe point (clip jobs between pieces, renders between batches); a task with no safe point
+   says so instead of offering pause.
+2. **Next start**: each unfinished task stores a choice: run now, ask me, or just notify. Default: **just notify**
+   (user 2026-11-24): at start the studio shows a notice and the tasks wait in the task manager until started.
+   Paused or scheduled work never runs while live (the live check holds it).
+3. **Window**: the task panel pops out into its own window and docks back. List sorted by state, start time,
+   category or size; filtered by state and category. A task's detail view shows stage, progress, current step,
+   elapsed and remaining time, the parts that are running and the log tail. Per-task CPU/GPU use is left out of the
+   first version.
+4. **Routing**: job side on Opus, window on Sonnet, Codex second-opinion review of the job side before done.
