@@ -21,6 +21,11 @@ sys.path.insert(0, os.path.join(_REPO, "services", "clip"))
 import pack_tune as pt  # noqa: E402
 
 PACK = os.path.join(_REPO, "data", "games", "codm")
+# The committed pack version moves with each release (D441: 0.9.0); the tests follow it instead of pinning it.
+with open(os.path.join(PACK, "detectors.json"), encoding="utf-8") as _f:
+    BASE = json.load(_f)["version"]
+_maj, _min, _pat = BASE.split(".")
+NEXT = f"{_maj}.{_min}.{int(_pat) + 1}"
 
 
 def read(path, mode="r"):
@@ -138,7 +143,7 @@ class FlagAndGuards(Base):
         flags = load(os.path.join(_REPO, "data", "flags.json"))["flags"]
         self.assertIs(next(f for f in flags if f["id"] == "learning-train")["default"], False)
         self.banner_sessions()
-        for cmd in (["propose"], ["list"], ["approve", "--candidate", "20261111-120000-0.8.1"]):
+        for cmd in (["propose"], ["list"], ["approve", "--candidate", f"20261111-120000-{NEXT}"]):
             code, _, err = self.cli(*cmd)
             self.assertEqual(code, pt.EXIT_FLAG_OFF, cmd)
             self.assertIn("learning-train is off", err)
@@ -210,7 +215,7 @@ class Banner(Base):
         self.assertIsNotNone(res["candidate"])
         (name,) = self.candidates()
         c = load(os.path.join(self.pack, "local", "candidates", name))
-        self.assertEqual((c["status"], c["state"], c["baseVersion"], c["version"]), ("unverified", "proposed", "0.8.0", "0.8.1"))
+        self.assertEqual((c["status"], c["state"], c["baseVersion"], c["version"]), ("unverified", "proposed", BASE, NEXT))
         (v,) = c["values"]
         self.assertEqual(v["score"]["metric"], "held-out accuracy")
         self.assertGreater(v["score"]["proposed"], v["score"]["current"])
@@ -260,13 +265,13 @@ class Banner(Base):
         code, out, err = self.cli("approve", "--candidate", cid)
         self.assertEqual(code, 0, err)
         det = load(os.path.join(self.pack, "detectors.json"))
-        self.assertEqual(det["version"], "0.8.1")
+        self.assertEqual(det["version"], NEXT)
         w1 = next(d for d in det["detectors"] if d["id"] == "W1")
         rnd = w1["banner"]["kinds"][0]
         self.assertEqual((rnd["y0"], rnd["y1"], rnd["status"]), (0.3, 0.38, "unverified"))
         self.assertIn("LL4 (D342", rnd["note"])
         cl = read(os.path.join(self.pack, "CHANGELOG.md"))
-        self.assertLess(cl.index("## 0.8.1"), cl.index("## 0.8.0"))
+        self.assertLess(cl.index(f"## {NEXT}"), cl.index(f"## {BASE}"))
         # weights, windows and event names are untouched
         orig = load(os.path.join(PACK, "detectors.json"))
         for a, b in zip(orig["detectors"], det["detectors"]):
@@ -285,7 +290,7 @@ class Banner(Base):
         code, _, err = self.cli("approve", "--candidate", cid)
         self.assertEqual(code, 1)
         self.assertIn("pack changed", err)
-        self.assertEqual(load(os.path.join(self.pack, "detectors.json"))["version"], "0.8.0")
+        self.assertEqual(load(os.path.join(self.pack, "detectors.json"))["version"], BASE)
 
 
 class Ocr(Base):
@@ -365,11 +370,11 @@ class CodexReview(Base):
         code, out, err = self.cli("approve", "--candidate", cid)
         self.assertEqual(code, 0, err)
         det = load(os.path.join(self.pack, "detectors.json"))
-        self.assertEqual(det["version"], "0.8.1")
+        self.assertEqual(det["version"], NEXT)
         self.assertEqual(det["detectors"][[d["id"] for d in det["detectors"]].index("W1")]["banner"]["kinds"][0]["y0"], 0.3)
         cl = read(os.path.join(self.pack, "CHANGELOG.md"))
-        self.assertEqual(cl.count("## 0.8.1"), 1)
-        self.assertIn("## 0.8.0", cl)
+        self.assertEqual(cl.count(f"## {NEXT}"), 1)
+        self.assertIn(f"## {BASE}", cl)
         c = load(os.path.join(self.pack, "local", "candidates", f"{cid}.json"))
         self.assertEqual(c["state"], "approved")
         leftovers = [n for r, _, fs in os.walk(self.pack) for n in fs if n.endswith((".ll4-new", ".journal.json"))]
@@ -394,7 +399,7 @@ class CodexReview(Base):
                 pt.approve(self.pack, cid)
         self.assertEqual(self.pack_bytes(), before, "nothing renamed, the changelog never truncated")
         self.assertEqual(self.cli("approve", "--candidate", cid)[0], 0)
-        self.assertEqual(read(os.path.join(self.pack, "CHANGELOG.md")).count("## 0.8.1"), 1)
+        self.assertEqual(read(os.path.join(self.pack, "CHANGELOG.md")).count(f"## {NEXT}"), 1)
         self.assertEqual([n for r, _, fs in os.walk(self.pack) for n in fs if n.endswith(".ll4-new")], [])
 
     def test_base_hashes_are_of_the_bytes_read_at_the_start(self):
