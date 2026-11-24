@@ -8,6 +8,9 @@
 // on one opens the panel. The lines come from the widget studio's C++ (TaskText = taskbar.h tasktime::*). Panel and
 // notifications are their own windows (Popup.Window) so the native previews never cover them; hidden test mode draws
 // them inside the window (studioUnseen).
+// D442 (task manager window): "Open in own window" moves the list into its own top-level window (TaskWindow.qml: sort,
+// filter, per-task Stop / Pause / Resume / Next start, a detail view); closing it or "Dock" returns to this panel. A
+// notice "N tasks are waiting for you" at the start opens that window.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -27,6 +30,10 @@ Item {
     property int waiting: 0
     property int stalled: 0
     property bool open: false
+    property bool windowOpen: false  // the task manager window (TaskWindow.qml) is open; the panel is folded away meanwhile
+    property bool windowMade: false
+    property int waitNotices: 0
+    property int pWaitSeen: 0
     property int toastsShown: 0
     property int toastClicks: 0
     property int startToasts: 0
@@ -97,7 +104,13 @@ Item {
         rows = all.filter(t => !pDismissed[String(t.id || "")]).map(t => ({
             id: String(t.id || ""), title: String(t.title || ""), state: String(t.state || ""), note: t.note ? String(t.note) : "",
             stalled: t.state === "running" && t.stalled === true, stop: stoppable(t),
-            finished: t.state === "done" || t.state === "failed", l: TaskText.lines(t)
+            finished: t.state === "done" || t.state === "failed", l: TaskText.lines(t),
+            // D442 (the task manager window): what the job side reports for controls and details
+            category: String(t.category || "maintenance"), controls: Array.isArray(t.controls) ? t.controls.map(String) : [],
+            pausable: t.pausable === true, pauseReason: t.pauseReason ? String(t.pauseReason) : "", paused: t.paused === true,
+            pausing: t.pausing === true, nextStart: typeof t.nextStart === "string" ? t.nextStart : "", question: t.question ? String(t.question) : "",
+            parts: Array.isArray(t.parts) ? t.parts.map(String) : [], logTail: Array.isArray(t.logTail) ? t.logTail.map(String) : [],
+            startedAt: typeof t.startedAt === "number" ? t.startedAt : 0, stageText: t.stageText ? String(t.stageText) : ""
         }));
         if (open && rows.length === 0) open = false; // nothing left to show: the panel folds away with its button
     }
@@ -120,8 +133,33 @@ Item {
         pDismissed = d;
         rebuild();
     }
-    function toggle() { setOpen(!open) }
-    function setOpen(o) { open = o && rows.length > 0 }
+    function toggle() { if (windowOpen) { raiseWindow(); return } setOpen(!open) }
+    function setOpen(o) { open = o && rows.length > 0 && !windowOpen }
+
+    // ---- the task manager window (D442): its own top-level window; Dock or closing it returns to the panel ----
+    function openWindow() {
+        windowMade = true;
+        open = false;
+        windowOpen = true;
+        return true;
+    }
+    function dockWindow() {
+        if (!windowOpen) return false;
+        windowOpen = false;
+        open = rows.length > 0;
+        return true;
+    }
+    function raiseWindow() { if (winLoader.item && !studioUnseen) { winLoader.item.raise(); winLoader.item.requestActivate() } }
+    // The start notice: "N tasks are waiting for you" once the first status shows jobs that wait for a choice (and again
+    // only if more wait later). A click opens the task manager window.
+    function checkWaiting() {
+        const n = store.waitingForYou;
+        if (n > pWaitSeen) {
+            waitNotices++;
+            toast(n === 1 ? "1 task is waiting for you" : n + " tasks are waiting for you", "Click to see them and choose what to do.", false, "window");
+        }
+        pWaitSeen = n;
+    }
 
     // Stop (2026-11-10): the background jobs end (clip making, uploads; the same route as the tray's Stop all while
     // live); the studio and host stay. The click acts at once (D332).
@@ -133,9 +171,9 @@ Item {
     // ---- notifications: at most 3, each about 6 s (the x or a click closes it sooner) ----
     property bool hold: false // true while a modal dialog is open: the notifications wait behind it
     property ListModel toasts: ListModel {}
-    function toast(title, note, failed) {
+    function toast(title, note, failed, act) {
         if (toasts.count >= 3) toasts.remove(0);
-        toasts.append({ uid: ++pToastSeq, title: title, note: note, failed: failed });
+        toasts.append({ uid: ++pToastSeq, title: title, note: note, failed: failed, act: act || "" });
         toastsShown++;
         lastToast = title;
         const log = toastLog.slice(-9);
@@ -147,7 +185,9 @@ Item {
     }
     function clickToast(uid) {
         toastClicks++;
-        setOpen(true);
+        let act = "";
+        for (let i = 0; i < toasts.count; i++) if (toasts.get(i).uid === uid) act = toasts.get(i).act;
+        if (act === "window") openWindow(); else if (windowOpen) raiseWindow(); else setOpen(true);
         closeToast(uid);
     }
     // A short notification without a task (as the widget's TaskBar::notice).
@@ -156,7 +196,9 @@ Item {
     Connections {
         target: center.store
         function onTasksChanged() { center.update(center.store.tasks, center.store.statusAt) }
+        function onWaitingForYouChanged() { center.checkWaiting() }
     }
+    Component.onCompleted: checkWaiting()
 
     // ---- probe: tasks:<open|close|dismiss|clear|toast-click|stop> (the widget probe's names) ----
     function probeAction(a) {
@@ -165,7 +207,10 @@ Item {
         if (a === "tasks:clear") { clearFinished(); return true }
         if (a === "tasks:toast-click") { if (toasts.count > 0) clickToast(toasts.get(0).uid); return true }
         if (a === "tasks:stop") { stopTasks(); return true }
-        return false;
+        if (a === "tasks:window-open") return openWindow();
+        if (a === "tasks:window-dock") return dockWindow();
+        if (a === "tasks:window-close") return winLoader.item ? winLoader.item.closeByUser() : false; // the window's own close (X)
+        return winLoader.item ? winLoader.item.probeAction(a) : false;
     }
     function probe() {
         const W = width;
@@ -181,13 +226,21 @@ Item {
             clearShown: anyFinished, chipHidden: rows.length === 0, chipQuiet: running + waiting === 0, chipText: chipText,
             chipTip: chipTip, chipInTopBar: true, panelOpen: open, toasts: toasts.count, toastsShown: toastsShown,
             toastClicks: toastClicks, lastToast: lastToast, toastLog: toastLog, startToasts: startToasts, stopsSent: stopsSent,
-            windowWidth: W, topY: topY, toastPos: toastPos,
+            windowWidth: W, topY: topY, toastPos: toastPos, windowOpen: windowOpen, windowMade: windowMade, waitNotices: waitNotices, waitingForYou: store.waitingForYou,
+            manager: winLoader.item ? winLoader.item.probe() : null,
             ids: all.map(t => String(t.id || "")), titles: all.map(t => String(t.title || "")), times: all.map(t => TaskText.lines(t).text),
             detail: rows.map(r => ({ id: r.id, title: r.title, state: r.state, stage: r.l.stage, count: r.l.count, fraction: r.l.fraction,
                                      eta: r.l.eta, last: r.l.last, warn: r.l.warn, stalled: r.stalled, stop: r.stop }))
         };
         if (open) o.panel = { x: Math.round(panel.x), y: Math.round(panel.y), width: Math.round(panel.width), right: W - Math.round(panel.x + panel.width) };
         return o;
+    }
+
+    // ---- the task manager window: made on its first opening (start-up time), kept after ----
+    Loader {
+        id: winLoader
+        active: center.windowMade
+        sourceComponent: TaskWindow { taskCenter: center }
     }
 
     // ---- the panel ----
@@ -244,6 +297,15 @@ Item {
                         tip: "Remove all finished and failed tasks from this list"
                         focusPolicy: Qt.NoFocus
                         onClicked: center.clearFinished()
+                    }
+                    UButton {
+                        objectName: "taskOwnWindow"
+                        visible: center.listed > 0
+                        text: "Open in own window"
+                        implicitHeight: 26
+                        tip: "Open the task list in its own window, with sorting, filters and a button for each task"
+                        focusPolicy: Qt.NoFocus
+                        onClicked: center.openWindow()
                     }
                     UButton {
                         objectName: "taskHide"
@@ -441,6 +503,7 @@ Item {
                     required property string title
                     required property string note
                     required property bool failed
+                    required property string act
                     required property int index
                     readonly property bool isToast: true
                     objectName: "toast:" + index
