@@ -434,7 +434,8 @@ def batch_overlay(ffmpeg, src, chunk, first_no, tr, frame, workdir, ctx, transcr
 def merge_info(infos):
     """One summary for long.json and render.json from the batches' infos."""
     if not infos:
-        return {"captions": {"backend": "none", "status": "off"}, "chapters": 0, "callouts": 0, "paths": 0}
+        return {"captions": {"backend": "none", "status": "off"}, "chapters": 0, "cardStyles": [], "callouts": 0,
+                "paths": 0}
     st = [i.get("status") for i in infos]
     status = "ok" if all(s == "ok" for s in st) else "off" if all(s == "off" for s in st) else \
         "failed" if all(s in ("failed", "unavailable") for s in st) else "partial"
@@ -442,7 +443,9 @@ def merge_info(infos):
     cap = {"backend": infos[0].get("backend"), "status": status, "cards": sum(int(i.get("cards") or 0) for i in infos)}
     if reasons:
         cap["reason"] = "; ".join(reasons)[:200]
+    # Astra review: the K.O. card styles each batch drew, in video order (a re-render reads them back)
     return {"captions": cap, "chapters": sum(int(i.get("chapters") or 0) for i in infos),
+            "cardStyles": [s for i in infos for s in (i.get("cardStyles") or [])],
             "callouts": sum(int(i.get("callouts") or 0) for i in infos),
             "paths": sum(int(i.get("paths") or 0) for i in infos)}
 

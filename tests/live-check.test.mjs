@@ -29,8 +29,18 @@ test('the exit line: off air; a running host without a readable log: unknown', (
 });
 
 test('each host reads the log named after its own start', () => {
-  const start = stampSec('2026-11-18T19-15-03');
+  const start = Date.UTC(2026, 10, 18, 19, 15, 3) / 1000;
   const names = ['host-2026-11-18T19-15-04.log', 'host-2026-11-18T21-00-00.log', 'other.log'];
   assert.equal(logForStart(names, start), 'host-2026-11-18T19-15-04.log');
   assert.equal(logForStart(names, start + 3600), null);
+});
+
+test('the log name is UTC: a host started in summer time still finds its log (Astra review)', () => {
+  // The process start comes from a local CreationDate stamp; the log name from hlog::utc_now.
+  const start = Date.UTC(2026, 6, 18, 19, 15, 3) / 1000;
+  assert.equal(logForStart(['host-2026-07-18T19-15-04.log'], start), 'host-2026-07-18T19-15-04.log');
+  const local = new Date(start * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())}T${pad(local.getHours())}-${pad(local.getMinutes())}-${pad(local.getSeconds())}`;
+  assert.equal(stampSec(stamp), start, 'the local CreationDate stamp reads back as the same instant');
 });

@@ -316,8 +316,11 @@ class OnAirTests(unittest.TestCase):
 
     def test_rules_match_live_check(self):
         import datetime
-        s1 = datetime.datetime(2026, 11, 18, 19, 15, 3)
-        s2 = datetime.datetime(2026, 11, 18, 21, 0, 0)
+
+        def local(*a):  # installed_hosts gives local naive times; the log names are UTC
+            return datetime.datetime(*a, tzinfo=datetime.timezone.utc).astimezone().replace(tzinfo=None)
+        s1 = local(2026, 11, 18, 19, 15, 3)
+        s2 = local(2026, 11, 18, 21, 0, 0)
         a, b = "host-2026-11-18T19-15-04.log", "host-2026-11-18T21-00-01.log"
         up = lambda: [s1]  # noqa: E731
         self.assertFalse(cc.on_air(self.dir, lambda: []), "no installed host runs: off air, whatever the logs say")
@@ -339,9 +342,16 @@ class OnAirTests(unittest.TestCase):
         self.log(a, "[host] exit 0\n", age=3600, mode="a")
         self.assertFalse(cc.on_air(self.dir, up), "the host closed")
 
+    def test_the_log_name_is_utc_in_summer_time_too(self):
+        """Astra review: the host names its log in UTC; a local reading missed it by an hour under summer time."""
+        import datetime
+        start = datetime.datetime(2026, 7, 18, 19, 15, 3, tzinfo=datetime.timezone.utc).astimezone().replace(tzinfo=None)
+        self.assertEqual(cc.log_for_start(["host-2026-07-18T19-15-04.log"], start), "host-2026-07-18T19-15-04.log")
+
     def test_a_replaced_log_is_read_from_the_start(self):
         import datetime
-        up = lambda: [datetime.datetime(2026, 11, 18, 19, 15, 3)]  # noqa: E731
+        up = lambda: [datetime.datetime(2026, 11, 18, 19, 15, 3, tzinfo=datetime.timezone.utc)  # noqa: E731
+                      .astimezone().replace(tzinfo=None)]
         name = "host-2026-11-18T19-15-03.log"
         self.log(name, "[host] sink yt-h live\n" + "x" * 200 + "\n")
         self.assertTrue(cc.on_air(self.dir, up))

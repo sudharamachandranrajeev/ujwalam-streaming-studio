@@ -573,7 +573,7 @@ def host_logs_dir():
 
 
 HOST_EXE = "ujwalam-host.exe"
-LOG_BIND_SEC = 120  # a host's log is named after its start (local time): the name lies within this of the start
+LOG_BIND_SEC = 120  # a host's log is named after its start (UTC): the name lies within this of the start
 _LOG_NAME = re.compile(r"^host-(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)\.log$")
 
 
@@ -657,14 +657,16 @@ def installed_host_running(base=None):
 
 def log_for_start(names, start):
     """The host log of the host started at `start` (local naive datetime): the newest log whose name time lies
-    within LOG_BIND_SEC around the start. None when no log belongs to it."""
+    within LOG_BIND_SEC around the start. None when no log belongs to it. The host names its log in UTC
+    (app/host/src/main.cpp, hlog::utc_now); the name is turned into local time before the compare (Astra review: a
+    local reading missed every log by an hour in summer time, so the guard said "unknown")."""
     import datetime
     best = None
     for f in names:
         m = _LOG_NAME.match(f)
         if not m:
             continue
-        t = datetime.datetime(*map(int, m.groups()))
+        t = datetime.datetime(*map(int, m.groups()), tzinfo=datetime.timezone.utc).astimezone().replace(tzinfo=None)
         if abs((t - start).total_seconds()) <= LOG_BIND_SEC and (best is None or t > best[0]):
             best = (t, f)
     return best and best[1]

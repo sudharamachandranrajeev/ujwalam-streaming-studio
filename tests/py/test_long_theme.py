@@ -102,7 +102,10 @@ class Theme(unittest.TestCase):
             self.assertEqual(len(renders), 2)
             self.assertIn("xfade=transition=slideleft", " ".join(renders[0]))
             for argv, ass in zip(renders, cards):
-                self.assertIn("colorbalance=", " ".join(argv))
+                g = " ".join(argv)
+                self.assertRegex(g, r"colorbalance=[^\[]*:pl=1,format=yuv420p\[", "graded picture back to 4:2:0")
+                self.assertIn("alimiter=", g)
+                self.assertIn(":latency=1,", g, "no look-ahead delay at the batch joins")
                 self.assertIn("[aout1]", argv)
                 self.assertIn(long_teaching._colour(theme["palette"]["accent"]), ass)
                 self.assertIn(loud.probe_argv(argv), probes)
@@ -110,3 +113,27 @@ class Theme(unittest.TestCase):
             self.assertNotEqual(start, 0)
             self.assertIn(f"atrim=start_sample={start}:", " ".join(renders[1]))
             self.assertFalse(list((out / lv.SUBDIR).glob(lv.ATTEMPT_PREFIX + "*")))
+
+
+class AstraReview(unittest.TestCase):
+    def test_card_styles_merge_in_video_order_and_a_dropped_overlay_has_none(self):
+        infos = [{"status": "off", "cards": 2, "chapters": 2, "cardStyles": ["a", "b"]},
+                 {"status": "off", "cards": 1, "chapters": 1, "cardStyles": ["c"]},
+                 {"status": "failed", "cards": 0, "chapters": 0}]  # a batch with no overlay at all
+        self.assertEqual(long_teaching.merge_info(infos)["cardStyles"], ["a", "b", "c"])
+        self.assertEqual(long_teaching.merge_info([])["cardStyles"], [])
+
+    def test_a_second_long_render_leaves_the_running_one_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / lv.SUBDIR
+            out.mkdir()
+            busy = out / (lv.ATTEMPT_PREFIX + "running")
+            busy.mkdir()
+            a = argparse.Namespace(out=d, recording=None, data_dir=d)
+            with cc.HeavyJobLock(str(out), job="long video"):
+                with patch.object(clipper, "_long_video_steps", side_effect=AssertionError("must not start")):
+                    status = clipper._long_video(a)
+            self.assertEqual(status["status"], "failed")
+            self.assertIn("another long video", status["reason"])
+            self.assertTrue(busy.is_dir(), "the running render's soundtrack folder is kept")
+            self.assertFalse((out / lv.STATUS).exists(), "the running render owns long.json")

@@ -101,7 +101,7 @@ import music_gen as mgen  # noqa: E402
 import music_library as mlib  # noqa: E402
 from clip_common import (  # noqa: E402
     CLIP_DATA, EXIT_FLAG_OFF, EXIT_NOT_STARTED, EXIT_ON_AIR, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
-    end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
+    HeavyJobLock, end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
     load_json, lower_own_priority, match_gate_settings, media_info, on_air, progress_line, resolve_data_dir, run_tool,
     write_json_atomic,
 )
@@ -997,14 +997,25 @@ def _long_video(a):
     import long_video as lv  # noqa: PLC0415
     out = os.path.join(a.out, lv.SUBDIR)
     os.makedirs(out, exist_ok=True)
-    lv.clear_attempts(out)  # abandoned theme soundtrack from an interrupted render
-    lv.clear_attempts(os.path.join(out, "clips", lv.CLIP_ID))  # Codex D406: every path, before any early return
-    progress_line("long", 0, 1, "making the long highlights video")
+    # Astra review: one long render per run folder. A second one would clear the first one's attempt folders (its
+    # soundtrack and parts) below. The busy run writes no long.json: the run that holds the folder owns it.
+    guard = HeavyJobLock(out, job="long video")
     try:
-        status = _long_video_steps(a, lv, out)
-    except Exception as e:  # noqa: BLE001 - any error is reported; the shorts and reels stay as they are
-        eprint(f"long video: FAILED: {type(e).__name__}: {str(e)[-200:]}")
-        status = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[-200:]}"}
+        guard.__enter__()
+    except ClipError:
+        eprint("long video: not started: another long video render is using this run folder")
+        return {"status": "failed", "reason": "another long video render is using this run folder"}
+    try:
+        lv.clear_attempts(out)  # abandoned theme soundtrack from an interrupted render
+        lv.clear_attempts(os.path.join(out, "clips", lv.CLIP_ID))  # Codex D406: every path, before any early return
+        progress_line("long", 0, 1, "making the long highlights video")
+        try:
+            status = _long_video_steps(a, lv, out)
+        except Exception as e:  # noqa: BLE001 - any error is reported; the shorts and reels stay as they are
+            eprint(f"long video: FAILED: {type(e).__name__}: {str(e)[-200:]}")
+            status = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[-200:]}"}
+    finally:
+        guard.__exit__(None, None, None)
     rec = getattr(a, "recording", None)
     status = dict(status, createdAt=_now(), flag=lv.FLAG, recording=os.path.basename(rec) if rec else None,
                   **lv.recording_identity(rec))
@@ -1086,7 +1097,7 @@ def _long_video_steps(a, lv, out):
         return {"ass": ass, "fontsdir": fd, "fx": fx}
 
     def overlay_failed(i, stderr):  # the batch was rendered again without its overlay: nothing of it is on screen
-        infos[i] = dict(infos[i], status="failed", cards=0, chapters=0, callouts=0, paths=0,
+        infos[i] = dict(infos[i], status="failed", cards=0, chapters=0, cardStyles=[], callouts=0, paths=0,
                         reason=f"burning the overlay failed: {(stderr or '').strip()[-120:]}")
     # D440: one loudness gain for the whole video from an audio-only pre-pass of every batch
     enc0 = rnd.pick_encoder(a.encoder)
@@ -1123,7 +1134,7 @@ def _long_video_steps(a, lv, out):
         "clips": [{"id": lv.CLIP_ID, "start": 0.0, "end": expected, "score": round(sum(g["score"] for g in p["segments"]), 3),
                    "labels": [], "kills": kills, "pieces": p["segments"], "dropped": p["dropped"],
                    "captions": teach["captions"], "chapters": teach["chapters"],
-                   "cardStyles": teach.get("cardStyles", []), "callouts": teach["callouts"],
+                   "cardStyles": teach["cardStyles"], "callouts": teach["callouts"],
                    "paths": teach["paths"],
                    "music": music_rec,
                    "loudness": lrec,

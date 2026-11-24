@@ -526,7 +526,10 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     encode."""
     ow, oh = int(frame["width"]), int(frame["height"])
     vol = f"volume={float(gain_db):.2f}dB," if gain_db is not None else ""
-    limit = f"aresample=192000,alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1,aresample=48000"
+    # Astra review: latency=1 removes the 20 ms look-ahead delay. Without it the sound lands 20 ms late and loses its
+    # last 20 ms, a gap at every long-video batch join (measured on an impulse, ffmpeg 8.1, 2026-11-23).
+    limit = (f"aresample=192000,alimiter=limit={LIMIT_LINEAR}:level=disabled:attack=20:release=400:asc=1:latency=1,"
+             "aresample=48000")
     fd = fade_ms / 1000.0
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(threads), "-filter_threads", "2"]
     for p in pieces:
@@ -570,6 +573,8 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     if grade:
         post.append(f"colorbalance=bs={float(grade['blueShadows']):g}:rm={float(grade['redMidtones']):g}:"
                     f"gh={float(grade['greenHighlights']):g}:pl=1")
+    if post:  # Astra review: lut3d and colorbalance work in RGB; the encoder must still get 4:2:0 (players, concat)
+        post.append("format=yuv420p")
     vgraded = vlast
     if post or fx:
         vlast = "[vgr]"

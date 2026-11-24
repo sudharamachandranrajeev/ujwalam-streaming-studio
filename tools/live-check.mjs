@@ -37,12 +37,19 @@ export function stampSec(s) {
   return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000 : null;
 }
 
-/** The log of the host started at startSec: the newest host-<stamp>.log within LOG_BIND_SEC of the start, or null. */
+/** Seconds since 1970 of a UTC "YYYY-MM-DDTHH-MM-SS" stamp (the host's log names, hlog::utc_now), or null. */
+export function utcStampSec(s) {
+  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)$/.exec(s);
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) / 1000 : null;
+}
+
+/** The log of the host started at startSec: the newest host-<UTC stamp>.log within LOG_BIND_SEC of the start, or
+ *  null. Astra review: the name is UTC; reading it as local time missed every log by an hour in summer time. */
 export function logForStart(names, startSec) {
   let best = null;
   for (const f of names) {
     const m = /^host-(.+)\.log$/.exec(f);
-    const t = m && stampSec(m[1]);
+    const t = m && utcStampSec(m[1]);
     if (t !== null && t !== undefined && Math.abs(t - startSec) <= LOG_BIND_SEC && (!best || t > best.t)) best = { t, f };
   }
   return best && best.f;
