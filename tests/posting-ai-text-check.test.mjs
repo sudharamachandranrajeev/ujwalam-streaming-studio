@@ -40,8 +40,11 @@ test('schema: not an object, missing or wrong-typed fields, factsSeen types', ()
 });
 
 test('shape: description 2-4 lines, 5-12 tags, hook 2-4 words, thumbTime inside the clip', () => {
-  reject(run(withAns({ description: 'one line only' })), 'description');
-  reject(run(withAns({ description: 'a\nb\nc\nd\ne' })), 'description');
+  assert.equal(run(withAns({ description: 'one line only' })).ok, true); // 1 line is enough (minLines 1)
+  // extra lines beyond the maximum are dropped, not rejected
+  const trimmed = run(withAns({ description: 'a\nb\nc\nd\ne' }));
+  assert.equal(trimmed.ok, true, JSON.stringify(trimmed));
+  assert.equal(trimmed.text.description.split('\n').length, 4);
   reject(run(withAns({ tags: ['a', 'b', 'c'] })), 'tags');
   reject(run(withAns({ tags: Array.from({ length: 13 }, (_, i) => `tag${String.fromCharCode(97 + i)}`) })), 'tags');
   reject(run(withAns({ tags: ['a'.repeat(31), 'b', 'c', 'd', 'e'] })), 'tags');
@@ -115,28 +118,44 @@ test('facts: kill counts must equal the detector facts', () => {
   assert.deepEqual(killClaims('4 kills, five-kill, 12 frags, nothing about 9 pm'), [4, 12, 5]);
 });
 
-test('facts: no detector kills -> factsSeen decides and the source is recorded as model', () => {
+test('facts: no detector kills -> any kill claim is fact-unverified, whatever factsSeen says', () => {
   const seen = (kills) => ({ kills, result: null, mode: null, medal: null });
-  const r = run(withAns({ title: '4 kills and a clean finish', factsSeen: seen(4) }));
-  assert.equal(r.ok, true, JSON.stringify(r));
-  assert.equal(r.factsSource, 'model');
-  reject(run(withAns({ title: '4 kills and a clean finish', factsSeen: seen(null) })), 'fact-kills');
-  reject(run(withAns({ title: '4 kills and a clean finish', factsSeen: seen(3) })), 'fact-kills');
+  for (const k of [4, null, 3]) reject(run(withAns({ title: '4 kills and a clean finish', factsSeen: seen(k) })), 'fact-unverified');
+  assert.equal(run(withAns({ title: 'A clean finish', factsSeen: seen(4) })).factsSource, null);
 });
 
-test('facts: result claims must match the detector result, else factsSeen', () => {
+test('facts: multi-kill words count as kill claims', () => {
+  assert.deepEqual(killClaims('a double kill, triple-kill, quad kills, penta kill, quadruple kill'), [2, 3, 4, 5, 4]);
+  reject(run(withAns({ title: 'Triple kill madness' })), 'fact-unverified');
+  const facts = { kills: '3', killsText: '3 KILLS' };
+  assert.equal(run(withAns({ title: 'Triple kill madness' }), { facts }).factsSource, 'detector');
+  reject(run(withAns({ title: 'Penta kill madness' }), { facts }), 'fact-kills');
+});
+
+test('facts: result claims must match the detector result; none = fact-unverified, factsSeen never accepts', () => {
   const v = { result: 'VICTORY' };
   assert.equal(run(withAns({ title: 'The victory we needed' }), { facts: v }).factsSource, 'detector');
   reject(run(withAns({ title: 'A painful defeat' }), { facts: v }), 'fact-result');
   reject(run(withAns({ title: 'Win and loss in one match' }), { facts: v }), 'fact-result');
-  reject(run(withAns({ title: 'We won it' })), 'fact-result'); // no facts at all
+  reject(run(withAns({ title: 'We won it' })), 'fact-unverified'); // no facts at all
   const seen = { kills: null, result: 'victory', mode: null, medal: null };
-  const r = run(withAns({ title: 'We won it', factsSeen: seen }));
-  assert.equal(r.ok, true); assert.equal(r.factsSource, 'model');
-  reject(run(withAns({ title: 'We lost it', factsSeen: seen })), 'fact-result');
+  reject(run(withAns({ title: 'We won it', factsSeen: seen })), 'fact-unverified');
+  reject(run(withAns({ title: 'We lost it', factsSeen: seen })), 'fact-unverified');
   // detector result that is not a win/loss word: no claim can be checked
   reject(run(withAns({ title: 'The win' }), { facts: { result: 'RANK 3' } }), 'fact-result');
   assert.equal(resultClass('DEFEAT'), 'loss'); assert.equal(resultClass('MATCH WON'), 'win'); assert.equal(resultClass('RANK 3'), null);
+});
+
+test('screen names: a word on screen and not in the vocab rejects; vocab words and absent words pass', () => {
+  const vocab = new Set(['clutch', 'finish']);
+  const ans = withAns({ title: 'Clutch finish by zorblax' });
+  reject(run(ans, { screenWords: new Set(['zorblax']), vocab }), 'screen-name');
+  reject(run(ans, { screenWords: new Set(['zorblax']) }), 'screen-name'); // no vocab = nothing allowed
+  assert.equal(run(ans, { screenWords: new Set(['clutch', 'finish']), vocab }).ok, true); // on screen but allowed
+  assert.equal(run(ans, { screenWords: new Set(['other']), vocab }).ok, true); // not on screen
+  assert.equal(run(ans, { screenWords: new Set(), vocab }).ok, true);
+  assert.equal(run(ans).ok, true); // screenWords undefined = not checked (pure tests)
+  reject(run(withAns({ description: 'Watch ZORBLAX go\nsecond line' }), { screenWords: new Set(['zorblax']), vocab }), 'screen-name');
 });
 
 test('facts: no invented numbers (years, ranks, other counts); the fact itself may repeat', () => {
@@ -158,7 +177,7 @@ test('numbers rule 1: claim-context numbers (rank, place, top, N/M, xN, win) mus
   assert.equal(run(withAns({ title: 'Top 3 finish' }), { facts }).ok, true);
   assert.equal(run(withAns({ description: '1st place, nobody close\nsecond line' }), { facts }).ok, true);
   assert.equal(run(withAns({ title: 'Rank 1 reached' }), { facts }).ok, true);
-  // no fact numbers at all: a model number counts only through factsSeen.kills (model source)
+  // no fact numbers at all: the model's own numbers never count
   reject(run(withAns({ title: 'Top 3 finish' })), 'fact-number');
 });
 

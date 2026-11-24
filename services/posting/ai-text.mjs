@@ -4,7 +4,7 @@
 // one json_schema call; the answer is checked (ai-text-check.mjs) and used only when every rule passes. Chat text is
 // never an input. The model runs once per batch: withAiText() holds one runner.withModel() for the whole packaging pass.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,16 +82,72 @@ function oneFrame(ffmpeg, video, atSec, width, out) {
 }
 
 /** 3-4 frames spread over the clip. -> Buffer[] (those that could be taken). */
-export async function grabFrames(ffmpeg, file, seconds, cfg, tmpRoot = os.tmpdir()) {
+export async function grabFrames(ffmpeg, file, seconds, cfg, tmpRoot = os.tmpdir(), width = cfg.frames.width) {
   const dir = mkdtempSync(path.join(tmpRoot, 'ujw-aitext-'));
   try {
     const len = Number.isFinite(seconds) && seconds > 1 ? seconds : 20;
     const out = [];
     for (let i = 0; i < cfg.frames.at.length; i++) {
       const f = path.join(dir, `f${i}.jpg`);
-      if (await oneFrame(ffmpeg, file, Math.max(0, Math.min(len - 0.2, len * cfg.frames.at[i])), cfg.frames.width, f)) out.push(readFileSync(f));
+      if (await oneFrame(ffmpeg, file, Math.max(0, Math.min(len - 0.2, len * cfg.frames.at[i])), width, f)) out.push(readFileSync(f));
     }
     return out;
+  } finally { try { rmSync(dir, { recursive: true, force: true }); } catch { /* scratch */ } }
+}
+
+export const VOCAB_FILE = path.join(REPO, 'data', 'posting', 'ai-text-vocab.json');
+const tokens = (s) => String(s).toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+
+/** Words allowed in the text even when they are on screen: the vocab file plus the labels of every game pack
+ *  (data/games/<id>/events.json and screens.json: label, name, id, title values). -> Set<string> */
+export function loadVocab({ file = VOCAB_FILE, gamesDir = path.join(REPO, 'data', 'games') } = {}) {
+  const out = new Set();
+  try { for (const w of JSON.parse(readFileSync(file, 'utf8')).words ?? []) for (const t of tokens(w)) out.add(t); } catch { /* none */ }
+  const walk = (n) => {
+    if (Array.isArray(n)) n.forEach(walk);
+    else if (isPlain(n)) for (const [k, v] of Object.entries(n)) { if (typeof v === 'string' && ['label', 'name', 'id', 'title'].includes(k)) tokens(v).forEach((t) => out.add(t)); else walk(v); }
+  };
+  try {
+    for (const g of readdirSync(gamesDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+      for (const f of ['events.json', 'screens.json']) { try { walk(JSON.parse(readFileSync(path.join(gamesDir, g.name, f), 'utf8'))); } catch { /* none */ } }
+    }
+  } catch { /* none */ }
+  return out;
+}
+
+/** The Python with the OCR packages: UJWALAM_OCR_PYTHON, else a dev venv or the bundled runtime in the repo. null if none. */
+export function ocrPython(root = REPO) {
+  if (process.env.UJWALAM_OCR_PYTHON && existsSync(process.env.UJWALAM_OCR_PYTHON)) return process.env.UJWALAM_OCR_PYTHON;
+  for (const rel of [['.venv-gpu', 'Scripts', 'python.exe'], ['.venv', 'Scripts', 'python.exe'], ['runtime', 'python', 'python.exe']]) {
+    const p = path.join(root, ...rel);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * The words on screen in some frames (the repo's RapidOCR, services/clip/ocr_words.py), lowercase, 3+ chars.
+ * Throws (code ocr-unavailable) when OCR cannot run: the caller fails closed.
+ */
+export async function ocrWords(frames, { python = ocrPython(), tmpRoot = os.tmpdir(), timeoutMs = 120000 } = {}) {
+  if (!python) throw new LocalModelError('ocr-unavailable', 'no Python with the OCR packages');
+  const dir = mkdtempSync(path.join(tmpRoot, 'ujw-ocr-'));
+  try {
+    const files = frames.map((b, i) => { const f = path.join(dir, `o${i}.jpg`); writeFileSync(f, b); return f; });
+    const out = await new Promise((resolve, reject) => {
+      let p; let buf = '';
+      try { p = spawn(python, ['-I', path.join(REPO, 'services', 'clip', 'ocr_words.py'), ...files], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }); } catch (e) { return reject(e); }
+      try { os.setPriority(p.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* best effort */ }
+      const t = setTimeout(() => { p.kill(); reject(new Error('timeout')); }, timeoutMs);
+      p.stdout.on('data', (d) => { buf += d; });
+      p.on('error', (e) => { clearTimeout(t); reject(e); });
+      p.on('close', (code) => { clearTimeout(t); code === 0 ? resolve(buf) : reject(new Error(`exit ${code}`)); });
+    });
+    const j = JSON.parse(out.trim().split(/\r?\n/).pop());
+    if (!Array.isArray(j.words)) throw new Error('no words');
+    return new Set(j.words.filter((w) => typeof w === 'string').map((w) => w.toLowerCase()));
+  } catch (e) {
+    throw e instanceof LocalModelError ? e : new LocalModelError('ocr-unavailable', `OCR could not run (${String(e?.message ?? e).slice(0, 80)})`);
   } finally { try { rmSync(dir, { recursive: true, force: true }); } catch { /* scratch */ } }
 }
 
@@ -126,6 +182,7 @@ export async function withAiText(deps, fn) {
   if (!on || !deps?.runner) return fn(null, 'flag-off', stats);
   const cfg = deps.cfg ?? loadAiTextConfig();
   const terms = deps.profileTerms ?? loadProfileTerms();
+  const vocab = deps.vocab ?? loadVocab();
   let opening = null; let release = null; let done = null;
   const open = () => (opening ??= new Promise((resolveOpen) => {
     done = Promise.resolve(deps.runner.withModel((m) => new Promise((rel) => { release = rel; resolveOpen({ m }); }))).catch((e) => resolveOpen({ err: e }));
@@ -142,7 +199,13 @@ export async function withAiText(deps, fn) {
       answer = await chatJson({ url: h.m.url, system: cfg.system, prompt: buildPrompt(cfg, { kind, seconds, facts, transcript: transcriptFor(file, cfg.transcriptMaxChars) }),
         images: frames, schema: answerSchema(cfg), timeoutMs: cfg.timeoutMs, maxTokens: cfg.maxTokens, temperature: cfg.temperature });
     } catch (e) { return fail(e instanceof LocalModelError ? e.code : 'error', String(e?.message ?? '').slice(0, 120)); }
-    const r = checkAiText({ answer, facts, seconds, limits, cfg, profileTerms: terms });
+    // screen names: OCR of larger frames of the same clip; if OCR cannot run, nothing is accepted (template text)
+    let screenWords;
+    try {
+      const big = await (deps.grab ?? grabFrames)(ffmpeg, file, seconds, cfg, deps.tmpRoot, cfg.ocr.width);
+      screenWords = await (deps.ocr ?? ocrWords)(big, { python: deps.ocrPython, tmpRoot: deps.tmpRoot, timeoutMs: cfg.ocr.timeoutMs });
+    } catch (e) { return fail('ocr-unavailable', String(e?.message ?? '').slice(0, 120)); }
+    const r = checkAiText({ answer, facts, seconds, limits, cfg, profileTerms: terms, screenWords, vocab });
     if (!r.ok) { deps.onReject?.(r, answer); return fail(r.code, r.detail); }
     return r;
   };

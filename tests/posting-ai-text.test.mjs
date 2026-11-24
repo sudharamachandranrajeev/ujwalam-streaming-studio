@@ -9,7 +9,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createModelRunner, loadConfig } from '../services/local-model/runner.mjs';
-import { buildPrompt, loadAiTextConfig, transcriptFor, withAiText } from '../services/posting/ai-text.mjs';
+import { buildPrompt, loadAiTextConfig, loadVocab, transcriptFor, withAiText } from '../services/posting/ai-text.mjs';
 import { aiPost, loadLimits, loadTemplates, packageUploads } from '../services/posting/index.mjs';
 
 const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'helpers', 'fake-llama-server.mjs');
@@ -59,7 +59,8 @@ const pack = (e, ai, why) => packageUploads({ dataDir: e.dataDir, ledgerFile: e.
 const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((x) => (x.isDirectory() ? walk(path.join(d, x.name)) : [path.join(d, x.name)]));
 const postFiles = (e) => walk(path.join(e.dataDir, 'posting', 'packages')).filter((f) => f.endsWith('post.json'));
 const grab = async () => [Buffer.from([0xff, 0xd8, 0xff, 0xd9])];
-const run = (e, deps) => withAiText({ cfg, profileTerms: [], grab, tmpRoot: mk(), ...deps }, (ai, why, stats) => pack(e, ai, why).then((r) => ({ r, stats })));
+const ocr = async () => new Set();
+const run = (e, deps) => withAiText({ cfg, profileTerms: [], vocab: new Set(['clutch']), grab, ocr, tmpRoot: mk(), ...deps }, (ai, why, stats) => pack(e, ai, why).then((r) => ({ r, stats })));
 
 describe('AI text lands in the draft', () => {
   test('two drafts, one model start; title and description from the model, template lines kept after; textSource ai', async () => {
@@ -93,13 +94,12 @@ describe('AI text lands in the draft', () => {
     assert.equal(j.textSource, 'ai'); assert.equal(j.factsSource, 'detector'); assert.equal(j.title, '3 kills to take the victory');
   });
 
-  test('no detector facts, the model saw 4 kills: allowed, factsSource model, the seen facts are recorded', async () => {
+  test('no detector facts, the model saw 4 kills: a kill claim is rejected (fact-unverified), template text; the seen facts do not verify', async () => {
     const e = setup([ROWS[0]]);
     const { r: rn } = runner(answer({ title: '4 kills in one push', factsSeen: { kills: 4, result: null, mode: null, medal: null } }));
     await run(e, { runner: rn, isOn: () => true });
     const j = readPost(e);
-    assert.equal(j.textSource, 'ai'); assert.equal(j.factsSource, 'model'); assert.equal(j.ai.factsSeen.kills, 4);
-    assert.equal(j.source.facts, undefined, 'detector facts stay detector facts');
+    assert.equal(j.textSource, 'template'); assert.equal(j.aiReject, 'fact-unverified');
   });
 });
 
@@ -126,6 +126,37 @@ describe('every failure keeps the template text and records why', () => {
     assert.equal(stats.used, 0); assert.equal(stats.rejects['fact-kills'], 1);
   });
 
+  test('screen name: a word that OCR reads on screen and is not in the vocab is rejected (screen-name)', async () => {
+    const e = setup([ROWS[0]]);
+    const { r: rn } = runner(answer({ title: 'Zorblax clutch finish' }));
+    await run(e, { runner: rn, isOn: () => true, ocr: async () => new Set(['zorblax']) });
+    const j = readPost(e);
+    assert.equal(j.textSource, 'template'); assert.equal(j.aiReject, 'screen-name');
+    assert.doesNotMatch(JSON.stringify(j), /Zorblax/i);
+  });
+
+  test('screen word that is in the vocab is allowed', async () => {
+    const e = setup([ROWS[0]]);
+    const { r: rn } = runner(answer());
+    await run(e, { runner: rn, isOn: () => true, ocr: async () => new Set(['clutch']) });
+    assert.equal(readPost(e).textSource, 'ai');
+  });
+
+  test('OCR cannot run (seam throws): fail closed, template text, aiReject ocr-unavailable', async () => {
+    const e = setup([ROWS[0]]);
+    const { r: rn } = runner(answer());
+    const { stats } = await run(e, { runner: rn, isOn: () => true, ocr: async () => { throw new Error('no python'); } });
+    const j = readPost(e);
+    assert.equal(j.textSource, 'template'); assert.equal(j.aiReject, 'ocr-unavailable'); assert.equal(stats.used, 0);
+  });
+
+  test('win claim with no detector result: fact-unverified', async () => {
+    const e = setup([ROWS[0]]);
+    const { r: rn } = runner(answer({ title: 'We won it', factsSeen: { kills: null, result: 'victory', mode: null, medal: null } }));
+    await run(e, { runner: rn, isOn: () => true });
+    assert.equal(readPost(e).aiReject, 'fact-unverified');
+  });
+
   test('privacy reject: a profile term in the text', async () => {
     const e = setup([ROWS[0]]);
     const { r: rn } = runner(answer({ title: 'ExampleBrand clutch' }));
@@ -138,7 +169,7 @@ describe('every failure keeps the template text and records why', () => {
     const e = setup([ROWS[0]]);
     const small = loadLimits(); small.targets['youtube-shorts'].fields.description.max = 150;
     const { r: rn } = runner(answer());
-    const ai = await withAiText({ cfg, profileTerms: [], grab, tmpRoot: mk(), runner: rn, isOn: () => true }, (g) => packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: PROFILE, ffmpeg: process.execPath, limits: small, aiText: g }));
+    const ai = await withAiText({ cfg, profileTerms: [], vocab: new Set(), grab, ocr, tmpRoot: mk(), runner: rn, isOn: () => true }, (g) => packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: PROFILE, ffmpeg: process.execPath, limits: small, aiText: g }));
     assert.equal(ai.packaged.length, 1);
     const j = readPost(e);
     assert.equal(j.textSource, 'template'); assert.equal(j.aiReject, 'limits');
@@ -234,5 +265,19 @@ describe('inputs: transcript beside the clip and the prompt', () => {
     assert.match(p, /kills: 3 KILLS/); assert.match(p, /result: VICTORY/); assert.match(p, /<speech>\nfirst second\n<\/speech>/); assert.match(p, /12 seconds/);
     assert.doesNotMatch(p, /\{\w+\}/, 'no placeholder is left unfilled');
     assert.doesNotMatch(p, /chat message:/);
+  });
+});
+
+describe('vocab', () => {
+  test('loadVocab: lowercase words of 3+ letters, no duplicates in the file, and game-pack labels are added', () => {
+    const j = JSON.parse(readFileSync(new URL('../data/posting/ai-text-vocab.json', import.meta.url), 'utf8'));
+    assert.equal(new Set(j.words).size, j.words.length, 'no duplicate words');
+    assert.ok(j.words.every((w) => /^[a-z]{3,}$/.test(w)));
+    const d = mk();
+    mkdirSync(path.join(d, 'g1'));
+    writeFileSync(path.join(d, 'g1', 'events.json'), JSON.stringify({ events: [{ id: 'wombat_zone', label: 'Wombat Rush' }] }));
+    const v = loadVocab({ file: path.join(d, 'none.json'), gamesDir: d });
+    assert.ok(v.has('wombat') && v.has('rush') && v.has('zone'));
+    assert.ok(loadVocab().has('clutch'));
   });
 });

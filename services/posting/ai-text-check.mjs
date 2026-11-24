@@ -77,6 +77,7 @@ export function killClaims(text) {
   const out = [];
   const s = String(text);
   for (const m of s.matchAll(new RegExp(`(\\d{1,3})\\s*(?:-|\\s)?\\s*(?:x\\s*)?${KILL_WORD}\\b`, 'gi'))) out.push(Number(m[1]));
+  for (const m of s.matchAll(/\b(double|triple|quad(?:ruple)?|penta)[\s-]*kills?\b/gi)) out.push({ double: 2, triple: 3, quad: 4, quadruple: 4, penta: 5 }[m[1].toLowerCase()]);
   for (const m of s.matchAll(new RegExp(`\\b(${Object.keys(WORD_NUM).join('|')})\\s*(?:-|\\s)?\\s*${KILL_WORD}\\b`, 'gi'))) out.push(WORD_NUM[m[1].toLowerCase()]);
   return out;
 }
@@ -111,7 +112,8 @@ function shape(answer, cfg) {
   let lines = description.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean);
   // a small model often writes the lines as sentences in one paragraph: one sentence per line then
   if (lines.length === 1) lines = lines[0].split(/(?<=[.!?])\s+/).map((l) => l.trim()).filter(Boolean);
-  if (lines.length < A.description.minLines || lines.length > A.description.maxLines) return bad('description', `${lines.length} lines`);
+  if (lines.length > A.description.maxLines) lines = lines.slice(0, A.description.maxLines); // extra trailing sentences are dropped
+  if (lines.length < A.description.minLines) return bad('description', `${lines.length} lines`);
   if (tags.length < A.tags.min || tags.length > A.tags.max) return bad('tags', `${tags.length} tags`);
   if (tags.some((t) => UNIT.chars(t) > A.tags.maxChars)) return bad('tags', 'a tag is too long');
   const words = thumbHook.split(/\s+/).filter(Boolean);
@@ -123,7 +125,7 @@ function shape(answer, cfg) {
  * opts: { answer, facts (cleanFacts output: medal, killsText, kills, result, mode), seconds, limits (limits.json
  *   targets[target]: { fields }), cfg (data/posting/ai-text.json), profileTerms: string[], forbidTerms: string[] }
  */
-export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileTerms = [], forbidTerms = [] }) {
+export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileTerms = [], forbidTerms = [], screenWords, vocab }) {
   const t = shape(answer, cfg);
   if (t.ok === false) return t;
   // time of the thumbnail frame inside the clip
@@ -131,7 +133,7 @@ export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileT
   if (t.thumbTime < 0) return bad('thumb-time', 'negative');
   // numbers: the facts' numbers (detector: kills, placement, teams; the model's kills only when the detector has none)
   const detKills = Number.isFinite(Number(facts.kills)) ? Number(facts.kills) : null;
-  const factNums = new Set([detKills, Number(facts.placement), Number(facts.teams), detKills === null ? t.factsSeen.kills : null].filter((n) => n !== null && Number.isFinite(n)));
+  const factNums = new Set([detKills, Number(facts.placement), Number(facts.teams)].filter((n) => n !== null && Number.isFinite(n)));
   // a tag with a number that is not a fact is dropped alone; the post stays
   const tagsBefore = t.tags.length;
   t.tags = t.tags.filter((g) => [...g.matchAll(/\d+/g)].every((m) => factNums.has(Number(m[0]))));
@@ -158,26 +160,26 @@ export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileT
   if (URL_RE.test(rest)) return bad('url', 'a web address in the text');
   const hit = findTerm(rest, [...profileTerms, ...forbidTerms]);
   if (hit !== null) return bad('privacy', 'a private or chat term in the text');
-  // facts
-  const seen = t.factsSeen;
-  let usedModel = false, usedDetector = false;
-  const claimsKills = killClaims(rest);
-  let allowedKills = null;
-  if (detKills !== null) allowedKills = detKills;
-  else if (seen.kills !== null) allowedKills = seen.kills;
-  for (const c of claimsKills) {
-    if (allowedKills === null || c !== allowedKills) return bad('fact-kills', 'a kill count that the detector facts do not give');
-    if (detKills !== null) usedDetector = true; else usedModel = true;
+  // screen names: a word that is on screen (OCR of the frames) and not in the allowed vocabulary is a player, team or
+  // account name; screenWords undefined = not checked (pure tests only; the runner always passes it and fails closed)
+  if (screenWords instanceof Set) {
+    const ok = vocab instanceof Set ? vocab : new Set();
+    for (const w of rest.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []) if (screenWords.has(w) && !ok.has(w)) return bad('screen-name', 'a word that is on screen and not a common or game word');
+  }
+  // facts: only the detector's facts verify a claim; with none the text may not claim kills or a win/loss at all
+  // (factsSeen is recorded for later learning, never used to accept)
+  let usedDetector = false;
+  for (const c of killClaims(rest)) {
+    if (detKills === null) return bad('fact-unverified', 'a kill count claimed without detector facts');
+    if (c !== detKills) return bad('fact-kills', 'a kill count that the detector facts do not give');
+    usedDetector = true;
   }
   const hasWin = WIN.test(rest), hasLoss = LOSS.test(rest);
   if (hasWin || hasLoss) {
     if (hasWin && hasLoss) return bad('fact-result', 'both a win and a loss');
-    const claim = hasWin ? 'win' : 'loss';
-    let expected = null; let model = false;
-    if (typeof facts.result === 'string' && facts.result) expected = resultClass(facts.result);
-    else if (seen.result !== null) { expected = resultClass(seen.result); model = true; }
-    if (expected === null || expected !== claim) return bad('fact-result', 'a result that the detector facts do not give');
-    if (model) usedModel = true; else usedDetector = true;
+    if (!(typeof facts.result === 'string' && facts.result)) return bad('fact-unverified', 'a win or loss claimed without a detector result');
+    if (resultClass(facts.result) !== (hasWin ? 'win' : 'loss')) return bad('fact-result', 'a result that the detector facts do not give');
+    usedDetector = true;
   }
   // numbers in title, description and hook: a claim-context number must be a fact number; any other digit is rejected
   let body = [t.title, t.description, t.thumbHook].join('\n').replace(OK_PLACEHOLDER, ' ');
@@ -186,7 +188,7 @@ export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileT
   }
   body = body.replace(CLAIM_NUM, ' ').replace(KILL_NUM, ' ');
   if (/\d/.test(body)) return bad('fact-number', 'a number that is not a fact');
-  const source = usedModel ? 'model' : usedDetector ? 'detector' : null;
+  const source = usedDetector ? 'detector' : null;
   return { ok: true, text: t, factsSource: source, tagsDropped };
 }
 
