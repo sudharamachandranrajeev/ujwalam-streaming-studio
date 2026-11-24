@@ -1650,7 +1650,7 @@ export async function main(argv = process.argv.slice(2)) {
       // Clips from each finished recording (D283, flag clip-pipeline): outputs.status every 5 s; the discovery file is
       // read each time, so a restarted host is followed.
       const liveClipsFlag = () => flagIsOn('live-clips');
-      recordClips = createRecordClips({ clipRoot: CLIP_ROOT, dataDir, project: alpha ? alphaFile(dataDir) : null, log: (l) => console.log(`[studio] ${l}`), postChain: createPostChain({ dataDir, log: (l) => console.log(`[studio] ${l}`),
+      recordClips = createRecordClips({ clipRoot: CLIP_ROOT, dataDir, project: alpha ? alphaFile(dataDir) : null, log: (l) => console.log(`[studio] ${l}`), postChain: createPostChain({ dataDir, log: (l) => console.log(`[studio] ${l}`), aiText: true, // D443 T2: AI post text after the stream (flags ai-post-text + local-ai-model)
         // The launcher's own profile (2026-11-20): an install keeps it in <install>/data, not beside the version's code,
         // and without it every package kept {handles.x}/{links.x} unfilled, so auto-post approved nothing.
         profileFile: typeof args.profile === 'string' ? path.resolve(args.profile) : path.join(REPO, 'data', 'profile.local.json') }),
