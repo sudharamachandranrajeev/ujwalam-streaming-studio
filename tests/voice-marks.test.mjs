@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compilePhrases, createVoiceMarks, loadVoiceConfig, matchPhrases, FLAG } from '../services/event-core/voice-marks.mjs';
+import { compilePhrases, createVoiceMarks, loadVoiceConfig, matchDetail, matchPhrases, FLAG } from '../services/event-core/voice-marks.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES = JSON.parse(readFileSync(path.join(HERE, 'fixtures', 'voice-phrases.json'), 'utf8')).samples;
@@ -31,7 +31,8 @@ test('config: phrases from data, live values unverified', () => {
 
 test('matching: Malayalam script, Manglish and English samples (same samples as the Python side)', () => {
   const c = compilePhrases(CFG.items);
-  for (const s of SAMPLES) assert.deepEqual(matchPhrases(s.text, c), s.want, JSON.stringify(s.text));
+  for (const s of SAMPLES) assert.deepEqual(matchDetail(s.text, c).map((x) => [x.id, x.forced]), s.want, JSON.stringify(s.text));
+  for (const s of SAMPLES) assert.deepEqual(matchPhrases(s.text, c), s.want.map((x) => x[0]));
   assert.deepEqual(matchPhrases(null, c), []);
   // NFD input (decomposed) still matches after NFC
   assert.deepEqual(matchPhrases('സൂപ്പർ'.normalize('NFD'), c), ['super']);
@@ -42,8 +43,27 @@ test('heard: a phrase writes exactly one marker (source audio, phrase id only, n
   const vm = createVoiceMarks({ flags: flagsOn(), host, config: CFG });
   assert.deepEqual(vm.heard('ayyo പൊളിച്ചു secret words here', 1000), ['polich']);
   await tick();
-  assert.deepEqual(host.calls, [['audio', 'voice: marker phrase polich']]);
+  assert.deepEqual(host.calls, [['audio', 'voice: marker phrase polich forced']]);
   assert.equal(vm.stats().written, 1);
+  // English 'scene' is a score-only word: its note says so, so post-stream never force-keeps it
+  vm.heard('nice scene', 100_000);
+  await tick();
+  assert.deepEqual(host.calls[1], ['audio', 'voice: marker phrase scene word']);
+});
+
+test('a host call that never answers frees its slot after hostTimeoutMs (counted as a failure)', async () => {
+  const host = fakeHost({ hang: true });
+  const timers = [];
+  const vm = createVoiceMarks({ flags: flagsOn(), host, config: CFG, setTimeout: (fn, ms) => { timers.push([fn, ms]); return timers.length; }, clearTimeout: () => {} });
+  vm.heard('super', 0); vm.heard('adipoli', 60_000);
+  assert.equal(vm.stats().inflight, 2);
+  assert.deepEqual(timers.map((t) => t[1]), [CFG.live.hostTimeoutMs, CFG.live.hostTimeoutMs]);
+  for (const [fn] of timers) fn();
+  await tick(); await tick();
+  const s = vm.stats();
+  assert.deepEqual([s.inflight, s.failures, s.timeouts], [0, 2, 2]);
+  assert.deepEqual(vm.heard('scene', 120_000), ['scene']);
+  assert.equal(host.calls.length, 3);
 });
 
 test('gaps: same phrase once per minGapSec, any phrase once per anyGapSec', async () => {

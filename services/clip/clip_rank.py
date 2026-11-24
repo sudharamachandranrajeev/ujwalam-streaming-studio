@@ -86,9 +86,23 @@ def _local_peaks(peaks, min_gap):
     return sorted(kept)
 
 
-def marker_events(markers, weights):
-    return [{"t": m["t"], "kind": f"marker.{m['source']}", "w": weights.get(f"marker.{m['source']}", 0.0),
-             "strength": 1.0, "detail": {}, "win": "marker"} for m in markers]
+def marker_events(markers, weights, voice=None):
+    """Markers -> events. A live voice mark (source 'voice', D443 T6) becomes 'voice.phrase' (forced phrase) or
+    'voice.word' with the excitement.json rank weights in voice, the same kinds as the post-stream phrase events, so
+    the two never add up (one per kind per window) and only a forcing phrase is force-kept. voice None (flag off):
+    voice marks are left out."""
+    out = []
+    for m in markers:
+        if m["source"] == "voice":
+            if voice is None:
+                continue
+            kind, wkey = ("voice.phrase", "phraseWeight") if m.get("forced") else ("voice.word", "wordWeight")
+            out.append({"t": m["t"], "kind": kind, "w": float(voice[wkey]), "strength": 1.0,
+                        "detail": {"phrases": [m.get("phrase")], "live": True}, "win": "audio"})
+            continue
+        out.append({"t": m["t"], "kind": f"marker.{m['source']}", "w": weights.get(f"marker.{m['source']}", 0.0),
+                    "strength": 1.0, "detail": {}, "win": "marker"})
+    return out
 
 
 def _num(x):
@@ -192,7 +206,8 @@ def build_candidates(events, duration, cfg, deaths=()):
         cands.append({"start": round(a, 2), "end": round(b, 2), "score": round(score, 4),
                       "anchor": round(anchor["t"], 2), "reasons": reasons})
     # minScore keeps weak automatic windows out (e.g. loudness alone); an explicit request (marker, chat "clip it")
-    # always makes a clip; so does a spoken marker phrase (D443 T6, user 2026-11-24: a marker phrase marks the moment)
+    # always makes a clip; so does a forcing spoken marker phrase (D443 T6 marker forcing: adipoli / polich in any
+    # script, or any Malayalam-script phrase; English scene / super are 'voice.word', score only)
     min_score = float(cfg.get("minScore", 0.0))
     cands = [c for c in cands if c["score"] >= min_score
              or any(r["kind"].startswith("marker.") or r["kind"] in ("chat.intent", "voice.phrase") for r in c["reasons"])]

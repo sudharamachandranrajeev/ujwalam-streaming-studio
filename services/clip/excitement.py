@@ -49,51 +49,81 @@ def load_config(path=None):
 _LATIN_WORD = re.compile(r"[a-z0-9]+")
 
 
-def _fold(s):
-    """Lower case, NFC, runs of one repeated letter folded to one (adipoliii -> adipoli, suuper -> super)."""
-    return re.sub(r"(.)\1+", r"\1", unicodedata.normalize("NFC", s).casefold())
+_RUN3 = re.compile(r"(.)\1{2,}")
+
+
+def _lower(s):
+    """NFC + lower() (the same as JS toLowerCase for these scripts; casefold differs, e.g. for sharp s)."""
+    return unicodedata.normalize("NFC", s).lower()
+
+
+def _word_forms(w):
+    """A word as said, plus runs of 3+ equal letters folded to one and to two (adipoliii -> adipoli, suuuper ->
+    super / suuper). Runs of 2 are kept, so 'supper' never becomes 'super'."""
+    return {w, _RUN3.sub(r"\1", w), _RUN3.sub(r"\1\1", w)}
+
+
+def _is_word_char(ch):
+    return unicodedata.category(ch)[0] in "LMN"
 
 
 def compile_phrases(cfg):
-    """-> [(id, [latin token tuples], [malayalam strings])] from cfg['phrases']['items']."""
+    """-> [(id, [latin token tuples], [malayalam strings], forceLatin, malayalamSuffix)] from cfg['phrases']['items']."""
     out = []
     for it in cfg["phrases"]["items"]:
-        lat = [tuple(_LATIN_WORD.findall(_fold(v))) for v in it.get("latin", [])]
+        lat = [tuple(_LATIN_WORD.findall(_lower(v))) for v in it.get("latin", [])]
         mal = [unicodedata.normalize("NFC", v) for v in it.get("malayalam", [])]
-        out.append((it["id"], [t for t in lat if t], [m for m in mal if m]))
+        out.append((it["id"], [t for t in lat if t], [m for m in mal if m], bool(it.get("forceLatin")),
+                    bool(it.get("malayalamSuffix"))))
     return out
 
 
-def match_phrases(text, compiled):
-    """Phrase ids found in text (each id once, in the order of the config). Latin: whole adjacent words; Malayalam:
-    part of a word (endings join the word). Text is only tested, never kept."""
+def _malayalam_hit(norm, m, suffix):
+    """m at a word start in norm; with suffix False also at a word end (സൂപ്പർമാർക്കറ്റ് is not സൂപ്പർ)."""
+    i = norm.find(m)
+    while i >= 0:
+        j = i + len(m)
+        if (i == 0 or not _is_word_char(norm[i - 1])) and (suffix or j >= len(norm) or not _is_word_char(norm[j])):
+            return True
+        i = norm.find(m, i + 1)
+    return False
+
+
+def match_detail(text, compiled):
+    """[(id, forced)] found in text, each id once, in config order. Latin: whole adjacent words; Malayalam: at a word
+    start (endings allowed only where malayalamSuffix). forced: a Malayalam-script hit, or a Latin hit of a phrase with
+    forceLatin (D443 T6 marker forcing: English 'scene'/'super' add score only). Text is only tested, never kept."""
     if not isinstance(text, str) or not text:
         return []
     norm = unicodedata.normalize("NFC", text)
-    words = _LATIN_WORD.findall(_fold(norm))
+    forms = [_word_forms(w) for w in _LATIN_WORD.findall(_lower(norm))]
     found = []
-    for pid, lat, mal in compiled:
-        hit = any(m in norm for m in mal)
-        if not hit:
-            for toks in lat:
-                n = len(toks)
-                if any(tuple(words[i:i + n]) == toks for i in range(len(words) - n + 1)):
-                    hit = True
-                    break
-        if hit:
-            found.append(pid)
+    for pid, lat, mal, force_latin, suffix in compiled:
+        if any(_malayalam_hit(norm, m, suffix) for m in mal):
+            found.append((pid, True))
+            continue
+        for toks in lat:
+            n = len(toks)
+            if any(all(toks[k] in forms[i + k] for k in range(n)) for i in range(len(forms) - n + 1)):
+                found.append((pid, force_latin))
+                break
     return found
 
 
+def match_phrases(text, compiled):
+    """Phrase ids found in text (see match_detail)."""
+    return [pid for pid, _ in match_detail(text, compiled)]
+
+
 def phrase_seconds(segments, duration, compiled):
-    """Transcript segments [{start, end, text, words?: [{start, end, word}]}] -> ({second: [ids]}, count). Word times
+    """Transcript segments [{start, end, text, words?: [{start, end, word}]}] -> ({second: {id: forced}}, count). Word times
     are used when the words alone carry the phrase; else the segment's start second."""
     n = max(0, int(duration + 0.999))
     hits = {}
     count = 0
     for seg in segments or []:
-        ids = match_phrases(seg.get("text", ""), compiled)
-        if not ids:
+        found = match_detail(seg.get("text", ""), compiled)
+        if not found:
             continue
         t = float(seg.get("start", 0.0))
         for w in seg.get("words") or []:
@@ -102,11 +132,11 @@ def phrase_seconds(segments, duration, compiled):
                 break
         s = int(t)
         if 0 <= s < n:
-            hits.setdefault(s, [])
-            for i in ids:
-                if i not in hits[s]:
-                    hits[s].append(i)
+            hits.setdefault(s, {})
+            for pid, forced in found:
+                if pid not in hits[s]:
                     count += 1
+                hits[s][pid] = hits[s].get(pid, False) or forced
     return hits, count
 
 
@@ -176,7 +206,10 @@ def voice_parts(read_second, n_sec, vcfg):
         loud.append(db)
         pitch.append(hz)
     base, mv, z = int(vcfg["baselineSec"]), int(vcfg["minVoicedSec"]), float(vcfg["zFull"])
-    lr = rolling_rise(loud, float(vcfg["floorDb"]), base, mv, float(vcfg["minSpreadDb"]), z)
+    # Review fix 4: loudness counts only on pitched (voice-like) seconds, in the baseline and as a rise, so an
+    # explosion or loud game noise without a pitch is never "excited voice"
+    voiced = [db if hz is not None else None for db, hz in zip(loud, pitch)]
+    lr = rolling_rise(voiced, float(vcfg["floorDb"]), base, mv, float(vcfg["minSpreadDb"]), z)
     pr = rolling_rise(pitch, 0.0, base, mv, float(vcfg["minSpreadHz"]), z)
     return lr, pr, {"voicedSec": sum(1 for x in loud if x is not None), "pitchedSec": sum(1 for x in pitch if x is not None)}
 
@@ -305,9 +338,21 @@ def combine(parts, weights, n_sec):
     return out
 
 
+def gate_agreement(score, parts, level, min_parts):
+    """Review fix 4: a second keeps its score only when at least min_parts independent parts reach level there; else
+    0. One part alone (loud game audio, a fast chat) never makes an excited moment."""
+    avail = [v for v in parts.values() if v is not None]
+    out = []
+    for i, s in enumerate(score):
+        n = sum(1 for v in avail if i < len(v) and v[i] >= level)
+        out.append(s if n >= min_parts else 0.0)
+    return out
+
+
 def excitement_events(score, phrase_hits, rcfg):
     """Score per second + phrase seconds -> clip_rank events. 'voice.excitement' at local maxima >= threshold (one per
-    minGapSec, strongest first); 'voice.phrase' at each phrase second (one per minGapSec)."""
+    minGapSec, strongest first). Phrase seconds ({second: {id: forced}}): 'voice.phrase' where a forced phrase was said
+    (passes minScore, like a marker), else 'voice.word' (adds score only); each kind one per minGapSec."""
     gap = int(rcfg["minGapSec"])
     thr = float(rcfg["threshold"])
 
@@ -321,9 +366,12 @@ def excitement_events(score, phrase_hits, rcfg):
     for i, v in nms([(i, v) for i, v in enumerate(score) if v >= thr]):
         ev.append({"t": i + 0.5, "kind": "voice.excitement", "w": float(rcfg["excitementWeight"]), "strength": float(v),
                    "detail": {"score": round(v, 3)}, "win": "audio"})
-    for i, _ in nms([(s, 1.0) for s in sorted(phrase_hits)]):
-        ev.append({"t": i + 0.5, "kind": "voice.phrase", "w": float(rcfg["phraseWeight"]), "strength": 1.0,
-                   "detail": {"phrases": list(phrase_hits[i])}, "win": "audio"})
+    forced = {s: h for s, h in phrase_hits.items() if any(h.values())}
+    words = {s: h for s, h in phrase_hits.items() if s not in forced}
+    for kind, wkey, hits in (("voice.phrase", "phraseWeight", forced), ("voice.word", "wordWeight", words)):
+        for i, _ in nms([(s, 1.0) for s in sorted(hits)]):
+            ev.append({"t": i + 0.5, "kind": kind, "w": float(rcfg[wkey]), "strength": 1.0,
+                       "detail": {"phrases": sorted(hits[i])}, "win": "audio"})
     return ev
 
 
@@ -345,13 +393,23 @@ def attach_scores(cands, score):
 # ---------------------------------------------------------------- recording
 
 def decode_wave(ffmpeg, recording, wd, vcfg, run_tool, duration):
-    """ffmpeg -> <wd>/excitement.s16 (mono s16le at sampleRate, the configured audio track). -> path or None."""
-    out = os.path.join(wd, "excitement.s16")
+    """ffmpeg -> <wd>/excitement-<pid>-<random>.s16 (mono s16le at sampleRate, the configured audio track). -> path or
+    None. Review fix 5: a unique name per run, and the file is deleted on every path that returns None."""
+    out = os.path.join(wd, f"excitement-{os.getpid()}-{os.urandom(4).hex()}.s16")
     argv = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", recording,
             "-map", f"0:a:{int(vcfg.get('track', 0))}", "-ac", "1", "-ar", str(int(vcfg["sampleRate"])),
             "-f", "s16le", out]
-    r = run_tool(argv, timeout=max(600, int(duration) * 2))
-    return out if r.returncode == 0 and os.path.isfile(out) else None
+    ok = False
+    try:
+        r = run_tool(argv, timeout=max(600, int(duration) * 2))
+        ok = r.returncode == 0 and os.path.isfile(out)
+    finally:
+        if not ok:
+            try:
+                os.remove(out)
+            except OSError:
+                pass
+    return out if ok else None
 
 
 def analyse(recording, duration, *, ffmpeg, run_tool, wd, models_dir, chat_counts=None, transcript=None, cfg=None,
@@ -426,7 +484,8 @@ def analyse(recording, duration, *, ffmpeg, run_tool, wd, models_dir, chat_count
     except Exception as e:  # noqa: BLE001
         stats["parts"]["chat"] = f"failed: {type(e).__name__}"
     stats["used"] = [k for k in PARTS if parts[k] is not None]
-    score = combine(parts, cfg["weights"], n_sec)
+    rc = cfg["rank"]
+    score = gate_agreement(combine(parts, cfg["weights"], n_sec), parts, float(rc["partLevel"]), int(rc["minParts"]))
     if log:
         log(f"excitement: parts {','.join(stats['used']) or 'none'}")
     return score, hits, stats

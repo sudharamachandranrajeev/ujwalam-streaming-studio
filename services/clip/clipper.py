@@ -149,7 +149,7 @@ def cmd_candidates(a):
     approved = cfg.get("detectorWeightsStatus") == "approved"
     w = cfg["weights"]
     gap = int(cfg["peaks"]["minGapSec"])
-    events = rank.marker_events(markers, w)
+    events = rank.marker_events(markers, w, _voice_rank(a))
     events += rank.chat_events(counts if a.chat_db else None, intents, {**cfg["chat"], "minGapSec": gap}, w)
     aev, abase = rank.loudness_events(lufs, cfg["audio"], w, gap)
     events += aev
@@ -196,6 +196,14 @@ def cmd_candidates(a):
           f"audio {'on' if astats.get('available') else 'off'}, detectors {len(hits)}); ranking {cfg.get('status')}")
     progress_line("candidates", 1, 1, f"{len(cands)} candidate(s)")
     return 0
+
+
+def _voice_rank(a):
+    """excitement.json rank values when the flag 'voice-excitement' is on (live voice marks count), else None."""
+    try:
+        return exc.load_config()["rank"] if flag_on(resolve_data_dir(a.data_dir), exc.FLAG) else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _excitement(a, ffmpeg, dur, info, chat_counts):

@@ -5,12 +5,12 @@
   "approvedBy": null,
   "phrases": {
     "status": "user-answer-2026-11-24",
-    "note": "latin: matched as whole words after lower-casing and folding repeated letters (adipoliii = adipoli); a variant with a space must appear as adjacent words. malayalam: matched as a part of a word (Malayalam joins endings to words), after Unicode NFC.",
+    "note": "latin: matched as whole words after lower-casing; runs of 3 or more equal letters fold to one or two (adipoliii = adipoli, suuuper = super), runs of 2 are kept (supper is not super); a variant with a space must appear as adjacent words. malayalam: after Unicode NFC, matched at a word start; endings may follow only where malayalamSuffix is true (സൂപ്പർമാർക്കറ്റ് is not സൂപ്പർ). Forcing (D443 T6 marker forcing): a Malayalam-script hit always forces a clip; a Latin hit forces only where forceLatin is true. English scene and super are common words (game audio, teammates), so they add score only.",
     "items": [
-      { "id": "adipoli", "latin": ["adipoli", "adi poli", "adipolli"], "malayalam": ["അടിപൊളി"] },
-      { "id": "polich", "latin": ["polich", "pwolich", "polichu", "pwolichu", "polichoo", "pwolichoo"], "malayalam": ["പൊളിച്ച"] },
-      { "id": "scene", "latin": ["scene"], "malayalam": ["സീൻ", "സീന്"] },
-      { "id": "super", "latin": ["super", "suuper"], "malayalam": ["സൂപ്പർ", "സൂപ്പര്"] }
+      { "id": "adipoli", "forceLatin": true, "malayalamSuffix": true, "latin": ["adipoli", "adi poli", "adipolli"], "malayalam": ["അടിപൊളി"] },
+      { "id": "polich", "forceLatin": true, "malayalamSuffix": true, "latin": ["polich", "pwolich", "polichu", "pwolichu", "polichoo", "pwolichoo"], "malayalam": ["പൊളിച്ച"] },
+      { "id": "scene", "forceLatin": false, "malayalamSuffix": false, "latin": ["scene"], "malayalam": ["സീൻ", "സീന്"] },
+      { "id": "super", "forceLatin": false, "malayalamSuffix": false, "latin": ["super", "suuper"], "malayalam": ["സൂപ്പർ", "സൂപ്പര്"] }
     ]
   },
   "voice": {
@@ -55,17 +55,21 @@
   },
   "rank": {
     "status": "unverified",
-    "note": "Post-stream: a second whose score reaches threshold opens a 'voice.excitement' event (strength = score) in the clip ranking; a marker phrase opens a 'voice.phrase' event. At most one of each per minGapSec. Weights are on the scale of data/clip/ranking.json weights.",
+    "note": "Post-stream: a second keeps its score only when at least minParts parts reach partLevel there (one part alone, e.g. loud game audio, never counts). A second whose score reaches threshold opens a 'voice.excitement' event (strength = score). A forcing phrase (forceLatin, or any Malayalam-script hit) opens 'voice.phrase', which makes a clip even below ranking minScore; any other phrase hit (English scene, super) opens 'voice.word', score only. At most one of each per minGapSec. Weights are on the scale of data/clip/ranking.json weights.",
     "threshold": 0.45,
+    "minParts": 2,
+    "partLevel": 0.5,
     "minGapSec": 30,
     "excitementWeight": 0.5,
-    "phraseWeight": 0.8
+    "phraseWeight": 0.8,
+    "wordWeight": 0.3
   },
   "live": {
     "status": "unverified",
-    "note": "Live: a marker phrase in the live transcript writes one host marker (source audio), at most one per phrase per minGapSec and one in total per anyGapSec. Never acts on the stream.",
+    "note": "Live (not wired: no live transcriber exists yet): a marker phrase in a live transcript line writes one host marker (source audio, note 'voice: marker phrase <id> forced|word'), at most one per phrase per minGapSec and one in total per anyGapSec; a host call that does not answer in hostTimeoutMs frees its slot. Post-stream these markers become voice.phrase / voice.word events (clip_signals.read_markers), never a force-kept marker.audio. Never acts on the stream.",
     "minGapSec": 30,
     "anyGapSec": 5,
-    "maxTextChars": 500
+    "maxTextChars": 500,
+    "hostTimeoutMs": 2000
   }
 }
