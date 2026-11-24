@@ -12,9 +12,9 @@ import { fileURLToPath } from 'node:url';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // services import tools/diag (report, diagnostics bundle), tools/mock (event core mock mode), tools/package/zip.mjs and
-// app/studio/tools (studio exe path).
+// app/studio/tools (studio exe path), tools/live-check.mjs (the local model runner's on-air rule, D443).
 export const STAGE_DIRS = Object.freeze(['services', path.join('app', 'host', 'overlay'), path.join('app', 'host', 'lib'), path.join('app', 'host', 'projects'), path.join('app', 'studio', 'tools'), path.join('tools', 'diag'), path.join('tools', 'mock'), 'data', 'registry', 'ui']);
-export const STAGE_FILES = Object.freeze(['package.json', 'release.json', path.join('tools', 'package', 'zip.mjs')]);
+export const STAGE_FILES = Object.freeze(['package.json', 'release.json', path.join('tools', 'package', 'zip.mjs'), path.join('tools', 'live-check.mjs')]);
 
 const skip = (src) => {
   const b = path.basename(src);

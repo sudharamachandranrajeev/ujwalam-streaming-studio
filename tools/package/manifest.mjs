@@ -107,6 +107,8 @@ export const REPO_FILES = Object.freeze([
   'data/live/host-watch.json', 'data/counters.json', 'data/clip/reel-length.json', 'data/clip/reel-hook.json', 'data/clip/transitions.json',
   'data/scene-builder/build-rules.json', // the scene builder's placement rules (services/scene-builder/build.mjs)
   'data/audio-tools/presets.json', // mixer strip tool presets (D399; services/studio-ui/audio-routes.mjs)
+  // local AI model runner (D443 T1): services/local-model/runner.mjs imports the live-check rule and reads its config
+  'tools/live-check.mjs', 'data/ai/local-model.json',
 ]);
 // data/luts: the app's own .cube LUTs, base "luts" of the alpha load (D381; services/studio-ui/alpha.mjs LUTS_DIR)
 // Single-file setup (2026-11-19): the clip maker and face worker ship with the bundled Python, so their data ships too:
