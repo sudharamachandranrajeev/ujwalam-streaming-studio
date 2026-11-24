@@ -534,7 +534,6 @@ async function runCrash(args, ctx) {
 // ---------------------------------------------------------------- main
 export async function main(argv) {
   const args = parseArgs(argv);
-  try { os.setPriority(0, BELOW); } catch { /* best effort */ }
   const dataRoot = resolveDataRoot(args);
   const exports = readExports(path.join(dataRoot, 'chat', 'twitch'));
   let exp = args.export ? exports.find((e) => e.file === path.basename(args.export)) : chooseExport(exports);
@@ -580,5 +579,10 @@ export async function main(argv) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // The harness lowers its own process only when it is the process (the CLI). Called from a test, main() used to lower
+  // the whole test file's process, and every child it then started (core child, whoami, icacls) inherited BelowNormal:
+  // under CI load they starved past their ceilings (2026-11-24: "core child did not become ready in 120 s", whoami's
+  // 10 s timeout -> ACL_FAILED).
+  try { os.setPriority(0, BELOW); } catch { /* best effort */ }
   main(process.argv.slice(2)).then(() => process.exit(0), (e) => { console.log(`[replay] failed: ${e?.message ?? e}`); process.exit(1); });
 }
