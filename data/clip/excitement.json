@@ -1,0 +1,71 @@
+{
+  "$comment": "D443 T6 voice and excitement (services/clip/excitement.py post-stream, services/event-core/voice-marks.mjs live). Every threshold, weight and window here is a first proposal, not measured on the user's voice or streams: status unverified, approvedBy null. Event weights need the user's approval (AGENTS.md: never invented as final). Marker phrases are the user's own answer of 2026-11-24 (Malayalam script, Manglish Latin spellings, English); a phrase only marks the moment, it never acts on the stream.",
+  "version": 1,
+  "status": "unverified",
+  "approvedBy": null,
+  "phrases": {
+    "status": "user-answer-2026-11-24",
+    "note": "latin: matched as whole words after lower-casing and folding repeated letters (adipoliii = adipoli); a variant with a space must appear as adjacent words. malayalam: matched as a part of a word (Malayalam joins endings to words), after Unicode NFC.",
+    "items": [
+      { "id": "adipoli", "latin": ["adipoli", "adi poli", "adipolli"], "malayalam": ["അടിപൊളി"] },
+      { "id": "polich", "latin": ["polich", "pwolich", "polichu", "pwolichu", "polichoo", "pwolichoo"], "malayalam": ["പൊളിച്ച"] },
+      { "id": "scene", "latin": ["scene"], "malayalam": ["സീൻ", "സീന്"] },
+      { "id": "super", "latin": ["super", "suuper"], "malayalam": ["സൂപ്പർ", "സൂപ്പര്"] }
+    ]
+  },
+  "voice": {
+    "note": "Per second of the recording's audio: loudness (RMS dBFS) and pitch (autocorrelation, voiced 50 ms frames) against the speaker's own rolling baseline (median/MAD of the earlier voiced seconds). A rise of zFull MADs or more counts as 1.",
+    "track": 0,
+    "sampleRate": 16000,
+    "floorDb": -50,
+    "baselineSec": 600,
+    "minVoicedSec": 20,
+    "minSpreadDb": 1.5,
+    "minSpreadHz": 10,
+    "zFull": 4.0,
+    "pitchMinHz": 75,
+    "pitchMaxHz": 500
+  },
+  "events": {
+    "note": "Laughter and shouting from the YAMNet audio-event model (download item audio-events, CPU only). Class indexes from yamnet_class_map.csv at the pinned revision. A per-second probability of full or more counts as 1.",
+    "dest": "models/audio-events",
+    "file": "yamnet.onnx",
+    "threads": 2,
+    "full": 0.5,
+    "classes": {
+      "laughter": [13, 15, 16, 17, 18],
+      "shout": [6, 8, 9, 11],
+      "cheer": [61]
+    }
+  },
+  "chat": {
+    "note": "Chat rate over windowSec against the session median; ratio x median (at least minMessages) counts as 1.",
+    "windowSec": 20,
+    "ratio": 3.0,
+    "minMessages": 3
+  },
+  "weights": {
+    "status": "unverified",
+    "note": "Share of each part in the per-second excitement score (0..1). Proposal; needs the user's approval.",
+    "loudRise": 0.25,
+    "pitchRise": 0.15,
+    "phrase": 0.3,
+    "event": 0.2,
+    "chat": 0.1
+  },
+  "rank": {
+    "status": "unverified",
+    "note": "Post-stream: a second whose score reaches threshold opens a 'voice.excitement' event (strength = score) in the clip ranking; a marker phrase opens a 'voice.phrase' event. At most one of each per minGapSec. Weights are on the scale of data/clip/ranking.json weights.",
+    "threshold": 0.45,
+    "minGapSec": 30,
+    "excitementWeight": 0.5,
+    "phraseWeight": 0.8
+  },
+  "live": {
+    "status": "unverified",
+    "note": "Live: a marker phrase in the live transcript writes one host marker (source audio), at most one per phrase per minGapSec and one in total per anyGapSec. Never acts on the stream.",
+    "minGapSec": 30,
+    "anyGapSec": 5,
+    "maxTextChars": 500
+  }
+}

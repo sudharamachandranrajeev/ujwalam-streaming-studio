@@ -192,10 +192,10 @@ def build_candidates(events, duration, cfg, deaths=()):
         cands.append({"start": round(a, 2), "end": round(b, 2), "score": round(score, 4),
                       "anchor": round(anchor["t"], 2), "reasons": reasons})
     # minScore keeps weak automatic windows out (e.g. loudness alone); an explicit request (marker, chat "clip it")
-    # always makes a clip
+    # always makes a clip; so does a spoken marker phrase (D443 T6, user 2026-11-24: a marker phrase marks the moment)
     min_score = float(cfg.get("minScore", 0.0))
     cands = [c for c in cands if c["score"] >= min_score
-             or any(r["kind"].startswith("marker.") or r["kind"] == "chat.intent" for r in c["reasons"])]
+             or any(r["kind"].startswith("marker.") or r["kind"] in ("chat.intent", "voice.phrase") for r in c["reasons"])]
     cands.sort(key=lambda c: (-c["score"], c["start"]))
     kept = []
     for c in cands:  # a candidate that is mostly inside a better one adds nothing

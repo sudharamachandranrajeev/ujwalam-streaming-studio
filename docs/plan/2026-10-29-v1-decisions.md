@@ -3193,3 +3193,9 @@ fact numbers; other digits in title/description reject the post; a tag with a no
 T5 (2026-11-24): flag `ai-captions` is ON by default (user-requested). After Whisper, the local model tidies the text of each
 caption line only (word list data/clip/caption-words.json); timing and cue count never change; a line that adds words,
 changes script, adds a name or runs too long keeps the Whisper text. ON by default; needs `local-ai-model` and `reel-captions`.
+T6 (2026-11-24): flag `voice-excitement` is ON by default (user-requested). Post-stream, an excitement score per second
+(loudness and pitch rise over the speaker's own baseline, marker phrases from a transcript, laughter/shout from the
+YAMNet ONNX model on the CPU, chat rate) adds `voice.excitement` / `voice.phrase` events to the clip ranking. Marker
+phrases (user answer 2026-11-24): adipoli, polich/pwolich, scene, super in Malayalam script, Manglish and English, in
+data/clip/excitement.json. Live: a phrase only writes a host marker (source audio), never acts on the stream. All
+thresholds and weights are status unverified until tuned on the user's streams and approved. Off: ranking as before.

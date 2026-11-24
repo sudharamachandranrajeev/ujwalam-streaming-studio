@@ -92,6 +92,7 @@ import reel_sfx as rsfx  # noqa: E402
 import reel_style as rstyle  # noqa: E402
 import reel_transition as rt  # noqa: E402
 import clip_signals as sig  # noqa: E402
+import excitement as exc  # noqa: E402
 import clip_validate as val  # noqa: E402
 import game_pack  # noqa: E402
 import learning_capture as lcap  # noqa: E402
@@ -155,7 +156,12 @@ def cmd_candidates(a):
     dev = rank.detector_events(hits, cfg.get("detectorWeights", {}), approved)
     events += dev
     deaths = rank.death_spans(hits, cfg)
+    xscore, xstats = _excitement(a, ffmpeg, dur, info, counts if a.chat_db else None)
+    if xscore is not None:
+        events += exc.excitement_events(xscore[0], xscore[1], xscore[2]["rank"])
     cands = rank.build_candidates(events, dur, cfg, deaths)
+    if xscore is not None:
+        exc.attach_scores(cands, xscore[0])
     if hstats is not None:
         hstats = {**hstats, "file": os.path.basename(hits_path), "weightsStatus": cfg.get("detectorWeightsStatus"),
                   "rule": "a detector hit counts only when detectorWeightsStatus is 'approved'; until then weight 0, "
@@ -174,6 +180,7 @@ def cmd_candidates(a):
             "chat": cstats if a.chat_db else {"available": False},
             "audio": {**astats, **({"baseline": abase} if abase else {})},
             "detectors": hstats or {"available": False},
+            "excitement": xstats,
             "events": len(events),
         },
         "candidates": cands,
@@ -189,6 +196,25 @@ def cmd_candidates(a):
           f"audio {'on' if astats.get('available') else 'off'}, detectors {len(hits)}); ranking {cfg.get('status')}")
     progress_line("candidates", 1, 1, f"{len(cands)} candidate(s)")
     return 0
+
+
+def _excitement(a, ffmpeg, dur, info, chat_counts):
+    """D443 T6: ((score[], phrase seconds, config) or None, stats). Flag 'voice-excitement' off, or any failure: None,
+    and the ranking is exactly as before."""
+    try:
+        data_dir = resolve_data_dir(a.data_dir)
+        if not flag_on(data_dir, exc.FLAG):
+            return None, {"available": False, "reason": "flag off"}
+        if a.no_audio or not info["has_audio"]:
+            return None, {"available": False, "reason": "no audio"}
+        xcfg = exc.load_config()
+        os.makedirs(a.out, exist_ok=True)
+        models = os.path.join(os.path.dirname(os.path.abspath(data_dir)), "models") if data_dir else None
+        score, hits, st = exc.analyse(a.recording, dur, ffmpeg=ffmpeg, run_tool=run_tool, wd=a.out, models_dir=models,
+                                      chat_counts=chat_counts, transcript=exc.load_transcript(a.transcript), cfg=xcfg)
+        return (score, hits, xcfg), {"available": True, **st, "phraseSeconds": len(hits)}
+    except Exception as e:  # noqa: BLE001 - excitement is optional, never breaks the clip run
+        return None, {"available": False, "reason": f"failed: {type(e).__name__}"}
 
 
 # ---------------------------------------------------------------- gate
@@ -2564,6 +2590,8 @@ def build_parser():
         sp.add_argument("--hits")
         sp.add_argument("--record-start")
         sp.add_argument("--no-audio", action="store_true")
+        # D443 T6: a transcript of the recording (segments JSON) for marker phrases; optional
+        sp.add_argument("--transcript")
 
     def render_args(sp):
         sp.add_argument("--layouts")
