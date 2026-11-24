@@ -29,7 +29,8 @@ const task = (dataDir, o) => writeTaskFile(dataDir, { kind: 'clips', startedAt: 
 // A small set that covers every state, category and control combination the window decides on.
 const set = (d) => {
   task(d, { id: 'clip-a', title: 'Editing clips (3 of 7)', state: 'running', category: 'clips', startedAt: NOW - 60_000, stage: 'render', stages: ['detect', 'render', 'validate'], stageText: 'Cutting the clips', done: 2, total: 7,
-    controls: ['stop', 'pause', 'next'], pausable: true, nextStart: 'notify', parts: ['Clip 3', 'Clip 4'], logTail: ['Rendering clip 3', 'Used <b>bold</b> text'] });
+    controls: ['stop', 'pause', 'next'], pausable: true, nextStart: 'notify', parts: ['Clip 3', 'Clip 4'], logTail: ['Used <b>bold</b> text'],
+    logEvents: [{ v: 1, type: 'progress', stage: 'render', done: 3, total: 7 }, { v: 1, type: 'part', name: 'Video tools (ffmpeg)' }] });
   task(d, { id: 'reel-b', title: 'Making the reel', state: 'running', category: 'reels', startedAt: NOW - 30_000, controls: ['stop'], pausable: false,
     pauseReason: 'This step cannot be paused' });
   task(d, { id: 'long-c', title: 'Long video batch', state: 'waiting', category: 'long-video', startedAt: NOW - 90_000, controls: ['stop', 'resume', 'next'], paused: true,
@@ -159,7 +160,7 @@ describe('QML studio: task manager window (headless probe)', { skip }, () => {
     assert.ok('Time left' in f, JSON.stringify(f));
     assert.equal(f['Next start'], 'Just notify me');
     assert.deepEqual(d.parts, ['Clip 3', 'Clip 4']);
-    assert.deepEqual(d.log, ['Rendering clip 3', 'Used <b>bold</b> text'], 'the lines as they are: no tags are turned into markup');
+    assert.deepEqual(d.log, ['Making clip videos: 3 of 7', 'Running: Video tools (ffmpeg)'], 'Codex round 2: fixed text from typed events; a string tail is dropped');
     assert.equal(d.logPlain, true, 'the log text is drawn as plain text, never rich text');
     const none = await probe({ prepare: set, actions: O });
     assert.equal(none.m.detail, null, 'nothing selected: a hint instead of details');
