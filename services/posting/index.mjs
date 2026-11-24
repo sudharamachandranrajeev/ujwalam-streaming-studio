@@ -30,6 +30,7 @@ import { resolveString } from '../project/scene-preset.mjs';
 import { trustedRow } from './clips-source.mjs';
 import { cleanFacts, createTextHistory, creditMissing, draftText, legacyContext, legacyFor, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
+import { keepsParts } from './ai-text-check.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const POSTING_FLAG = 'posting';
@@ -255,6 +256,35 @@ export function uploadCoverAt(row, seconds) {
   return Number.isFinite(seconds) && seconds > 0.4 ? Math.min(2, seconds / 2) : 0;
 }
 
+/**
+ * D443 T2: the post with the checked AI text: the AI title; description = AI lines, then the template's own description
+ * (links, credits) unchanged, then the user's footer and the music credit; tags = AI tags then the template's, within the
+ * limit. -> { post } | { reject: code }. Pure.
+ */
+export function aiPost({ ai, tpl, ctx, post: base, music, limits, target, titleMax, kind, seed, prefs }) {
+  const miss = new Set(); const tplMiss = new Set();
+  const title = renderText(ai.title, ctx, miss);
+  const aiDesc = renderText(ai.description, ctx, miss);
+  const tags = ai.tags.map((t) => renderText(t, ctx, miss));
+  const tplDesc = renderText(tpl.description, ctx, tplMiss);
+  if ([...miss].some((k) => !tplMiss.has(k))) return { reject: 'unresolved' };
+  const p = { title, description: `${aiDesc}\n\n${tplDesc}`, tags: [], hashtags: [...base.hashtags], target };
+  const fits = limitsFit(p, limits);
+  const seen = new Set();
+  for (const t of [...tags, ...base.tags]) {
+    const k = t.toLowerCase();
+    if (!t || seen.has(k)) continue;
+    if (fits({ tags: [...p.tags, t] })) { p.tags.push(t); seen.add(k); }
+  }
+  Object.assign(p, applyTextPrefs(p, prefs, { kind, seed, titleMax, fits: limitsFit(p, limits) }));
+  if (music.use === 'credit') p.description = `${p.description}\n\n${music.text}`;
+  if (!p.title) return { reject: 'title' };
+  if (!checkLimits(p, limits).ok) return { reject: 'limits' };
+  const lost = keepsParts(p.description, [tplDesc, music.use === 'credit' ? music.text : null]);
+  if (lost !== null) return { reject: 'credit-lost' };
+  return { post: p };
+}
+
 export function extractCover(ffmpeg, video, atSec, out) {
   return new Promise((resolve) => {
     const args = ['-v', 'error', '-nostdin', '-y', '-threads', '1', '-ss', atSec.toFixed(3), '-i', video, '-frames:v', '1', '-q:v', '2', out];
@@ -468,8 +498,7 @@ export async function packageUploads(opts) {
     const hist = textHistory(opts, templates);
     const titleMax = limits.targets[target]?.fields?.title?.max ?? null;
     const d = draftText({ templates, kind: row.kind, game, facts, seed: sha, recent: hist?.recent() ?? [], maxTitle: titleMax, gamesDir: opts.gamesDir });
-    if (hist && (d.title || d.lead)) hist.add(d.title?.line, d.lead?.line);
-    const post = {
+    let post = {
       title: renderText(d.title?.text ?? tpl.title, ctx, missing),
       description: renderText(d.lead ? `${d.lead.text}\n\n${tpl.description}` : tpl.description, ctx, missing),
       tags: tpl.tags.map((t) => renderText(t, ctx, missing)),
@@ -479,6 +508,24 @@ export async function packageUploads(opts) {
     // PT5 (D410): the user's tone, emoji, own hashtags and footer (Settings > Posting & growth); the defaults change nothing
     Object.assign(post, applyTextPrefs(post, readPrefs(opts.dataDir).prefs.text, { kind: row.kind, seed: sha, titleMax, fits: limitsFit(post, limits) }));
     if (music.use === 'credit') post.description = post.description ? `${post.description}\n\n${music.text}` : music.text; // D414: last, after the prefs
+    // D443 T2: AI text (opts.aiText from ai-text.mjs withAiText, one model start per batch) replaces the template text only
+    // when the checker passed and the composed fields still fit the limits and keep the template's lines; else the
+    // template text above stays and the reason is recorded.
+    const aiMeta = {};
+    if (typeof opts.aiText === 'function' || opts.aiWhy) {
+      const tried = typeof opts.aiText === 'function' ? await opts.aiText({ file, seconds, facts, kind: row.kind, limits: limits.targets[target], ffmpeg }) : { ok: false, code: opts.aiWhy };
+      const mixed = tried.ok ? aiPost({ ai: tried.text, tpl, ctx, post, music, limits, target, titleMax, kind: row.kind, seed: sha, prefs: readPrefs(opts.dataDir).prefs.text }) : { reject: tried.code };
+      if (mixed.post) {
+        post = mixed.post;
+        if (opts.aiText.stats) opts.aiText.stats.used += 1;
+        Object.assign(aiMeta, { textSource: 'ai', ...(tried.tagsDropped ? { tagsDropped: tried.tagsDropped } : {}), ...(tried.factsSource ? { factsSource: tried.factsSource } : {}),
+          ai: { version: opts.aiText.version ?? null, thumbHook: tried.text.thumbHook, thumbTime: Number(tried.text.thumbTime.toFixed(2)), factsSeen: tried.text.factsSeen } });
+      } else {
+        if (opts.aiText?.stats && tried.ok) { opts.aiText.stats.rejected += 1; opts.aiText.stats.rejects[mixed.reject] = (opts.aiText.stats.rejects[mixed.reject] ?? 0) + 1; }
+        Object.assign(aiMeta, { textSource: 'template', aiReject: String(mixed.reject ?? 'error').slice(0, 40) });
+      }
+    }
+    if (aiMeta.textSource !== 'ai' && hist && (d.title || d.lead)) hist.add(d.title?.line, d.lead?.line);
     const at = uploadCoverAt(row, seconds);
     const coverOk = await extractCover(ffmpeg, dst, at, path.join(dir, 'cover.jpg'));
     const srt = CAPTION_UPLOAD_KINDS.includes(row.kind) ? `${file.slice(0, -path.extname(file).length)}.srt` : null;
@@ -489,6 +536,7 @@ export async function packageUploads(opts) {
     const full = {
       version: 1,
       ...post,
+      ...aiMeta,
       privacy: 'private',
       status: 'draft',
       source: { run: runName, clipId, kind: row.kind, layout: tail ? tail[2].toLowerCase() : 'unknown', startSec: 0, endSec: Number.isFinite(seconds) ? seconds : null, score: null, sha256: sha,

@@ -57,6 +57,8 @@ import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
 import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadTemplates, packageRun, packageUploads, sha256File } from './index.mjs';
 import { createTextHistory } from './post-text.mjs';
+import { AI_TEXT_FLAG, withAiText } from './ai-text.mjs';
+import { FLAG as LOCAL_MODEL_FLAG, createModelRunner } from '../local-model/runner.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
 import { scanClipsFolder } from './clips-source.mjs';
 import { outputsOnAir } from '../studio-ui/record-clips.mjs';
@@ -627,6 +629,20 @@ export function createPostChain(opts) {
   // LU2: the rules reload when the file changes; a broken file keeps the last good rules (notice in the task area).
   const rulesSrc = opts.rulesSource ?? createRulesSource({ dataDir, explicit: opts.rulesFile, report: createDataNotifier({ dataDir, writeTask: writeTaskFile, log }) });
   const scheduleOn = () => flags.isOn(SCHEDULE_FLAG);
+  // D443 T2: AI post text. Opt-in by the caller (opts.aiText: true | { runner, ... }; the studio launcher passes true) so
+  // tests never start a model. One model start per packaging pass (withAiText); never on air (the runner refuses).
+  let aiRunner = null;
+  const packVideos = (args) => {
+    const impl = opts.packageUploadsImpl ?? packageUploads;
+    if (!opts.aiText) return impl(args);
+    const o = opts.aiText === true ? {} : opts.aiText;
+    aiRunner ??= o.runner ?? createModelRunner({ isOn: () => flags.isOn(LOCAL_MODEL_FLAG), log });
+    return withAiText({ runner: aiRunner, isOn: () => flags.isOn(AI_TEXT_FLAG), ...o },
+      (ai, why, stats) => impl({ ...args, ...(ai ? { aiText: ai } : { aiWhy: why }) }).then((r) => {
+        if (ai && (stats.used || stats.rejected)) log(`posting: AI text used for ${stats.used} draft(s), template for ${stats.rejected}${stats.rejected ? ` (${Object.entries(stats.rejects).map(([k, n]) => `${k} x${n}`).join(', ')})` : ''}`);
+        return r;
+      }));
+  };
   const allOutputs = async () => { if (!latest) throw new Error('no output status yet'); return latest; };
   const outputsStatus = streamOnly(allOutputs);
   // D375 daily budget: uploads per day and quota units, persisted; every API read goes through apiFetch and is counted.
@@ -1026,7 +1042,7 @@ export function createPostChain(opts) {
     try {
       const { rows } = scanClipsFolder({ dataDir, folder: opts.clipsFolder ?? clipsFolder(dataDir), ...(opts.probeSeconds ? { probeSeconds: opts.probeSeconds } : {}) });
       if (!rows.length) return 0;
-      const r = await (opts.packageUploadsImpl ?? packageUploads)({ dataDir, ledgerFile, profile, ffmpeg: opts.ffmpeg, rows });
+      const r = await packVideos({ dataDir, ledgerFile, profile, ffmpeg: opts.ffmpeg, rows });
       if (r.packaged.length) log(`posting: packaged ${r.packaged.length} video(s) from the clips folder`);
       return r.packaged.length;
     } catch (e) { log(`posting: could not read the clips folder (${String(e?.code ?? e?.message ?? 'error').slice(0, 80)})`); return 0; }
@@ -1164,7 +1180,7 @@ export function createPostChain(opts) {
         }
         // 2. Every validated published video of this run in uploads.json (short | montage | won-reel); same-bytes files are skipped.
         let packedVideos = 0;
-        try { packedVideos = (await (opts.packageUploadsImpl ?? packageUploads)({ dataDir, ledgerFile, profile, ffmpeg: opts.ffmpeg, run: runName })).packaged.length; } catch (e) {
+        try { packedVideos = (await packVideos({ dataDir, ledgerFile, profile, ffmpeg: opts.ffmpeg, run: runName })).packaged.length; } catch (e) {
           log(`posting: could not package the finished videos of ${runName}: ${String(e?.message ?? 'error').slice(0, 120)}`);
           if (!packedClips) return { skipped: 'package-failed' };
         }
