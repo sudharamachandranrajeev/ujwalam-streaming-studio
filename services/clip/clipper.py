@@ -408,6 +408,14 @@ def cmd_render(a):
     for n, c in enumerate(cands, 1):
         wd = os.path.join(a.out, "clips", c["id"])
         os.makedirs(wd, exist_ok=True)
+        # D442 resume: a clip finished by an earlier, paused or stopped run of the same inputs is kept, not made again
+        rkey = _row_key(c, wanted, encoder, frame, lay_doc.get("version"), a.captions)
+        kept = _done_row(wd, rkey)
+        if kept is not None:
+            out_rows.append(kept)
+            print(f"render {c['id']}: kept from the earlier run")
+            progress_line("render", n, len(cands), f"clip {c['id']} kept")
+            continue
         dur = float(c["end"]) - float(c["start"])
         cinfo = {"backend": a.captions, "status": "off"}
         capname = None
@@ -441,6 +449,11 @@ def cmd_render(a):
         out_rows.append({"id": c["id"], "start": c["start"], "end": c["end"], "captions": cinfo, "files": files,
                          "music": None,  # D414: plain variants carry no music bed (the record posting reads)
                          "errors": errors})
+        if not errors:
+            try:
+                write_json_atomic(os.path.join(wd, DONE_ROW), {"key": rkey, "row": out_rows[-1]})
+            except (OSError, ClipError):
+                pass  # only the resume shortcut is lost
         progress_line("render", n, len(cands), f"clip {c['id']} {'failed' if errors else 'done'}")
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": doc["recording"],
@@ -885,6 +898,42 @@ RENDER_STALL_SEC = 120  # a render that writes nothing this long is stopped (202
 CPU_ENCODER = "libopenh264"
 
 
+def _has_duration(ffprobe, path):
+    """D442: a saved long-video part is usable again only when ffprobe reads a duration above zero."""
+    try:
+        return float(media_info(ffprobe, path).get("duration") or 0) > 0
+    except (ClipError, OSError, ValueError, TypeError):
+        return False
+
+
+DONE_ROW = "done-row.json"  # D442: one finished clip's render row and the key of the inputs it was made from
+
+
+def _row_key(c, wanted, encoder, frame, layouts_version, captions):
+    """D442: the inputs of one clip's render (candidate, layouts, encoder, frame, captions, tool version), hashed."""
+    import hashlib  # noqa: PLC0415
+    blob = json.dumps([c, sorted(wanted), encoder, frame, layouts_version, captions, TOOL_VERSION], sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _done_row(wd, key):
+    """D442 resume: the stored row of a clip made from the same inputs when every file of it is still there and not
+    empty, else None (make it again)."""
+    try:
+        with open(os.path.join(wd, DONE_ROW), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    row = d.get("row") if isinstance(d, dict) and d.get("key") == key else None
+    if not isinstance(row, dict) or not row.get("files") or row.get("errors"):
+        return None
+    for fr in row["files"]:
+        p = os.path.join(wd, str(fr.get("file") or ""))
+        if not fr.get("file") or not os.path.isfile(p) or os.path.getsize(p) <= 0:
+            return None
+    return dict(row, resumed=True)
+
+
 def _render_job(mk_argv, encoder, wd, part, what):
     """Runs one reel render (mk_argv(encoder) -> argv writing `part` in wd) with the stall watch. A GPU render that
     fails, stalls or times out is tried once more on the CPU encoder (the part file is removed first). A timeout never
@@ -1116,7 +1165,10 @@ def _long_video_steps(a, lv, out):
                                       int(mcfg["audioFadeMs"]), tr, cfg["batchPieces"], _render_job, rnd.run_tool,
                                       rnd.ENCODERS, rnd.AUDIO, overlay=overlay if ctx else None,
                                       overlay_failed=overlay_failed, gain_db=gain, music=bed,
-                                      grade=theme["grade"] if theme else None)
+                                      grade=theme["grade"] if theme else None,
+                                      # D442: one line per finished batch (total 0 = unknown): the studio's pause point
+                                      on_part=lambda n: progress_line("long", n, 0, f"part {n} done"),
+                                      part_ok=lambda pth: _has_duration(ffprobe, pth))
     if ok:
         lrec = _loud_check(ffmpeg, os.path.join(wd, lv.FILE), lrec, "long video")
         try:  # C1: one caption file for the whole video from every batch's lines (what was said stays, overlay or not)

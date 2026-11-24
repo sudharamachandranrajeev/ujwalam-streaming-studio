@@ -193,8 +193,9 @@ class Render(unittest.TestCase):
             self.assertIn("did not render", err)
             self.assertEqual(os.listdir(wd), [])
 
-    def test_an_exception_or_an_earlier_kill_leaves_no_part_files(self):
-        # Codex D406 P2: parts live in a per-attempt folder removed in finally; a folder left by a kill goes next start
+    def test_an_exception_keeps_saved_parts_and_old_attempt_folders_go(self):
+        # Codex D406 P2: an old attempt folder goes at the next start. D442: the fixed parts folder stays after a kill
+        # or an error, so a resumed run reuses the batches it saved; nothing half-written is in it (".part" names).
         def render_job(mk, enc, wd, part, what):
             open(os.path.join(wd, part), "wb").close()
             raise RuntimeError("killed")
@@ -204,7 +205,53 @@ class Render(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 lv.render("ffmpeg", "x.mkv", [{"start": 0, "end": 10, "kills": 1}], CFG["frame"], "e", wd, 1,
                           80, None, 12, render_job, None, {"e": []}, [])
-            self.assertEqual(os.listdir(wd), [])
+            self.assertEqual(os.listdir(wd), [lv.PARTS_DIR])
+            self.assertFalse([n for n in os.listdir(os.path.join(wd, lv.PARTS_DIR)) if n.endswith(".key")])
+
+    def test_resume_reuses_saved_batches_and_redoes_bad_ones(self):
+        # D442: a run stopped after batch 1 of 3: the next run renders only batches 2 and 3, and each batch is told
+        segs = [m(i * 40, i * 40 + 20, 1) for i in range(30)]
+        renders, told = [], []
+
+        def render_job(mk, enc, wd, part, what):
+            renders.append(part)
+            if len(renders) == 2 and stop[0]:
+                raise RuntimeError("paused")
+            with open(os.path.join(wd, part), "wb") as f:
+                f.write(b"x")
+            return subprocess.CompletedProcess([], 0, "", ""), enc
+
+        def run_tool(argv, cwd=None, timeout=None):
+            open(os.path.join(cwd, argv[-1]), "wb").close()
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        enc = {"h264_nvenc": ["-c:v", "h264_nvenc"]}
+        with tempfile.TemporaryDirectory() as wd:
+            stop = [True]
+            with self.assertRaises(RuntimeError):
+                lv.render("ffmpeg", "h.mkv", segs, CFG["frame"], "h264_nvenc", wd, 2, 80, FADE, 12, render_job,
+                          run_tool, enc, ["-c:a", "aac"], on_part=told.append)
+            self.assertEqual(told, [1])
+            stop[0] = False
+            renders.clear(); told.clear()
+            ok, _, err = lv.render("ffmpeg", "h.mkv", segs, CFG["frame"], "h264_nvenc", wd, 2, 80, FADE, 12, render_job,
+                                   run_tool, enc, ["-c:a", "aac"], on_part=told.append, part_ok=lambda p: True)
+            self.assertTrue(ok, err)
+            self.assertEqual(renders, ["part-001.mov.part", "part-002.mov.part"])  # batch 1 kept
+            self.assertEqual(told, [1, 2, 3])
+            self.assertEqual(os.listdir(wd), [lv.FILE])  # joined: the parts folder goes
+        # a saved part that fails the check (part_ok) or whose inputs changed is made again
+        with tempfile.TemporaryDirectory() as wd:
+            stop[0] = False
+            renders.clear()
+            adir = os.path.join(wd, lv.PARTS_DIR)
+            os.makedirs(adir)
+            with open(os.path.join(adir, "part-000.mov"), "wb") as f:
+                f.write(b"x")
+            with open(os.path.join(adir, "part-000.mov.key"), "w", encoding="utf-8") as f:
+                f.write("other inputs")
+            lv.render("ffmpeg", "h.mkv", segs, CFG["frame"], "h264_nvenc", wd, 2, 80, FADE, 12, render_job, run_tool,
+                      enc, ["-c:a", "aac"], part_ok=lambda p: False)
+            self.assertEqual(len(renders), 3)
 
     def test_cap_is_enforced_on_the_probed_file_and_planned_with_a_margin(self):
         # Codex D406 re-review: the tolerance never lets a file over maxSec through; the plan leaves room for rounding
