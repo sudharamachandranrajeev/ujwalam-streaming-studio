@@ -3183,3 +3183,5 @@ posts automatically; English hype tone; already scheduled reels are rewritten au
 read-only scope is added; live voice markers yes, phrases not fixed yet (seed excitement words: adipoli, polich,
 pwolich, super, scene). Every AI result passes a checker (limits, schema, privacy, facts); any failure keeps the
 template text. Phases T1-T7 in the plan.
+T1 (2026-11-24): the runner's flag `local-ai-model` is ON by default (user-requested feature, memory "requested
+features ship ON"); off, the model never starts and template text is used.
