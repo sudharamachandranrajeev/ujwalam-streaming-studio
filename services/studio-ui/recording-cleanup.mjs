@@ -230,7 +230,7 @@ export async function runRecordingCleanup({ dataDir, folder, flagOn, status, sta
     const title = `Deleted ${n} recording${n === 1 ? '' : 's'}, freed ${gb} GB`;
     log(`clips: ${title} (listed in clips/${DELETED_RECORDINGS_LOG})`);
     if (typeof writeTask === 'function') {
-      try { writeTask(dataDir, { id: `rec-deleted-${nowMs}`, kind: 'clips', title, state: 'done', startedAt: nowMs, updatedAt: nowMs, note: 'Deleted permanently: every clip from them is made and reviewed (Delete clipped recordings)' }); } catch { /* the log has it */ }
+      try { writeTask(dataDir, { id: `rec-deleted-${nowMs}`, kind: 'clips', category: 'maintenance', title, state: 'done', startedAt: nowMs, updatedAt: nowMs, note: 'Deleted permanently: every clip from them is made and reviewed (Delete clipped recordings)' }); } catch { /* the log has it */ }
     }
   }
   return res;

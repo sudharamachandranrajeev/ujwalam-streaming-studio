@@ -63,7 +63,7 @@ import { createReelStyles } from './reel-styles.mjs';
 import { createMontageMusic } from './montage-music.mjs';
 import { createBeatdropReview } from './beatdrop-review.mjs';
 import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, montageMusicInfo, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
-import { TASKS_CONFIG, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskFile } from './tasks.mjs';
+import { NEXT_START, TASKS_CONFIG, TASK_CONTROLS, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskControl, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
 import { READINESS_FLAG, createReadiness, diskFreeBytes, lastCiPass, listProcessNames, loadReadinessConfig, logOverride, planTargets, readinessSummary } from './readiness.mjs';
 import { STOP_TASKS_FILE, clipTools } from './record-clips.mjs';
@@ -1006,6 +1006,23 @@ export function createStudioServer(opts) {
     renameSync(path.join(dir, 'stop-tasks.json.tmp'), path.join(dir, STOP_TASKS_FILE));
     return json(res, 200, { ok: true });
   }
+  // D442: one task's control from the task manager: { id, op: stop | pause | resume | next, nextStart? (op next:
+  // run | ask | notify) }. Only a control the task offers (its controls list) is accepted; pause also needs pausable
+  // (else 409 not-pausable with the task's plain reason). The launcher applies it on its next status tick
+  // (<dataDir>/clips/control/<id>.json, atomic). 202: asked; the task list shows the result.
+  function taskControl(res, body) {
+    if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+    if (!body || typeof body !== 'object' || Object.keys(body).some((k) => !['id', 'op', 'nextStart'].includes(k))) return json(res, 400, { error: 'bad-params' });
+    if (typeof body.id !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(body.id)) return json(res, 400, { error: 'bad-id' });
+    if (!TASK_CONTROLS.includes(body.op)) return json(res, 400, { error: 'bad-op' });
+    if (body.op === 'next' ? !NEXT_START.includes(body.nextStart) : body.nextStart !== undefined) return json(res, 400, { error: 'bad-next-start' });
+    const t = tasks.list().find((x) => x.id === body.id);
+    if (!t) return json(res, 404, { error: 'no-task' });
+    if (body.op === 'pause' && !t.pausable) return json(res, 409, { error: 'not-pausable', reason: t.pauseReason ?? 'This task cannot be paused' });
+    if (!t.controls?.includes(body.op)) return json(res, 409, { error: 'not-offered', reason: `This task cannot ${body.op === 'next' ? 'change its next start' : body.op} now` });
+    writeTaskControl(opts.dataDir, body.id, { op: body.op, ...(body.op === 'next' ? { nextStart: body.nextStart } : {}), atMs: now() });
+    return json(res, 202, { ok: true, id: body.id, op: body.op });
+  }
 
   // ---- status snapshot (text-free: counts, flags and numbers only; never chat text) ----
   // outputs: the status tick's shared outputs.status read (idle load, 2026-11-18); without it a fresh one is read.
@@ -1786,6 +1803,7 @@ export function createStudioServer(opts) {
     if (route === '/ui/api/clips/answer') return clipAnswer(res, body);
     if (route === '/ui/api/beatdrop/retake' || route === '/ui/api/beatdrop/play') { if (!beatdropReview) return json(res, 404, { error: 'no-data-dir' }); const r = route.endsWith('retake') ? beatdropReview.retake(body) : beatdropReview.play(body); return json(res, r.status, r.body); } // BD7b
     if (route === '/ui/api/tasks/stop') return stopTasks(res);
+    if (route === '/ui/api/tasks/control') return taskControl(res, body); // D442
     if (route === '/ui/api/updates/apply') {
       // LU7 (D343): one click applies a waiting update (D332: no typed phrase, no "are you sure"). Only a logged-in page
       // or the studio window reaches this (session cookie, same origin, CSRF); the launcher decides (a host update is

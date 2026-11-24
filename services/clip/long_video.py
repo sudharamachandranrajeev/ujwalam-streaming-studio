@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 
 import clip_montage as mont
 from clip_common import CLIP_DATA, flag_on, load_json
@@ -242,17 +241,23 @@ def clear_attempts(wd):
 
 
 def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, batch_pieces, render_job, run_tool, encoders,
-           audio, overlay=None, overlay_failed=None, gain_db=None, music=None, grade=None):
+           audio, overlay=None, overlay_failed=None, gain_db=None, music=None, grade=None, on_part=None, part_ok=None):
     """Renders the segments into wd/long-h.mp4. render_job(mk_argv, encoder, wd, part, what) -> (CompletedProcess,
     encoder) (clipper._render_job: stall watch, CPU retry). The parts and their list live in a per-attempt folder that
     is removed in finally (and by the next start, after a kill). overlay (LV1a/LV1b, D421/D422): overlay(chunk, first
     number, folder) -> {"ass", "fontsdir", "fx"} (each may be None): the ASS burned over that batch, fx a render_argv
     graph fragment ([fxin] -> [fxout], the callout cards); a batch that fails with it is rendered once more without it
     (overlay_failed(batch index, stderr) is told), so an overlay never stops the video. gain_db (D440): the one loudness
-    gain of the whole video (batch_parts + clip_loudness), the same in every batch.
+    gain of the whole video (batch_parts + clip_loudness), the same in every batch. on_part(n) (D442): told after batch n
+    (1-based) is saved; the studio may pause the job there (its safe point between batches).
     -> (ok, expected seconds, error or None)."""
     clear_attempts(wd)
-    adir = tempfile.mkdtemp(prefix=ATTEMPT_PREFIX, dir=wd)
+    # D442 resume: the parts live in a fixed folder (not an attempt folder), each with the key of its inputs, so a run
+    # paused or stopped between batches keeps the batches it saved; a part whose key, size or duration is wrong is
+    # made again. The folder goes once the video is joined (or the render failed).
+    adir = os.path.join(wd, PARTS_DIR)
+    os.makedirs(adir, exist_ok=True)
+    finished = False
     try:
         parts, expected, first = [], 0.0, 1
         for i, (chunk, seconds, bed) in enumerate(_render_batches(segs, batch_pieces, tr, music)):
@@ -260,6 +265,13 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
             pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
             ov = (overlay(chunk, first, adir) if overlay else None) or {}
             first += len(chunk)
+            key = part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov)
+            if part_done(adir, name, key, part_ok):
+                parts.append(name)
+                expected += seconds
+                if on_part:
+                    on_part(i + 1)
+                continue
 
             def mk(enc, pieces=pieces, name=name, ov=ov, bed=bed):
                 return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], PART_AUDIO, fade_ms, name + ".part",
@@ -273,19 +285,59 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
                 r, encoder = render_job(lambda enc, mk=mk: mk(enc, ov={}), encoder, adir, name + ".part",
                                         f"long video part {i + 1} without captions")
             if r.returncode != 0:
+                finished = True
                 return False, 0.0, f"part {i + 1} did not render: {r.stderr.strip()[-200:]}"
             os.replace(os.path.join(adir, name + ".part"), os.path.join(adir, name))
+            with open(os.path.join(adir, name + ".key"), "w", encoding="utf-8") as f:
+                f.write(key)
             parts.append(name)
             expected += seconds
+            if on_part:
+                on_part(i + 1)
         with open(os.path.join(adir, "parts.txt"), "w", encoding="utf-8") as f:
             f.write("".join(f"file '{p}'\n" for p in parts))
         r = run_tool(concat_argv(ffmpeg, "parts.txt", FILE + ".part", audio), cwd=adir, timeout=1800)
+        finished = True
         if r.returncode != 0:
             return False, 0.0, f"the parts did not join: {r.stderr.strip()[-200:]}"
         os.replace(os.path.join(adir, FILE + ".part"), os.path.join(wd, FILE))
         return True, round(expected, 3), None
     finally:
-        shutil.rmtree(adir, ignore_errors=True)
+        if finished:  # a kill or an error mid-way keeps the saved parts for the next run
+            shutil.rmtree(adir, ignore_errors=True)
+
+
+PARTS_DIR = "long-parts"  # D442: not an attempt folder (clear_attempts keeps it)
+
+
+def part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov):
+    """D442: the inputs of one batch, hashed (the overlay by its file contents, so new captions make it again)."""
+    import hashlib  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    def content(p):
+        try:
+            with open(p, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        except (OSError, TypeError):
+            return None
+    blob = json.dumps([pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, content(ov.get("ass")),
+                       ov.get("fx"), PART_CONTAINER], sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def part_done(adir, name, key, part_ok=None):
+    """D442: a saved batch can be used again: its key matches, the file is not empty and (part_ok) has a duration."""
+    p = os.path.join(adir, name)
+    try:
+        with open(p + ".key", encoding="utf-8") as f:
+            if f.read().strip() != key:
+                return False
+        if os.path.getsize(p) <= 0:
+            return False
+    except OSError:
+        return False
+    return part_ok(p) if part_ok else True
 
 def batch_parts(ffmpeg, src, segs, frame, enc_args, audio, fade_ms, tr, batch_pieces, audio_tracks, music=None):
     """D440: [(argv builder(gain), seconds)] per batch, as render() cuts them (no overlay: the sound is the same), for
