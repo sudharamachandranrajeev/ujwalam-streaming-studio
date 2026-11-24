@@ -3185,3 +3185,8 @@ pwolich, super, scene). Every AI result passes a checker (limits, schema, privac
 template text. Phases T1-T7 in the plan.
 T1 (2026-11-24): the runner's flag `local-ai-model` is ON by default (user-requested feature, memory "requested
 features ship ON"); off, the model never starts and template text is used.
+
+T2 (2026-11-24): flag `ai-post-text` is ON by default (user-requested; English, hype tone, fully automatic). Each draft
+gets AI title, description and tags only when the checker passes (limits, privacy, facts, numbers, kept credit lines);
+any failure keeps the template text and records `aiReject` in post.json. Number rule: claim-context numbers must be
+fact numbers; other digits in title/description reject the post; a tag with a non-fact number is dropped alone.

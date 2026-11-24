@@ -82,7 +82,7 @@ export function killClaims(text) {
 }
 
 // claim-context numbers: next to win/won/victory/rank/place/top (also 1st 2nd), N/M, xN, Nx
-const CLAIM_WORD = '(?:wins?|won|victory|ranked?|place|top|st|nd|rd|th)';
+const CLAIM_WORD = '(?:wins?|won|victory|rank(?:ed)?|place|top|st|nd|rd|th)';
 const CLAIM_NUM = new RegExp(`\\b${CLAIM_WORD}\\s*:?\\s*(\\d{1,3})\\b|\\b(\\d{1,3})\\s*-?\\s*${CLAIM_WORD}\\b|\\b(\\d{1,3})\\s*/\\s*(\\d{1,3})\\b|\\bx\\s*(\\d{1,3})\\b|\\b(\\d{1,3})\\s*x\\b`, 'gi');
 const KILL_NUM = new RegExp(`\\d{1,3}\\s*(?:-|\\s)?\\s*(?:x\\s*)?${KILL_WORD}\\b`, 'gi');
 const textOf =(t) => [t.title, t.description, ...t.tags, t.thumbHook].join('\n');

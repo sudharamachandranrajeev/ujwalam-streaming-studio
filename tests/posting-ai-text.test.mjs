@@ -39,7 +39,7 @@ function runner(reply, over = {}) {
 }
 
 const answer = (o = {}) => ({
-  title: 'Clutch finish nobody saw coming', description: 'Everything on the line.\nThe last push wins it.', tags: ['cod mobile', 'clutch', 'highlights', 'shooter', 'mobile gaming'],
+  title: 'Clutch finish nobody saw coming', description: 'Everything on the line.\nThe last push settles it.', tags: ['cod mobile', 'clutch', 'highlights', 'shooter', 'mobile gaming'],
   thumbHook: 'NO WAY', thumbTime: 3, factsSeen: { kills: null, result: null, mode: null, medal: null }, ...o,
 });
 
@@ -75,7 +75,7 @@ describe('AI text lands in the draft', () => {
       const j = JSON.parse(readFileSync(f, 'utf8'));
       assert.equal(j.textSource, 'ai');
       assert.equal(j.title, 'Clutch finish nobody saw coming');
-      assert.match(j.description, /^Everything on the line\.\nThe last push wins it\.\n\n/);
+      assert.match(j.description, /^Everything on the line\.\nThe last push settles it.\n\n/);
       assert.match(j.description, /Live on @example-channel/, 'the template description (links) is kept after the AI lines');
       assert.ok(j.tags.includes('clutch') && j.tags.includes('gaming'), 'AI tags first, template tags kept');
       assert.deepEqual(j.ai.thumbHook, 'NO WAY');
