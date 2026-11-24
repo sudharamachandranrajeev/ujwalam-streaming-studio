@@ -45,6 +45,10 @@
 // Daily budget (quota-budget.mjs, Codex review 2026-11-13): every upload start or resume counts against the rules'
 // maxUploadsPerDay (UTC day) and the quota units (Pacific day); every API read (schedule reads, status checks) counts 1
 // unit. Over budget: the items wait ('daily-cap-reached' / 'quota-day-used'), no attempt is used.
+// D444 (IP2): Instagram Reels, opt-in by the caller (opts.instagram: true | { auth, fetchImpl, endpoints, cfg, sleep }; the
+// studio launcher passes true). Each Shorts clip in the queue gets an Instagram job (instagram-queue.mjs) while the flag
+// instagram-autopost is on and Instagram is connected; one due job is posted per pass, never while live. The delete pass
+// keeps a clip's file while Instagram still wants it (not posted yet, failed, or its state unreadable).
 // D409 (second Codex review, 2026-11-21): this chain is the only sender. Every upload goes through sendGated (budget
 // gate + quotaExceeded record) inside one schedule-lock hold per pass; every new session is preceded by a complete
 // channel read in that hold and the 60-min check. The studio's Upload button and `cli.mjs youtube upload` only queue.
@@ -75,6 +79,8 @@ import { createQuotaBudget, exhaustedUntil, loadQuota, quotaFallback, recordQuot
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { userKindShares } from './post-prefs.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
+import { createInstagramAuth } from './instagram.mjs';
+import { createInstagramPoster } from './instagram-queue.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const QUEUE_NAME = 'upload-queue.json';
@@ -649,6 +655,13 @@ export function createPostChain(opts) {
   // opts.quotaFile (tests): another quota data file than data/posting/quota.json.
   const budget = opts.budget ?? createQuotaBudget({ dataDir, nowMs, ...(opts.quotaFile ? { quota: () => loadQuota(dataDir, opts.quotaFile, { nowMs: nowMs() }) } : {}) });
   const apiFetch = budget.meter(opts.fetchImpl ?? fetch);
+  // D444: Instagram poster (null = not opted in: the chain behaves exactly as before)
+  const ig = !opts.instagram ? null : createInstagramPoster({
+    dataDir, flags, log, nowMs, liveBlock: () => liveBlock(outputsStatus), halted: () => halted,
+    gapMs: () => { const c = scheduleCfg(); return c && Number.isFinite(c.intervalHours) ? c.intervalHours * 60 * 60 * 1000 : null; },
+    auth: opts.instagram === true || !opts.instagram.auth ? createInstagramAuth({ browserOpen: async () => { throw new Error('sign-in is never started from the background'); } }) : opts.instagram.auth,
+    ...(opts.instagram === true ? {} : { fetchImpl: opts.instagram.fetchImpl, endpoints: opts.instagram.endpoints, cfg: opts.instagram.cfg, sleep: opts.instagram.sleep }),
+  });
   const getAuth = () => opts.auth ?? createYoutubeAuth({ browserOpen: async () => { throw new Error('sign-in is never started from the background'); } });
 
   const sessions = {
@@ -1068,6 +1081,8 @@ export function createPostChain(opts) {
     const names = [];
     for (const item of due) {
       const later = new Date(t + STATUS_EVERY_MS).toISOString();
+      // D444 data-loss rule: Instagram still wants this clip (not posted, failed, or its state unreadable): keep the file.
+      if (ig && await ig.holdsFile(item.id, { target: store.get(item.id)?.target ?? null, ytState: item.state })) { queue.patch(item.id, { deleteReason: 'instagram-pending', deleteCheckAt: later }); continue; }
       let status;
       try { status = await checkUploadStatus({ videoId: item.videoId, accessToken, fetchImpl: apiFetch }); } catch {
         queue.patch(item.id, { deleteReason: 'status-unreadable', deleteCheckAt: later }); continue;
@@ -1149,6 +1164,10 @@ export function createPostChain(opts) {
       // Oldest clip first (D375), or the backlog order (D403): the queue's order is the order slots are given out in.
       for (const p of (order ?? oldestFirst)(store.list())) if (p.status === 'approved' && UPLOAD_TARGETS.includes(p.target) && autoApproved.has(p.id)) queue.add(p.id);
       await processQueue(store, rules);
+    }
+    if (ig) {
+      ig.resetPass();
+      try { await ig.sync(queue.items(), store); await ig.pass(store); } catch (e) { log(`posting: Instagram error (${String(e?.code ?? e?.name ?? 'error').slice(0, 40)})`); }
     }
     const deleted = await deletePass(store);
     // Last, and only when nothing this pass said more (a sign-in wait outranks it).

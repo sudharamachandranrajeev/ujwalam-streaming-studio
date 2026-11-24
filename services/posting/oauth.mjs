@@ -98,12 +98,17 @@ function tokenRequest(url, form, { request } = {}) {
 
 /** One-shot loopback listener: resolves { code, state } from the redirect, or rejects on timeout/error/cancel.
  *  Serves a tiny HTML page so the browser tab shows something, then closes. Binds 127.0.0.1 only. */
-export function loopbackListener({ timeoutMs = LOOPBACK_TIMEOUT_MS, signal } = {}) {
-  let server;
+// port (D444): 0 = a random free port (Google accepts any loopback port); Facebook Login needs the exact redirect URI
+// registered in the Meta app, so the Instagram sign-in passes its fixed port from data/posting/instagram.json.
+export function loopbackListener({ timeoutMs = LOOPBACK_TIMEOUT_MS, signal, port: listenPort = 0, alsoV6 = false } = {}) {
+  let server; let server6 = null;
+  // alsoV6 (D444): the same handler also on [::1]:<port>, so a browser that resolves `localhost` to ::1 reaches it. Still
+  // loopback only; if this PC has no IPv6 loopback the extra listener is skipped.
+  const closeAll = () => { try { server.close(); } catch { /* already closing */ } try { server6?.close(); } catch { /* already closing */ } };
   const result = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { try { server.close(); } catch { /* already closing */ } reject(new OAuthError('oauth-timeout', 'no redirect received in time')); }, timeoutMs);
+    const timer = setTimeout(() => { closeAll(); reject(new OAuthError('oauth-timeout', 'no redirect received in time')); }, timeoutMs);
     // signal (optional): the caller gave up (a cancelled sign-in); the listener closes at once instead of waiting.
-    signal?.addEventListener('abort', () => { clearTimeout(timer); try { server.close(); } catch { /* already closing */ } reject(new OAuthError('oauth-cancelled', 'sign-in cancelled')); }, { once: true });
+    signal?.addEventListener('abort', () => { clearTimeout(timer); closeAll(); reject(new OAuthError('oauth-cancelled', 'sign-in cancelled')); }, { once: true });
     server = createServer((req, res) => {
       const u = new URL(req.url, 'http://127.0.0.1');
       if (u.pathname !== '/') { res.writeHead(404).end(); return; }
@@ -112,7 +117,7 @@ export function loopbackListener({ timeoutMs = LOOPBACK_TIMEOUT_MS, signal } = {
       res.end(err ? '<html><body>Sign-in was not completed. You can close this tab.</body></html>'
         : '<html><body>Signed in. You can close this tab and return to Ujwalam.</body></html>');
       clearTimeout(timer);
-      try { server.close(); } catch { /* best effort */ }
+      closeAll();
       if (err) { reject(new OAuthError('oauth-denied', err)); return; }
       const code = u.searchParams.get('code');
       const state = u.searchParams.get('state');
@@ -123,9 +128,13 @@ export function loopbackListener({ timeoutMs = LOOPBACK_TIMEOUT_MS, signal } = {
   });
   result.catch(() => {}); // a cancel or time-out before the caller awaits it is not an unhandled rejection
   const ready = new Promise((resolve, reject) => {
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(listenPort, '127.0.0.1', () => {
       const { port } = server.address();
-      resolve({ port, redirectUri: `http://127.0.0.1:${port}/`, result });
+      const done = () => resolve({ port, redirectUri: `http://127.0.0.1:${port}/`, result });
+      if (!alsoV6) { done(); return; }
+      server6 = createServer(server.listeners('request')[0]);
+      server6.once('error', () => { server6 = null; done(); });
+      server6.listen(port, '::1', done);
     });
     server.once('error', reject);
   });

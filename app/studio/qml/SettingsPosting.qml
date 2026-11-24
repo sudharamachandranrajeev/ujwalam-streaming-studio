@@ -6,6 +6,9 @@
 // removing a queued clip acts on its own click (ui/api/posts/auto/queue/move|remove, D332). Not live-gated, like the widget.
 // PT5 (D410): the POST TEXT AND GROWTH card (tone, emoji, own hashtags, footer with a preview on the newest clips, the
 // share of each kind, growth suggestions) loads ui/api/posts/prefs and saves it with the same Save / Discard.
+// D444 INSTAGRAM REELS card: ui/api/posts/instagram (state, never a secret or token), .../app (App ID + App Secret to the
+// Credential Manager), .../connect (Facebook Login in the browser), .../disconnect, and the flag instagram-autopost
+// (ui/api/flags/set). Each acts on its own click (D332), outside Save / Discard.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -59,6 +62,60 @@ Column {
     readonly property var weekDays: [{ id: "mon", text: "Mon" }, { id: "tue", text: "Tue" }, { id: "wed", text: "Wed" }, { id: "thu", text: "Thu" }, { id: "fri", text: "Fri" }, { id: "sat", text: "Sat" }, { id: "sun", text: "Sun" }]
 
     readonly property bool active: box.ready && box.flagOn("posting")
+    // ---- D444 Instagram Reels ----
+    property var ig: ({ hasApp: false, connected: false, username: null, expiresAt: null, redirectUri: "", flagOn: false, connecting: false, lastError: null, queue: null })
+    property bool igLoaded: false
+    property string igAppId: ""
+    property string igSecret: ""
+    property string igMsg: ""
+    readonly property string igStatus: !igLoaded ? "Checking Instagram..."
+        : ig.connecting ? "Waiting for you to finish signing in to Facebook in the browser..."
+        : ig.connected ? "Connected" + (ig.username ? " to @" + ig.username : "") + (ig.expiresAt ? ". The sign-in renews itself (now valid until " + String(ig.expiresAt).slice(0, 10) + ")." : ".")
+        : !ig.hasApp ? "Not connected. Save your Meta app's App ID and App Secret, then click Connect."
+        : "Not connected. Click Connect and allow Ujwalam in the browser."
+    readonly property string igQueueText: {
+        const q = ig.queue;
+        if (!ig.connected || !q) return "";
+        const parts = [];
+        if (q.done) parts.push(q.done + " posted");
+        if (q.waiting) parts.push(q.waiting + " waiting" + (q.nextAt ? " (next " + localTime(q.nextAt) + ")" : ""));
+        if (q.posting) parts.push(q.posting + " posting now");
+        if (q.failed) parts.push(q.failed + " failed");
+        return (parts.length ? "Reels: " + parts.join(", ") + "." : "No Reels yet.") + (q.reasonText ? " " + q.reasonText + "." : "");
+    }
+    function renderIg(b) { ig = b; igLoaded = true }
+    function loadIg() {
+        Api.get("ui/api/posts/instagram", (ok, b, err) => { if (ok) renderIg(b); else igMsg = "Instagram state is not available: " + err });
+    }
+    function saveIgApp() {
+        if (igAppId.trim() === "" && igSecret.trim() === "") { igMsg = "Type the App ID and App Secret first."; return false }
+        Api.post("ui/api/posts/instagram/app", { appId: igAppId.trim(), appSecret: igSecret.trim() }, (ok, b, err) => {
+            if (ok) { renderIg(b); igSecret = ""; igMsg = "Saved in Windows Credential Manager." }
+            else igMsg = "Not saved: " + ((b && b.text) ? b.text : err);
+        });
+        return true;
+    }
+    function connectIg() {
+        igMsg = "";
+        Api.post("ui/api/posts/instagram/connect", {}, (ok, b, err) => { if (ok) renderIg(b); else igMsg = "Could not start: " + ((b && b.text) ? b.text : err) });
+        return true;
+    }
+    function disconnectIg() {
+        Api.post("ui/api/posts/instagram/disconnect", {}, (ok, b, err) => { if (ok) { renderIg(b); igMsg = "Disconnected." } else igMsg = "Not disconnected: " + ((b && b.text) ? b.text : err) });
+        return true;
+    }
+    function dropIg() {
+        Api.post("ui/api/posts/instagram/drop", {}, (ok, b, err) => {
+            if (ok) { renderIg(b); igMsg = b.dropped ? "Dropped " + b.dropped + " clip(s) from the Instagram queue. Their files are no longer kept for Instagram." : "Nothing was waiting for Instagram." }
+            else igMsg = "Not dropped: " + ((b && b.text) ? b.text : err);
+        });
+        return true;
+    }
+    function setIgFlag(on) {
+        Api.post("ui/api/flags/set", { id: "instagram-autopost", on: on }, (ok, b, err) => { if (!ok) igMsg = "Not changed: " + err; loadIg() });
+        return true;
+    }
+    Timer { interval: 2000; repeat: true; running: ap.ig.connecting && ap.visible; onTriggered: ap.loadIg() }
     readonly property bool cardDirty: loaded && JSON.stringify(card) !== orig
     readonly property bool rulesDirty: loaded && rulesOwn && JSON.stringify(rulesEdit) !== rulesOrig
     readonly property bool prefsDirty: prefsLoaded && JSON.stringify(prefs) !== prefsOrig
@@ -192,6 +249,7 @@ Column {
             loadTimes(false);
             loadRules(b.custom === true);
         });
+        loadIg();
         Api.get("ui/api/posts/prefs", (ok, b, err) => {
             if (g !== gen) return;
             if (!ok) { prefsError = "Post text settings are not available: " + err; return }
@@ -1192,13 +1250,88 @@ Column {
         Quiet { objectName: "autopostMsg"; text: ap.message }
     }
 
+    UCard {
+        title: "INSTAGRAM REELS"
+        objectName: "igCard"
+        Quiet { text: "Posts each clip that goes to YouTube Shorts as an Instagram Reel too, as many a day as Instagram allows, at least the auto-post gap apart and never while you are live. Instagram has no scheduled posts, so a Reel goes up while the studio is open; a missed time posts at the next start. Needs an Instagram professional account linked to a Facebook Page, and your own Meta app." }
+        Words { objectName: "igStatus"; width: parent.width; wrapMode: Text.Wrap; text: ap.igStatus }
+        Quiet { objectName: "igQueue"; visible: text !== ""; text: ap.igQueueText }
+        Quiet { objectName: "igError"; visible: !!ap.ig.lastError; color: Theme.c.danger; text: ap.ig.lastError || "" }
+        USwitch {
+            id: igSw
+            objectName: "igFlag"
+            width: parent.width
+            text: ap.ig.flagOn ? "Instagram Reels autopost on" : "Instagram Reels autopost off"
+            checked: ap.ig.flagOn
+            onToggled: ap.setIgFlag(checked)
+            Binding { target: igSw; property: "checked"; value: ap.ig.flagOn }
+        }
+        Flow {
+            width: parent.width
+            spacing: Theme.sp.m
+            Field {
+                label: "App ID"
+                UField {
+                    objectName: "igAppId"
+                    width: parent.width
+                    label: "App ID"
+                    text: ap.igAppId
+                    onTextEdited: ap.igAppId = text
+                    inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhNoPredictiveText
+                    placeholderText: ap.ig.hasApp ? "Saved (leave empty to keep it)" : "From your Meta app's Basic settings"
+                }
+            }
+            Field {
+                label: "App Secret"
+                Item {
+                    objectName: "igSecretBox" // the field itself is not named: the probe tree never lists its text
+                    width: parent.width
+                    height: 34
+                    UField {
+                        anchors.fill: parent
+                        label: "App Secret"
+                        text: ap.igSecret
+                        onTextEdited: ap.igSecret = text
+                        echoMode: TextInput.Password // never shown, never echoed back by the server
+                        inputMethodHints: Qt.ImhHiddenText | Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
+                        placeholderText: ap.ig.hasApp ? "Saved (leave empty to keep it)" : "Kept in Windows Credential Manager only"
+                    }
+                }
+            }
+        }
+        Row {
+            spacing: Theme.sp.s
+            UButton { objectName: "igSave"; text: "Save app"; tip: "Saves the App ID and App Secret in Windows Credential Manager. They are never shown again."; onClicked: ap.saveIgApp() }
+            UButton {
+                objectName: "igConnect"
+                text: ap.ig.connected ? "Connect again" : "Connect"
+                kind: "primary"
+                enabled: ap.ig.hasApp && !ap.ig.connecting
+                tip: "Opens Facebook in your browser. Sign in, allow Ujwalam, then come back here."
+                onClicked: ap.connectIg()
+            }
+            UButton {
+                objectName: "igDrop"
+                visible: !!ap.ig.queue && (ap.ig.queue.waiting + ap.ig.queue.failed + ap.ig.queue.posting) > 0
+                text: "Drop Instagram queue"
+                tip: "Clips waiting for Instagram are never posted there. Their files are no longer kept for Instagram, so Delete posted clips forever can remove them once YouTube has them."
+                onClicked: ap.dropIg()
+            }
+            UButton { objectName: "igDisconnect"; visible: ap.ig.connected; text: "Disconnect"; tip: "Removes the saved Instagram sign-in from this PC. Nothing more is posted to Instagram."; onClicked: ap.disconnectIg() }
+        }
+        Quiet { objectName: "igRedirect"; text: "In your Meta app (Facebook Login > Settings > Valid OAuth Redirect URIs) add exactly: " + (ap.ig.redirectUri || "(not known)") }
+        Quiet { objectName: "igMsg"; visible: text !== ""; text: ap.igMsg }
+    }
+
     // ---- probe (tests): the same names and values as the widget card's probe ----
     function probe() {
         return { loaded: loaded, card: JSON.parse(JSON.stringify(card)), dirty: dirty, fit: fit, flags: flagsText, problem: problem,
             rulesOwn: rulesOwn, rulesProblem: rulesProblem, rules: JSON.parse(JSON.stringify(rulesEdit)), notices: notices.slice(), customNext: customNext.slice(),
             timesInfo: timesInfo, times: times.map(t => t.text), message: message, stuckLockId: stuckLockId,
             prefsLoaded: prefsLoaded, prefs: JSON.parse(JSON.stringify(prefs)), prefsDirty: prefsDirty, prefsError: prefsError, shareSum: shareSum, quotaModel: quotaModel,
-            previewInfo: previewInfo, preview: previewItems.map(i => String(i.title)), gridProblem: gridProblem, offsetsText: offsetsText };
+            previewInfo: previewInfo, preview: previewItems.map(i => String(i.title)), gridProblem: gridProblem, offsetsText: offsetsText,
+            ig: { loaded: igLoaded, hasApp: ig.hasApp === true, connected: ig.connected === true, username: ig.username || "", flagOn: ig.flagOn === true, connecting: ig.connecting === true,
+                status: igStatus, queue: igQueueText, redirectUri: ig.redirectUri || "", msg: igMsg, appIdTyped: igAppId, secretTyped: igSecret.length > 0 } };
     }
 
     // ap-upload:<on|off> | ap-kind:<id>:<on|off> | ap-score:<n> | ap-perday:<n> | ap-gap:<h> | ap-days:<n> | ap-placement:<id>
@@ -1207,6 +1340,15 @@ Column {
         if (!loaded) return false;
         const a = p[0], arg = p[1];
         const on = (v) => v === "on" || v === "1";
+        // D444: ap-ig-appid:<digits> | ap-ig-secret:<text> | ap-ig-save | ap-ig-connect | ap-ig-disconnect | ap-ig-drop | ap-ig-flag:<on|off> | ap-ig-refresh
+        if (a === "ap-ig-appid") { igAppId = String(arg || ""); return true }
+        if (a === "ap-ig-secret") { igSecret = String(arg || ""); return true }
+        if (a === "ap-ig-save") return saveIgApp();
+        if (a === "ap-ig-connect") return connectIg();
+        if (a === "ap-ig-disconnect") return disconnectIg();
+        if (a === "ap-ig-drop") return dropIg();
+        if (a === "ap-ig-flag") return setIgFlag(on(arg));
+        if (a === "ap-ig-refresh") { loadIg(); return true }
         if (a === "ap-upload") return set("autoUpload", on(arg));
         if (a === "ap-clearlock") { if (stuckLockId === "") return false; clearLock(); return true }
         if (a === "ap-kind" && p.length === 3) return setKind(arg, on(p[2]));
