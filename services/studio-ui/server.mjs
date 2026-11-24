@@ -63,7 +63,7 @@ import { createReelStyles } from './reel-styles.mjs';
 import { createMontageMusic } from './montage-music.mjs';
 import { createBeatdropReview } from './beatdrop-review.mjs';
 import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, montageMusicInfo, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
-import { NEXT_START, TASKS_CONFIG, TASK_CONTROLS, createTasks, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskControl, writeTaskFile } from './tasks.mjs';
+import { NEXT_START, TASKS_CONFIG, TASK_CONTROLS, createTasks, currentClipTaskIds, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskControl, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
 import { READINESS_FLAG, createReadiness, diskFreeBytes, lastCiPass, listProcessNames, loadReadinessConfig, logOverride, planTargets, readinessSummary } from './readiness.mjs';
 import { STOP_TASKS_FILE, clipTools } from './record-clips.mjs';
@@ -1019,7 +1019,8 @@ export function createStudioServer(opts) {
     if (!TASK_CONTROLS.includes(body.op)) return json(res, 400, { error: 'bad-op' });
     if (body.op === 'next' ? !NEXT_START.includes(body.nextStart) : body.nextStart !== undefined) return json(res, 400, { error: 'bad-next-start' });
     const t = tasks.list().find((x) => x.id === body.id);
-    if (!t) return json(res, 404, { error: 'no-task' });
+    // Codex round 3: only a job the launcher has running or queued now (a row left from a gone job is not controllable)
+    if (!t || !currentClipTaskIds(opts.dataDir).has(body.id)) return json(res, 404, { error: 'no-task' });
     if (body.op === 'pause' && !t.pausable) return json(res, 409, { error: 'not-pausable', reason: t.pauseReason ?? 'This task cannot be paused' });
     if (!t.controls?.includes(body.op)) return json(res, 409, { error: 'not-offered', reason: `This task cannot ${body.op === 'next' ? 'change its next start' : body.op} now` });
     writeTaskControl(opts.dataDir, body.id, { op: body.op, ...(body.op === 'next' ? { nextStart: body.nextStart } : {}), atMs: now() });

@@ -47,6 +47,7 @@ const PART_NAMES = Object.freeze(['Clip maker (Python)', 'Screen reader (OCR)', 
 export const END_TEXT = Object.freeze({
   done: 'Finished', failed: 'Stopped with an error; the full log is on this computer', stopped: 'Stopped by you',
   paused: 'Paused by you', 'paused-live': 'Paused while the stream runs', 'paused-rec': 'Paused while recording',
+  'not-started': 'Could not start; it tries again shortly',
 });
 export const LOG_EVENT_VERSION = 1;
 const n = (v) => (Number.isSafeInteger(v) && v >= 0 && v <= 1e6 ? v : null);
@@ -357,4 +358,16 @@ export function createTasks({ dataDir = null, now = Date.now, stallAfterMs = loa
     return out;
   }
   return { start, track, list, isFinished: (t) => FINISHED.has(t.state) };
+}
+
+/** D442: the task id of a clip-queue job (record-clips writes it; the control route checks requests against it). */
+export const clipJobTaskId = (j) => `${j.type === 'long' ? 'long' : j.type === 'beatdrop' ? 'beatdrop' : 'clip'}-${String(j.name ?? 'run').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60)}-${j.jobId ?? 'x'}`;
+/** Codex round 3: the task ids of the jobs the launcher has running or queued now (its clips/status.json). A task row
+ *  left over from a job that is gone is not one of them. Unreadable: none. */
+export function currentClipTaskIds(dataDir) {
+  try {
+    const s = JSON.parse(readFileSync(path.join(dataDir, 'clips', 'status.json'), 'utf8'));
+    return new Set([s?.running, ...(Array.isArray(s?.queued) ? s.queued : [])]
+      .filter((j) => j && typeof j === 'object' && typeof j.jobId === 'string' && /^[0-9a-f]{8}$/.test(j.jobId)).map(clipJobTaskId));
+  } catch { return new Set(); }
 }

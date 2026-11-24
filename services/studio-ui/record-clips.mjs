@@ -35,7 +35,7 @@ import path from 'node:path';
 import { PARENT_PIPE_ENV } from '../common/parent-pipe.mjs';
 import { killChildTree } from '../common/kill-tree.mjs';
 import { clipsFolder, readSettings, writeSettings } from './user-settings.mjs';
-import { DEFAULT_NEXT_START, NEXT_START, ackTaskControls, peekTaskControls, pushLogEvent, removeTaskFile, writeTaskFile } from './tasks.mjs';
+import { DEFAULT_NEXT_START, NEXT_START, ackTaskControls, clipJobTaskId, peekTaskControls, pushLogEvent, removeTaskFile, writeTaskFile } from './tasks.mjs';
 import { RETAKE_FILE, RETAKE_OPS, knownRuns, pieceBlocks, retakeProblems, runsDir, sourceOf } from './beatdrop-review.mjs';
 import { CLEANUP_FLAG, appendJobRecord, fileIdentity, runRecordingCleanup } from './recording-cleanup.mjs';
 
@@ -446,7 +446,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
         }
         // Codex review: a stop asked for before the close is done now; a pause asked for stands
         if (j.stopReq === true) { delete job.stopReq; stoppedAtClose.push(job); continue; }
-        if (j.paused === true || j.pauseAt === true) { job.paused = true; delete job.pauseAt; } else { delete job.paused; if (nextStart !== 'run') job.awaitStart = true; }
+        // Codex round 3: awaitFromNext: this wait comes from the next-start choice, so a replayed Next start request (asked
+        // before the close, read at the first dispatch, before any start) can still change it
+        if (j.paused === true || j.pauseAt === true) { job.paused = true; delete job.pauseAt; } else { delete job.paused; if (nextStart !== 'run') { job.awaitStart = true; job.awaitFromNext = true; } }
         queue.push(job);
       }
     }
@@ -459,7 +461,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
 
   // Task bar (tasks.mjs): one task file per clip job, rewritten with every status write (that also keeps it fresh).
   // Codex review: the job's own id makes it unique (two jobs from one recording name, a retake beside its montage).
-  const taskId = (j) => `${j.type === 'long' ? 'long' : j.type === 'beatdrop' ? 'beatdrop' : 'clip'}-${String(j.name ?? 'run').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60)}-${j.jobId ?? 'x'}`;
+  const taskId = clipJobTaskId;
   // D442: the task manager fields of a queue job (category, controls, pause, next start, question, log tail).
   const ctl = (j) => {
     const pi = pauseInfo(j);
@@ -497,16 +499,17 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     if (t) writeTaskFile(dataDir, t);
     watchEnded = false;
   };
-  const finishTask = (j, ok, note) => writeTaskFile(dataDir, { id: taskId(j), kind: 'clips', category: jobCategory(j), logEvents: j.logEvents ?? [], title: j.type === 'beatdrop' ? (ok ? `${beatdropTitle(j)} done` : `${beatdropTitle(j)} not made`) : j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : j.type === 'long' ? (ok ? `Long highlights video done for ${j.name}` : `Long highlights video from ${j.name} not made`) : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
+  // Codex round 3: a finished row is published only after the status that no longer holds the job is committed (write)
+  let finished = [];
+  const finishTask = (j, ok, note) => { finished.push(finishRow(j, ok, note)); };
+  const finishRow = (j, ok, note) => ({ id: taskId(j), kind: 'clips', category: jobCategory(j), logEvents: j.logEvents ?? [], title: j.type === 'beatdrop' ? (ok ? `${beatdropTitle(j)} done` : `${beatdropTitle(j)} not made`) : j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : j.type === 'long' ? (ok ? `Long highlights video done for ${j.name}` : `Long highlights video from ${j.name} not made`) : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
   for (const j of stoppedAtClose) finishTask(j, false, 'Stopped by you');
   const trainOn = () => { try { return trainFlag() === true; } catch { return false; } };
 
   const write = () => {
-    writeTasks();
     const s = readSettings(dataDir);
     const t = clipTools({ clipRoot });
     const lc = lcState();
-    if (!halted) writeLiveTask(lc);
     const liveClipperOut = lc ? { ...lc, watching, since: watchSince === null ? null : iso(watchSince), saves: savesNow } : null;
     const out = { liveClipper: liveClipperOut, at: iso(now()), state: current && !halted ? 'running' : queue.length ? 'queued' : 'idle', available: !!t.py, reason: t.reason, fix: t.fix, missing: t.missing,
       settings: s.clips, folder: clipsFolder(dataDir, s),
@@ -518,8 +521,13 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       writeFileSync(`${statusFile}.tmp`, JSON.stringify(out, null, 2));
       renameSync(`${statusFile}.tmp`, statusFile);
       writeOk = true;
-      return true;
     } catch { writeOk = false; return false; } // the UI's view and the user's requested state: nothing starts until it is saved
+    // Codex round 3: the task rows follow the committed status, never the other way round
+    writeTasks();
+    if (!halted) writeLiveTask(lc);
+    const f = finished; finished = [];
+    for (const r of f) writeTaskFile(dataDir, r);
+    return true;
   };
   const setWorker = (on) => {
     // Rewritten every tick while on (the worker ignores a file older than 30 s, so a crashed launcher stops it).
@@ -527,6 +535,12 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     workerOn = on;
     try { mkdirSync(stateDir, { recursive: true }); writeFileSync(workerFile, JSON.stringify({ on, atMs: now() })); } catch { /* next tick */ }
     if (on !== workerOn) log(`clips: watching for moments ${on ? 'on' : 'off'}`);
+  };
+  // Codex round 3: a start that failed: the job stays queued and is tried again; its task says so (a typed event)
+  const launchFailed = (job, e) => {
+    log(`clips: ${job?.name ?? 'a job'} could not start (${String(e?.code ?? e?.message ?? 'error').slice(0, 60)}); it is tried again`);
+    if (job) pushLogEvent(job.logEvents ??= [], { type: 'end', code: 'not-started' });
+    try { write(); } catch { /* next tick */ }
   };
   const add = (job, why) => { job.nextStart ??= DEFAULT_NEXT_START; job.jobId ??= newJobId(); queue.push(job); log(`clips: ${why}`); };
   const start = () => {
@@ -558,7 +572,8 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       if (r !== true && r !== false) {
         checkingModel = true;
         // Codex round 4 (P1): the check can end after the stream went live; the job then waits for the off-air start.
-        Promise.resolve(r).catch(() => false).then((ok) => { checkingModel = false; settle(ok); write(); if (!stopped) dispatch(); });
+        Promise.resolve(r).catch(() => false).then((ok) => { checkingModel = false; settle(ok); write(); if (!stopped) dispatch(); })
+          .catch((e) => launchFailed(job, e));
         return;
       }
       settle(r);
@@ -578,25 +593,34 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
           log(`clips: ${job.name} waits (the outputs are on, or their state is not known right now)`); return; // next tick
         }
         if (stopped || child) return;
-        job.freshAt = now(); start();
-      });
+        // Codex round 3: the controls that came during the wait are applied, the job is picked again and every gate
+        // is checked again (dispatch); the answer counts for this job for FRESH_MS
+        job.freshAt = now(); dispatch();
+      }).catch((e) => { launching = false; launchFailed(job, e); });
       return;
     }
     delete job.freshAt;
-    mkdirSync(spec.out, { recursive: true });
     const logFile = path.join(stateDir, `run-${job.name}.log`);
-    mkdirSync(stateDir, { recursive: true });
-    const fd = openSync(logFile, 'a');
-    current = job;
-    // Codex round 2: the files' identity when the job starts reading them; the finish record needs the same files.
-    job.hId = typeof job.h === 'string' && job.h ? fileIdentity(job.h) : null; job.vId = typeof job.v === 'string' && job.v ? fileIdentity(job.v) : null;
-    progress = null;
-    job.activeAt = now(); job.progressAt = null; // the stall warning measures silence from here (tasks.mjs stallOf)
-    // stdin: the parent pipe (D234): when the launcher is gone (even hard-killed) the clipper ends itself and its ffmpeg
-    // children (clip_common.end_tree_when_parent_gone), so nothing runs on unseen after Ujwalam closed (D311 proposed).
-    child = spawnFn(spec.exe, spec.argv, { stdio: ['pipe', fd, 'pipe'], windowsHide: true, cwd: clipRoot, env: { ...process.env, [PARENT_PIPE_ENV]: '1', ...(job.captionsOk === false ? { UJWALAM_REEL_CAPTIONS: 'off' } : {}), ...(job.look ? { UJWALAM_CLIP_LOOK: JSON.stringify(job.look) } : {}) } });
-    child.stdin?.on?.('error', () => {});
-    closeSync(fd);
+    let fd = null;
+    try {
+      mkdirSync(spec.out, { recursive: true });
+      mkdirSync(stateDir, { recursive: true });
+      fd = openSync(logFile, 'a');
+      current = job;
+      // Codex round 2: the files' identity when the job starts reading them; the finish record needs the same files.
+      job.hId = typeof job.h === 'string' && job.h ? fileIdentity(job.h) : null; job.vId = typeof job.v === 'string' && job.v ? fileIdentity(job.v) : null;
+      progress = null;
+      job.activeAt = now(); job.progressAt = null; // the stall warning measures silence from here (tasks.mjs stallOf)
+      // stdin: the parent pipe (D234): when the launcher is gone (even hard-killed) the clipper ends itself and its ffmpeg
+      // children (clip_common.end_tree_when_parent_gone), so nothing runs on unseen after Ujwalam closed (D311 proposed).
+      child = spawnFn(spec.exe, spec.argv, { stdio: ['pipe', fd, 'pipe'], windowsHide: true, cwd: clipRoot, env: { ...process.env, [PARENT_PIPE_ENV]: '1', ...(job.captionsOk === false ? { UJWALAM_REEL_CAPTIONS: 'off' } : {}), ...(job.look ? { UJWALAM_CLIP_LOOK: JSON.stringify(job.look) } : {}) } });
+      child.stdin?.on?.('error', () => {});
+    } catch (e) {
+      // Codex round 3: a start that fails (folder, log file, spawn) leaves the job queued; it is tried again
+      current = null; child = null;
+      launchFailed(job, e);
+      return;
+    } finally { if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } } }
     // stderr: copied to the log and scanned for `ujwalam-progress {...}` lines (the task bar's progress).
     let pending = ''; let lastWrite = 0;
     child.stderr?.on?.('data', (chunk) => {
@@ -619,7 +643,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
         }
       }
       if (pending.length > 4000) pending = '';
-      if (progress && now() - lastWrite >= 0) { lastWrite = now(); writeTasks(); }
+      if (progress && writeOk && now() - lastWrite >= 0) { lastWrite = now(); writeTasks(); } // Codex round 3: rows follow a committed status
     });
     try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* a fake child has no pid */ }
     log(`clips: making clips from ${job.name} (log ${logFile})`);
@@ -738,7 +762,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     if (halted || !(Number(r?.atMs) >= createdAt)) return;
     halted = true; stopped = true;
     if (child) killTreeFn(child);
-    for (const j of queue) finishTask(j, false, 'Stopped by you; it runs again at the next start');
+    for (const j of queue) writeTaskFile(dataDir, finishRow(j, false, 'Stopped by you; it runs again at the next start')); // the queue is kept
     log(`clips: stopped by you (${queue.length} job(s) run again at the next start)`);
     postChain?.stopTasks?.();
   };
@@ -752,10 +776,13 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   // A request whose job has gone (or from an earlier launcher) is dropped. A resume clears a pause still in flight.
   const readControls = () => {
     const reqs = peekTaskControls(dataDir);
+    // Codex round 3: a job keeps an applied request's key while its file is there (a delete that failed), then drops it
+    const present = new Set(reqs.map((r) => r.key));
+    for (const q of queue) if (Array.isArray(q.applied)) { q.applied = q.applied.filter((k) => present.has(k)); if (!q.applied.length) delete q.applied; }
     if (!reqs.length) return;
     // Codex round 2: staged: on a failed status commit every change is undone (nothing starts, nothing is signalled)
     const snap = queue.map((j) => [j, { ...j }]); const qSnap = [...queue];
-    let kill = false; const stoppedNow = [];
+    let kill = false; const fLen = finished.length;
     for (const r of reqs) {
       const j = queue.find((q) => taskId(q) === r.id);
       if (!j) { log(`clips: task ${r.id}: ${r.op} ignored (it is not waiting or running)`); continue; }
@@ -763,19 +790,23 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       // the close came first); for a job of this session it is a leftover. One applied already (its key) is skipped.
       if (!(r.atMs >= createdAt) && !j.resumed) continue;
       if (r.key && (j.applied ?? []).includes(r.key)) continue;
-      if (r.key) j.applied = [...(j.applied ?? []), r.key].slice(-32);
+      if (r.key) j.applied = [...(j.applied ?? []), r.key];
       if (halted && r.op !== 'next') continue; // Stop all: nothing more runs in this session
-      if (r.op === 'next') j.nextStart = r.nextStart;
+      if (r.op === 'next') {
+        j.nextStart = r.nextStart;
+        // Codex round 3: a Next start asked before the close, for a job that waits only because of its old choice
+        if (j.awaitFromNext && !(r.atMs >= createdAt)) { if (r.nextStart === 'run') delete j.awaitStart; else j.awaitStart = true; }
+      }
       else if (r.op === 'stop') {
         if (j === current && child) { j.stopReq = true; kill = true; } else {
           queue.splice(queue.indexOf(j), 1);
-          stoppedNow.push(j);
+          finishTask(j, false, 'Stopped by you'); // published with the commit below
         }
       } else if (r.op === 'pause') {
         if (!pauseInfo(j).pausable) { log(`clips: ${j.name} cannot be paused: ${pauseInfo(j).reason}`); continue; }
         if (j === current && child) j.pauseAt = true; else j.paused = true;
       } else if (r.op === 'resume') {
-        delete j.paused; delete j.awaitStart; delete j.pauseAt; j.userStarted = true;
+        delete j.paused; delete j.awaitStart; delete j.awaitFromNext; delete j.pauseAt; j.userStarted = true;
       }
       log(`clips: ${j.name}: ${r.op}${r.op === 'next' ? ` ${r.nextStart}` : ''} (asked by you)`);
     }
@@ -783,9 +814,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       // not committed: undone; the requests stay and are applied again once the status can be saved
       for (const [j, was] of snap) { for (const k of Object.keys(j)) delete j[k]; Object.assign(j, was); }
       queue.splice(0, queue.length, ...qSnap);
+      finished.length = fLen;
       return;
     }
-    for (const j of stoppedNow) finishTask(j, false, 'Stopped by you');
     ackTaskControls(reqs);
     if (kill && child && current?.stopReq) killTreeFn(child);
   };

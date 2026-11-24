@@ -509,11 +509,12 @@ test('Codex round 2 #5: a request read again after a later one was applied is sk
     s.ctl('clip-game-h-2', 'pause');
     const [pf] = readdirSync(controlDir(s.dataDir)); const pbody = readFileSync(path.join(controlDir(s.dataDir), pf), 'utf8');
     rc.feed(s.S('stopped'));
+    assert.equal(s.status().queued[0].applied.length, 1, 'its key is kept with the job');
+    writeFileSync(path.join(controlDir(s.dataDir), pf), pbody); // its delete had failed: the old pause is still there
     s.advance(10); s.ctl('clip-game-h-2', 'resume'); rc.feed(s.S('stopped'));
-    writeFileSync(path.join(controlDir(s.dataDir), pf), pbody); // its delete had failed: the old pause is read again
+    assert.equal(s.task('clip-game-h-2').paused, false, 'the later resume stands; the old pause is skipped');
     rc.feed(s.S('stopped'));
-    assert.equal(s.task('clip-game-h-2').paused, false, 'the later resume stands');
-    assert.ok(s.status().queued[0].applied.length >= 2);
+    assert.equal(s.status().queued[0].applied, undefined, 'Codex round 3: a key goes once its file is gone (no fixed cap)');
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
 
@@ -539,6 +540,63 @@ test('Codex round 2 #9: an older status: the old task row is retired when the jo
     const rc = s.make(); rc.feed(s.S('stopped'));
     assert.ok(!existsSync(path.join(s.dataDir, 'tasks', 'clip-game-h-1.json')), 'the old row is gone (the route answers 404 for it)');
     assert.equal(s.ids('clip-game-h-1').length, 1);
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+// ---- Codex review round 3 ----
+test('Codex round 3 #1: a stop asked while the fresh status is awaited is applied before any spawn', async () => {
+  const s = setup();
+  try {
+    let answer;
+    const rc = s.make({ freshStatus: () => new Promise((r) => { answer = r; }) });
+    s.record(rc, s.files(1)); await tick();
+    s.ctl('clip-game-h-1', 'stop');
+    answer(RC_IDLE); await tick(); await tick(); await tick();
+    assert.equal(s.spawned.length, 0, 'drained, picked again: nothing to start');
+    assert.equal(s.task('clip-game-h-1').note, 'Stopped by you');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 3 #2: a start that throws (also after the fresh status) leaves the job queued, says so, and is tried again', async () => {
+  const s = setup();
+  const unhandled = []; const onU = (e) => unhandled.push(e); process.on('unhandledRejection', onU);
+  try {
+    let fail = true;
+    const rc = s.make({ freshStatus: async () => RC_IDLE, spawnFn: (...a) => { if (fail) throw Object.assign(new Error('x'), { code: 'EACCES' }); const c = new EventEmitter(); c.stderr = new PassThrough(); s.spawned.push({ argv: a[1], o: a[2], c }); return c; } });
+    s.record(rc, s.files(1)); await tick(); await tick(); await tick();
+    assert.equal(s.status().queued.length, 1, 'still queued');
+    assert.ok(s.task('clip-game-h-1').logTail.includes('Could not start; it tries again shortly'));
+    fail = false; rc.feed(s.S('stopped')); await tick(); await tick(); await tick();
+    assert.equal(s.spawned.length, 1, 'tried again');
+    assert.equal(unhandled.length, 0);
+  } finally { process.off('unhandledRejection', onU); rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 3 #3: a Next start "run" asked before the close lets the carried-over job run by itself', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    rc.stop();
+    s.ctl('clip-game-h-2', 'next', { nextStart: 'run' }); // asked after the last poll, before the close
+    s.advance(10_000);
+    const rc2 = s.make(); rc2.feed(s.S('stopped'));
+    s.advance(10 * 60_000); rc2.feed(s.S('stopped'));
+    assert.ok(s.spawned.some((x) => /game-h-2/.test(x.argv.join(' '))), 'not held as "notify"');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 3 #4: a task row is published only after the status is saved', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    const tmpPath = path.join(s.dataDir, 'clips', 'status.json.tmp');
+    mkdirSync(tmpPath);
+    s.ctl('clip-game-h-2', 'stop'); rc.feed(s.S('stopped'));
+    assert.notEqual(s.task('clip-game-h-2').note, 'Stopped by you', 'not saved: the row does not say stopped');
+    rmSync(tmpPath, { recursive: true }); rc.feed(s.S('stopped'));
+    assert.equal(s.task('clip-game-h-2').note, 'Stopped by you');
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
 
@@ -569,26 +627,32 @@ test('D442 POST /ui/api/tasks/control: checks id, op and nextStart; only offered
     const csrf = (await raw(port, { url: '/ui/api/session', headers: { cookie } })).body.csrf;
     const post = (b) => raw(port, { method: 'POST', url: '/ui/api/tasks/control', body: JSON.stringify(b), headers: { cookie, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf } });
     const now = Date.now();
-    writeTaskFile(d, { id: 'clip-a', title: 'Clips from a', kind: 'clips', state: 'running', startedAt: now, updatedAt: now, controls: ['stop', 'pause', 'next'], pausable: true, nextStart: 'notify' });
-    writeTaskFile(d, { id: 'beatdrop-b', title: 'BeatDrop', kind: 'clips', category: 'reels', state: 'running', startedAt: now, updatedAt: now, controls: ['stop', 'next'], pausable: false, pauseReason: 'made in one piece' });
+    // Codex round 3: a control is accepted only for a job the launcher has running or queued (clips/status.json)
+    mkdirSync(path.join(d, 'clips'), { recursive: true });
+    writeFileSync(path.join(d, 'clips', 'status.json'), JSON.stringify({ running: { type: 'full', name: 'a', jobId: '0000000a' }, queued: [{ type: 'beatdrop', name: 'b', jobId: '0000000b' }] }));
+    const A = 'clip-a-0000000a'; const B = 'beatdrop-b-0000000b';
+    writeTaskFile(d, { id: A, title: 'Clips from a', kind: 'clips', state: 'running', startedAt: now, updatedAt: now, controls: ['stop', 'pause', 'next'], pausable: true, nextStart: 'notify' });
+    writeTaskFile(d, { id: B, title: 'BeatDrop', kind: 'clips', category: 'reels', state: 'running', startedAt: now, updatedAt: now, controls: ['stop', 'next'], pausable: false, pauseReason: 'made in one piece' });
+    writeTaskFile(d, { id: 'clip-z-0000000c', title: 'Clips from z', kind: 'clips', state: 'waiting', startedAt: now, updatedAt: now, controls: ['stop'] });
+    assert.equal((await post({ id: 'clip-z-0000000c', op: 'stop' })).status, 404, 'a row whose job is gone');
     writeTaskFile(d, { id: 'up-c', title: 'Uploading', kind: 'upload', state: 'running', startedAt: now, updatedAt: now });
     assert.equal((await post({ id: '../x', op: 'stop' })).status, 400);
-    assert.equal((await post({ id: 'clip-a', op: 'kill' })).status, 400);
-    assert.equal((await post({ id: 'clip-a', op: 'next', nextStart: 'later' })).status, 400);
-    assert.equal((await post({ id: 'clip-a', op: 'stop', nextStart: 'run' })).status, 400);
-    assert.equal((await post({ id: 'clip-a', op: 'stop', extra: 1 })).status, 400);
+    assert.equal((await post({ id: A, op: 'kill' })).status, 400);
+    assert.equal((await post({ id: A, op: 'next', nextStart: 'later' })).status, 400);
+    assert.equal((await post({ id: A, op: 'stop', nextStart: 'run' })).status, 400);
+    assert.equal((await post({ id: A, op: 'stop', extra: 1 })).status, 400);
     assert.equal((await post({ id: 'nope', op: 'stop' })).status, 404);
-    const np = await post({ id: 'beatdrop-b', op: 'pause' });
+    const np = await post({ id: B, op: 'pause' });
     assert.deepEqual([np.status, np.body.error, np.body.reason], [409, 'not-pausable', 'made in one piece']);
-    assert.equal((await post({ id: 'clip-a', op: 'resume' })).status, 409, 'resume is not offered while it runs');
-    assert.equal((await post({ id: 'up-c', op: 'stop' })).body.error, 'not-offered', 'a task with no controls');
-    const ok = await post({ id: 'clip-a', op: 'pause' });
+    assert.equal((await post({ id: A, op: 'resume' })).status, 409, 'resume is not offered while it runs');
+    assert.equal((await post({ id: 'up-c', op: 'stop' })).status, 404, 'a task that is not a clip job');
+    const ok = await post({ id: A, op: 'pause' });
     assert.deepEqual([ok.status, ok.body.op], [202, 'pause']);
-    assert.equal((await post({ id: 'clip-a', op: 'next', nextStart: 'run' })).status, 202);
+    assert.equal((await post({ id: A, op: 'next', nextStart: 'run' })).status, 202);
     assert.equal(peekTaskControls(d).length, 2, 'read without removing');
     const got = takeTaskControls(d);
-    assert.deepEqual(got.map((r) => [r.id, r.op, r.nextStart]), [['clip-a', 'pause', undefined], ['clip-a', 'next', 'run']], 'every request, in order');
+    assert.deepEqual(got.map((r) => [r.id, r.op, r.nextStart]), [[A, 'pause', undefined], [A, 'next', 'run']], 'every request, in order');
     const list = (await raw(port, { url: '/ui/api/tasks', headers: { cookie } })).body.tasks;
-    assert.deepEqual(Object.fromEntries(list.map((t) => [t.id, t.category])), { 'clip-a': 'clips', 'beatdrop-b': 'reels', 'up-c': 'posting' });
+    assert.deepEqual(Object.fromEntries(list.map((t) => [t.id, t.category])), { [A]: 'clips', [B]: 'reels', 'clip-z-0000000c': 'clips', 'up-c': 'posting' });
   } finally { srv.close(); rmSync(d, { recursive: true, force: true }); }
 });
