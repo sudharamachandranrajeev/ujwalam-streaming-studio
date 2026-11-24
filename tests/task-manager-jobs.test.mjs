@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 // SPDX-License-Identifier: GPL-3.0-or-later
 // D442 task manager, job side: category per task, per-task stop / pause / resume through the UI server, pause only at
 // a safe point (or a plain reason when a job has none), the next-start choice (run | ask | notify, default notify)
@@ -597,6 +598,62 @@ test('Codex round 3 #4: a task row is published only after the status is saved',
     assert.notEqual(s.task('clip-game-h-2').note, 'Stopped by you', 'not saved: the row does not say stopped');
     rmSync(tmpPath, { recursive: true }); rc.feed(s.S('stopped'));
     assert.equal(s.task('clip-game-h-2').note, 'Stopped by you');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+// ---- Codex review round 4 ----
+test('Codex round 4 #1: the fresh reply is checked against the job picked after the controls', async () => {
+  const s = setup();
+  try {
+    let answer;
+    const rc = s.make({ freshStatus: () => new Promise((r) => { answer = r; }) });
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    s.ctl('clip-game-h-2', 'pause'); rc.feed(s.S('stopped')); await tick(); // job 1 waits for the reply
+    s.advance(5); s.ctl('clip-game-h-1', 'stop'); s.advance(5); s.ctl('clip-game-h-2', 'resume'); // job 2: user-started
+    answer({ sinks: [{ id: 'r-h', kind: 'record', state: 'recording', active: true }, { id: 'yt', kind: 'stream', state: 'stopped' }] });
+    await tick(); await tick(); await tick();
+    assert.equal(s.spawned.length, 0, 'a recording runs: work that waits for idle outputs does not start');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 4 #2: a missing program (spawn error) leaves the job queued with a typed event', async () => {
+  const s = setup();
+  try {
+    const rc = s.make({ spawnFn: (exe, argv, o) => spawn(path.join(s.d, 'missing', 'none.exe'), [], { ...o, stdio: ['pipe', o.stdio[1], 'pipe'], windowsHide: true }) });
+    s.record(rc, s.files(1));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(s.status().queued.length, 1, 'still queued');
+    assert.equal(s.status().running, null);
+    assert.ok(s.task('clip-game-h-1').logTail.includes('Could not start; it tries again shortly'));
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 4 #3: a saved Run then a pending Ask: the restored job waits', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    s.ctl('clip-game-h-2', 'next', { nextStart: 'run' }); rc.feed(s.S('stopped'));
+    s.ctl('clip-game-h-2', 'next', { nextStart: 'ask' }); // not read before the close
+    rc.stop(); s.advance(10_000);
+    const rc2 = s.make(); rc2.feed(s.S('stopped')); s.advance(10 * 60_000); rc2.feed(s.S('stopped'));
+    assert.ok(!s.spawned.slice(1).some((x) => /game-h-2/.test(x.argv.join(' '))), 'it waits (ask)');
+    assert.equal(s.task('clip-game-h-2').nextStart, 'ask');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 4 #4: a control folder that cannot be listed keeps every applied key', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    s.ctl('clip-game-h-2', 'pause');
+    const [pf] = readdirSync(controlDir(s.dataDir)); const pbody = readFileSync(path.join(controlDir(s.dataDir), pf), 'utf8');
+    writeFileSync(path.join(controlDir(s.dataDir), `${pf}.keep`), pbody);
+    rc.feed(s.S('stopped'));
+    rmSync(controlDir(s.dataDir), { recursive: true }); writeFileSync(controlDir(s.dataDir), 'not a folder');
+    rc.feed(s.S('stopped'));
+    assert.equal(s.status().queued[0].applied.length, 1, 'the listing failed: the key stays');
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
 

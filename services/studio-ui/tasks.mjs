@@ -166,10 +166,15 @@ export function writeTaskControl(dataDir, id, req) {
 /** Reads the waiting control requests without removing them: [{ id, op, nextStart?, atMs, file }], in the order they
  *  were asked. Codex review: the reader removes a request (ackTaskControls) only after its effect is committed to
  *  status.json, so a close in between applies it again at the next start. Unreadable files are removed. */
-export function peekTaskControls(dataDir) {
+export function peekTaskControls(dataDir) { return listTaskControls(dataDir).reqs; }
+/** Codex round 4: the requests plus whether the folder could be listed (ok) and the keys of every request file
+ *  there (keys), so a reader forgets an applied key only once a good listing shows its file gone. No folder: ok. */
+export function listTaskControls(dataDir) {
   const dir = controlDir(dataDir);
   let names;
-  try { names = readdirSync(dir); } catch { return []; }
+  try { names = readdirSync(dir); } catch (e) { return { ok: e?.code === 'ENOENT', keys: new Set(), reqs: [] }; }
+  const keys = new Set();
+  for (const nm of names) { const k = /^[A-Za-z0-9._-]{1,80}~(.+)\.json$/.exec(nm); if (k) keys.add(k[1]); }
   const out = [];
   for (const nm of names) {
     if (!nm.endsWith('.json')) continue;
@@ -180,7 +185,7 @@ export function peekTaskControls(dataDir) {
     if (c && m) out.push({ id: m[1], ...c, seq: Number(m[3]), key: nm.slice(0, -5).slice(m[1].length + 1), file: f });
     else try { rmSync(f, { force: true }); } catch { /* next tick */ }
   }
-  return out.sort((a, b) => a.atMs - b.atMs || a.seq - b.seq).map(({ seq: _s, ...r }) => r);
+  return { ok: true, keys, reqs: out.sort((a, b) => a.atMs - b.atMs || a.seq - b.seq).map(({ seq: _s, ...r }) => r) };
 }
 /** Removes applied requests (their files). */
 export function ackTaskControls(reqs) {

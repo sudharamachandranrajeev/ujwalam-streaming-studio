@@ -35,7 +35,7 @@ import path from 'node:path';
 import { PARENT_PIPE_ENV } from '../common/parent-pipe.mjs';
 import { killChildTree } from '../common/kill-tree.mjs';
 import { clipsFolder, readSettings, writeSettings } from './user-settings.mjs';
-import { DEFAULT_NEXT_START, NEXT_START, ackTaskControls, clipJobTaskId, peekTaskControls, pushLogEvent, removeTaskFile, writeTaskFile } from './tasks.mjs';
+import { DEFAULT_NEXT_START, NEXT_START, ackTaskControls, clipJobTaskId, listTaskControls, pushLogEvent, removeTaskFile, writeTaskFile } from './tasks.mjs';
 import { RETAKE_FILE, RETAKE_OPS, knownRuns, pieceBlocks, retakeProblems, runsDir, sourceOf } from './beatdrop-review.mjs';
 import { CLEANUP_FLAG, appendJobRecord, fileIdentity, runRecordingCleanup } from './recording-cleanup.mjs';
 
@@ -425,11 +425,12 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   let prev = null; let child = null; let current = null; let last = null; let stopped = false;
   let halted = false; let lastStatus = null; let progress = null; let liveNow = false; let recNow = false; let recStart = null; let recSawLive = false; let liveStart = null; let liveHadRecording = false; let workerOn = null;
   // Live clipper view (LC1): liveClipper() -> { state, reason, restarts, maxRestarts, flagOn } from the launcher.
-  let checkingModel = false; let statusAt = null; let airNow = true; let launching = false; let writeOk = true;
+  let checkingModel = false; let statusAt = null; let airNow = true; let launching = false; let writeOk = true; let fresh = null; // fresh: { st, at } the last fresh outputs reply
   let watchSince = null; let watching = false; let watchEnded = false; let savesNow = 0;
 
   // A run cut short by closing Ujwalam (or queued, or still to be answered) comes back at the next start.
   const stoppedAtClose = []; // stopped by the user just before the close: their tasks say so below
+  const pendingAtStart = listTaskControls(dataDir).reqs; // in the order asked
   try {
     const old = JSON.parse(readFileSync(statusFile, 'utf8'));
     last = old.last ?? null;
@@ -446,9 +447,13 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
         }
         // Codex review: a stop asked for before the close is done now; a pause asked for stands
         if (j.stopReq === true) { delete job.stopReq; stoppedAtClose.push(job); continue; }
-        // Codex round 3: awaitFromNext: this wait comes from the next-start choice, so a replayed Next start request (asked
-        // before the close, read at the first dispatch, before any start) can still change it
-        if (j.paused === true || j.pauseAt === true) { job.paused = true; delete job.pauseAt; } else { delete job.paused; if (nextStart !== 'run') { job.awaitStart = true; job.awaitFromNext = true; } }
+        // Codex rounds 3-4: a Next start asked before the close (any saved choice, run included) is applied before the
+        // wait is derived; its key is kept so the first dispatch skips it
+        for (const r of pendingAtStart) {
+          if (r.op !== 'next' || r.id !== clipJobTaskId(job)) continue;
+          job.nextStart = r.nextStart; if (r.key) job.applied = [...(job.applied ?? []), r.key];
+        }
+        if (j.paused === true || j.pauseAt === true) { job.paused = true; delete job.pauseAt; } else { delete job.paused; if (job.nextStart !== 'run') job.awaitStart = true; }
         queue.push(job);
       }
     }
@@ -584,24 +589,28 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       finishTask(job, false, reason);
       log(`clips: none made for ${job.name}: ${reason}`); write(); dispatch(); return;
     }
-    if (freshStatus && !(job.freshAt !== undefined && now() - job.freshAt < FRESH_MS)) {
+    // Codex round 4: the fresh reply is checked against the job picked now (after the controls were applied): a job
+    // that waits for idle outputs needs no recording either; any other only no stream
+    if (freshStatus && fresh && now() - fresh.at < FRESH_MS) {
+      const st = fresh.st; fresh = null;
+      if (streamOn(st) || (needsIdle(job) && outputsOnAir(st))) { log(`clips: ${job.name} waits (the outputs are on)`); return; }
+    } else if (freshStatus) {
       launching = true;
       const t0 = now();
       Promise.resolve().then(() => freshStatus()).then((st) => st, () => null).then((st) => {
         launching = false;
-        if (!st || now() - t0 >= FRESH_MS || streamOn(st) || (needsIdle(job) && outputsOnAir(st))) {
+        if (!st || now() - t0 >= FRESH_MS || streamOn(st)) {
           log(`clips: ${job.name} waits (the outputs are on, or their state is not known right now)`); return; // next tick
         }
         if (stopped || child) return;
         // Codex round 3: the controls that came during the wait are applied, the job is picked again and every gate
-        // is checked again (dispatch); the answer counts for this job for FRESH_MS
-        job.freshAt = now(); dispatch();
+        // is checked again (dispatch); the reply counts for FRESH_MS and is checked against the job picked then
+        fresh = { st, at: t0 }; dispatch();
       }).catch((e) => { launching = false; launchFailed(job, e); });
       return;
     }
-    delete job.freshAt;
     const logFile = path.join(stateDir, `run-${job.name}.log`);
-    let fd = null;
+    let fd = null; let me = null;
     try {
       mkdirSync(spec.out, { recursive: true });
       mkdirSync(stateDir, { recursive: true });
@@ -615,6 +624,13 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       // children (clip_common.end_tree_when_parent_gone), so nothing runs on unseen after Ujwalam closed (D311 proposed).
       child = spawnFn(spec.exe, spec.argv, { stdio: ['pipe', fd, 'pipe'], windowsHide: true, cwd: clipRoot, env: { ...process.env, [PARENT_PIPE_ENV]: '1', ...(job.captionsOk === false ? { UJWALAM_REEL_CAPTIONS: 'off' } : {}), ...(job.look ? { UJWALAM_CLIP_LOOK: JSON.stringify(job.look) } : {}) } });
       child.stdin?.on?.('error', () => {});
+      // Codex round 4: a spawn that fails later (a missing program) says so here; the job stays queued
+      me = child;
+      child.on?.('error', (e) => {
+        if (child !== me) return;
+        child = null; current = null; progress = null;
+        launchFailed(job, e);
+      });
     } catch (e) {
       // Codex round 3: a start that fails (folder, log file, spawn) leaves the job queued; it is tried again
       current = null; child = null;
@@ -649,6 +665,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     log(`clips: making clips from ${job.name} (log ${logFile})`);
     write();
     child.once('exit', (code) => {
+      if (child !== me) return; // Codex round 4: its spawn failed ('error'), already handled
       if (stopped) return; // Ujwalam closing: the status keeps this job, so the next start runs it again
       const done = current; child = null; current = null;
       const drop = () => { const i = queue.indexOf(done); if (i >= 0) queue.splice(i, 1); };
@@ -775,10 +792,10 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   // are their files removed and the running child signalled (a close in between keeps the intent: stopReq, pauseAt).
   // A request whose job has gone (or from an earlier launcher) is dropped. A resume clears a pause still in flight.
   const readControls = () => {
-    const reqs = peekTaskControls(dataDir);
-    // Codex round 3: a job keeps an applied request's key while its file is there (a delete that failed), then drops it
-    const present = new Set(reqs.map((r) => r.key));
-    for (const q of queue) if (Array.isArray(q.applied)) { q.applied = q.applied.filter((k) => present.has(k)); if (!q.applied.length) delete q.applied; }
+    const listed = listTaskControls(dataDir); const reqs = listed.reqs;
+    // Codex rounds 3-4: a job keeps an applied request's key while its file is there (a delete that failed); it drops
+    // it only once a good listing shows the file gone (a listing that failed keeps every key)
+    if (listed.ok) for (const q of queue) if (Array.isArray(q.applied)) { q.applied = q.applied.filter((k) => listed.keys.has(k)); if (!q.applied.length) delete q.applied; }
     if (!reqs.length) return;
     // Codex round 2: staged: on a failed status commit every change is undone (nothing starts, nothing is signalled)
     const snap = queue.map((j) => [j, { ...j }]); const qSnap = [...queue];
@@ -792,11 +809,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       if (r.key && (j.applied ?? []).includes(r.key)) continue;
       if (r.key) j.applied = [...(j.applied ?? []), r.key];
       if (halted && r.op !== 'next') continue; // Stop all: nothing more runs in this session
-      if (r.op === 'next') {
-        j.nextStart = r.nextStart;
-        // Codex round 3: a Next start asked before the close, for a job that waits only because of its old choice
-        if (j.awaitFromNext && !(r.atMs >= createdAt)) { if (r.nextStart === 'run') delete j.awaitStart; else j.awaitStart = true; }
-      }
+      if (r.op === 'next') j.nextStart = r.nextStart;
       else if (r.op === 'stop') {
         if (j === current && child) { j.stopReq = true; kill = true; } else {
           queue.splice(queue.indexOf(j), 1);
@@ -806,7 +819,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
         if (!pauseInfo(j).pausable) { log(`clips: ${j.name} cannot be paused: ${pauseInfo(j).reason}`); continue; }
         if (j === current && child) j.pauseAt = true; else j.paused = true;
       } else if (r.op === 'resume') {
-        delete j.paused; delete j.awaitStart; delete j.awaitFromNext; delete j.pauseAt; j.userStarted = true;
+        delete j.paused; delete j.awaitStart; delete j.pauseAt; j.userStarted = true;
       }
       log(`clips: ${j.name}: ${r.op}${r.op === 'next' ? ` ${r.nextStart}` : ''} (asked by you)`);
     }
