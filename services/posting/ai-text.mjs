@@ -143,7 +143,7 @@ export async function withAiText(deps, fn) {
         images: frames, schema: answerSchema(cfg), timeoutMs: cfg.timeoutMs, maxTokens: cfg.maxTokens, temperature: cfg.temperature });
     } catch (e) { return fail(e instanceof LocalModelError ? e.code : 'error', String(e?.message ?? '').slice(0, 120)); }
     const r = checkAiText({ answer, facts, seconds, limits, cfg, profileTerms: terms });
-    if (!r.ok) return fail(r.code, r.detail);
+    if (!r.ok) { deps.onReject?.(r, answer); return fail(r.code, r.detail); }
     return r;
   };
   gen.stats = stats;

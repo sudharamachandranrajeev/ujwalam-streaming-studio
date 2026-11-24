@@ -108,7 +108,9 @@ function shape(answer, cfg) {
     seen[k] = typeof v === 'string' ? v.trim() : v;
   }
   const tags = [...new Set(answer.tags.map((t) => t.trim()).filter(Boolean))];
-  const lines = description.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean);
+  let lines = description.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean);
+  // a small model often writes the lines as sentences in one paragraph: one sentence per line then
+  if (lines.length === 1) lines = lines[0].split(/(?<=[.!?])\s+/).map((l) => l.trim()).filter(Boolean);
   if (lines.length < A.description.minLines || lines.length > A.description.maxLines) return bad('description', `${lines.length} lines`);
   if (tags.length < A.tags.min || tags.length > A.tags.max) return bad('tags', `${tags.length} tags`);
   if (tags.some((t) => UNIT.chars(t) > A.tags.maxChars)) return bad('tags', 'a tag is too long');
