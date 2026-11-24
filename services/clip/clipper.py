@@ -103,7 +103,7 @@ from clip_common import (  # noqa: E402
     CLIP_DATA, EXIT_FLAG_OFF, EXIT_NOT_STARTED, EXIT_ON_AIR, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
     HeavyJobLock, end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
     load_json, lower_own_priority, match_gate_settings, media_info, on_air, progress_line, resolve_data_dir, run_tool,
-    write_json_atomic,
+    safepoint_line, write_json_atomic,
 )
 
 TOOL_VERSION = 1
@@ -409,13 +409,18 @@ def cmd_render(a):
         wd = os.path.join(a.out, "clips", c["id"])
         os.makedirs(wd, exist_ok=True)
         # D442 resume: a clip finished by an earlier, paused or stopped run of the same inputs is kept, not made again
-        rkey = _row_key(c, wanted, encoder, frame, lay_doc.get("version"), a.captions)
+        # Codex review: the key holds the source files' identity (path, size, mtime) and the effective layouts,
+        # captions and targets, not only versions; the marker goes BEFORE any output is rewritten.
+        rkey = _row_key(c, [by_id[x] for x in wanted], encoder, frame, lay_doc.get("version"),
+                        [a.captions, opts], targets, {k: _file_identity(v[0]) for k, v in sources.items()})
         kept = _done_row(wd, rkey)
         if kept is not None:
             out_rows.append(kept)
             print(f"render {c['id']}: kept from the earlier run")
             progress_line("render", n, len(cands), f"clip {c['id']} kept")
+            safepoint_line("render", n)
             continue
+        _drop_done_row(wd)
         dur = float(c["end"]) - float(c["start"])
         cinfo = {"backend": a.captions, "status": "off"}
         capname = None
@@ -449,12 +454,10 @@ def cmd_render(a):
         out_rows.append({"id": c["id"], "start": c["start"], "end": c["end"], "captions": cinfo, "files": files,
                          "music": None,  # D414: plain variants carry no music bed (the record posting reads)
                          "errors": errors})
-        if not errors:
-            try:
-                write_json_atomic(os.path.join(wd, DONE_ROW), {"key": rkey, "row": out_rows[-1]})
-            except (OSError, ClipError):
-                pass  # only the resume shortcut is lost
+        saved = not errors and _save_done_row(wd, rkey, out_rows[-1])
         progress_line("render", n, len(cands), f"clip {c['id']} {'failed' if errors else 'done'}")
+        if saved:
+            safepoint_line("render", n)
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": doc["recording"],
         "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
@@ -691,6 +694,18 @@ def cmd_live_review(a):
     for n, c in enumerate(clips, 1):
         wd = os.path.join(a.out, "clips", c["id"])
         os.makedirs(wd, exist_ok=True)
+        # D442 (Codex review): a clip a paused or stopped review run finished is kept: same save (its identity),
+        # layouts, encoder, frame, settings and limits; the marker goes before any output is rewritten.
+        rkey = _row_key(c, [by_id[x] for x in wanted], encoder, frame, lay_doc.get("version"), [ex, lim_live, fade_ms],
+                        None, {"save": _file_identity(c["file"])})
+        kept = _done_row(wd, rkey)
+        if kept is not None:
+            out_rows.append(kept)
+            print(f"live-review {c['id']}: kept from the earlier run")
+            progress_line("review", n, len(clips), f"clip {c['id']} kept")
+            safepoint_line("review", n)
+            continue
+        _drop_done_row(wd)
         files, errors = [], []
         m = _live_hook(c, ex, lim_live)
         sinfo = infos[c["file"]]
@@ -771,7 +786,10 @@ def cmd_live_review(a):
                          **({"styleNotApplied": style_skips} if style_skips else {}), "captions": cinfo, "hook": hook, "files": files,
                          "errors": errors})
         _look_remember(ex, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
+        saved = not errors and _save_done_row(wd, rkey, out_rows[-1])
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
+        if saved:
+            safepoint_line("review", n)
     write_json_atomic(os.path.join(a.out, RENDER), {
         "tool": "clipper", "toolVersion": TOOL_VERSION, "createdAt": _now(), "recording": "live-saves",
         "musicRecords": 1,  # D414: every clip entry carries "music"; a missing one is unknown (clip_publish)
@@ -909,27 +927,65 @@ def _has_duration(ffprobe, path):
 DONE_ROW = "done-row.json"  # D442: one finished clip's render row and the key of the inputs it was made from
 
 
-def _row_key(c, wanted, encoder, frame, layouts_version, captions):
-    """D442: the inputs of one clip's render (candidate, layouts, encoder, frame, captions, tool version), hashed."""
+def _file_identity(p):
+    """D442: a file's identity for resume keys: normalised path, size and mtime (ns); None when it is not there."""
+    try:
+        s = os.stat(p)
+    except (OSError, TypeError, ValueError):
+        return None
+    return [os.path.normcase(os.path.abspath(p)), s.st_size, s.st_mtime_ns]
+
+
+def _row_key(c, layouts, encoder, frame, layouts_version, captions, targets=None, sources=None):
+    """D442: the inputs of one clip's render, hashed: the candidate, the effective layouts (crop, input), encoder,
+    frame, captions settings, targets, the source files' identity and the tool version."""
     import hashlib  # noqa: PLC0415
-    blob = json.dumps([c, sorted(wanted), encoder, frame, layouts_version, captions, TOOL_VERSION], sort_keys=True, default=str)
+    blob = json.dumps([c, layouts, encoder, frame, layouts_version, captions, targets, sources, TOOL_VERSION],
+                      sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _drop_done_row(wd):
+    """D442 (Codex review): the completion marker goes before a clip's files are made again, so a run cut short
+    never leaves an old marker over new or half-made files."""
+    try:
+        os.remove(os.path.join(wd, DONE_ROW))
+    except FileNotFoundError:
+        pass
+
+
+def _save_done_row(wd, key, row):
+    """D442: commits the marker after the media: the row plus each file's size and mtime (a file replaced later no
+    longer matches). -> True when committed."""
+    ids = {}
+    for fr in row.get("files") or []:
+        ident = _file_identity(os.path.join(wd, str(fr.get("file") or "")))
+        if not fr.get("file") or ident is None or ident[1] <= 0:
+            return False
+        ids[fr["file"]] = ident[1:]
+    try:
+        write_json_atomic(os.path.join(wd, DONE_ROW), {"key": key, "row": row, "files": ids})
+        return True
+    except (OSError, ClipError):
+        return False  # only the resume shortcut is lost
+
+
 def _done_row(wd, key):
-    """D442 resume: the stored row of a clip made from the same inputs when every file of it is still there and not
-    empty, else None (make it again)."""
+    """D442 resume: the stored row of a clip made from the same inputs when every file of it is still the one the
+    marker was written for (size and mtime) and not empty, else None (make it again)."""
     try:
         with open(os.path.join(wd, DONE_ROW), encoding="utf-8") as f:
             d = json.load(f)
     except (OSError, ValueError):
         return None
     row = d.get("row") if isinstance(d, dict) and d.get("key") == key else None
-    if not isinstance(row, dict) or not row.get("files") or row.get("errors"):
+    ids = d.get("files") if isinstance(d, dict) else None
+    if not isinstance(row, dict) or not row.get("files") or row.get("errors") or not isinstance(ids, dict):
         return None
     for fr in row["files"]:
-        p = os.path.join(wd, str(fr.get("file") or ""))
-        if not fr.get("file") or not os.path.isfile(p) or os.path.getsize(p) <= 0:
+        name = str(fr.get("file") or "")
+        ident = _file_identity(os.path.join(wd, name))
+        if not name or ident is None or ident[1] <= 0 or ids.get(name) != ident[1:]:
             return None
     return dict(row, resumed=True)
 
@@ -1167,7 +1223,7 @@ def _long_video_steps(a, lv, out):
                                       overlay_failed=overlay_failed, gain_db=gain, music=bed,
                                       grade=theme["grade"] if theme else None,
                                       # D442: one line per finished batch (total 0 = unknown): the studio's pause point
-                                      on_part=lambda n: progress_line("long", n, 0, f"part {n} done"),
+                                      on_part=lambda n: (progress_line("long", n, 0, f"part {n} done"), safepoint_line("long", n)),
                                       part_ok=lambda pth: _has_duration(ffprobe, pth))
     if ok:
         lrec = _loud_check(ffmpeg, os.path.join(wd, lv.FILE), lrec, "long video")

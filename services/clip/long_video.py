@@ -249,7 +249,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
     graph fragment ([fxin] -> [fxout], the callout cards); a batch that fails with it is rendered once more without it
     (overlay_failed(batch index, stderr) is told), so an overlay never stops the video. gain_db (D440): the one loudness
     gain of the whole video (batch_parts + clip_loudness), the same in every batch. on_part(n) (D442): told after batch n
-    (1-based) is saved; the studio may pause the job there (its safe point between batches).
+    (1-based) is saved with its manifest (never for a batch made without its overlay); the studio may pause there.
     -> (ok, expected seconds, error or None)."""
     clear_attempts(wd)
     # D442 resume: the parts live in a fixed folder (not an attempt folder), each with the key of its inputs, so a run
@@ -265,7 +265,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
             pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
             ov = (overlay(chunk, first, adir) if overlay else None) or {}
             first += len(chunk)
-            key = part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov)
+            key = part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov, src=src, encoder=encoder)
             if part_done(adir, name, key, part_ok):
                 parts.append(name)
                 expected += seconds
@@ -273,13 +273,17 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
                     on_part(i + 1)
                 continue
 
+            drop_part(adir, name)  # Codex review: the manifest and the old media go before this batch is made again
+
             def mk(enc, pieces=pieces, name=name, ov=ov, bed=bed):
                 return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], PART_AUDIO, fade_ms, name + ".part",
                                         audio_tracks=audio_tracks, transition=tr, captions=ov.get("ass"),
                                         fontsdir=ov.get("fontsdir"), fx=ov.get("fx"), gain_db=gain_db, music=bed, grade=grade,
                                         container=PART_CONTAINER)
             r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
+            fallback = False
             if r.returncode != 0 and (ov.get("ass") or ov.get("fx")):
+                fallback = True  # Codex review: a batch made without its overlay is never kept for a resume
                 if overlay_failed:
                     overlay_failed(i, r.stderr)
                 r, encoder = render_job(lambda enc, mk=mk: mk(enc, ov={}), encoder, adir, name + ".part",
@@ -288,12 +292,12 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
                 finished = True
                 return False, 0.0, f"part {i + 1} did not render: {r.stderr.strip()[-200:]}"
             os.replace(os.path.join(adir, name + ".part"), os.path.join(adir, name))
-            with open(os.path.join(adir, name + ".key"), "w", encoding="utf-8") as f:
-                f.write(key)
             parts.append(name)
             expected += seconds
-            if on_part:
-                on_part(i + 1)
+            if not fallback:  # D442: only a committed part is a safe point (a fallback part is made again on resume)
+                commit_part(adir, name, key)
+                if on_part:
+                    on_part(i + 1)
         with open(os.path.join(adir, "parts.txt"), "w", encoding="utf-8") as f:
             f.write("".join(f"file '{p}'\n" for p in parts))
         r = run_tool(concat_argv(ffmpeg, "parts.txt", FILE + ".part", audio), cwd=adir, timeout=1800)
@@ -310,32 +314,83 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
 PARTS_DIR = "long-parts"  # D442: not an attempt folder (clear_attempts keeps it)
 
 
-def part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov):
-    """D442: the inputs of one batch, hashed (the overlay by its file contents, so new captions make it again)."""
+MANIFEST_SUFFIX = ".done.json"  # D442: written after the part's media; binds its key to that file's size and mtime
+FINGERPRINT_BYTES = 1 << 20
+
+
+def fingerprint(p):
+    """D442: a stable identity of a file's content that does not depend on where it is: size + SHA-256 of its first
+    and last MB. None when it is not a readable file."""
+    import hashlib  # noqa: PLC0415
+    try:
+        size = os.path.getsize(p)
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            h.update(f.read(FINGERPRINT_BYTES))
+            if size > FINGERPRINT_BYTES:
+                f.seek(max(FINGERPRINT_BYTES, size - FINGERPRINT_BYTES))
+                h.update(f.read(FINGERPRINT_BYTES))
+        return [size, h.hexdigest()]
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _stable(v):
+    """Values for a key with every file path replaced by its content fingerprint (a temp soundtrack path changes per
+    run; the song does not)."""
+    if isinstance(v, dict):
+        return {k: _stable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_stable(x) for x in v]
+    if isinstance(v, str) and len(v) < 1024 and os.path.isfile(v):
+        return {"file": fingerprint(v)}
+    return v
+
+
+def part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov, src=None, encoder=None):
+    """D442: the inputs of one batch, hashed: the recording (content fingerprint), the pieces, the effective render
+    configuration (frame, tracks, fade, transition, gain, grade, encoder asked for, part formats), the soundtrack by
+    content, the overlay by its files' contents (new captions make it again)."""
     import hashlib  # noqa: PLC0415
     import json  # noqa: PLC0415
-
-    def content(p):
-        try:
-            with open(p, "rb") as f:
-                return hashlib.sha256(f.read()).hexdigest()
-        except (OSError, TypeError):
-            return None
-    blob = json.dumps([pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, content(ov.get("ass")),
-                       ov.get("fx"), PART_CONTAINER], sort_keys=True, default=str)
+    blob = json.dumps([fingerprint(src) if src else None, pieces, frame, audio_tracks, fade_ms, tr, gain_db,
+                       _stable(bed), grade, _stable(ov.get("ass")), _stable(ov.get("fx")), encoder, PART_AUDIO,
+                       PART_CONTAINER], sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def drop_part(adir, name):
+    """Removes a batch's manifest first, then its media (a crash in between leaves media no manifest vouches for)."""
+    for n in (name + MANIFEST_SUFFIX, name):
+        try:
+            os.remove(os.path.join(adir, n))
+        except FileNotFoundError:
+            pass
+
+
+def commit_part(adir, name, key):
+    """Writes the manifest of a saved batch atomically, after its media: { key, size, mtimeNs }."""
+    import json  # noqa: PLC0415
+    s = os.stat(os.path.join(adir, name))
+    m = os.path.join(adir, name + MANIFEST_SUFFIX)
+    with open(m + ".tmp", "w", encoding="utf-8") as f:
+        json.dump({"key": key, "size": s.st_size, "mtimeNs": s.st_mtime_ns}, f)
+    os.replace(m + ".tmp", m)
+
+
 def part_done(adir, name, key, part_ok=None):
-    """D442: a saved batch can be used again: its key matches, the file is not empty and (part_ok) has a duration."""
+    """D442: a saved batch can be used again: its manifest has this key and the same size and mtime as the media
+    there now (not a file written later), the file is not empty and (part_ok) has a duration."""
+    import json  # noqa: PLC0415
     p = os.path.join(adir, name)
     try:
-        with open(p + ".key", encoding="utf-8") as f:
-            if f.read().strip() != key:
-                return False
-        if os.path.getsize(p) <= 0:
-            return False
-    except OSError:
+        with open(p + MANIFEST_SUFFIX, encoding="utf-8") as f:
+            m = json.load(f)
+        s = os.stat(p)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(m, dict) or m.get("key") != key or s.st_size <= 0 or m.get("size") != s.st_size \
+            or m.get("mtimeNs") != s.st_mtime_ns:
         return False
     return part_ok(p) if part_ok else True
 

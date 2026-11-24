@@ -287,6 +287,21 @@ PROGRESS_PREFIX = "ujwalam-progress "
 PROGRESS_STAGES = ("detect", "candidates", "render", "validate", "review", "gate", "publish", "montage", "long")  # long: D406
 
 
+SAFEPOINT_PREFIX = "ujwalam-safepoint "
+SAFEPOINT_STAGES = ("detect", "render", "review", "long")
+
+
+def safepoint_line(stage, done):
+    """D442 (Codex review): the job may be ended here and a re-run keeps what is done so far. Printed only AFTER the
+    work's durable record is committed (detect checkpoint, a clip's done-row manifest, a long-video part manifest);
+    the studio pauses a job only on this line, never on a progress line.
+    ujwalam-safepoint {"stage":"<stage>","done":<int>}"""
+    if stage not in SAFEPOINT_STAGES:
+        raise ValueError(f"unknown safe point stage {stage}")
+    print(SAFEPOINT_PREFIX + json.dumps({"stage": stage, "done": int(done)}, separators=(",", ":")), file=sys.stderr,
+          flush=True)
+
+
 def progress_line(stage, done, total, note=""):
     """One progress line for the UI (contract shared with the studio): on stderr,
     ujwalam-progress {"stage":"<stage>","done":<int>,"total":<int>,"note":"<short plain text, no names>"}"""
