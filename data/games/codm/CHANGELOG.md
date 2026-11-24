@@ -2,6 +2,16 @@
 
 The pack version is `version` in `detectors.json`. It covers every file in this folder (`game.json`, `detectors.json`, `events.json`, `screens.json`, `capture-plan.json`, `match-reels.json`). Validate with `npm run validate:games`.
 
+## 0.9.0 — 2026-11-24 (BR end screen S2, BR top HUD H1, D441)
+
+Evidence: `docs/evidence/2026-11-24-br-end-screen.md` (6 BR matches of the 2026-11-22 recording, OCR 1 fps).
+
+- New detector S2 "BR end screen" (role context, no weight, nameRequired false, status unverified), mode br, screens `br_placement` (card: heading, Ranking #N/M, Mode, MAP) and `br_squad_cards` (results strip: #N/M top left, Mode - Map bottom left). Stats `rankRegex`, `modeNames` (Battle Royale), `mapNames` (VERDANSK), `headings` (GAME OVER, MISSION COMPLETED). S2 joins S1 `stats.endScreenDetectors`, so a BR end screen closes a BR match.
+- New detector H1 "BR top HUD" (role context, status unverified), mode br, screen `br_gameplay`, ROIs `players_left` and `own_kills`; stats `playersRegex`. Readings only, no hit rows.
+- Schema: detector `stats` gains `rankRegex`, `mapNames`, `headings`, `playersRegex`.
+- Match gate (code): a BR match takes placement, lobby team count, mode, map and (placement 1) a confirmed VICTORY from S2; own kills from the H1 counter (largest value read on 2+ frames) when no scoreboard exists; an end-screen hit of a detector that does not run in the frame's family (a W1 VICTORY/DEFEAT read on a BR screen) never closes a match; the unknown-mode review offers a BR match BR modes only.
+- Detection changes: S2 rows and S2/H1 readings are new; runs detected with 0.8.0 segment as before until re-detected.
+
 ## 0.8.0 — 2026-11-10 (reels cut only own kills, spectate detector N3, impact-play reels, D326)
 
 Evidence: `docs/evidence/2026-11-10-reel-own-kills-impact-play.md`.

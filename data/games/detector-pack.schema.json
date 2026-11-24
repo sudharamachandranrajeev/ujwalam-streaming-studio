@@ -127,6 +127,24 @@
             "killLineHoldSec": { "type": "number", "minimum": 0 },
             "victimMatchMin": { "type": "number", "minimum": 0, "maximum": 1 },
             "spectateDetectors": { "type": "array", "uniqueItems": true, "description": "Detectors whose hits mark the streamer as dead and spectating; own kill-feed lines read inside such a hit never count.", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*$" } },
+            "rankRegex": { "type": "string", "description": "S2 (D441): placement #N/M on the BR end screen, applied to the box text without spaces; group 1 = own placement, group 2 = teams in the lobby." },
+            "mapNames": {
+              "type": "array",
+              "description": "S2 (D441): map names as shown on the BR end screen. Same forms as modeNames ({text, mode} reads a spelling as the name in `mode`).",
+              "items": {
+                "oneOf": [
+                  { "type": "string", "minLength": 1 },
+                  {
+                    "type": "object",
+                    "required": ["text", "mode"],
+                    "additionalProperties": false,
+                    "properties": { "text": { "type": "string", "minLength": 1 }, "mode": { "type": "string", "minLength": 1 }, "note": { "type": "string" } }
+                  }
+                ]
+              }
+            },
+            "headings": { "type": "array", "description": "S2 (D441): end-card headings (e.g. GAME OVER, MISSION COMPLETED).", "items": { "type": "string", "minLength": 1 } },
+            "playersRegex": { "type": "string", "description": "H1 (D441): players left N/total on the BR top HUD, applied to the box text without spaces." },
             "status": { "$ref": "#/$defs/status" },
             "note": { "type": "string" }
           }

@@ -1,7 +1,7 @@
 {
   "$schema": "../detector-pack.schema.json",
   "$comment": "CODM detector pack. All ROIs, texts and colours are UNVERIFIED until G1/G2 check them on corpus footage (source: docs/evidence/2026-10-27-g1-live-reference.md). Weights, windows and cooldowns are null: G3 proposes them from labelled data. No private names here; names come from data/profile.local.json at runtime. `version` is the pack version for every file in this folder; version history: CHANGELOG.md.",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "engineVersion": "0.1.0",
   "game": "codm",
   "detectors": [
@@ -609,7 +609,8 @@
           "W1",
           "M1",
           "M2",
-          "K1"
+          "K1",
+          "S2"
         ],
         "endGapSec": 90,
         "killLineHoldSec": 6,
@@ -630,6 +631,153 @@
       "cooldownSec": null,
       "status": "unverified",
       "note": "D286 proposed (match gate). Context only: never a clip signal or weight. Per top-3 frame: rank (card position), score and whether the card holds a profile name (nameMin, the same fuzzy rule as the other detectors); names are never written. One match seen (own card rank 1); a DEFEAT top-3 screen and a full scoreboard are not seen yet."
+    },
+    {
+      "id": "S2",
+      "name": "BR end screen (placement card and results strip)",
+      "role": "context",
+      "modes": [
+        "br"
+      ],
+      "screens": [
+        "br_placement",
+        "br_squad_cards"
+      ],
+      "method": "ocr",
+      "rois": [
+        {
+          "id": "heading",
+          "label": "Card: GAME OVER (not a win) or MISSION COMPLETED (a win), centre",
+          "x0": 0.18,
+          "y0": 0.35,
+          "x1": 0.82,
+          "y1": 0.535,
+          "status": "unverified",
+          "note": "D441, 2026-11-22 recording, 6 BR matches, OCR 1 fps: GAME OVER x 0.325-0.672 y 0.368-0.519; MISSION COMPLETED x 0.194-0.804 y 0.371-0.518 (same place in all 6). docs/evidence/2026-11-24-br-end-screen.md."
+        },
+        {
+          "id": "ranking",
+          "label": "Card: the #N/M value of the Ranking row (right column)",
+          "x0": 0.62,
+          "y0": 0.53,
+          "x1": 0.74,
+          "y1": 0.63,
+          "status": "unverified",
+          "note": "D441, 2026-11-22, 6 matches: #N/M x 0.635-0.724 y 0.541-0.621; the Ranking label sits left of it (x 0.279-0.334)."
+        },
+        {
+          "id": "mode_value",
+          "label": "Card: the value of the Mode row (right column)",
+          "x0": 0.62,
+          "y0": 0.625,
+          "x1": 0.735,
+          "y1": 0.68,
+          "status": "unverified",
+          "note": "D441, 2026-11-22, 6 matches: Battle Royale x 0.634-0.719 y 0.634-0.679."
+        },
+        {
+          "id": "map_value",
+          "label": "Card: the value of the MAP row (right column)",
+          "x0": 0.635,
+          "y0": 0.68,
+          "x1": 0.735,
+          "y1": 0.735,
+          "status": "unverified",
+          "note": "D441, 2026-11-22, 6 matches: VERDANSK x 0.650-0.718 y 0.685-0.722. A daily-challenge popup can cover x 0.64-0.81 y 0.67-0.76 a few seconds later; only pack map names are read here, so its text never counts."
+        },
+        {
+          "id": "strip_rank",
+          "label": "Results strip (after the card): #N/M, top left",
+          "x0": 0.24,
+          "y0": 0.015,
+          "x1": 0.36,
+          "y1": 0.105,
+          "status": "unverified",
+          "note": "D441, 2026-11-22, 6 matches: #N/M x 0.251-0.349 y 0.026-0.093."
+        },
+        {
+          "id": "strip_mode",
+          "label": "Results strip: Mode - Map line, bottom left",
+          "x0": 0.09,
+          "y0": 0.875,
+          "x1": 0.29,
+          "y1": 0.945,
+          "status": "unverified",
+          "note": "D441, 2026-11-22, 6 matches: Battle Royale - VERDANSK x 0.103-0.275 y 0.889-0.929 (OCR may drop the space before the dash). The strip's per-teammate KILLS N (y 0.725-0.757) is not read: the text does not tell which card is the streamer."
+        }
+      ],
+      "stats": {
+        "rankRegex": "^#(\\d{1,3})/(\\d{1,3})$",
+        "modeNames": [
+          "Battle Royale"
+        ],
+        "mapNames": [
+          "VERDANSK"
+        ],
+        "headings": [
+          "GAME OVER",
+          "MISSION COMPLETED"
+        ],
+        "status": "unverified",
+        "note": "D441, 2026-11-22 recording, 6 BR matches (all Battle Royale on VERDANSK). rankRegex runs on the box text with spaces removed: group 1 = own placement, group 2 = number of teams in the lobby (never turned into duo or squad). A card reading needs #N/M in ranking plus the heading or the mode value; a strip reading needs #N/M in strip_rank plus a Mode - Map line. Only these pack texts are returned. Placement 1 is a win. A single frame read #2 without /M: not accepted (the next frame read #2/51)."
+      },
+      "nameRequired": false,
+      "weight": null,
+      "window": {
+        "preSec": null,
+        "postSec": null
+      },
+      "cooldownSec": null,
+      "status": "unverified",
+      "note": "D441 (match gate, services/clip/match_gate.py parse_br_end). Context only: never a clip signal or weight. Closes a BR match (S1 stats.endScreenDetectors) and gives its placement, lobby team count, mode and map. The older card layout of 2026-10-27 (#N/M left of the heading, mode under it) is not covered."
+    },
+    {
+      "id": "H1",
+      "name": "BR top HUD (players left, own kill counter)",
+      "role": "context",
+      "modes": [
+        "br"
+      ],
+      "screens": [
+        "br_gameplay"
+      ],
+      "method": "ocr",
+      "rois": [
+        {
+          "id": "players_left",
+          "label": "Top left: players left N/total",
+          "x0": 0.125,
+          "y0": 0.01,
+          "x1": 0.185,
+          "y1": 0.07,
+          "status": "unverified",
+          "note": "D441, 2026-11-22, 6 BR matches: 96/97 x 0.136-0.171 y 0.022-0.060. Kept right of x 0.12: an N/M box at x 0.056-0.095 is on every end frame and is not players left."
+        },
+        {
+          "id": "own_kills",
+          "label": "Top left: own kill counter (the number right of players left)",
+          "x0": 0.195,
+          "y0": 0.015,
+          "x1": 0.227,
+          "y1": 0.068,
+          "status": "unverified",
+          "note": "D441, 2026-11-22, 6 matches: single digits x 0.204-0.219 y 0.027-0.056. The third box (x1, x 0.232-0.270) is a gulag countdown and stays outside."
+        }
+      ],
+      "stats": {
+        "playersRegex": "^(\\d{1,3})/(\\d{2,3})$",
+        "status": "unverified",
+        "note": "D441, 2026-11-22. own_kills: a whole number of 1-2 digits alone in the ROI. The match's own kills are the largest value read on at least 2 frames (match_gate.br_hud_kills). Not checked: whether the counter shows a teammate's kills while spectating."
+      },
+      "nameRequired": false,
+      "weight": null,
+      "window": {
+        "preSec": null,
+        "postSec": null
+      },
+      "cooldownSec": null,
+      "status": "unverified",
+      "note": "D441 (match gate, services/clip/match_gate.py parse_br_hud). Context only: readings for the BR own kill count; never a hit row."
     },
     {
       "id": "C1",
