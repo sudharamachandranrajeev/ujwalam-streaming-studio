@@ -164,7 +164,10 @@ export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileT
   // account name; screenWords undefined = not checked (pure tests only; the runner always passes it and fails closed)
   if (screenWords instanceof Set) {
     const ok = vocab instanceof Set ? vocab : new Set();
-    for (const w of rest.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []) if (screenWords.has(w) && !ok.has(w)) return bad('screen-name', 'a word that is on screen and not a common or game word');
+    for (const w of rest.toLowerCase().match(/[\p{L}\p{M}\p{N}]{3,}/gu) ?? []) if (screenWords.has(w) && !ok.has(w)) return bad('screen-name', 'a word that is on screen and not a common or game word');
+    // a longer screen word inside the text with the spaces and marks taken out ("Shadow King" for "Shadow_King")
+    const sk = skel(rest);
+    for (const w of screenWords) { const k = skel(w); if (k.length >= 5 && !ok.has(w) && sk.includes(k)) return bad('screen-name', 'a name that is on screen, written another way'); }
   }
   // facts: only the detector's facts verify a claim; with none the text may not claim kills or a win/loss at all
   // (factsSeen is recorded for later learning, never used to accept)

@@ -158,6 +158,17 @@ test('screen names: a word on screen and not in the vocab rejects; vocab words a
   reject(run(withAns({ description: 'Watch ZORBLAX go\nsecond line' }), { screenWords: new Set(['zorblax']), vocab }), 'screen-name');
 });
 
+test('screen names: a name made of common words is caught in its joined form, written with or without a space', () => {
+  // OCR of "Clutch_Finish" gives clutch, finish and the joined clutchfinish (services/clip/ocr_words.py)
+  const vocab = new Set(['clutch', 'finish', 'what']);
+  const screenWords = new Set(['clutch', 'finish', 'clutchfinish']);
+  reject(run(withAns({ title: 'What a ClutchFinish' }), { screenWords, vocab }), 'screen-name');
+  reject(run(withAns({ title: 'What a Clutch Finish' }), { screenWords, vocab }), 'screen-name');
+  assert.equal(run(withAns({ title: 'What a finish' }), { screenWords, vocab }).ok, true);
+  // a name in another script is a word too
+  reject(run(withAns({ title: 'Clutch by ശക്തൻ' }), { screenWords: new Set(['ശക്തൻ']), vocab }), 'screen-name');
+});
+
 test('facts: no invented numbers (years, ranks, other counts); the fact itself may repeat', () => {
   reject(run(withAns({ description: 'Best clip of 2026\nsecond line' })), 'fact-number');
   reject(run(withAns({ title: 'Top 10 plays' })), 'fact-number');

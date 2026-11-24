@@ -96,7 +96,7 @@ export async function grabFrames(ffmpeg, file, seconds, cfg, tmpRoot = os.tmpdir
 }
 
 export const VOCAB_FILE = path.join(REPO, 'data', 'posting', 'ai-text-vocab.json');
-const tokens = (s) => String(s).toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+const tokens = (s) => String(s).toLowerCase().match(/[\p{L}\p{M}\p{N}]{3,}/gu) ?? []; // same words as the checker
 
 /** Words allowed in the text even when they are on screen: the vocab file plus the labels of every game pack
  *  (data/games/<id>/events.json and screens.json: label, name, id, title values). -> Set<string> */
