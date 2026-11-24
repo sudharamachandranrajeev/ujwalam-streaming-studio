@@ -3190,3 +3190,6 @@ T2 (2026-11-24): flag `ai-post-text` is ON by default (user-requested; English, 
 gets AI title, description and tags only when the checker passes (limits, privacy, facts, numbers, kept credit lines);
 any failure keeps the template text and records `aiReject` in post.json. Number rule: claim-context numbers must be
 fact numbers; other digits in title/description reject the post; a tag with a non-fact number is dropped alone.
+T5 (2026-11-24): flag `ai-captions` is ON by default (user-requested). After Whisper, the local model tidies the text of each
+caption line only (word list data/clip/caption-words.json); timing and cue count never change; a line that adds words,
+changes script, adds a name or runs too long keeps the Whisper text. ON by default; needs `local-ai-model` and `reel-captions`.

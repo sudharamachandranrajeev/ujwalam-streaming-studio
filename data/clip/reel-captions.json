@@ -17,5 +17,7 @@
   "minConfidence": 0.55,
   "minConfidenceStatus": "unverified: a first guess; STT-ML will measure the model on real stream speech and set it from that",
   "confidenceNote": "faster-whisper: exp(avg_logprob) x (1 - no_speech_prob) per segment; whisper-cli: mean token probability from its full JSON (-ojf). A segment without a confidence is not shown.",
-  "minSegmentSec": 0.3
+  "minSegmentSec": 0.3,
+  "clean": { "maxCueChars": 90, "maxCueWords": 16 },
+  "cleanNote": "D443 T5: line limits the model-cleaned caption text must stay inside (services/local-model/caption-clean.mjs); word lists and rules: data/clip/caption-words.json. A longer cleaned line is rejected and the Whisper text kept."
 }

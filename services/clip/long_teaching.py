@@ -395,7 +395,8 @@ def batch_overlay(ffmpeg, src, chunk, first_no, tr, frame, workdir, ctx, transcr
     if ctx.get("ccfg"):
         try:
             doc, info = rcap.make_transcript(ffmpeg, src, pieces, ctx["ccfg"], ctx["style"], ctx["opts"], workdir,
-                                             in_sec, transcribe=transcribe, words=True)
+                                             in_sec, transcribe=transcribe, words=True,
+                                             **({"clean": ctx["clean"]} if ctx.get("clean") else {}))
             if doc:
                 doc = rcap.retime(doc, pieces, pieces, xd)
                 info = dict(info, cues=rcap.subtitle_cues(doc, out_sec))  # C1: the batch's lines, its own timeline
@@ -495,7 +496,8 @@ def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, lay
     except (AttributeError, KeyError, TypeError, ValueError):
         paths = None
     return {"tcfg": tcfg, "style": style, "accent": accent, "ccfg": ccfg if use else None,
-            "opts": {"whisper_bin": whisper_bin, **mopts}, "box": box, "boxModes": box_modes, "paths": paths,
+            "opts": {"whisper_bin": whisper_bin, **mopts},
+            "clean": rcap.clean_flags(data_dir) if use else None, "box": box, "boxModes": box_modes, "paths": paths,
             "cards": cards, "cardWeights": card_weights, "seed": seed or ""}
 
 

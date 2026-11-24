@@ -1,0 +1,19 @@
+{
+  "$comment": "D443 T5 (user yes 2026-11-24): word lists and rules for the local model's clean-up of Whisper caption lines (services/local-model/caption-clean.mjs). Placeholders only: no brand, channel or player names (the user adds their own game terms in the studio data copy). The model may spell these words the way listed; the checker lets them in even when the line did not have them.",
+  "version": "1.0.0",
+  "flag": "ai-captions",
+  "excitementWords": ["adipoli", "polich", "pwolich", "scene", "super"],
+  "excitementNote": "The user's own cheers. Manglish spellings of the same sound (adipolli, polichu) stay as the speaker said them.",
+  "gameTerms": ["headshot", "clutch", "ace", "squad", "revive", "loadout", "airdrop", "killstreak", "scorestreak", "sniper", "rush", "respawn", "lobby", "ranked", "victory", "defeat", "mvp", "gg"],
+  "chunkCues": 40,
+  "maxEditDistance": 2,
+  "shortWordLen": 4,
+  "shortWordMaxEdit": 1,
+  "maxExtraWordsRatio": 0.2,
+  "minKeepWordsRatio": 0.6,
+  "timeoutMs": 120000,
+  "maxTokens": 2048,
+  "temperature": 0.1,
+  "system": "You clean up speech-to-text caption lines. You never add new content.",
+  "prompt": "Clean each caption line. Fix punctuation and capital letters. Spell Manglish (Malayalam written in English letters) the same way every time. Correct game words using the word list. Keep Malayalam script as Malayalam script and English as English. Do not translate, do not add words, do not add names, do not merge or split lines. Return every id exactly once with its cleaned text.\nWord list: {words}\nLines (JSON): {cues}"
+}

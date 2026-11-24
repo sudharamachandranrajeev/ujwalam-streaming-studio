@@ -1386,6 +1386,7 @@ def _reel_extras(a, data_dir):
     # FX6 (D429): the tick alone; a stored track is reused without the runtime, new ones need it (music_gen.make)
     ai = bool(lcfg and mlcfg and mgen.SOURCE in (look_now["music"].get("sources") or []))
     return {"hooks": rh.active(data_dir, hcfg), "hcfg": hcfg, "cap_on": cap_on, "ccfg": ccfg,
+            "clean": rcap.clean_flags(data_dir) if cap_on else None,
             "look": ({"cfg": lcfg, "look": look_now, "override": look.override_from_env(lcfg), "tracks": tracks,
                       "mlcfg": mlcfg, "dataDir": data_dir, "history": look.load_history(data_dir), "ai": ai,
                       # each part of the look obeys its own switch (Codex review): music = reel-music, transitions =
@@ -1777,7 +1778,8 @@ def _caption_reel(ffmpeg, src, pieces, frame, wd, ex, duration):
     if not ex["cap_on"]:
         return None, {"backend": "none", "status": "off"}
     try:
-        tr, info = rcap.make_transcript(ffmpeg, src, pieces, ex["ccfg"], ex["style"], ex["opts"], wd, duration)
+        tr, info = rcap.make_transcript(ffmpeg, src, pieces, ex["ccfg"], ex["style"], ex["opts"], wd, duration,
+                                         **({"clean": ex["clean"]} if ex.get("clean") else {}))
     except ClipError as e:  # a caption failure never stops the reel: it renders without captions
         return None, {"backend": ex["ccfg"]["backend"], "status": "failed", "reason": str(e)[-200:]}
     return tr, info

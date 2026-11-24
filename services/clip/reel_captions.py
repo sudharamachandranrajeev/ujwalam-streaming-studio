@@ -25,6 +25,7 @@ Data: data/clip/reel-captions.json (backend, model, confidence threshold, preset
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import struct
@@ -72,6 +73,44 @@ def on(data_dir, cfg=None):
     if os.environ.get("UJWALAM_REEL_CAPTIONS") == "off":
         return False
     return flag_on(data_dir, (cfg or {}).get("flag") or FLAG)
+
+
+CLEAN_FLAGS = ("local-ai-model", "ai-captions")  # D443 T5: both must be on for the model to clean the lines
+CLEAN_CLI = os.path.join(REPO, "services", "local-model", "caption-clean.mjs")
+
+
+def clean_flags(data_dir):
+    """D443 T5: the flags to pass the clean-up step, or None when the model may not clean (a switch is off)."""
+    return list(CLEAN_FLAGS) if data_dir and all(flag_on(data_dir, f) for f in CLEAN_FLAGS) else None
+
+
+def clean_transcript(doc, workdir, flags, node=None, run=None):
+    """D443 T5: the local model cleans the text of the transcript's lines (punctuation, spelling, game words) in
+    workdir/transcript.json, off air only (the runner refuses on air). Timing never changes. Any failure returns the
+    transcript as it was. -> (doc, stats dict or None)."""
+    node = node or shutil.which("node")
+    if not flags or not doc or not node or not os.path.isfile(CLEAN_CLI):
+        return doc, None
+    path = os.path.join(workdir, TRANSCRIPT)
+    try:
+        r = (run or run_tool)([node, CLEAN_CLI, path, "--flags=" + ",".join(flags)], timeout=1800)
+        if r.returncode != 0:
+            return doc, {"status": "failed", "reason": "exit " + str(r.returncode)}
+        stats = json.loads(r.stdout.strip().splitlines()[-1])
+        if stats.get("status") != "cleaned":
+            return doc, stats
+        new = load_json(path)
+        old_t = [(x["start"], x["end"]) for x in doc["segments"]]
+        if [(x["start"], x["end"]) for x in new["segments"]] != old_t:  # timing is sacred: never accept a change
+            write_json_atomic(path, doc)
+            return doc, {"status": "failed", "reason": "timing changed"}
+        return new, stats
+    except Exception as e:  # noqa: BLE001 - captions stay as the speech model wrote them
+        try:
+            write_json_atomic(path, doc)
+        except Exception:  # noqa: BLE001
+            pass
+        return doc, {"status": "failed", "reason": str(e)[-120:]}
 
 
 def model_path(data_dir, cfg, given=None):
@@ -254,7 +293,8 @@ def mark(segments, cfg, codepoints, duration=None):
     return out
 
 
-def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=None, transcribe=None, words=False):
+def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=None, transcribe=None, words=False,
+                    clean=None, cleaner=None):
     """Transcribes the reel's pieces -> (transcript dict or None, info). Writes workdir/transcript.json when there is
     any segment. transcribe: injected for tests (backend, wav, opts) -> (segments, info). words (LV1, D421): ask the
     speech to text for word times too."""
@@ -275,7 +315,11 @@ def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=Non
            "edited": False, "note": "Edit text or show, then run clipper.py recaption to render the reel again.",
            "segments": rows}
     write_json_atomic(os.path.join(workdir, TRANSCRIPT), doc)
-    return doc, dict(info, shown=sum(1 for x in rows if x["show"] and not x.get("fontMissing")), segments=len(rows))
+    cinfo = None
+    if clean:  # D443 T5: the model tidies the lines before burn-in and the .srt/.vtt files are made from them
+        doc, cinfo = (cleaner or clean_transcript)(doc, workdir, clean)
+        rows = doc["segments"]
+    return doc, dict(info, **({"clean": cinfo} if cinfo else {}), shown=sum(1 for x in rows if x["show"] and not x.get("fontMissing")), segments=len(rows))
 
 
 def retime(doc, src_pieces, out_pieces, xd):
