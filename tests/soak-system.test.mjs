@@ -18,6 +18,9 @@ test.after(async () => {
   assert.equal(openMocks() + openChildren(), 0, 'a mock or child process was left open');
   assert.equal(killed + closed, 0, `teardown had to clean up ${killed} child(ren) and ${closed} mock(s): a test did not clean up after itself`);
 });
+// --live-priority: these runs test the duration and the system probe, not the soak's priority. A BelowNormal core child (and
+// its whoami/icacls children) starved behind the other test files under CI load: 'core child did not become ready in 120 s'
+// and ACL_FAILED (2026-11-24). Its priority handling has its own tests (event-core-priority).
 const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'evsys-')); dirs.push(d); return d; };
 const comment = (id, off, body) => ({ _id: id, content_offset_seconds: off, commenter: { _id: 'c-t', name: 'tester', display_name: 'tester' }, message: { body } });
 const exportRoot = (comments) => {
@@ -31,7 +34,7 @@ const exportRoot = (comments) => {
 // that fell inside the window and nothing waited for the rest of the duration. A duration run lasts the duration.
 test('a duration run lasts the whole duration even when its last message comes much earlier', { timeout: 300000 }, async () => {
   const root = exportRoot([comment('r1', 10, 'synthetic one'), comment('r2', 11, 'synthetic two')]);
-  const r = await main(['--data-root', root, '--speed', '10', '--no-loop', '--duration-s', '6', '--sample-s', '1', '--run-id', 'idle', '--quiet', '--no-system-probe']);
+  const r = await main(['--data-root', root, '--speed', '10', '--no-loop', '--duration-s', '6', '--sample-s', '1', '--run-id', 'idle', '--quiet', '--no-system-probe', '--live-priority']);
   assert.equal(r.harness.sent, 2, 'both messages are inside the window');
   assert.ok(r.wallSeconds >= 6, `wall ${r.wallSeconds} s must reach the 6 s duration`);
   assert.equal(r.system.status, 'NOT RECORDED', 'the probe can be switched off and then says so');
@@ -39,7 +42,7 @@ test('a duration run lasts the whole duration even when its last message comes m
 
 test('a replay records power and system load, and leaves no mock process behind', { timeout: 300000 }, async () => {
   const root = exportRoot([comment('p1', 10, 'synthetic one'), comment('p2', 11, 'synthetic two')]);
-  const r = await main(['--data-root', root, '--speed', '10', '--max-gap-s', '0.5', '--duration-s', '3', '--sample-s', '1', '--run-id', 'sys', '--quiet']);
+  const r = await main(['--data-root', root, '--speed', '10', '--max-gap-s', '0.5', '--duration-s', '3', '--sample-s', '1', '--run-id', 'sys', '--quiet', '--live-priority']);
   assert.ok(r.system.samples >= 3 && ['QUIET', 'NOISY'].includes(r.system.status));
   assert.ok(['ac', 'ac (no battery)', 'battery', 'unknown'].includes(r.system.powerStart));
   const rows = readFileSync(path.join(root, 'soak', 'sys', 'metrics', 'system.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);

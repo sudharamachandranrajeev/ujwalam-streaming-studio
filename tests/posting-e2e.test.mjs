@@ -1107,15 +1107,29 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
     const { LOCK_NAME } = await import('../services/posting/auto-chain.mjs');
     const g = await fakeGoogle(); const e = setup([ROWS[0]]); g.opt.hideOwnUploads = true;
     let hang = true;
-    const fetchImpl = (u, o) => (hang && String(u).includes('uploadType=resumable') ? new Promise(() => {}) : g.fetchImpl(u, o));
+    // The capped section is the lock hold: it starts when the lock file is written (its `at`), not when afterRun is
+    // called. Timing the whole afterRun also counted the work before the lock (store, rules, auth, budget), which took
+    // seconds under CPU load (4.4 s, 8 of 10 runs failed with 12 busy cores, 2026-11-24) although the hold itself ended at the cap.
+    let holdAt = null;
+    const lockFile = path.join(e.dataDir, 'posting', LOCK_NAME);
+    const fetchImpl = (u, o) => {
+      if (!(hang && String(u).includes('uploadType=resumable'))) return g.fetchImpl(u, o);
+      holdAt = JSON.parse(readFileSync(lockFile, 'utf8')).at;
+      return new Promise(() => {});
+    };
     // The request deadline is far away; only the hold cap (300 ms) ends the pass.
-    const c = schedChain(e, g, { fetchImpl, requestMs: 60 * 60e3, lockOpts: { maxHoldMs: 300 } });
-    const t = Date.now();
+    const lockOpts = { maxHoldMs: 300 };
+    const c = schedChain(e, g, { fetchImpl, requestMs: 60 * 60e3, lockOpts });
     await c.afterRun(e.runDir, IDLE);
-    assert.ok(Date.now() - t < 3000, `the pass ended at the cap (${Date.now() - t} ms)`);
+    assert.ok(holdAt !== null, 'the pass reached the hung session start inside the hold');
+    const held = Date.now() - holdAt;
+    assert.ok(held < 3000, `the hold ended at the cap (${held} ms)`);
     let it = e.queue().items()[0];
     assert.equal(it.state, 'queued'); assert.equal(it.reason, 'request-timeout'); assert.equal(it.attempts, 0);
     assert.ok(!existsSync(path.join(e.dataDir, 'posting', LOCK_NAME)), 'the lock was released at the cap');
+    // The next tick is a normal pass (a whole upload): it gets the shipped cap, not the 300 ms one that only had to end
+    // the hung pass. A whole upload under 300 ms raced CPU load (4 of 10 runs, 12 busy cores, 2026-11-24).
+    delete lockOpts.maxHoldMs;
     hang = false; e.clock.t += 6 * MIN; await c.tick(IDLE);
     it = e.queue().items()[0];
     assert.equal(it.state, 'done'); assert.equal(g.videos.length, 1, 'the next tick posts');
