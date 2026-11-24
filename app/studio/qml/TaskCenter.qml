@@ -179,6 +179,17 @@ Item {
         const log = toastLog.slice(-9);
         log.push(title);
         toastLog = log;
+        if (act === "window" && pNoticeClick) { pNoticeClick = false; clickToast(pToastSeq) }
+    }
+    // Probe: tasks:notice-click clicks the "N tasks are waiting for you" notice itself (found by its action, not its
+    // place in the stack), now if it is shown, else the moment it appears. tasks:toast-click clicked whatever toast was
+    // first: under CI load the notice had closed (6 s) or been pushed out by preview "Done" toasts before the click, and
+    // the click opened the panel instead (2026-11-24).
+    property bool pNoticeClick: false
+    function noticeClick() {
+        for (let i = toasts.count - 1; i >= 0; i--) if (toasts.get(i).act === "window") { clickToast(toasts.get(i).uid); return true }
+        pNoticeClick = true;
+        return true;
     }
     function closeToast(uid) {
         for (let i = 0; i < toasts.count; i++) if (toasts.get(i).uid === uid) { toasts.remove(i); return }
@@ -206,6 +217,7 @@ Item {
         if (a === "tasks:dismiss") { dismissFirstFinished(); return true }
         if (a === "tasks:clear") { clearFinished(); return true }
         if (a === "tasks:toast-click") { if (toasts.count > 0) clickToast(toasts.get(0).uid); return true }
+        if (a === "tasks:notice-click") return noticeClick();
         if (a === "tasks:stop") { stopTasks(); return true }
         if (a === "tasks:window-open") return openWindow();
         if (a === "tasks:window-dock") return dockWindow();

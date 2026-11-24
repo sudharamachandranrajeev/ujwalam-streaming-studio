@@ -23,7 +23,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants as FS, copyFileSync, createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFlags } from '../flags/index.mjs';
@@ -290,8 +289,10 @@ export function extractCover(ffmpeg, video, atSec, out) {
   return new Promise((resolve) => {
     const args = ['-v', 'error', '-nostdin', '-y', '-threads', '1', '-ss', atSec.toFixed(3), '-i', video, '-frames:v', '1', '-q:v', '2', out];
     let p;
+    // Normal priority on purpose: one frame on one thread (well under a second of CPU). At BelowNormal it got no CPU at
+    // all while the machine was busy (3 of 3 extracts not done in 180 s with 20 busy threads on 16 cores, 2026-11-24),
+    // so the 60 s ceiling dropped the cover exactly when the PC was loaded (full CI; a stream would do the same).
     try { p = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true }); } catch { return resolve(false); }
-    try { os.setPriority(p.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* best effort */ }
     const t = setTimeout(() => p.kill(), 60_000);
     p.on('error', () => { clearTimeout(t); resolve(false); });
     p.on('close', (code) => { clearTimeout(t); resolve(code === 0 && isRealFile(out)); });
