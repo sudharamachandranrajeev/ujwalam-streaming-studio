@@ -253,14 +253,6 @@ class RoundThree(unittest.TestCase):
             clipper._drop_done_row(wd)
             self.assertEqual(os.listdir(wd), [], "an old subtitle file is never bound to a new render")
 
-    def test_marker_keeps_the_look_track_for_replay(self):
-        with tempfile.TemporaryDirectory() as wd:
-            _write(os.path.join(wd, "v.mp4"))
-            row = {"id": "c", "files": [{"layout": "v", "file": "v.mp4"}], "errors": [], "look": {"music": "m"}}
-            self.assertTrue(clipper._save_done_row(wd, "k", row, track="t1"))
-            self.assertEqual(clipper._done_track(wd), "t1")
-            self.assertEqual(clipper._done_row(wd, "k")["look"], {"music": "m"})
-
 
 if __name__ == "__main__":
     unittest.main()

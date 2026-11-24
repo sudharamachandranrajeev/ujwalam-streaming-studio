@@ -691,16 +691,6 @@ def cmd_live_review(a):
     lim_live = rl.effective_limits(data_dir)["live-clip"]
     fade_ms = int(load_config("montage", getattr(a, "montage_config", None))["audioFadeMs"])
     out_rows, failed = [], 0
-    # Codex round 3: the look pool's no-repeat history starts where this run started (a resumed run reads the copy
-    # saved at its first start), and each kept clip's picks are replayed in clip order, as if no pause came between
-    hist_start = os.path.join(a.out, LOOK_START)
-    if ex.get("look"):
-        start_h = load_json(hist_start) if os.path.isfile(hist_start) else None
-        if isinstance(start_h, dict):
-            write_json_atomic(os.path.join(data_dir, look.HISTORY_FILE), start_h)
-            ex["look"]["history"] = start_h
-        else:
-            write_json_atomic(hist_start, ex["look"]["history"])
     progress_line("review", 0, len(clips), "making clip videos from live saves")
     for n, c in enumerate(clips, 1):
         wd = os.path.join(a.out, "clips", c["id"])
@@ -715,7 +705,6 @@ def cmd_live_review(a):
         kept = _done_row(wd, rkey)
         if kept is not None:
             out_rows.append(kept)
-            _look_remember(ex, kept.get("look") if kept.get("files") else None, track=_done_track(wd))
             print(f"live-review {c['id']}: kept from the earlier run")
             progress_line("review", n, len(clips), f"clip {c['id']} kept")
             safepoint_line("review", n)
@@ -801,7 +790,7 @@ def cmd_live_review(a):
                          **({"styleNotApplied": style_skips} if style_skips else {}), "captions": cinfo, "hook": hook, "files": files,
                          "errors": errors})
         _look_remember(ex, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
-        saved = not errors and _save_done_row(wd, rkey, out_rows[-1], track=(mplan or {}).get("track", {}).get("id"))
+        saved = not errors and _save_done_row(wd, rkey, out_rows[-1])
         progress_line("review", n, len(clips), f"clip {c['id']} {'failed' if errors else 'done'}")
         if saved:
             safepoint_line("review", n)
@@ -811,10 +800,6 @@ def cmd_live_review(a):
         "saves": len(rows), "encoder": encoder, "frame": frame, "layoutsVersion": lay_doc.get("version"),
         "failed": failed, "matchGate": gate_info, "clips": out_rows,
     })
-    try:  # the run is complete: the next review run starts from the history as it is now
-        os.remove(os.path.join(a.out, LOOK_START))
-    except FileNotFoundError:
-        pass
     print(f"live-review: {len(rows)} save(s) -> {len(clips)} clip(s), {failed} failed render(s)")
     rc = 0
     if a.publish:
@@ -943,7 +928,6 @@ def _has_duration(ffprobe, path):
         return False
 
 
-LOOK_START = "look-history-start.json"  # Codex round 3: the look history when this review run first started
 DONE_ROW = "done-row.json"  # D442: one finished clip's render row and the key of the inputs it was made from
 
 
@@ -1041,17 +1025,7 @@ def _drop_done_row(wd):
             pass
 
 
-def _done_track(wd):
-    """The music track a kept clip's look history recorded (from its marker), or None."""
-    try:
-        with open(os.path.join(wd, DONE_ROW), encoding="utf-8") as f:
-            t = json.load(f).get("lookTrack")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return t if isinstance(t, str) else None
-
-
-def _save_done_row(wd, key, row, track=None):
+def _save_done_row(wd, key, row):
     """D442: commits the marker after the media: the row plus each file's size and mtime (a file replaced later no
     longer matches). -> True when committed."""
     ids = {}
@@ -1063,8 +1037,7 @@ def _save_done_row(wd, key, row, track=None):
             return False
         ids[fr["file"]] = ident[1:]
     try:
-        write_json_atomic(os.path.join(wd, DONE_ROW), {"key": key, "row": row, "files": ids, "sidecars": _sidecars(wd),
-                                                       "lookTrack": track})
+        write_json_atomic(os.path.join(wd, DONE_ROW), {"key": key, "row": row, "files": ids, "sidecars": _sidecars(wd)})
         return True
     except (OSError, ClipError):
         return False  # only the resume shortcut is lost
