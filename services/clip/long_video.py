@@ -265,7 +265,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
             pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
             ov = (overlay(chunk, first, adir) if overlay else None) or {}
             first += len(chunk)
-            key = part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov, src=src, encoder=encoder)
+            key = part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov, src=src, encoder=encoder, base=adir)
             if part_done(adir, name, key, part_ok):
                 parts.append(name)
                 expected += seconds
@@ -281,7 +281,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
                                         fontsdir=ov.get("fontsdir"), fx=ov.get("fx"), gain_db=gain_db, music=bed, grade=grade,
                                         container=PART_CONTAINER)
             r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
-            fallback = False
+            fallback = ov.get("degraded") is True  # Codex round 2: the overlay's preparation failed in part
             if r.returncode != 0 and (ov.get("ass") or ov.get("fx")):
                 fallback = True  # Codex review: a batch made without its overlay is never kept for a resume
                 if overlay_failed:
@@ -318,44 +318,57 @@ MANIFEST_SUFFIX = ".done.json"  # D442: written after the part's media; binds it
 FINGERPRINT_BYTES = 1 << 20
 
 
-def fingerprint(p):
+def fingerprint(p, mtime=False):
     """D442: a stable identity of a file's content that does not depend on where it is: size + SHA-256 of its first
-    and last MB. None when it is not a readable file."""
+    and last MB (a file up to 2 MB: all of it). mtime (Codex round 2, the recording): its mtime in ns too, so an
+    in-place edit is seen; the full file is not hashed (hours of video). Residual: an edit inside the middle that keeps
+    the size, both end MBs and the mtime is not seen. None when it is not a readable file."""
     import hashlib  # noqa: PLC0415
     try:
         size = os.path.getsize(p)
+        mt = os.stat(p).st_mtime_ns if mtime else None
         h = hashlib.sha256()
         with open(p, "rb") as f:
             h.update(f.read(FINGERPRINT_BYTES))
             if size > FINGERPRINT_BYTES:
                 f.seek(max(FINGERPRINT_BYTES, size - FINGERPRINT_BYTES))
                 h.update(f.read(FINGERPRINT_BYTES))
-        return [size, h.hexdigest()]
+        return [size, h.hexdigest()] + ([mt] if mtime else [])
     except (OSError, TypeError, ValueError):
         return None
 
 
-def _stable(v):
-    """Values for a key with every file path replaced by its content fingerprint (a temp soundtrack path changes per
-    run; the song does not)."""
+def _stable(v, base=None):
+    """Values for a key with every file or folder path replaced by its content (a temp soundtrack path changes per
+    run; the song does not). Codex round 2: a relative path is the batch folder's (base), where ffmpeg runs; a
+    folder (the fonts) is keyed by each file's name and content."""
     if isinstance(v, dict):
-        return {k: _stable(x) for k, x in v.items()}
+        return {k: _stable(x, base) for k, x in v.items()}
     if isinstance(v, (list, tuple)):
-        return [_stable(x) for x in v]
-    if isinstance(v, str) and len(v) < 1024 and os.path.isfile(v):
-        return {"file": fingerprint(v)}
+        return [_stable(x, base) for x in v]
+    if isinstance(v, str) and 0 < len(v) < 1024:
+        p = v if os.path.isabs(v) or not base else os.path.join(base, v)
+        if os.path.isfile(p):
+            return {"file": fingerprint(p)}
+        if os.path.isdir(p):
+            files = []
+            for root, dirs, names in os.walk(p):
+                dirs.sort()
+                files += [[os.path.relpath(os.path.join(root, n), p).replace(os.sep, "/"), fingerprint(os.path.join(root, n))]
+                          for n in sorted(names)]
+            return {"dir": files}
     return v
 
 
-def part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov, src=None, encoder=None):
+def part_key(pieces, frame, audio_tracks, fade_ms, tr, gain_db, bed, grade, ov, src=None, encoder=None, base=None):
     """D442: the inputs of one batch, hashed: the recording (content fingerprint), the pieces, the effective render
     configuration (frame, tracks, fade, transition, gain, grade, encoder asked for, part formats), the soundtrack by
     content, the overlay by its files' contents (new captions make it again)."""
     import hashlib  # noqa: PLC0415
     import json  # noqa: PLC0415
-    blob = json.dumps([fingerprint(src) if src else None, pieces, frame, audio_tracks, fade_ms, tr, gain_db,
-                       _stable(bed), grade, _stable(ov.get("ass")), _stable(ov.get("fx")), encoder, PART_AUDIO,
-                       PART_CONTAINER], sort_keys=True, default=str)
+    blob = json.dumps([fingerprint(src, mtime=True) if src else None, pieces, frame, audio_tracks, fade_ms, tr, gain_db,
+                       _stable(bed), grade, _stable(ov.get("ass"), base), _stable(ov.get("fontsdir"), base),
+                       _stable(ov.get("fx"), base), encoder, PART_AUDIO, PART_CONTAINER], sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 

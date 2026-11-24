@@ -146,6 +146,80 @@ class SafePointLine(unittest.TestCase):
         with self.assertRaises(ValueError):
             clip_common.safepoint_line("candidates", 1)
 
+class RoundTwo(unittest.TestCase):
+    """Codex round 2 on the resume records."""
+
+    def test_caption_key_follows_the_model_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            m = os.path.join(d, "model")
+            os.makedirs(m)
+            _write(os.path.join(m, "model.bin"), b"small")
+            k0 = clipper._caption_assets({"whisper_model": m})
+            self.assertEqual(k0, clipper._caption_assets({"whisper_model": m}))
+            _write(os.path.join(m, "model.bin"), b"another model")
+            _bump_mtime(os.path.join(m, "model.bin"))
+            self.assertNotEqual(k0, clipper._caption_assets({"whisper_model": m}), "replaced in place")
+
+    def test_no_marker_without_expected_outputs_and_sidecars_are_bound(self):
+        with tempfile.TemporaryDirectory() as wd:
+            self.assertFalse(clipper._save_done_row(wd, "k", {"id": "c", "files": [], "errors": []}))
+            self.assertFalse(os.path.exists(os.path.join(wd, clipper.DONE_ROW)))
+            row = {"id": "c", "files": [{"layout": "v", "file": "v.mp4"}], "errors": []}
+            _write(os.path.join(wd, "v.mp4"))
+            _write(os.path.join(wd, "captions.srt"), b"1")
+            self.assertTrue(clipper._save_done_row(wd, "k", row))
+            self.assertIsNotNone(clipper._done_row(wd, "k"))
+            os.remove(os.path.join(wd, "captions.srt"))
+            self.assertIsNone(clipper._done_row(wd, "k"), "a removed subtitle file")
+            self.assertTrue(clipper._save_done_row(wd, "k", row))
+            _write(os.path.join(wd, "captions.vtt"), b"x")
+            self.assertIsNone(clipper._done_row(wd, "k"), "a subtitle file that was not there")
+
+    def test_review_key_ignores_look_history(self):
+        ex = {"look": {"cfg": 1, "history": [1]}, "cap_on": True}
+        self.assertEqual(clipper._stable_extras(ex), clipper._stable_extras(dict(ex, look={"cfg": 1, "history": [1, 2]})))
+        self.assertNotEqual(clipper._stable_extras(ex), clipper._stable_extras(dict(ex, look={"cfg": 2, "history": [1]})))
+
+    def test_recording_mtime_and_overlay_files_from_the_batch_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "rec.mkv")
+            _write(src, b"rec")
+            adir = os.path.join(d, "parts")
+            os.makedirs(os.path.join(adir, "fonts"))
+            _write(os.path.join(adir, "captions.ass"), b"cue one")
+            _write(os.path.join(adir, "fonts", "a.ttf"), b"font a")
+            k = lambda: long_video.part_key([], {}, 1, 0, None, None, None, None,  # noqa: E731
+                                            {"ass": "captions.ass", "fontsdir": "fonts"}, src=src, base=adir)
+            k0 = k()
+            _bump_mtime(src)
+            k1 = k()
+            self.assertNotEqual(k0, k1, "an in-place edit changes the mtime")
+            _write(os.path.join(adir, "captions.ass"), b"cue two")
+            k2 = k()
+            self.assertNotEqual(k1, k2, "a relative ASS is read from the batch folder")
+            _write(os.path.join(adir, "fonts", "a.ttf"), b"font b")
+            self.assertNotEqual(k2, k(), "the fonts are part of the key")
+
+    def test_degraded_overlay_gets_no_manifest(self):
+        class R:
+            returncode, stderr = 0, ""
+        seen = []
+
+        def render_job(mk, enc, adir, part, what):
+            _write(os.path.join(adir, part))
+            return R(), enc
+        with tempfile.TemporaryDirectory() as wd:
+            adir = os.path.join(wd, long_video.PARTS_DIR)
+            ov = lambda chunk, first, folder: {"ass": None, "degraded": True}  # noqa: E731
+            fail_join = lambda argv, cwd, timeout: type("F", (), {"returncode": 1, "stderr": "x"})()  # noqa: E731
+
+            def on_part(n):
+                seen.append(n)
+            long_video.render("ffmpeg", "src.mkv", [{"start": 0, "end": 1, "kills": 1}], {"w": 1}, "x", wd, 1, 0, None,
+                              10, render_job, fail_join, {"x": []}, [], overlay=ov, on_part=on_part)
+            self.assertEqual(seen, [], "no safe point for a batch whose overlay was prepared only in part")
+            self.assertFalse(os.path.exists(adir) and any(n.endswith(long_video.MANIFEST_SUFFIX) for n in os.listdir(adir)))
+
 
 if __name__ == "__main__":
     unittest.main()
