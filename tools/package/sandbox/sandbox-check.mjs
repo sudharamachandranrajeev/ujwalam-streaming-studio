@@ -26,14 +26,18 @@ const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 /** The .wsb configuration (pure; tested). */
 export function wsbConfig({ distDir, harnessDir, outDir, setupName, download, keepOpen }) {
-  const cmd = `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ${IN}\\harness\\in-sandbox.ps1`
-    + ` -Setup "${IN}\\dist\\${setupName}" -Out ${IN}\\out -Download ${download}${keepOpen ? ' -KeepOpen' : ''}`;
+  // The logon command can run before the mapped folders are there: wait for the script (up to 5 min) first.
+  const script = `${IN}\\harness\\in-sandbox.ps1`;
+  const cmd = `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "`
+    + `for ($i = 0; $i -lt 300 -and -not ((Test-Path '${script}') -and (Test-Path '${IN}\\out')); $i++) { Start-Sleep 1 }; `
+    + `& '${script}' -Setup '${IN}\\dist\\${setupName}' -Out '${IN}\\out' -Download '${download}'${keepOpen ? ' -KeepOpen' : ''}"`;
   const map = (host, box, ro) => `    <MappedFolder><HostFolder>${xml(host)}</HostFolder><SandboxFolder>${xml(box)}</SandboxFolder><ReadOnly>${ro}</ReadOnly></MappedFolder>`;
   return [
     '<Configuration>',
-    '  <vGPU>Enable</vGPU>',
+    // vGPU on and 6 GiB both lost the connection before the desktop on this PC (2026-11-24); the default (4 GiB) and
+    // no vGPU boot. Without vGPU the host draws on Windows' software renderer, like a PC with no usable graphics card.
+    '  <vGPU>Disable</vGPU>',
     '  <Networking>Default</Networking>',
-    '  <MemoryInMB>6144</MemoryInMB>',
     '  <AudioInput>Disable</AudioInput>',
     '  <VideoInput>Disable</VideoInput>',
     '  <ClipboardRedirection>Disable</ClipboardRedirection>',

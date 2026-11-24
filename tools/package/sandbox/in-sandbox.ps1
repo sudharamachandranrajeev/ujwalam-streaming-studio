@@ -29,6 +29,7 @@ $data = Join-Path $root 'data'
 $steps = New-Object System.Collections.ArrayList
 $transcript = Join-Path $Out 'in-sandbox.log'
 function Note([string]$m) { Add-Content -LiteralPath $transcript -Value ("{0:HH:mm:ss} {1}" -f (Get-Date), $m) }
+Note "started as $env:USERNAME, setup $Setup"
 
 function Step([string]$name, [scriptblock]$body) {
   Note "== $name"
@@ -73,8 +74,10 @@ $env0 = [ordered]@{
   node = [bool](Get-Command node -ErrorAction SilentlyContinue)
   python = [bool](Get-Command python -ErrorAction SilentlyContinue)
   ffmpeg = [bool](Get-Command ffmpeg -ErrorAction SilentlyContinue)
-  defender = $(try { $d = Get-MpComputerStatus; "realtime=$($d.RealTimeProtectionEnabled)" } catch { 'unknown' })
+  # Defender's query can hang on a fresh Sandbox: read it in a job with a 20 s limit
+  defender = $(try { $j = Start-Job { (Get-MpComputerStatus).RealTimeProtectionEnabled }; if (Wait-Job $j -Timeout 20) { "realtime=$(Receive-Job $j)" } else { 'no answer in 20 s' } } catch { 'unknown' })
 }
+Note ("machine: " + ($env0 | ConvertTo-Json -Compress))
 
 # ---- 1. install ----
 $installed = Step 'install' {
