@@ -2,7 +2,7 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
-## 0.1.0-alpha.42 — 2026-11-22
+## 0.1.0-alpha.42 — 2026-11-24
 
 - Clip music: the music is now set 8 dB under each clip's own game sound (measured per clip), never louder than your music level (new default -20 dB). It also turns down 8 dB more while someone talks in the game, with smooth 0.2 s / 0.3 s ramps. The start music stays full until the name ends and then fades out; the end music fades in earlier so its full ending is not cut short. Fades use a smooth S-curve, 1.5 s, by default. Settings > Clips > Clip look has Music under the game, Quieter when someone talks, Fade in, Fade out and Fade shape, each with what it does.
 - Long highlights video: the numbered card at the start of each moment is now a K.O. card with no number. A big word says what happened (K.O., DOUBLE K.O., TRIPLE K.O., QUAD K.O., RAMPAGE, STREAK, WON), with a small line under it when it adds something ("streak · 5 kills"). Each moment gets one of five animations (slam in, slash wipe, glitch split, zoom punch, stamp), mixed so the same one never shows twice in a row; a re-made video draws the same ones. Settings > Clips > Clip look > Moment cards on the long video picks which animations are in the mix; untick all to show no cards.
@@ -12,6 +12,10 @@ One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the sec
 - Task manager window: the task panel can open in its own window ("Open in own window"; Dock or X puts it back). Sort and filter by state, start time or category; each task has Stop, Pause, Resume and what to do at the next start (Run, Ask me, Just notify). Click a task to see its details and log. When tasks are waiting for you at start, a notice says how many; a click opens the window.
 - Battle Royale: the end screen and the top bar of a Battle Royale match are now read, so the clip maker knows the placement, mode, map and your own kills of each match.
 - Long video joins: the sound no longer has a tiny gap where two parts of a long video meet.
+- Post text by the local AI: each post's title, description and tags are now written by the AI model on this PC from four pictures of the clip, what was said in it and what the clip maker found. A checker throws the text out (and keeps the old template text) when it has a wrong fact, a name seen on screen, a placeholder or anything over a platform limit. Never on air. Settings switch: AI post text.
+- Cover picture: when the AI text is used, the cover is the moment the AI picked with its short hook line on top (2 lines at most). If that fails, the plain frame as before.
+- Rewrite scheduled posts (off by default, command line only for now): posts this app uploaded that are still private and scheduled can get the new AI text. The old text is saved first and can be put back exactly. Videos that are public, edited by you, or due within 30 minutes are never touched.
+- First start on a new PC: the shortcut now starts the studio. Before, it stopped without a word because the new PC had no profile file; the app now makes one from the example the first time.
 
 ## 0.1.0-alpha.41 — 2026-11-22
 

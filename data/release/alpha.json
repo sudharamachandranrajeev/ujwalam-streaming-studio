@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 41,
+  "current": 42,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -52,6 +52,7 @@
     { "n": 38, "date": "2026-11-22", "title": "Top bar fits its buttons, Help icon, Review reads pictures" },
     { "n": 39, "date": "2026-11-22", "title": "Auto-post runs again on big channels; free music pack; music made on this PC" },
     { "n": 40, "date": "2026-11-22", "title": "Settings opens fast, labelled top bar, Clips menu" },
-    { "n": 41, "date": "2026-11-22", "title": "Hourly slots a year ahead, 100 uploads a day, Review reads fix" }
+    { "n": 41, "date": "2026-11-22", "title": "Hourly slots a year ahead, 100 uploads a day, Review reads fix" },
+    { "n": 42, "date": "2026-11-24", "title": "AI post text and cover, clip loudness and music, captions, task window, first start on a new PC" }
   ]
 }
