@@ -105,6 +105,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/BeatDropWindow.qml
 		qml/AlertStrip.qml
 		qml/TaskCenter.qml
+		qml/TaskWindow.qml
 		qml/TaskChip.qml
 		qml/UpdateButton.qml
 		qml/DownloadsList.qml

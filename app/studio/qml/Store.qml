@@ -51,6 +51,8 @@ QtObject {
     property string note: ""
     property var clips: ({})         // status "clips" (D283, D284): settings, the clip job's state, questions, the last run
     property int reviewCount: 0      // Review reads waiting (flag learning-review, D340)
+    // D442: unfinished jobs that wait for the user's choice (the start notice in TaskCenter)
+    readonly property int waitingForYou: typeof clips.waitingForYou === "number" ? clips.waitingForYou : 0
     readonly property string clipsText: clipsWords(clips)
     readonly property string clipsTip: clipsTipWords(clips)
 

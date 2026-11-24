@@ -813,7 +813,7 @@ export function createStudioServer(opts) {
   function clipStatus() {
     if (typeof opts.dataDir !== 'string') return null;
     const st = settingsNow();
-    const base = { settings: st.clips, settingsSaved: st.exists, folder: clipsFolder(opts.dataDir, st), available: null, reason: null, fix: null, missing: null, state: 'idle', running: null, queued: 0, asks: [], last: null };
+    const base = { settings: st.clips, settingsSaved: st.exists, folder: clipsFolder(opts.dataDir, st), available: null, reason: null, fix: null, missing: null, state: 'idle', running: null, queued: 0, waitingForYou: 0, asks: [], last: null };
     try {
       const file = path.join(opts.dataDir, 'clips', 'status.json');
       const s = statCache(file, () => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } });
@@ -823,6 +823,8 @@ export function createStudioServer(opts) {
       return { ...base, available: s.available === true, reason: str(s.reason, 200), fix: str(s.fix, 200), missing: ['root', 'python', 'script'].includes(s.missing) ? s.missing : null, state: str(s.state, 16) ?? 'idle',
         running: s.running ? { name: str(s.running.name, 120), kind: str(s.running.kind, 16) } : null,
         queued: Array.isArray(s.queued) ? s.queued.length : 0,
+        // D442: unfinished jobs that wait for the user's choice (the studio's start notice)
+        waitingForYou: Number.isInteger(s.waitingForYou) && s.waitingForYou > 0 ? Math.min(s.waitingForYou, 99) : 0,
         asks: (Array.isArray(s.asks) ? s.asks : []).slice(0, 5).map((a) => ({ id: str(a.id, 160), name: str(a.name, 120), kind: str(a.kind, 16), minutes: Number.isFinite(a.minutes) ? a.minutes : null })),
         posting: (() => { try { return readQueueSummary(opts.dataDir, flags); } catch { return null; } })(),
         last: l ? { name: str(l.name, 120), kind: str(l.kind, 16), result: str(l.result, 16), reason: str(l.reason, 200), clips: Number(l.clips) || 0, out: str(l.out, 400), folder: str(l.folder, 400),
