@@ -208,10 +208,16 @@ def _render_batches(segs, n, tr, music):
         offset += seconds
 
 
-def concat_argv(ffmpeg, list_name, out_name):
-    """Joins the batch files without re-encoding (picture and audio copied: the audio is encoded once)."""
+# The batch parts carry their sound as PCM; the join encodes it to AAC once. AAC parts joined by stream copy kept
+# each part's 1024-sample encoder delay: a ~21 ms near-silent gap at every batch join and the sound drifting later
+# by that much per join (measured 2026-11-23, ffmpeg n8.1.3; docs/evidence/2026-11-23-astra-review-fixes.md).
+PART_AUDIO = ["-c:a", "pcm_s24le", "-ar", "48000", "-ac", "2"]
+
+
+def concat_argv(ffmpeg, list_name, out_name, audio):
+    """Joins the batch files: the picture copied (encoded once in its part), the PCM sound encoded once with audio."""
     return [ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list_name, "-map", "0",
-            "-c", "copy", "-movflags", "+faststart", "-f", "mp4", out_name]
+            "-c:v", "copy", *audio, "-movflags", "+faststart", "-f", "mp4", out_name]
 
 
 ATTEMPT_PREFIX = "attempt-"
@@ -250,7 +256,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
             first += len(chunk)
 
             def mk(enc, pieces=pieces, name=name, ov=ov, bed=bed):
-                return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], audio, fade_ms, name + ".part",
+                return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], PART_AUDIO, fade_ms, name + ".part",
                                         audio_tracks=audio_tracks, transition=tr, captions=ov.get("ass"),
                                         fontsdir=ov.get("fontsdir"), fx=ov.get("fx"), gain_db=gain_db, music=bed, grade=grade)
             r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
@@ -266,7 +272,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
             expected += seconds
         with open(os.path.join(adir, "parts.txt"), "w", encoding="utf-8") as f:
             f.write("".join(f"file '{p}'\n" for p in parts))
-        r = run_tool(concat_argv(ffmpeg, "parts.txt", FILE + ".part"), cwd=adir, timeout=1800)
+        r = run_tool(concat_argv(ffmpeg, "parts.txt", FILE + ".part", audio), cwd=adir, timeout=1800)
         if r.returncode != 0:
             return False, 0.0, f"the parts did not join: {r.stderr.strip()[-200:]}"
         os.replace(os.path.join(adir, FILE + ".part"), os.path.join(wd, FILE))

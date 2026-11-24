@@ -147,7 +147,7 @@ class Plan(unittest.TestCase):
 
 
 class Render(unittest.TestCase):
-    def test_batches_then_copy_join(self):
+    def test_batches_then_join_with_one_audio_encode(self):
         segs = [{"start": i * 100.0, "end": i * 100.0 + 20, "kills": 1} for i in range(30)]
         calls = []
 
@@ -170,12 +170,13 @@ class Render(unittest.TestCase):
         self.assertEqual(len(calls), 4)  # 12 + 12 + 6 pieces, then one join
         for argv in calls[:3]:
             self.assertIn("h264_nvenc", argv)
-            self.assertIn("-c:a", argv)  # audio encoded in the batch render ...
+            self.assertEqual(argv[argv.index("-c:a") + 1], "pcm_s24le")  # the parts keep their sound as PCM ...
+            self.assertNotIn("aac", argv)
             self.assertIn("scale=1920:1080:force_original_aspect_ratio=decrease", " ".join(argv))
             self.assertIn("xfade=transition=fade", " ".join(argv))
         join = calls[3]
-        self.assertEqual(join[join.index("-c") + 1], "copy")  # ... and only copied when joined (encoded once)
-        self.assertNotIn("aac", join)
+        self.assertEqual(join[join.index("-c:v") + 1], "copy")  # the picture is copied when joined ...
+        self.assertEqual(join[join.index("-c:a") + 1], "aac")  # ... and the sound encoded once (no AAC delay per join)
         self.assertAlmostEqual(exp, 600 - 0.25 * (11 + 11 + 5))
 
     def test_failed_part_leaves_nothing(self):

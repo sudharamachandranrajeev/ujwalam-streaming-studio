@@ -39,8 +39,43 @@ Handover 2026-11-22, "Resume here" step 1. Branch `codex/reel-mix-long-video`. T
   The on-air tests now build their start times from UTC and include a July (summer time) case.
 - `node --test tests/live-check.test.mjs` -> 5 pass, 0 fail, including a summer-time case.
 
-## UNVERIFIED
+## Real two-batch render (2026-11-24, handover step 2)
 
-- A real two-batch themed render (separate output tracks, nonzero music offset, decoded seam audio, pixel format,
-  loudness) has not been run yet. It is handover step 2.
+Setup: a synthetic 100 s recording made in the session scratchpad (`testsrc2` 1280x720 60 fps; track 1 a 440 Hz tone
+at -18 dB, track 2 pink noise), hits at 20, 50 and 80 s, flags `long-highlights-video` and `long-video-themes` on.
+Only `lv.load_config` was patched (minSec 2, maxSec 60, batchPieces 2), as in `test_long_theme`. The render ran
+through `clipper.main([... "long" ...])` with `h264_nvenc`, off air. The result was 3 moments in 2 batches. The join
+is at 12.8 s. The second batch's music starts at offset 12.8 s.
+
+6. **New finding: AAC encoder delay at every batch join.** The first real render showed track 1 near silent
+   (-55 to -93 dBFS, 1 ms windows) from 12.820 to 12.842 s. The second batch's sound then started abruptly at
+   -24.7 dBFS. Audio was 19.349 s against 19.336 s of picture. The cause is that each part was encoded to AAC and
+   the join copied the streams, so each part's 1024-sample encoder delay (21.3 ms) stayed in. A 2 x 2 s check
+   confirmed it: AAC parts joined by copy gave 4.053 s of sound and a quiet gap at 2.026 to 2.047 s, while PCM parts
+   joined with one AAC encode gave no gap. On a real long video (about 10 batches) the sound would drift about
+   0.2 s behind the picture by the end.
+   **Fix:** `long_video.PART_AUDIO` makes the parts carry 24-bit PCM. `concat_argv` copies the picture and encodes the
+   sound once (`rnd.AUDIO`). This matches the "audio encoded once" rule.
+
+After the fix (same render):
+
+- `ffprobe`: h264 **Main**, **yuv420p**; two AAC LC stereo tracks; picture and both tracks are 19.300 s.
+- Track 1, 1 ms windows below -50 dBFS mid-file: 1, at 12.799 s. This is where the two batches' designed 80 ms
+  fades cross, with no dead gap. Track 2 dips only at the start fade, a crossfade midpoint (6.41 s), the batch fades
+  around 12.8 s, and the end fade.
+- Loudness of track 1 (`ebur128=peak=true`): **I -14.0 LUFS**, peak -7.4 dBFS. `render.json` loudness `after`
+  `{lufs -14.0, truePeak -7.4, ok}`. Music bed: generated here, `bedGainDb -18.8`, `mixTargetLufs -51.8`.
+- `render.json` `cardStyles`: `["zoom-punch", "glitch", "slash"]` (fix 1 working end to end).
+- `python -I -m unittest discover -s tests/py -t tests/py -p "test_long_*.py"` -> 80 OK; `test_ko_cards.py` -> 10 OK.
+  `test_long_video.Render.test_batches_then_join_with_one_audio_encode` now checks PCM parts and one AAC encode at
+  the join.
+- Other suites run on the fixes (before the PCM change): `test_clip_loudness` 12 OK, `test_music_*` 57 OK
+  (1 skipped), `test_reel_music` 13 OK, `test_reel_transition_sets` 14 OK, `test_clip_montage` 35 OK,
+  `test_beatdrop` 46 OK (1 skipped, 686 s).
+
+## UNVERIFIED / open
+
+- Batch joins are still a hard cut with an 80 ms fade out and in. Inside a batch, the theme's slide transition joins
+  the moments. Whether batch joins should also slide is a design question for the long video and is not changed here.
+- Synthetic sound only. A real stream recording has not been rendered with the theme.
 - A Codex second-opinion review of these fixes has not been run yet.
