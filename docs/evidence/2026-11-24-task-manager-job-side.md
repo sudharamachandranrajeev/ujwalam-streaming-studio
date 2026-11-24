@@ -126,3 +126,19 @@ All 17 items were fixed. None was judged "not a defect". Tests are in `tests/tas
 | R2-17 | The review key held the style folder, not the effective style. | The review key holds the style this clip gets (the same seeded pick), its effective tuning and its files (names, sizes, mtimes). | covered by the key path; no separate test (UNVERIFIED) |
 
 Changed test: the D406 long-video test in `record-clips.test.mjs`. The long job's live-interruption exit now runs dispatch, so the next clip job (allowed beside a plain recording) starts first. The test finishes that job before it expects the long job again.
+### Codex review, round 3 (0fa5944b..b7c5c667, 10 items)
+
+Nine items were fixed and one was accepted as a residual. Tests are in `tests/task-manager-jobs.test.mjs` ("Codex round 3 #N", the control-route test and the round-2 #5 test) and `tests/py/test_task_resume.py` (`RoundThree`).
+
+| Item | Finding | Fix | Test |
+|---|---|---|---|
+| R3-1 | The fresh-status callback started the job without applying the waiting controls. | After a good answer, the callback runs `dispatch()`. It applies Stop all and the controls, picks the job again and checks every gate again. The answer counts for that job for 1 s. | #1 |
+| R3-2 | A launch error could become an unhandled rejection. | The whole launch path catches errors: the fresh-status chain, the speech-model check chain, and the folder, log-file and spawn steps. The job stays queued and is tried again. Its task shows the typed end event `not-started` ("Could not start; it tries again shortly"). | #2 |
+| R3-3 | A replayed Next start was applied after the restored job's wait state was set. | A restored job remembers when its wait comes from its old next-start choice (`awaitFromNext`). A Next start asked before the close sets that wait again: `run` clears it, `ask` and `notify` keep it. The first dispatch applies it, before any start. | #3 |
+| R3-4 | Task rows were published before the status commit. | `write()` publishes the queue rows, the live-clipper row and the finished rows only after `status.json` is saved. Finished rows wait in a list until then. A failed control commit takes its rows back out. Live progress rows need a saved status. | #4 |
+| R3-5 | The 32-entry dedup list could age out a key. | There is no fixed cap. A job keeps an applied key while that request's file exists, and drops it once the file is gone. | round-2 #5 (changed) |
+| R3-6 | The control route trusted stale task rows. | The route accepts only an id that matches a job the launcher has running or queued in `clips/status.json` (`currentClipTaskIds`). Anything else gets 404. | control-route test |
+| R3-7 | A degraded batch could reuse a manifest. | The degraded check runs before manifest reuse, so such a batch is always made again and is no safe point. | `test_degraded_batch_never_reuses_a_manifest` |
+| R3-8 | Stale caption sidecars could be certified. | Invalidating a row also removes `transcript.json`, `captions.srt` and `captions.vtt`, so the marker binds only files this render made. | `test_invalidating_a_row_clears_its_caption_files` |
+| R3-9 | Kept rows broke the look pool's no-repeat. | A review run saves the look history it started from (`look-history-start.json` in its output folder). A resumed run starts from that copy and replays each kept clip's picks and music track in clip order. The copy is removed when the run completes. | `test_marker_keeps_the_look_track_for_replay` (the full replay in a review run is UNVERIFIED by a test) |
+| R3-10 | A caption model replaced by one with the same size and mtime is not noticed. | Accepted residual, as decided by the main session. The key holds names, sizes and mtimes, not a full hash. | none |
