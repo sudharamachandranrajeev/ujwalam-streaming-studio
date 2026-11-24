@@ -44,6 +44,8 @@ import { applyTextPrefs, readPrefs, savePrefs } from '../posting/post-prefs.mjs'
 import { analyseTiming, applySuggestion, dismissSuggestion, loadTimingConfig, readRecord as readGrowthRecord, refreshSuggestion, undoSuggestion } from '../analytics/timing.mjs';
 import { SCHEDULE_FLAG, userScheduleFile } from '../posting/schedule.mjs';
 import { UploadError, checkPostStatus } from '../posting/youtube.mjs';
+import { createInstagramRoutes } from './instagram-routes.mjs';
+import { igReasonText, readInstagramStates } from '../posting/instagram-queue.mjs';
 import { GROWTH_FLAG, DB_NAME as GROWTH_DB, collect as growthCollect, openStore as openGrowthStore, view as growthView } from '../analytics/index.mjs';
 import { MIX_FLAG, step as mixStep, undo as mixUndo, view as mixView, weeklyReport as mixReport } from '../learning/mix.mjs';
 import { AnalyticsError } from '../analytics/youtube.mjs';
@@ -434,6 +436,9 @@ export function createStudioServer(opts) {
   // reach the browser. opts.youtube = { auth, fetchImpl, outputsStatus } are test seams.
   let ytAuth = opts.youtube?.auth ?? null;
   const youtubeAuth = () => (ytAuth ??= createYoutubeAuth({ browserOpen: async () => { throw new Error('sign-in runs from the command line'); } }));
+  // D444 Instagram section (Settings > Posting & growth): Connect opens Facebook Login in the browser; the secret and the
+  // token stay in the Credential Manager. opts.instagram = { auth, browserOpen } are test seams.
+  const igRoutes = createInstagramRoutes({ dataDir: opts.dataDir, flags, auth: opts.instagram?.auth, browserOpen: opts.instagram?.browserOpen });
   // D375 Auto-post card: a fresh channel read for "Next posting times" at most every 10 minutes (quota), else the saved one.
   const CHANNEL_READ_EVERY_MS = 10 * 60 * 1000;
   // { at, promise } -> { channel } | { error }. The promise is stored before it is awaited, so requests that arrive while a
@@ -1635,11 +1640,14 @@ export function createStudioServer(opts) {
     }
     if (req.method === 'GET' && route === '/ui/api/posts') {
       // D300: each post carries its auto-upload queue state; `queue` is the plain-language summary (e.g. not signed in to YouTube).
-      let qs = new Map(); let queue = null;
+      let qs = new Map(); let queue = null; let igs = {};
+      // D444: each post's Instagram Reels state (instagram-queue.json), with the reason in plain words.
+      if (typeof opts.dataDir === 'string') { try { igs = readInstagramStates(opts.dataDir); } catch { igs = {}; } }
+      const withIg = (p, o) => (Object.hasOwn(igs, p.id) ? { ...o, instagram: { ...igs[p.id], reasonText: igReasonText(igs[p.id].reason) } } : o);
       if (typeof opts.dataDir === 'string') {
         try { qs = new Map(createUploadQueue(path.join(opts.dataDir, 'posting', QUEUE_NAME)).items().map((i) => [i.id, i])); queue = readQueueSummary(opts.dataDir, flags); } catch { /* the list still works */ }
       }
-      return json(res, 200, { posts: posting.list().map((p) => { const q = qs.get(p.id); const url = p.videoId ? `https://youtu.be/${p.videoId}` : null; return q ? { ...p, videoUrl: url, queueState: q.state, queueAttempts: q.attempts, queueNextAt: q.nextAt, queueReason: q.reason, queueReasonText: reasonText(q.reason), queuePublishAt: shownPublishAt(q) } : { ...p, videoUrl: url }; }), queue });
+      return json(res, 200, { posts: posting.list().map((p) => { const q = qs.get(p.id); const url = p.videoId ? `https://youtu.be/${p.videoId}` : null; return withIg(p, q ? { ...p, videoUrl: url, queueState: q.state, queueAttempts: q.attempts, queueNextAt: q.nextAt, queueReason: q.reason, queueReasonText: reasonText(q.reason), queuePublishAt: shownPublishAt(q) } : { ...p, videoUrl: url }); }), queue });
     }
     if (req.method === 'GET' && route === '/ui/api/posts/auto/preview') {
       // Read-only dry run: what the rules WOULD queue, with rendered text and skip reasons. No write, no request to Google.
@@ -1759,6 +1767,7 @@ export function createStudioServer(opts) {
       try { return json(res, 200, { ...growthView(store, now()), signedIn: st.signedIn === true, hasClient: st.hasClient === true, busy: growthBusy }); } catch { return json(res, 500, { error: 'growth-failed' }); } finally { store.close(); }
     }
     if (req.method === 'GET' && route === '/ui/api/posts/media') return postMedia(req, res, url);
+    if (req.method === 'GET' && await igRoutes.handle('GET', route, null, res, json)) return undefined; // D444
     if (req.method === 'GET' && route === '/ui/api/posts/youtube/status') {
       try { const st = await youtubeAuth().status(); return json(res, 200, { signedIn: st.signedIn === true, hasClient: st.hasClient === true }); } catch { return json(res, 502, { error: 'youtube-status-failed' }); }
     }
@@ -1925,6 +1934,7 @@ export function createStudioServer(opts) {
       if (flags.isOn(body.id)) return json(res, 200, { verdict: 'allow', flags: flagList() });
       return json(res, 200, { verdict: 'allow', flags: applyFlag(body.id, true) }); // ON: the click is the decision (D332)
     }
+    if (await igRoutes.handle('POST', route, body, res, json)) return undefined; // D444 Instagram (Origin + CSRF checked above)
     if (route.startsWith('/ui/api/connect/')) return connectRoute(res, route, body);
     if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set' || route === '/ui/api/youtube/event/auto') return ytEventsRoute(req, res, route, body); // D386, D388
     if (await setupUpdate.handle('POST', route, res, null)) return undefined; // Update available (2026-11-18)

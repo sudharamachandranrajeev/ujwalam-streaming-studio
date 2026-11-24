@@ -1347,3 +1347,117 @@ describe('scheduled posting (post-schedule) against the local fake YouTube', () 
   });
 
 });
+// D444 IP2: Instagram Reels jobs in the chain, against an in-memory fake Graph + rupload (fetchImpl; never Meta).
+describe('D444 Instagram autopost in the chain', () => {
+  const IG_CFG = { graphVersion: 'v24.0', redirectHost: 'localhost', redirectPort: 47816, scopes: ['instagram_basic'], pollEveryMs: 1000, pollMaxMs: 0, renewDaysBefore: 10, retryMinutes: 30, maxAttempts: 2 };
+  const IG_EP = { graph: 'http://127.0.0.1:9', dialog: 'http://127.0.0.1:9', rupload: 'http://127.0.0.1:9' };
+  const fakeIg = (opt = {}) => {
+    const calls = [];
+    const fetchImpl = async (url, init) => {
+      const u = new URL(url); calls.push(`${init.method} ${u.pathname}`);
+      const ok = (j) => ({ ok: true, status: 200, json: async () => j });
+      if (u.pathname.endsWith('/content_publishing_limit')) return ok({ data: [{ quota_usage: 0, config: { quota_total: 100 } }] });
+      if (u.pathname.endsWith('/42/media')) return ok({ id: '777' });
+      if (u.pathname.startsWith('/ig-api-upload/')) return ok({ success: true });
+      if (u.pathname.endsWith('/777') && init.method === 'GET') return ok({ status_code: opt.status ?? 'FINISHED' });
+      if (u.pathname.endsWith('/media_publish')) return ok({ id: '9001' });
+      return { ok: false, status: 404, json: async () => ({ error: { code: 100 } }) };
+    };
+    const auth = { status: async () => ({ connected: opt.connected !== false }), session: async () => ({ token: 'fake-ig-token', igUserId: '42' }) };
+    return { calls, opt, instagram: { auth, fetchImpl, endpoints: IG_EP, cfg: IG_CFG, sleep: async () => {} } };
+  };
+  const igQueue = (e) => JSON.parse(readFileSync(path.join(e.dataDir, 'posting', 'instagram-queue.json'), 'utf8')).items;
+  const published = (ig) => ig.calls.filter((c) => c.endsWith('/media_publish')).length;
+
+  test('Shorts + Instagram both posted before the clip file is deleted', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); const ig = fakeIg({ status: 'IN_PROGRESS' });
+    const file = e.uploads()[0].file;
+    const c = e.chain(g, { flags: { isOn: () => true }, clipsFolder: path.dirname(file), instagram: ig.instagram });
+    await c.afterRun(e.runDir, IDLE);
+    assert.equal(g.videos.length, 1);
+    const id = e.queue().items()[0].id;
+    assert.equal(igQueue(e)[id].state, 'waiting'); assert.equal(igQueue(e)[id].reason, 'processing-timeout');
+    g.videos[0].status.uploadStatus = 'processed'; e.clock.t += 16 * MIN; ig.opt.status = 'IN_PROGRESS'; await c.tick(IDLE);
+    assert.ok(existsSync(file), 'YouTube processed, Instagram not posted yet: kept');
+    assert.equal(e.queue().items()[0].deleteReason, 'instagram-pending');
+    ig.opt.status = 'FINISHED'; e.clock.t += 16 * MIN; await c.tick(IDLE);
+    assert.equal(igQueue(e)[id].state, 'done'); assert.equal(igQueue(e)[id].mediaId, '9001'); assert.equal(published(ig), 1);
+    assert.equal(existsSync(file), false, 'both posted: deleted');
+    assert.equal(ig.calls.filter((x) => x.startsWith('POST /ig-api-upload/')).length, 1, 'the in-progress container was polled again, not uploaded twice');
+  });
+
+  test('an Instagram failure keeps the file for good (until Instagram posts it)', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); const ig = fakeIg({ status: 'ERROR' });
+    const file = e.uploads()[0].file;
+    const c = e.chain(g, { flags: { isOn: () => true }, clipsFolder: path.dirname(file), instagram: ig.instagram });
+    await c.afterRun(e.runDir, IDLE);
+    g.videos[0].status.uploadStatus = 'processed';
+    for (let i = 0; i < 4; i++) { e.clock.t += 2 * HOUR; await c.tick(IDLE); }
+    const id = e.queue().items()[0].id;
+    assert.equal(igQueue(e)[id].state, 'failed'); assert.equal(published(ig), 0);
+    assert.ok(existsSync(file)); assert.equal(e.queue().items()[0].deleteReason, 'instagram-pending');
+  });
+
+  test('live blocks Instagram: nothing is sent to Instagram while a stream is live', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); const ig = fakeIg();
+    const c = e.chain(g, { flags: { isOn: (f) => f !== DELETE_FLAG }, instagram: ig.instagram });
+    await c.afterRun(e.runDir, IDLE);
+    const id = e.queue().items()[0].id;
+    // the first pass already posted (idle); a second clip's job is checked while live
+    assert.equal(published(ig), 1);
+    const n = ig.calls.length;
+    const q = JSON.parse(readFileSync(path.join(e.dataDir, 'posting', 'instagram-queue.json'), 'utf8'));
+    q.items.other = { ...q.items[id], id: 'other', state: 'waiting', postedAt: null, mediaId: null }; q.lastPostedAt = null;
+    writeFileSync(path.join(e.dataDir, 'posting', 'instagram-queue.json'), JSON.stringify(q));
+    e.clock.t += 2 * HOUR; await c.tick(LIVE);
+    assert.equal(ig.calls.length, n, 'no request while live');
+    assert.equal(igQueue(e).other.reason, 'stream-live');
+  });
+
+  test('review: a job not posted keeps the file even after Instagram is switched off; Drop Instagram queue releases it', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[0]]); const ig = fakeIg({ status: 'IN_PROGRESS' });
+    const file = e.uploads()[0].file;
+    let igOn = true;
+    const c = e.chain(g, { flags: { isOn: (f) => (f === 'instagram-autopost' ? igOn : true) }, clipsFolder: path.dirname(file), instagram: ig.instagram });
+    await c.afterRun(e.runDir, IDLE);
+    const id = e.queue().items()[0].id;
+    assert.equal(igQueue(e)[id].state, 'waiting');
+    igOn = false; ig.opt.connected = false;
+    g.videos[0].status.uploadStatus = 'processed'; e.clock.t += 16 * MIN; await c.tick(IDLE);
+    assert.ok(existsSync(file), 'flag off and disconnected, but the job is not done: kept');
+    assert.equal(e.queue().items()[0].deleteReason, 'instagram-pending');
+    const { createInstagramPoster } = await import('../services/posting/instagram-queue.mjs');
+    assert.equal(createInstagramPoster({ dataDir: e.dataDir, flags: { isOn: () => false }, auth: ig.instagram.auth, liveBlock: async () => null }).dropQueue(), 1);
+    e.clock.t += 16 * MIN; await c.tick(IDLE);
+    assert.equal(existsSync(file), false, 'dropped: deleted once YouTube has it');
+  });
+
+  test('review: a long video (youtube-video) never gets a job and is never held for Instagram', async () => {
+    const g = await fakeGoogle(); const e = setup([ROWS[1]]); const ig = fakeIg({ status: 'IN_PROGRESS' });
+    const file = e.uploads()[0].file;
+    const c = e.chain(g, { flags: { isOn: () => true }, clipsFolder: path.dirname(file), instagram: ig.instagram });
+    await c.afterRun(e.runDir, IDLE);
+    const items = e.queue().items();
+    const store = e.store();
+    const longIdx = items.findIndex((i) => store.get(i.id)?.target === 'youtube-video');
+    assert.ok(longIdx >= 0, items.map((i) => store.get(i.id)?.target).join(','));
+    const longId = items[longIdx].id;
+    let q = {}; try { q = igQueue(e); } catch { q = {}; }
+    assert.equal(q[longId], undefined, 'no Instagram job for a long video');
+    for (const v of g.videos) v.status.uploadStatus = 'processed';
+    e.clock.t += 16 * MIN; await c.tick(IDLE);
+    const after = e.queue().get(longId);
+    assert.notEqual(after.deleteReason, 'instagram-pending');
+  });
+
+  test('Instagram not connected or flag off: Shorts behaviour exactly as before (file deleted once processed)', async () => {
+    for (const mode of ['not-connected', 'flag-off']) {
+      const g = await fakeGoogle(); const e = setup([ROWS[0]]); const ig = fakeIg({ connected: mode !== 'not-connected' });
+      const file = e.uploads()[0].file;
+      const c = e.chain(g, { flags: { isOn: (f) => mode === 'flag-off' ? f !== 'instagram-autopost' : true }, clipsFolder: path.dirname(file), instagram: ig.instagram });
+      await c.afterRun(e.runDir, IDLE);
+      g.videos[0].status.uploadStatus = 'processed'; e.clock.t += 16 * MIN; await c.tick(IDLE);
+      assert.equal(existsSync(file), false, mode); assert.equal(ig.calls.length, 0, mode);
+    }
+  });
+});

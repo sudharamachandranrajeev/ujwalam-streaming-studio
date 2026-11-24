@@ -67,7 +67,7 @@ describe('QML studio: Posts window (headless probe)', { skip }, () => {
     writeFileSync(ledgerFile, JSON.stringify({ version: 1, entries: { [`${SHA}:youtube-shorts`]: { sha256: SHA, target: 'youtube-shorts', status: 'draft', dir, clipId: 'c01', createdAt: stamp, updatedAt: stamp } } }));
     return dir;
   }
-  async function probe({ actions, flagOn = true, signedIn = false, queued = null, growth = null, ms = Math.max(7000, 3000 + actions.length * 700) }) {
+  async function probe({ actions, flagOn = true, signedIn = false, queued = null, igJob = null, growth = null, ms = Math.max(7000, 3000 + actions.length * 700) }) {
     const dataDir = tmp('ujw-qmlposts-');
     const dir = makePackage(dataDir);
     const flags = createFlags({ dataDir });
@@ -84,6 +84,8 @@ describe('QML studio: Posts window (headless probe)', { skip }, () => {
       st.close();
     }
     if (queued) { const q = createUploadQueue(path.join(dataDir, 'posting', QUEUE_NAME)); q.add(ID); q.patch(ID, queued); }
+    // D444: the clip's Instagram job (instagram-queue.json)
+    if (igJob) { const { queueInstagramNow, createInstagramQueue, IG_QUEUE_NAME } = await import('../services/posting/instagram-queue.mjs'); queueInstagramNow(dataDir, ID); createInstagramQueue(path.join(dataDir, 'posting', IG_QUEUE_NAME)).patch(ID, igJob); }
     const opened = [];
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
     const key = 'p'.repeat(40);
@@ -179,5 +181,20 @@ describe('QML studio: Posts window (headless probe)', { skip }, () => {
     r = await probe({ actions: ['posts-open', 'posts-growth-apply'] });
     assert.deepEqual(done(r.p), [true, false]);
     assert.equal(r.s.growthText, '');
+  });
+  // D444: the Instagram Reels state per clip, in plain words, on one line that is always there (no layout jump)
+  test('Instagram state: not queued, waiting with its time, posted, failed with the plain reason, dropped', async () => {
+    let r = await probe({ actions: ['posts-open', 'posts-pick:0'] });
+    assert.equal(r.s.igText, 'Not in the Instagram queue.');
+    assert.doesNotMatch(r.s.rows[0], /IG /);
+    r = await probe({ igJob: { state: 'waiting', dueAt: '2026-11-24T12:00:00.000Z', reason: 'stream-live' }, actions: ['posts-open', 'posts-pick:0'] });
+    assert.match(r.s.igText, /^Waiting to post at .+\. Waiting until the stream ends\.$/);
+    assert.match(r.s.rows[0], / \/ IG waiting$/);
+    r = await probe({ igJob: { state: 'done', postedAt: '2026-11-24T12:00:00.000Z' }, actions: ['posts-open', 'posts-pick:0'] });
+    assert.match(r.s.igText, /^Posted to Instagram /); assert.match(r.s.rows[0], /IG posted$/);
+    r = await probe({ igJob: { state: 'failed', reason: 'over-limit' }, actions: ['posts-open', 'posts-pick:0'] });
+    assert.match(r.s.igText, /^Not posted: it failed\. The caption is over an Instagram limit .+ The clip file is kept\.$/);
+    r = await probe({ igJob: { state: 'dropped', reason: 'dropped-by-user' }, actions: ['posts-open', 'posts-pick:0'] });
+    assert.equal(r.s.igText, 'Dropped from the Instagram queue; it is not posted there.');
   });
 });

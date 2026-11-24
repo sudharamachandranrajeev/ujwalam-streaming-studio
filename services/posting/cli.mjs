@@ -14,6 +14,8 @@ import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { LEDGER_NAME, POSTING_FLAG, PostingError, createPostStore, findFfmpeg, packageRun } from './index.mjs';
 import { ANALYTICS_SCOPE, CAPTIONS_SCOPE, READONLY_SCOPE, SCOPE, createYoutubeAuth, joinScopes } from './oauth.mjs';
 import { UploadError } from './youtube.mjs';
+import { IG_FLAG, InstagramError, createInstagramAuth } from './instagram.mjs';
+import { queueInstagramNow } from './instagram-queue.mjs';
 import { REWRITE_FLAG, runRewrite, runUndo } from './rewrite.mjs';
 import { AI_TEXT_FLAG } from './ai-text.mjs';
 import { createQuotaBudget } from './quota-budget.mjs';
@@ -100,6 +102,7 @@ function cliDataDir(a, out) {
 export async function main(argv, out = (s) => console.log(s), err = (s) => console.error(s), deps = {}) {
   const a = parseArgs(argv);
   if (a._[0] === 'youtube') return youtubeMain(a, out, err, deps);
+  if (a._[0] === 'instagram') return instagramMain(a, out, err, deps);
   if (a._[0] === 'auto') return autoMain(a, out, err, deps);
   if (a._[0] !== 'package' || typeof a.run !== 'string') {
     err('usage: node services/posting/cli.mjs package --run <clip run folder> [--data-dir DIR] [--profile FILE] [--ffmpeg FILE] [--targets a,b]\n       node services/posting/cli.mjs youtube signin|status|signout\n       node services/posting/cli.mjs youtube upload --id <post id> [--data-dir DIR]\n       node services/posting/cli.mjs auto [--run | --preview [--json]] [--data-dir DIR] [--rules FILE]\n       node services/posting/cli.mjs auto --init-rules [--data-dir DIR]');
@@ -253,6 +256,46 @@ async function youtubeMain(a, out, err, deps) {
     if (e?.code === 'oauth-reauth-needed') { err('youtube: not signed in (or sign-in expired) -- run: node services/posting/cli.mjs youtube signin'); return 1; }
     if (e instanceof UploadError) { err(`youtube: ${e.message}`); return 1; }
     err(`youtube: ${e?.message ?? 'error'}`);
+    return 1;
+  }
+}
+
+/** D444 `instagram signin|status|signout|post --id <post id>`. Behind the posting flag. The Meta app id and secret are
+ *  saved from Settings > Posting & growth (never on a command line, where other programs could read them). `post` sends
+ *  nothing itself: it puts the clip first in the Instagram queue and asks the studio's auto-post chain (the one sender)
+ *  to run now; the chain posts it when no stream is live, the gap allows it and Instagram's 24-hour limit has room. */
+async function instagramMain(a, out, err, deps) {
+  const dataDir = cliDataDir(a, out);
+  const flags = createFlags({ dataDir });
+  if (!flags.isOn(POSTING_FLAG)) { err(`posting: the '${POSTING_FLAG}' feature flag is off (switch it on from the control page)`); return EXIT_FLAG_OFF; }
+  const auth = (deps.createInstagramAuth ?? createInstagramAuth)({ browserOpen: deps.browserOpen ?? defaultBrowserOpen });
+  const sub = a._[1];
+  try {
+    if (sub === 'signin') { const r = await auth.signIn(); out(`instagram: connected${r.username ? ` as @${r.username}` : ''}; the sign-in lasts until ${new Date(r.expiresAt).toISOString().slice(0, 10)} and renews itself`); return 0; }
+    if (sub === 'status') {
+      const s = await auth.status();
+      out(`instagram: app saved: ${s.hasApp}, connected: ${s.connected}${s.connected ? ` (until ${s.expiresAt.slice(0, 10)})` : ''}, '${IG_FLAG}' flag: ${flags.isOn(IG_FLAG) ? 'on' : 'off'}`);
+      return 0;
+    }
+    if (sub === 'signout') { await auth.signOut(); out('instagram: disconnected'); return 0; }
+    if (sub === 'post') {
+      const id = typeof a.id === 'string' ? a.id : a._[2];
+      if (typeof id !== 'string') { err('usage: node services/posting/cli.mjs instagram post --id <post id> [--data-dir DIR]'); return 2; }
+      const store = createPostStore({ ledgerFile: path.join(dataDir, 'posting', LEDGER_NAME), dataDir });
+      const post = store.get(id);
+      if (!post) { err(`instagram: unknown post id ${id}`); return 1; }
+      if (post.status !== 'approved' && post.status !== 'uploaded') { err('instagram: only approved packages are posted'); return 1; }
+      queueInstagramNow(dataDir, id);
+      requestRunNow(dataDir);
+      out(`instagram: ${id} is next in the Instagram queue. The studio posts it when no stream is live (auto-post and '${IG_FLAG}' must be on).`);
+      return 0;
+    }
+    err('usage: node services/posting/cli.mjs instagram signin|status|signout|post --id <post id>');
+    return 2;
+  } catch (e) {
+    if (e?.code === 'no-app') { err('instagram: the Meta app id and secret are not saved yet (Settings > Posting & growth > Instagram)'); return 1; }
+    if (e instanceof InstagramError) { err(`instagram: ${e.message}`); return 1; }
+    err(`instagram: ${e?.message ?? 'error'}`);
     return 1;
   }
 }

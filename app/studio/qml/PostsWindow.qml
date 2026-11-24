@@ -134,7 +134,7 @@ Dialog {
     }
     function flagged(p) { return (p.limits && p.limits.ok === false) || (p.unresolved || []).length > 0 }
     function rowText(p) {
-        return (p.clipId || "") + "  " + (p.target || "") + "   " + (p.status || "") + (flagged(p) ? " / check" : "") + (p.queueState ? " / " + p.queueState : "");
+        return (p.clipId || "") + "  " + (p.target || "") + "   " + (p.status || "") + (flagged(p) ? " / check" : "") + (p.queueState ? " / " + p.queueState : "") + (igShort(p) ? " / " + igShort(p) : "");
     }
     function metaText(p) {
         if (!p) return "";
@@ -157,6 +157,22 @@ Dialog {
         if (p.queuePublishAt) bits.push((qs === "done" ? "goes public " : "will go public ") + when(p.queuePublishAt));
         if (p.videoUrl) bits.push("link (private): " + p.videoUrl);
         return bits.join(". ") + ".";
+    }
+    // D444: the clip's Instagram Reels state in plain words (one line, always shown for a selected clip: no layout jump)
+    function igText(p) {
+        const g = p && p.instagram ? p.instagram : null;
+        if (!g) return "Not in the Instagram queue.";
+        const why = g.reasonText ? " " + g.reasonText + "." : "";
+        if (g.state === "waiting") return "Waiting to post" + (g.dueAt ? " at " + when(g.dueAt) : "") + "." + why;
+        if (g.state === "posting") return "Posting to Instagram now.";
+        if (g.state === "done") return "Posted to Instagram" + (g.postedAt ? " " + when(g.postedAt) : "") + ".";
+        if (g.state === "failed") return "Not posted: it failed." + why + " The clip file is kept.";
+        if (g.state === "dropped") return "Dropped from the Instagram queue; it is not posted there.";
+        return String(g.state);
+    }
+    function igShort(p) {
+        const s = p && p.instagram ? p.instagram.state : "";
+        return s === "waiting" ? "IG waiting" : s === "posting" ? "IG posting" : s === "done" ? "IG posted" : s === "failed" ? "IG failed" : s === "dropped" ? "IG dropped" : "";
     }
     function ytText(p) {
         if (!p) return "";
@@ -267,7 +283,7 @@ Dialog {
         return { open: opened, info: info, autoInfo: autoInfo, previewInfo: previewInfo, queueInfo: queueInfo, rows: posts.map(rowText), selected: selected,
                  formShown: post !== null, meta: metaText(post), limits: limitsText(post), title: titleField.text, desc: descText.text, tags: tagsField.text,
                  hashtags: hashField.text, ytShown: isYoutube, ytInfo: ytText(post), uploadEnabled: canUpload, checkEnabled: canCheck,
-                 queueShown: queueState !== "", queueText: post ? queueText(post) : "", retryShown: retryShown, busy: busy,
+                 queueShown: queueState !== "", queueText: post ? queueText(post) : "", igText: post ? igText(post) : "", retryShown: retryShown, busy: busy,
                  scheduleNextEnabled: canScheduleNext,
                  growthText: growth ? String(growth.text) : "", growthStatus: growth ? String(growth.status) : "", growthNumbers: growthNumbers(growth), growthInfo: growthInfo, growthApplyText: growth && growth.applyText ? String(growth.applyText) : "" };
     }
@@ -426,6 +442,13 @@ Dialog {
                     Line { text: "Auto-upload queue"; font.weight: Font.DemiBold }
                     Line { objectName: "postsQueueSel"; text: dlg.post ? dlg.queueText(dlg.post) : "" }
                     UButton { objectName: "postsRetry"; text: "Retry now"; visible: dlg.retryShown; enabled: !dlg.busy; onClicked: dlg.retry() }
+                }
+                Column {
+                    width: parent.width
+                    spacing: 6
+                    visible: dlg.post !== null
+                    Line { text: "Instagram Reels"; font.weight: Font.DemiBold }
+                    Line { objectName: "postsIgInfo"; text: dlg.igText(dlg.post) }
                 }
                 Column {
                     width: parent.width
