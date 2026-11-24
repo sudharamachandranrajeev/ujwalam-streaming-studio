@@ -398,6 +398,7 @@ def batch_overlay(ffmpeg, src, chunk, first_no, tr, frame, workdir, ctx, transcr
                                              in_sec, transcribe=transcribe, words=True)
             if doc:
                 doc = rcap.retime(doc, pieces, pieces, xd)
+                info = dict(info, cues=rcap.subtitle_cues(doc, out_sec))  # C1: the batch's lines, its own timeline
         except Exception as e:  # noqa: BLE001 - any caption failure (a model load error too) leaves the cards only
             doc, info = None, {"backend": ctx["ccfg"].get("backend"), "status": "failed", "reason": str(e)[-200:]}
     npaths = 0
@@ -472,7 +473,8 @@ def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, lay
         tcfg = dict(tcfg, koCards=dict(tcfg["koCards"], palette=palette))
         # Respect disabled styles, including the user's choice to draw no cards.
         cards = [st for st in cards if st in theme["cardStyles"]] or cards
-    model = rcap.model_path(data_dir, ccfg, whisper_model)
+    mopts = rcap.model_opts(data_dir, ccfg, whisper_model)  # C3: the GPU model off air, else the CPU one
+    model = mopts["whisper_model"]
     use = bool(tcfg["captions"].get("on")) and os.environ.get("UJWALAM_REEL_CAPTIONS") != "off" and (
         ccfg["backend"] == "faster-whisper" and model or ccfg["backend"] == "whisper-cli" and whisper_bin and model)
     ocfg = tcfg.get("callouts") or {}
@@ -493,7 +495,7 @@ def context(data_dir, lcfg, whisper_bin=None, whisper_model=None, pack=None, lay
     except (AttributeError, KeyError, TypeError, ValueError):
         paths = None
     return {"tcfg": tcfg, "style": style, "accent": accent, "ccfg": ccfg if use else None,
-            "opts": {"whisper_bin": whisper_bin, "whisper_model": model}, "box": box, "boxModes": box_modes, "paths": paths,
+            "opts": {"whisper_bin": whisper_bin, **mopts}, "box": box, "boxModes": box_modes, "paths": paths,
             "cards": cards, "cardWeights": card_weights, "seed": seed or ""}
 
 

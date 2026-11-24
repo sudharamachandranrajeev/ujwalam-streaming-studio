@@ -66,6 +66,7 @@ regular, semibold and bold weights the themes use are shipped. Microsoft fonts (
 | Anton | BeatDrop titles (D413) | 2.116 | `https://github.com/google/fonts/` at commit `06bfe0d62a98375cb09c942fa18e68bd32cff057` (downloaded 2026-11-21), `ofl/anton/Anton-Regular.ttf`, `OFL.txt` | OFL 1.1, Copyright 2020 The Anton Project Authors |
 | Chakra Petch | BeatDrop HUD-style text (D413) | 1.000 | `https://github.com/google/fonts/` at commit `06bfe0d62a98375cb09c942fa18e68bd32cff057` (downloaded 2026-11-21), `ofl/chakrapetch/ChakraPetch-{SemiBold,Bold}.ttf`, `OFL.txt` | OFL 1.1, Copyright 2018 The Chakra Petch Project Authors |
 | Rajdhani | BeatDrop captions (D413) | 1.201 | `https://github.com/google/fonts/` at commit `06bfe0d62a98375cb09c942fa18e68bd32cff057` (downloaded 2026-11-21), `ofl/rajdhani/Rajdhani-{SemiBold,Bold}.ttf`, `OFL.txt` | OFL 1.1, Copyright (c) 2014 Indian Type Foundry |
+| Baloo Chettan 2 | Malayalam reel captions (C4, user yes 2026-11-24) | variable, wght 400-800 | `https://github.com/google/fonts/` at commit `c13390277dfb1fcc7415d84ef7ef9cfc1e52f8c1` (downloaded 2026-11-24), `ofl/baloochettan2/BalooChettan2[wght].ttf` saved as `BalooChettan2-Variable.ttf`, `OFL.txt` | OFL 1.1, Copyright 2019 The Baloo 2 Project Authors |
 
 SHA-256 of every shipped file (data/fonts/):
 
@@ -91,6 +92,8 @@ SHA-256 of every shipped file (data/fonts/):
 | `Rajdhani-SemiBold.ttf` | `94bbd25a18ca665999feb05a537de9fd2b860dcfb78bbe9ca00270825bf235da` |
 | `Rajdhani-Bold.ttf` | `691470dd3286a14e9677940d0bf75796179841ba5215cbda1a2c8910a3226afd` |
 | `Rajdhani-OFL.txt` | `f62ef357d3a1c3d27edd35a6e1ba350e8a8d13499797964eeadefbf0b3b15d1f` |
+| `BalooChettan2-Variable.ttf` | `8f0de4f81b40d314a129c55a3a9e58411868ca9a452edb57537488853f46db86` |
+| `BalooChettan2-OFL.txt` | `ad09b05dc8bc678c9daf7c4c5f7ef1f55e5726127f4330b2e98e40b9dffcb860` |
 
 The OFL "Reserved Font Name" clause: the files are unmodified, so their names are unchanged. Inter and Exo 2 come from
 their own upstream releases (statics); Google Fonts ships those two only as variable fonts, which Qt may not select by

@@ -1,8 +1,8 @@
 {
   "id": "reel-captions-bold",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "function": "reel-captions",
-  "functionVersion": "^1.0.0",
+  "functionVersion": "^1.1.0",
   "name": "Bold white, black outline (Inter)",
   "params": {
     "fontFamily": "Inter",
@@ -16,7 +16,14 @@
     "maxWordsPerCard": 3,
     "maxCharsPerLine": 16,
     "maxLines": 2,
-    "liftPx": 0
+    "liftPx": 0,
+    "scriptFonts": [
+      {
+        "script": "Malayalam",
+        "fontFamily": "Baloo Chettan 2",
+        "fontFile": "BalooChettan2-Variable.ttf"
+      }
+    ]
   },
   "themeOverrides": {},
   "family": "clipping",

@@ -8,6 +8,8 @@
   "preset": "reel-captions-bold",
   "backend": "faster-whisper",
   "model": "faster-whisper-small",
+  "gpuModel": { "model": "faster-whisper-large-v3-turbo", "computeType": "int8_float16" },
+  "gpuModelNote": "C3 (user yes 2026-11-24): used instead of model when <models>/<gpuModel.model> exists and the studio is off air (reel_captions.model_opts); a GPU failure falls back to model on the CPU. int8_float16 keeps it near 1 GB of the 6 GB VRAM (UNVERIFIED: measure). Fetched from the studio's Downloads (data/downloads/speech-captions.json, item speech-captions-turbo).",
   "modelNote": "Looked up as <models>/<model>, where <models> is the folder next to the event-core data folder (paths.event_core_data/../models), unless --whisper-model is given. Never downloaded.",
   "language": null,
   "languageNote": "null = detected per segment (faster-whisper multilingual): the speech is mixed Malayalam and English. The task is always transcribe, never translate; no transliteration step exists.",

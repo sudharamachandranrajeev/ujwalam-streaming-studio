@@ -1084,10 +1084,12 @@ def _long_video_steps(a, lv, out):
     ctx = lt.context(data_dir, cfg, getattr(a, "whisper_bin", None), getattr(a, "whisper_model", None),
                      pack=_gate_pack(a), layout=summ.get("layout"), rec_size=(info.get("width"), info.get("height")),
                      game=summ.get("game"), seed=os.path.basename(rec), theme=theme)
-    infos = []
+    infos, at = [], [0.0]  # at: where the next batch starts in the video (C1: its caption lines move there)
 
     def overlay(chunk, first, adir):
         ass, fd, inf = lt.batch_overlay(ffmpeg, rec, chunk, first, tr, frame, adir, ctx)
+        inf = dict(inf, cues=[(a0 + at[0], b0 + at[0], t) for a0, b0, t in inf.get("cues") or []])
+        at[0] += lv.video_seconds(chunk, tr)
         try:
             fx, nc = lt.batch_callouts(chunk, tr, frame, ctx)
         except (ClipError, KeyError, TypeError, ValueError) as e:  # a bad callout setting: the video without callouts
@@ -1117,6 +1119,10 @@ def _long_video_steps(a, lv, out):
                                       grade=theme["grade"] if theme else None)
     if ok:
         lrec = _loud_check(ffmpeg, os.path.join(wd, lv.FILE), lrec, "long video")
+        try:  # C1: one caption file for the whole video from every batch's lines (what was said stays, overlay or not)
+            rcap.write_cues([c for i in infos for c in i.get("cues") or []], wd)
+        except OSError as e:
+            eprint(f"long video: caption files not written ({type(e).__name__})")
     teach = lt.merge_info(infos if ctx else [])
     files, errors = [], []
     if ok:
@@ -1211,7 +1217,7 @@ def _reel_extras(a, data_dir):
             "loud": _loud_target(data_dir),  # D440: the loudness target of finished reels (None = as recorded)
             "safe": caps.safe_area(load_config("targets", getattr(a, "targets", None))),
             "opts": {"whisper_bin": getattr(a, "whisper_bin", None),
-                     "whisper_model": rcap.model_path(data_dir, ccfg, getattr(a, "whisper_model", None))}}
+                     **rcap.model_opts(data_dir, ccfg, getattr(a, "whisper_model", None))}}
 
 
 def _thumbnail(ffmpeg, src, reel, typ, frame, wd, ex, matches=None):

@@ -22,7 +22,7 @@ import json
 import os
 import re
 
-from clip_common import ClipError, FFMPEG_THREADS, run_tool
+from clip_common import ClipError, FFMPEG_THREADS, eprint, run_tool
 
 BACKENDS = ("none", "whisper-cli", "faster-whisper")
 MAX_CHARS_PER_LINE = 26
@@ -135,8 +135,27 @@ def transcribe(backend, wav, opts):
         model = opts.get("whisper_model")
         if not model:
             return [], {"backend": backend, "status": "unavailable", "reason": "no --whisper-model (local path)"}
-        m = WhisperModel(model, device=opts.get("device", "cpu"), compute_type=opts.get("compute_type", "int8"),
-                         cpu_threads=4, local_files_only=True)
+        try:
+            out, lang = _faster_whisper(WhisperModel, model, opts, wav)
+        except Exception as e:  # noqa: BLE001 - C3: a GPU model that fails (driver, memory) falls back to the CPU one
+            fb = opts.get("fallback") or {}
+            if opts.get("device") != "cuda" or not fb.get("whisper_model"):
+                raise
+            eprint(f"captions: {os.path.basename(model)} on the GPU failed ({type(e).__name__}); "
+                  f"using {os.path.basename(fb['whisper_model'])} on the CPU")
+            opts = dict(opts, **fb)
+            model = fb["whisper_model"]
+            out, lang = _faster_whisper(WhisperModel, model, opts, wav)
+        return out, {"backend": backend, "status": "ok", "segments": len(out), "language": lang,
+                     "model": os.path.basename(model), "device": opts.get("device", "cpu")}
+    raise ClipError(f"unknown captions backend {backend}")
+
+
+def _faster_whisper(WhisperModel, model, opts, wav):  # noqa: N803 (the class, passed in: an optional import)
+    """One faster-whisper run -> (segments, language). The model is freed on return (GPU memory too)."""
+    m = WhisperModel(model, device=opts.get("device", "cpu"), compute_type=opts.get("compute_type", "int8"),
+                     cpu_threads=4, local_files_only=True)
+    try:
         # vad_filter: without it a segment after leading silence is stamped from 0.0, so the caption showed seconds
         # before the speech (caption seam, tests/py/test_caption_seam.py). Silero VAD ships inside faster-whisper and
         # runs on the CPU through onnxruntime; segment times stay on the clip timeline.
@@ -156,9 +175,9 @@ def transcribe(backend, wav, opts):
             if words:  # LV1 (D421)
                 row["words"] = words
             out.append(row)
-        return out, {"backend": backend, "status": "ok", "segments": len(out),
-                     "language": getattr(info, "language", None)}
-    raise ClipError(f"unknown captions backend {backend}")
+        return out, getattr(info, "language", None)
+    finally:
+        del m
 
 
 # ---------------------------------------------------------------- ASS

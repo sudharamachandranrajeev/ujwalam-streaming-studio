@@ -99,8 +99,10 @@ describe('QML studio: Save clip, Mark moment and the alert strip (headless probe
   test('the buttons sit with Record and Go live, labelled, in one row', async () => {
     const { p } = await probe();
     const clip = node(p, 'clipBtn'), mark = node(p, 'markBtn'), rec = node(p, 'recordBtn');
-    assert.deepEqual([clip.text, clip.enabled, clip.visible], ['Save clip', true, true]);
-    assert.deepEqual([mark.text, mark.enabled, mark.visible], ['Mark moment', true, true]);
+    // D431: a bar narrower than its full labels (the headless probe window) shortens these two; both forms are labels
+    const compact = clip.text === 'Clip';
+    assert.deepEqual([clip.text, clip.enabled, clip.visible], [compact ? 'Clip' : 'Save clip', true, true]);
+    assert.deepEqual([mark.text, mark.enabled, mark.visible], [compact ? 'Mark' : 'Mark moment', true, true]);
     assert.ok(clip.rect[0] < mark.rect[0] && mark.rect[0] < rec.rect[0], 'Save clip, Mark moment, then Record');
     assert.equal(clip.rect[1], rec.rect[1], 'one row in the on-air bar');
   });

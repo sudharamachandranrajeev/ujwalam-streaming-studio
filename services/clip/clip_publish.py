@@ -160,6 +160,25 @@ def video_binding(video):
     return {"size": size, "head": head, "tail": tail}
 
 
+SUB_EXTS = (".srt", ".vtt")
+
+
+def _publish_subtitles(clip_dir, video):
+    """C1 (user yes 2026-11-24): the clip's captions.srt / captions.vtt copied beside the published video with the
+    video's own name (players pick <name>.srt up; posting uploads it as the video's captions). -> [paths] (may be [])."""
+    out = []
+    base = os.path.splitext(video)[0]
+    for ext in SUB_EXTS:
+        src = os.path.join(clip_dir, "captions" + ext)
+        if os.path.isfile(src):
+            try:
+                shutil.copyfile(src, base + ext)
+                out.append(base + ext)
+            except OSError:
+                pass  # a caption file is optional: the video is published without it
+    return out
+
+
 def _link_or_copy(src, dst):
     try:
         os.link(src, dst)
@@ -223,6 +242,7 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                                    lambda n: names.clip_name(game, kind, when, label, n, canvas), start_nn)
         counters[(kind, canvas)] = nn
         how = _link_or_copy(src, os.path.join(day, name))
+        subs = _publish_subtitles(os.path.join(work, "clips", c["id"]), os.path.join(day, name))
         prov = music_provenance(c, bool(rdoc.get("musicRecords")))
         write_music_sidecar(os.path.join(day, name), prov)
         try:
@@ -233,6 +253,7 @@ def publish(work, to, data_dir, game, layouts_by_id, det_weights=None, run_name=
                      "how": how, "kind": kind,
                      "label": label, "seconds": round(float(c["end"]) - float(c["start"]), 3),
                      **({"thumbnail": True} if f.get("thumbnail") else {}),  # RP6: frame 0 is the cover
+                     **({"subtitles": subs} if subs else {}),  # C1: <video>.srt / .vtt beside it
                      **({"music": prov} if prov is not None else {}),  # D414: where its music came from (posting gate)
                      **({"video": vbind} if vbind else {}),
                      # PT1 (D408): the clip's facts (medal, kills, result, mode; only the known ones) for its post text

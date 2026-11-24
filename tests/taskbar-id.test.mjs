@@ -24,7 +24,10 @@ test('studio, host and installer use the same taskbar id', () => {
 
 test('the studio sets the id before its first window; the host before any window; setup has none', () => {
   const main = read('app/studio/src/main.cpp');
-  assert.ok(main.indexOf('taskbarid::applyProcess()') > 0 && main.indexOf('taskbarid::applyProcess()') < main.indexOf('QApplication app('));
+  // D432: the app object is lagmon::TimedApplication<QApplication> app(argc, argv); any form of it counts
+  const appAt = main.search(/QApplication>? app\(argc, argv\)/);
+  assert.ok(appAt > 0, 'the application object is found');
+  assert.ok(main.indexOf('taskbarid::applyProcess()') > 0 && main.indexOf('taskbarid::applyProcess()') < appAt);
   const host = read('app/host/src/main.cpp');
   assert.ok(host.indexOf('SetCurrentProcessExplicitAppUserModelID(kAppUserModelId)') < host.indexOf('App app;'));
   assert.ok(!read('app/setup/src/setup.cpp').includes('AppUserModel'), 'Ujwalam-Setup.exe is a different tool');

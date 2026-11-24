@@ -52,6 +52,8 @@ export const OFL_FONTS = Object.freeze({
   'data/fonts/ChakraPetch-SemiBold.ttf': '45264de3204ddbd5fb3e14a2402acd5c630d16650ae5fc221d2c52da46a6734b',
   'data/fonts/Rajdhani-Bold.ttf': '691470dd3286a14e9677940d0bf75796179841ba5215cbda1a2c8910a3226afd',
   'data/fonts/Rajdhani-SemiBold.ttf': '94bbd25a18ca665999feb05a537de9fd2b860dcfb78bbe9ca00270825bf235da',
+  // Malayalam captions (C4, user yes 2026-11-24); google/fonts @ c1339027, the variable font as published
+  'data/fonts/BalooChettan2-Variable.ttf': '8f0de4f81b40d314a129c55a3a9e58411868ca9a452edb57537488853f46db86',
 });
 export const OFL_FONT_LICENCE_SHA = Object.freeze({
   'data/fonts/Barlow-OFL.txt': '186d750eb496a4c17a76385f82be6aea2ac1cf2de074a811d63786cf374ea73f',
@@ -60,6 +62,7 @@ export const OFL_FONT_LICENCE_SHA = Object.freeze({
   'data/fonts/Anton-OFL.txt': 'eee1d24ff8f553eb732237c7dd9b945a78313ed49ad6de02872a47277741b44a',
   'data/fonts/ChakraPetch-OFL.txt': '13831d02389d917d22fcfa6c79f98f8acbf61d230add0e73a4d4dc5f3bfb9e56',
   'data/fonts/Rajdhani-OFL.txt': 'f62ef357d3a1c3d27edd35a6e1ba350e8a8d13499797964eeadefbf0b3b15d1f',
+  'data/fonts/BalooChettan2-OFL.txt': 'ad09b05dc8bc678c9daf7c4c5f7ef1f55e5726127f4330b2e98e40b9dffcb860',
 });
 export const OFL_FONT_LICENCES = Object.freeze(Object.keys(OFL_FONT_LICENCE_SHA));
 export const REPO_FILES = Object.freeze([

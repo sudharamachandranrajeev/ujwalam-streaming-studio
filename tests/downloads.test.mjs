@@ -57,7 +57,7 @@ function mgr(dataRoot, items, { live = () => false, hashBetween } = {}) {
 
 test('manifests: every item is complete and safe; the Face AI item equals data/models/face-ai.json', () => {
   const items = loadItems(REPO);
-  assert.deepEqual(items.map((i) => i.id).sort(), ['face-ai-models', 'music-pack', 'speech-captions']);
+  assert.deepEqual(items.map((i) => i.id).sort(), ['face-ai-models', 'music-pack', 'speech-captions', 'speech-captions-turbo']);
   // FX5 (D427): the free music pack lands where services/clip/music_library.py pack_files reads it, with its marker
   const ml = JSON.parse(readFileSync(path.join(REPO, 'data', 'clip', 'music-library.json'), 'utf8')).pack;
   const pack = items.find((i) => i.id === 'music-pack');
@@ -77,6 +77,7 @@ test('manifests: every item is complete and safe; the Face AI item equals data/m
   // the speech model sits where services/clip/reel_captions.py model_path looks: <data root>/models/<reel-captions model>
   const cfg = JSON.parse(readFileSync(path.join(REPO, 'data', 'clip', 'reel-captions.json'), 'utf8'));
   assert.equal(items.find((i) => i.id === 'speech-captions').dest, `models/${cfg.model}`);
+  assert.equal(items.find((i) => i.id === 'speech-captions-turbo').dest, `models/${cfg.gpuModel.model}`, 'C3: model_opts looks there');
   assert.equal(items.find((i) => i.id === 'face-ai-models').dest, 'models/face', 'services/face/fetch_models.py: UJWALAM_MODELS_DIR/face');
   assert.ok(itemProblems({ ...items[0], dest: '../x' }).length && itemProblems({ ...items[0], files: [{ ...items[0].files[0], url: 'http://example.com/x' }] }).length);
 });

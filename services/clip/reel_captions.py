@@ -12,8 +12,10 @@ Data: data/clip/reel-captions.json (backend, model, confidence threshold, preset
                segment without a confidence is not shown. The user may edit text and show in transcript.json; a
                re-render (clipper.py recaption) uses the edited file as it is (the threshold is not applied again).
   script       the text is kept in the script the model wrote; nothing is transliterated or translated. A shown
-               segment with a character the caption font has no glyph for (today: Malayalam, see D353) is not
-               burned (hidden "font has no glyph for Malayalam") and stays in the transcript, so no empty boxes appear.
+               segment the caption font cannot draw is burned in the preset's script font for it (scriptFonts, C4
+               2026-11-24: Malayalam in Baloo Chettan 2, which draws Latin too, so a Manglish line stays one font).
+               A segment no listed font can draw is not burned (fontMissing) and stays in the transcript, so no empty
+               boxes appear.
   font         only the bundled OFL fonts in data/fonts/ (never a Microsoft font). The preset's font file is copied
                into the reel's work folder (fonts/) and passed to libass as fontsdir, so no system font is used.
   safe zone    captions sit inside the intersection of every target's safe zone (data/clip/targets.json): bottom
@@ -29,7 +31,7 @@ import struct
 import tempfile
 
 import clip_captions as caps
-from clip_common import CLIP_DATA, ClipError, flag_on, load_json, run_tool, write_json_atomic
+from clip_common import CLIP_DATA, ClipError, flag_on, load_json, on_air, run_tool, write_json_atomic
 
 DEFAULTS_FILE = os.path.join(CLIP_DATA, "reel-captions.json")
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -38,6 +40,7 @@ PRESETS_DIR = os.path.join(REPO, "registry", "presets")
 FLAG = "reel-captions"
 TRANSCRIPT = "transcript.json"
 ASS_NAME = "captions.ass"
+SUBS = ("captions.srt", "captions.vtt")  # C1 (user yes 2026-11-24): caption files beside the reel and its transcript
 FONT_SUBDIR = "fonts"
 SCRIPTS = (("Malayalam", 0x0D00, 0x0D7F), ("Devanagari", 0x0900, 0x097F), ("Tamil", 0x0B80, 0x0BFF),
            ("Latin", 0x0000, 0x024F))
@@ -53,8 +56,13 @@ def load_style(cfg, presets_dir=PRESETS_DIR):
     if p.get("function") != "reel-captions":
         raise ClipError(f"reel-captions: preset {cfg['preset']} is not a reel-captions preset")
     st = dict(p["params"])
-    if not os.path.isfile(os.path.join(FONTS_DIR, st["fontFile"])):
-        raise ClipError(f"reel-captions: font {st['fontFile']} is not in data/fonts")
+    for f in [st["fontFile"]] + [x["fontFile"] for x in st.get("scriptFonts") or []]:
+        if os.path.basename(f) != f or not os.path.isfile(os.path.join(FONTS_DIR, f)):
+            raise ClipError(f"reel-captions: font {f} is not in data/fonts")
+    names = {n for n, _, _ in SCRIPTS}
+    for x in st.get("scriptFonts") or []:
+        if x.get("script") not in names or not str(x.get("fontFamily") or "").strip():
+            raise ClipError(f"reel-captions: bad script font {x.get('script')!r}")
     return st
 
 
@@ -74,6 +82,23 @@ def model_path(data_dir, cfg, given=None):
         return None
     p = os.path.join(os.path.dirname(os.path.abspath(data_dir)), "models", cfg["model"])
     return p if os.path.isdir(p) else None
+
+
+def model_opts(data_dir, cfg, given=None, live=None):
+    """C3 (user yes 2026-11-24): the speech model and where it runs. cfg.gpuModel (faster-whisper large-v3-turbo) on
+    the GPU when its folder is in <models> and the studio is off air; else the CPU model (cfg.model). A GPU run that
+    fails falls back to the CPU model (clip_captions.transcribe). live: injected for tests (default on_air())."""
+    cpu = {"whisper_model": model_path(data_dir, cfg, given), "device": "cpu", "compute_type": "int8"}
+    gpu = cfg.get("gpuModel")
+    if given or not gpu or not data_dir:
+        return cpu
+    p = os.path.join(os.path.dirname(os.path.abspath(data_dir)), "models", gpu["model"])
+    if not os.path.isdir(p):
+        return cpu
+    if (on_air() if live is None else live) is not False:
+        return cpu  # never load a GPU model next to a live stream, or when that cannot be told (VRAM, D1)
+    return {"whisper_model": p, "device": "cuda", "compute_type": gpu["computeType"],
+            "fallback": cpu if cpu["whisper_model"] else None}
 
 
 # ---------------------------------------------------------------- font coverage (stdlib TrueType cmap reader)
@@ -147,6 +172,33 @@ def missing_scripts(text, codepoints):
     return out
 
 
+_CPS = {}
+
+
+def _cps(font_file):
+    """Code points of a data/fonts file, read once per process."""
+    if font_file not in _CPS:
+        _CPS[font_file] = font_codepoints(os.path.join(FONTS_DIR, font_file))
+    return _CPS[font_file]
+
+
+def font_for(text, style):
+    """C4 (2026-11-24): (family override or None for the main font, scripts no font can draw). The main font when it
+    draws every character; else the first script font for a missing script that draws the whole text."""
+    miss = missing_scripts(text, _cps(style["fontFile"]))
+    if not miss:
+        return None, []
+    for x in style.get("scriptFonts") or []:
+        if x["script"] in miss and not missing_scripts(text, _cps(x["fontFile"])):
+            return x["fontFamily"], []
+    return None, miss
+
+
+def glyph_check(style):
+    """missing(text) -> scripts that no font of the style can draw (mark's check)."""
+    return lambda text: font_for(text, style)[1]
+
+
 def covers(font_file, script):
     """True when the font maps every letter of the named script's block that is assigned (spot check: the first 16)."""
     cps = font_codepoints(font_file)
@@ -170,7 +222,8 @@ def pieces_wav_argv(ffmpeg, src, pieces, out_wav):
 
 
 def mark(segments, cfg, codepoints, duration=None):
-    """Transcript rows with show/hidden set by the threshold, the minimum length and the font's glyphs."""
+    """Transcript rows with show/hidden set by the threshold, the minimum length and the font's glyphs. codepoints: the
+    font's code points, or missing(text) -> scripts (glyph_check: the main font and the script fonts)."""
     lo, min_len = float(cfg["minConfidence"]), float(cfg.get("minSegmentSec", 0.0))
     out = []
     for s in segments:
@@ -194,7 +247,7 @@ def mark(segments, cfg, codepoints, duration=None):
               for x in s.get("words") or [] if float(x["start"]) < b]
         if ws:  # LV1 (D421): word times for the word-by-word captions
             row["words"] = ws
-        miss = missing_scripts(row["text"], codepoints)
+        miss = codepoints(row["text"]) if callable(codepoints) else missing_scripts(row["text"], codepoints)
         if miss:
             row["fontMissing"] = miss
         out.append(row)
@@ -215,9 +268,9 @@ def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=Non
                                                           full_json=True, language=cfg.get("language"), words=words))
     if info.get("status") != "ok":
         return None, info
-    cps = font_codepoints(os.path.join(FONTS_DIR, style["fontFile"]))
-    rows = mark(segs, cfg, cps, duration)
-    doc = {"version": 1, "backend": cfg["backend"], "model": os.path.basename(str(opts.get("whisper_model") or "")),
+    rows = mark(segs, cfg, glyph_check(style), duration)
+    doc = {"version": 1, "backend": cfg["backend"],
+           "model": info.get("model") or os.path.basename(str(opts.get("whisper_model") or "")),
            "language": info.get("language"), "minConfidence": cfg["minConfidence"], "font": style["fontFamily"],
            "edited": False, "note": "Edit text or show, then run clipper.py recaption to render the reel again.",
            "segments": rows}
@@ -337,8 +390,10 @@ def _words_match(seg):
     return bool(ws) and " ".join(w["text"] for w in ws).split() == str(seg.get("text", "")).split()
 
 
-def _highlight_events(seg, a, b, style, accent):
-    """One event per word: the whole card, the current word in the accent colour, until the next word starts."""
+def _highlight_events(seg, a, b, style, accent, family=None):
+    """One event per word: the whole card, the current word in the accent colour, until the next word starts. family
+    (C4): the script font, set at the start and again after each reset."""
+    fn = f"\\fn{family}" if family else ""
     ws = [w for w in seg["words"] if float(w["start"]) < b]
     ev = []
     cards = word_cards(ws, style["maxWordsPerCard"], style["maxCharsPerLine"], style["maxLines"])
@@ -354,9 +409,10 @@ def _highlight_events(seg, a, b, style, accent):
             if t1 - t0 < 0.02:
                 continue
             text = "\\N".join(" ".join(
-                (f"{{\\1c{accent}}}{caps.ass_escape(ws[j]['text'])}{{\\r}}" if j == k else caps.ass_escape(ws[j]["text"]))
+                (f"{{\\1c{accent}}}{caps.ass_escape(ws[j]['text'])}{{\\r{fn}}}" if j == k else caps.ass_escape(ws[j]["text"]))
                 for j in line) for line in card)
-            ev.append(f"Dialogue: 0,{caps._ts(t0)},{caps._ts(t1)},Reel,,0,0,0,,{text}")
+            ev.append(f"Dialogue: 0,{caps._ts(t0)},{caps._ts(t1)},Reel,,0,0,0,,{{{fn}}}{text}" if fn else
+                      f"Dialogue: 0,{caps._ts(t0)},{caps._ts(t1)},Reel,,0,0,0,,{text}")
     return ev
 
 
@@ -384,8 +440,9 @@ def to_ass(transcript, frame, safe, style, duration=None, highlight=None):
         a, b = float(s["start"]), float(s["end"])
         if duration is not None:
             b = min(b, float(duration))
+        family, _ = font_for(str(s.get("text", "")), style)  # C4: a script font for this segment, or None
         if highlight and b > a and _words_match(s):
-            hv = _highlight_events(s, a, b, style, _ass_colour(highlight))
+            hv = _highlight_events(s, a, b, style, _ass_colour(highlight), family)
             if hv:
                 ev += hv
                 n += 1
@@ -398,7 +455,8 @@ def to_ass(transcript, frame, safe, style, duration=None, highlight=None):
         t = a
         for c, wt in zip(cs, weights):
             d = (b - a) * wt / sum(weights)
-            ev.append(f"Dialogue: 0,{caps._ts(t)},{caps._ts(t + d)},Reel,,0,0,0,," +"\\N".join(c))
+            ev.append(f"Dialogue: 0,{caps._ts(t)},{caps._ts(t + d)},Reel,,0,0,0,,"
+                      + (f"{{\\fn{family}}}" if family else "") + "\\N".join(c))
             t += d
             n += 1
     return "\n".join(head + ev) + "\n", n
@@ -406,9 +464,8 @@ def to_ass(transcript, frame, safe, style, duration=None, highlight=None):
 
 def refresh_hidden(transcript, style):
     """Re-checks every segment's text against the font (after an edit the text may have changed)."""
-    cps = font_codepoints(os.path.join(FONTS_DIR, style["fontFile"]))
     for s in transcript.get("segments") or []:
-        miss = missing_scripts(str(s.get("text", "")), cps)
+        miss = font_for(str(s.get("text", "")), style)[1]
         if miss:
             s["fontMissing"] = miss
         else:
@@ -416,10 +473,63 @@ def refresh_hidden(transcript, style):
     return transcript
 
 
+def _sub_ts(sec, sep):
+    ms = int(round(max(0.0, sec) * 1000))
+    h, ms = divmod(ms, 3600000)
+    m, ms = divmod(ms, 60000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
+
+
+def subtitle_cues(transcript, duration=None):
+    """C1: [(start, end, text)] of the shown segments on the reel's timeline, as burned, but a segment the caption
+    font cannot draw is kept (players and YouTube draw every script). Text as written: one line, no markup."""
+    out = []
+    for s in transcript.get("segments") or []:
+        a, b = float(s["start"]), float(s["end"])
+        if duration is not None:
+            b = min(b, float(duration))
+        text = " ".join(str(s.get("text", "")).split())
+        if s.get("show") and b > a and text:
+            out.append((a, b, text))
+    return out
+
+
+def to_srt(cues):
+    return "".join(f"{i}\n{_sub_ts(a, ',')} --> {_sub_ts(b, ',')}\n{t}\n\n" for i, (a, b, t) in enumerate(cues, 1))
+
+
+def to_vtt(cues):
+    # WebVTT: "-->" would end a cue timing line and "<"/"&" start markup; spoken text never needs them as such
+    esc = lambda t: t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")  # noqa: E731
+    return "WEBVTT\n\n" + "".join(f"{_sub_ts(a, '.')} --> {_sub_ts(b, '.')}\n{esc(t)}\n\n" for a, b, t in cues)
+
+
+def write_subtitles(transcript, workdir, duration=None):
+    """C1: captions.srt and captions.vtt in workdir from the transcript (both removed when nothing is shown, so an
+    edit that hides every line leaves no stale file). -> number of cues."""
+    return write_cues(subtitle_cues(transcript, duration), workdir)
+
+
+def write_cues(cues, workdir):
+    """C1: [(start, end, text)] -> captions.srt and captions.vtt in workdir (removed when there is no cue)."""
+    for name, fmt in zip(SUBS, (to_srt, to_vtt)):
+        p = os.path.join(workdir, name)
+        if cues:
+            tmp = p + ".part"
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(fmt(cues))
+            os.replace(tmp, p)
+        elif os.path.isfile(p):
+            os.remove(p)
+    return len(cues)
+
+
 def write_ass(transcript, frame, safe, style, workdir, duration=None, highlight=None, extra=None):
     """Writes captions.ass and copies the preset's font into workdir/fonts. -> (ass name, fonts dir name, cards) or
     (None, None, 0) when nothing is left to burn. LV1 (D421): highlight as in to_ass; extra = (style lines, event
     lines) added to the same script (the long video's chapter cards), burned even with no caption."""
+    write_subtitles(transcript, workdir, duration)  # C1: also when nothing is burned (a Tamil line, say)
     text, n = to_ass(refresh_hidden(transcript, style), frame, safe, style, duration, highlight)
     if extra and extra[1]:
         head, _, events = text.partition("[Events]")
@@ -432,7 +542,8 @@ def write_ass(transcript, frame, safe, style, workdir, duration=None, highlight=
         f.write(text)
     fd = os.path.join(workdir, FONT_SUBDIR)
     os.makedirs(fd, exist_ok=True)
-    shutil.copyfile(os.path.join(FONTS_DIR, style["fontFile"]), os.path.join(fd, style["fontFile"]))
+    for f in [style["fontFile"]] + [x["fontFile"] for x in style.get("scriptFonts") or []]:
+        shutil.copyfile(os.path.join(FONTS_DIR, f), os.path.join(fd, f))
     return ASS_NAME, FONT_SUBDIR, n
 
 

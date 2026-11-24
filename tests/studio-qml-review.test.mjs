@@ -48,7 +48,7 @@ function seed(dataDir) {
   writeFileSync(path.join(dir, 'frames', 'ocr-003.jpg'), JPEG);
   const items = [
     { v: 1, id: 'live-00001', at: '2026-11-11T12:10:00.000Z', t: 600, kind: 'unclassified-banner', detector: 'W1', label: 'VICTORY', mode: 'mp', ocrScore: 0.97, threshold: null, value: null, choices: ['round', 'match', 'not a banner'], frame: null },
-    { v: 1, id: 'mode-002', at: '2026-11-11T13:00:00.000Z', t: 740, kind: 'unknown-mode', detector: null, label: null, mode: 'mp', ocrScore: null, threshold: null, value: null, choices: ['domination', 'hardpoint'], match: 2, frame: null, modeReason: 'no mode evidence', modeEvidence: [] },
+    { v: 1, id: 'mode-002', at: '2026-11-11T13:00:00.000Z', t: 740, kind: 'unknown-mode', detector: null, label: null, mode: 'mp', ocrScore: null, threshold: null, value: null, choices: ['domination', 'hardpoint'], modeFamilies: ['mp'], match: 2, frame: null, modeReason: 'no mode evidence', modeEvidence: [] },
     { v: 1, id: 'ocr-003', at: '2026-11-11T13:20:00.000Z', t: 900, kind: 'ocr-low', detector: 'K1', label: 'DOUBLE KILL', mode: 'mp', ocrScore: 0.41, threshold: 0.6, value: null, choices: ['DOUBLE KILL', 'wrong read'], frame: 'frames/ocr-003.jpg' },
   ];
   writeFileSync(path.join(dir, 'review.jsonl'), `${items.map((x) => JSON.stringify(x)).join('\n')}\n`);

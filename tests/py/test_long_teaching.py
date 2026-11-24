@@ -97,7 +97,7 @@ class Words(unittest.TestCase):
 
 
 class Highlight(unittest.TestCase):
-    STYLE = {"fontFamily": "F", "sizePx": 50, "textColour": "#FFFFFF", "outlineColour": "#000000", "outlinePx": 3,
+    STYLE = {"fontFamily": "F", "fontFile": "Inter-Bold.ttf", "sizePx": 50, "textColour": "#FFFFFF", "outlineColour": "#000000", "outlinePx": 3,
              "shadowPx": 0, "maxWordsPerCard": 4, "maxCharsPerLine": 12, "maxLines": 2}
     SAFE = {"left": 10, "right": 10, "bottom": 20}
 

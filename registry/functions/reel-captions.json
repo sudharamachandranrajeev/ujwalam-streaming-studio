@@ -1,6 +1,6 @@
 {
   "id": "reel-captions",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "ai-clipping",
   "family": "clipping",
   "name": "Burned-in reel captions (ED2)",
@@ -77,6 +77,39 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 200
+        },
+        "scriptFonts": {
+          "type": "array",
+          "maxItems": 4,
+          "description": "C4 (user yes 2026-11-24): a segment the main font cannot draw is burned in the first font listed for a missing script that draws the whole segment (bundled OFL fonts in data/fonts only)",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "script",
+              "fontFamily",
+              "fontFile"
+            ],
+            "properties": {
+              "script": {
+                "type": "string",
+                "enum": [
+                  "Malayalam",
+                  "Devanagari",
+                  "Tamil",
+                  "Latin"
+                ]
+              },
+              "fontFamily": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fontFile": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+.ttf$"
+              }
+            }
+          }
         }
       }
     },
@@ -92,7 +125,14 @@
       "maxWordsPerCard": 3,
       "maxCharsPerLine": 16,
       "maxLines": 2,
-      "liftPx": 0
+      "liftPx": 0,
+      "scriptFonts": [
+        {
+          "script": "Malayalam",
+          "fontFamily": "Baloo Chettan 2",
+          "fontFile": "BalooChettan2-Variable.ttf"
+        }
+      ]
     },
     "safeRanges": {
       "sizePx": [

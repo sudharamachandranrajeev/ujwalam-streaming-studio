@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "services", "clip"))
 
@@ -52,12 +53,19 @@ class FontTests(unittest.TestCase):
                 p = os.path.join(rcap.FONTS_DIR, f)
                 self.assertEqual(rcap.font_codepoints(p), set(TTFont(p).getBestCmap()), f)
 
-    def test_no_bundled_font_covers_malayalam_today(self):
-        # D353 finding: a Malayalam caption font would be a new font file (an install the user decides on)
+    def test_only_the_script_font_covers_malayalam(self):
+        # D353 finding, then C4 (user yes 2026-11-24): Baloo Chettan 2 is the one bundled font that draws Malayalam
         for f in sorted(os.listdir(rcap.FONTS_DIR)):
             if f.endswith(".ttf"):
-                self.assertFalse(rcap.covers(os.path.join(rcap.FONTS_DIR, f), "Malayalam"), f)
-                self.assertTrue(rcap.covers(os.path.join(rcap.FONTS_DIR, f), "Latin"), f)
+                p = os.path.join(rcap.FONTS_DIR, f)
+                draws = not rcap.missing_scripts(ML, rcap.font_codepoints(p))
+                self.assertEqual(draws, f == "BalooChettan2-Variable.ttf", f)
+                self.assertTrue(rcap.covers(p, "Latin"), f)
+
+    def test_presets_list_the_malayalam_font(self):
+        for p in ("reel-captions-bold", "reel-captions-barlow"):
+            st = rcap.load_style(dict(CFG, preset=p))
+            self.assertEqual([x["script"] for x in st["scriptFonts"]], ["Malayalam"])
 
     @unittest.skipUnless(TTFont, "fontTools not importable")
     def test_a_full_line_fits_the_safe_width(self):
@@ -106,9 +114,36 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn("right words", text)
         self.assertIn("hidden one", text)
         self.assertNotIn("wrong", text)
-        tr["segments"][0]["text"] = ML  # an edit into Malayalam: refresh marks it, nothing undrawable is burned
+        tr["segments"][0]["text"] = ML  # an edit into Malayalam: drawn in the script font (C4)
         text, _ = rcap.to_ass(rcap.refresh_hidden(tr, STYLE), FRAME, SAFE, STYLE)
-        self.assertNotIn(ML, text)
+        self.assertIn(ML.split()[0], text)
+        tr["segments"][0]["text"] = "வணக்கம்"  # Tamil: no bundled font draws it, so it is not burned
+        text, _ = rcap.to_ass(rcap.refresh_hidden(tr, STYLE), FRAME, SAFE, STYLE)
+        self.assertNotIn("வணக்கம்", text)
+        self.assertEqual(tr["segments"][0]["fontMissing"], ["Tamil"])
+
+    def test_manglish_line_burns_in_the_script_font(self):
+        """C4: a Malayalam or mixed line is drawn whole in Baloo Chettan 2; an English line keeps the main font."""
+        rows = rcap.mark([seg(0, 2, "nice shot", 0.9), seg(2, 4, ML + " clutch", 0.9)], CFG, rcap.glyph_check(STYLE))
+        self.assertFalse(any(r.get("fontMissing") for r in rows))
+        text, n = rcap.to_ass({"segments": rows}, FRAME, SAFE, STYLE)
+        cards = [x for x in text.splitlines() if x.startswith("Dialogue:")]
+        self.assertFalse(cards[0].split(",", 9)[9].startswith("{"), "English: the preset's font")
+        ml = [c for c in cards if "clutch" in c or ML.split()[0] in c]
+        self.assertTrue(ml and all(c.split(",", 9)[9].startswith("{\\fnBaloo Chettan 2}") for c in ml))
+        words = [{"start": 2.0, "end": 2.5, "text": ML.split()[0]}, {"start": 2.5, "end": 3.0, "text": ML.split()[1]},
+                 {"start": 3.0, "end": 4.0, "text": "clutch"}]
+        rows[1]["words"] = words
+        text, _ = rcap.to_ass({"segments": rows[1:]}, FRAME, SAFE, STYLE, highlight="#FFD400")
+        for c in [x for x in text.splitlines() if x.startswith("Dialogue:")]:
+            body = c.split(",", 9)[9]
+            self.assertTrue(body.startswith("{\\fnBaloo Chettan 2}"), body)
+            if "\\r" in body:
+                self.assertIn("{\\r\\fnBaloo Chettan 2}", body, "the reset after the lit word keeps the script font")
+        with tempfile.TemporaryDirectory() as d:
+            rcap.write_ass({"segments": rows}, FRAME, SAFE, STYLE, d)
+            self.assertEqual(sorted(os.listdir(os.path.join(d, rcap.FONT_SUBDIR))),
+                             sorted([STYLE["fontFile"], "BalooChettan2-Variable.ttf"]))
 
     def test_faster_whisper_confidence(self):
         self.assertAlmostEqual(caps.segment_confidence(0.0, 0.0), 1.0)
@@ -165,9 +200,10 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(seen["opts"]["full_json"], True)
         self.assertIs(seen["opts"]["multilingual"], True)
         self.assertTrue(os.path.isfile(os.path.join(wd, rcap.TRANSCRIPT)))
-        self.assertEqual(info["shown"], 1)
+        self.assertEqual(info["shown"], 2, "the teaser line and the Malayalam line (C4 script font)")
         ass, fdir, n = rcap.write_ass(tr, FRAME, SAFE, STYLE, wd, 10.0)
-        self.assertEqual((ass, fdir, n), ("captions.ass", "fonts", 1))
+        self.assertEqual((ass, fdir), ("captions.ass", "fonts"))
+        self.assertGreaterEqual(n, 2)
         argv = mont.render_argv("ffmpeg", self.src, pieces, FRAME, ["-c:v", "libopenh264"], ["-c:a", "aac"], 80,
                                 "cap.mp4", max_sec=10, captions=ass, fontsdir=fdir)
         r = cc.run_tool(argv, cwd=wd, timeout=600)
@@ -285,6 +321,98 @@ class TimelineTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(d, mus["file"])), "a bed is made, no KeyError on seed")
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+
+class ModelChoice(unittest.TestCase):
+    """C3 (user yes 2026-11-24): large-v3-turbo on the GPU off air when downloaded, else the small CPU model."""
+
+    def _root(self, d, *models):
+        data = os.path.join(d, "event-core")
+        for m in models:
+            os.makedirs(os.path.join(d, "models", m))
+        return data
+
+    def test_gpu_model_only_off_air_and_when_downloaded(self):
+        gpu = CFG["gpuModel"]["model"]
+        with tempfile.TemporaryDirectory() as d:
+            data = self._root(d, CFG["model"], gpu)
+            o = rcap.model_opts(data, CFG, live=False)
+            self.assertEqual((os.path.basename(o["whisper_model"]), o["device"]), (gpu, "cuda"))
+            self.assertEqual(os.path.basename(o["fallback"]["whisper_model"]), CFG["model"])
+            self.assertEqual(rcap.model_opts(data, CFG, live=True)["device"], "cpu", "on air: the CPU model")
+            with patch.object(rcap, "on_air", return_value=None):  # not known: treated as on air
+                self.assertEqual(rcap.model_opts(data, CFG)["device"], "cpu")
+            self.assertEqual(rcap.model_opts(data, CFG, "x/given", live=False),
+                             {"whisper_model": "x/given", "device": "cpu", "compute_type": "int8"})
+        with tempfile.TemporaryDirectory() as d:
+            o = rcap.model_opts(self._root(d, CFG["model"]), CFG, live=False)
+            self.assertEqual((os.path.basename(o["whisper_model"]), o["device"]), (CFG["model"], "cpu"))
+
+    def test_a_failed_gpu_run_falls_back_to_the_cpu_model(self):
+        import types
+        calls = []
+
+        class Seg:
+            start, end, text, avg_logprob, no_speech_prob, words = 0.0, 1.0, " hi", 0.0, 0.0, None
+
+        class Model:
+            def __init__(self, model, device, **kw):
+                calls.append((os.path.basename(model), device))
+                self.device = device
+
+            def transcribe(self, wav, **kw):
+                if self.device == "cuda":
+                    raise RuntimeError("CUDA out of memory")
+                return iter([Seg()]), types.SimpleNamespace(language="en")
+        fake = types.ModuleType("faster_whisper")
+        fake.WhisperModel = Model
+        opts = {"whisper_model": "m/turbo", "device": "cuda", "compute_type": "int8_float16",
+                "fallback": {"whisper_model": "m/small", "device": "cpu", "compute_type": "int8"}}
+        with patch.dict(sys.modules, {"faster_whisper": fake}):
+            segs, info = caps.transcribe("faster-whisper", "a.wav", opts)
+            self.assertEqual(calls, [("turbo", "cuda"), ("small", "cpu")])
+            self.assertEqual((info["model"], info["device"], len(segs)), ("small", "cpu", 1))
+            with self.assertRaises(RuntimeError):  # no fallback: the error is reported as before
+                caps.transcribe("faster-whisper", "a.wav", dict(opts, fallback=None))
+
+
+class SubtitleFiles(unittest.TestCase):
+    """C1 (user yes 2026-11-24): SRT and VTT from the transcript, beside the reel and the published video."""
+
+    def test_srt_and_vtt_of_the_shown_lines(self):
+        tr = {"segments": rcap.mark([seg(0.5, 2, "nice  shot", 0.9), seg(2, 3, "low", 0.1), seg(3, 4.25, ML, 0.9),
+                                     seg(5, 9, "a <b> & c", 0.9)], CFG, CPS)}
+        cues = rcap.subtitle_cues(tr, duration=6)
+        self.assertEqual(cues, [(0.5, 2.0, "nice shot"), (3.0, 4.25, ML), (5.0, 6.0, "a <b> & c")],
+                         "hidden lines out, a line the burn font cannot draw kept, cut at the reel's end")
+        srt = rcap.to_srt(cues)
+        self.assertTrue(srt.startswith("1\n00:00:00,500 --> 00:00:02,000\nnice shot\n\n2\n00:00:03,000 --> 00:00:04,250\n"))
+        vtt = rcap.to_vtt(cues)
+        self.assertTrue(vtt.startswith("WEBVTT\n\n00:00:00.500 --> 00:00:02.000\nnice shot\n"))
+        self.assertIn("a &lt;b&gt; &amp; c", vtt)
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(rcap.write_subtitles(tr, d, 6), 3)
+            self.assertEqual(sorted(os.listdir(d)), sorted(rcap.SUBS))
+            with open(os.path.join(d, "captions.srt"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), srt)
+            for x in tr["segments"]:
+                x["show"] = False  # the user hides every line: no stale caption file stays
+            self.assertEqual(rcap.write_subtitles(tr, d), 0)
+            self.assertEqual(os.listdir(d), [])
+
+    def test_published_video_gets_its_own_named_caption_files(self):
+        import clip_publish as pub
+        with tempfile.TemporaryDirectory() as d:
+            clip = os.path.join(d, "work", "clips", "M1")
+            os.makedirs(clip)
+            with open(os.path.join(clip, "captions.srt"), "w", encoding="utf-8") as f:
+                f.write("1\n")
+            day = os.path.join(d, "out")
+            os.makedirs(day)
+            out = pub._publish_subtitles(clip, os.path.join(day, "game-reel-01.mp4"))
+            self.assertEqual(out, [os.path.join(day, "game-reel-01.srt")])
+            self.assertEqual(pub._publish_subtitles(os.path.join(d, "none"), os.path.join(day, "x.mp4")), [])
 
 
 if __name__ == "__main__":
