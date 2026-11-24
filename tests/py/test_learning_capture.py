@@ -357,18 +357,34 @@ class UnknownModeTests(unittest.TestCase):
         self.assertIn("queued for review", out.getvalue())
 
     def test_other_family_match_not_queued(self):
-        # D435 (user 2026-11-22): a BR match is never asked to pick one of the pack's MP mode names.
+        # D435 (user 2026-11-22): a BR match is never asked to pick one of the pack's MP mode names. D441: the pack now
+        # names BR modes (S2), so a BR match is asked with the BR modes only; a family with no mode names is skipped.
         cfg = mg.stats_config(PACK)
-        self.assertEqual(cfg["modeFamilies"], ["mp"])
+        self.assertEqual(cfg["modeFamilies"], ["br", "mp"])
         with tempfile.TemporaryDirectory() as td:
             n = lc.queue_unknown_modes(td, "s1", [{"endSeen": True, "gameMode": None, "mode": "br"},
                                                   {"endSeen": True, "gameMode": None, "mode": "mp"},
-                                                  {"endSeen": True, "gameMode": None, "mode": None}], cfg)
+                                                  {"endSeen": True, "gameMode": None, "mode": None},
+                                                  {"endSeen": True, "gameMode": None, "mode": "dmz"}], cfg)
             with open(os.path.join(td, lc.STORE_DIR, "s1", "review.jsonl"), encoding="utf-8") as f:
                 items = [json.loads(x) for x in f if x.strip()]
-        self.assertEqual(n, 2)
-        self.assertEqual([i["match"] for i in items], [2, 3])
-        self.assertTrue(all(i["modeFamilies"] == ["mp"] for i in items))
+        self.assertEqual(n, 3)
+        self.assertEqual([i["match"] for i in items], [1, 2, 3])
+        br, mp, unknown = items
+        self.assertEqual((br["mode"], br["modeFamilies"], br["choices"]), ("br", ["br"], ["battle royale"]))
+        self.assertEqual(mp["modeFamilies"], ["mp"])
+        self.assertIn("hardpoint", mp["choices"])
+        self.assertNotIn("battle royale", mp["choices"])
+        self.assertEqual(unknown["modeFamilies"], ["br", "mp"])
+
+    def test_mode_choices_per_family(self):
+        # D441: mode_choices(cfg, "br") offers the BR modes only, "mp" the MP modes only
+        cfg = mg.stats_config(PACK)
+        self.assertEqual(lc.mode_choices(cfg, "br"), ["battle royale"])
+        mp = lc.mode_choices(cfg, "mp")
+        self.assertIn("search and destroy", mp)
+        self.assertNotIn("battle royale", mp)
+        self.assertEqual(lc.mode_choices(cfg, "dmz"), [])
 
     def test_failure_is_logged_never_raised(self):
         logs = []

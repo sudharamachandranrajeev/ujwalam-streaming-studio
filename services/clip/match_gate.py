@@ -69,11 +69,121 @@ def stats_config(pack):
     st["headerAfterSec"] = float(c2.get("afterEndSec") or 0)
     # D435: the game families (detector `modes`, e.g. mp) the mode names above belong to: the review asks for a mode only
     # in these (user 2026-11-22: BR matches were offered only MP modes).
+    s2 = br_end_detector(pack) or {}
     fams = set()
-    for x in (d, w1, c1, c2):
+    for x in (d, w1, c1, c2, s2):
         fams.update(m for m in x.get("modes") or [] if isinstance(m, str))
     st["modeFamilies"] = sorted(fams)
+    # D441: the review's mode choices per family (a BR match is offered BR modes only, an MP match MP modes only)
+    by = {}
+    for x, names in ((d, st["modeNames"]), (s2, (s2.get("stats") or {}).get("modeNames") or [])):
+        for fam in x.get("modes") or []:
+            by.setdefault(fam, set()).update(_mode_label(n) for n in names)
+    for x, cues in ((c1, st["modeCues"]), (c2, st["headerCues"]), (w1, st["banner"].get("subtitles") or [])):
+        for fam in x.get("modes") or []:
+            for q in cues:
+                by.setdefault(fam, set()).update(m.lower() for m in q.get("modes") or [] if isinstance(m, str))
+    st["modeChoicesByFamily"] = {k: sorted(v - {""}) for k, v in sorted(by.items())}
+    # D441: an end-screen hit read on a frame of a family its detector does not run in never closes a match (a W1
+    # VICTORY/DEFEAT misread on a BR screen, 2026-11-22)
+    st["detectorModes"] = {x["id"]: list(x.get("modes") or []) for x in pack.get("detectors", []) if x.get("id")}
     return st
+
+
+def _mode_label(n):
+    return (n if isinstance(n, str) else n.get("mode") or "").lower()
+
+
+# ---------------------------------------------------------------- BR end screen and top HUD (D441)
+
+def br_end_detector(pack):
+    """The pack's BR end-screen detector (S2), or None."""
+    return next((d for d in pack.get("detectors", []) if d.get("id") == "S2"), None)
+
+
+def br_hud_detector(pack):
+    """The pack's BR top-HUD detector (H1), or None."""
+    return next((d for d in pack.get("detectors", []) if d.get("id") == "H1"), None)
+
+
+def _boxes_in(boxes, roi):
+    return [b for b in boxes if roi and b.get("g") and _inside(b["g"], roi)]
+
+
+def _named(text, names, min_ratio=0.9):
+    """The pack name (canonical label) the whole text reads as, else None."""
+    t = gt.normalise(text or "")
+    for n in names:
+        src = n if isinstance(n, str) else n.get("text") or ""
+        if t and gt.normalise(src) and gt.ratio(gt.normalise(src), t) >= min_ratio:
+            return _mode_label(n)
+    return None
+
+
+def parse_br_end(boxes, det):
+    """BR end screen from one frame -> {screen: "card"|"strip", ownRank, teams, gameMode, map, heading} or None.
+    card: the GAME OVER / MISSION COMPLETED card (heading, Ranking #N/M, Mode, MAP rows); strip: the results screen
+    that follows it (#N/M top left, "Mode - Map" bottom left). A reading needs the #N/M placement inside its ROI plus,
+    on the card, the heading or the mode value, and on the strip the mode-map line: a lone #N/M elsewhere never counts.
+    Only pack texts are returned (modeNames, mapNames, headings), never raw OCR text, and never a name."""
+    st = det.get("stats") or {}
+    rank_re = re.compile(st.get("rankRegex") or r"^#(\d{1,3})/(\d{1,3})$")
+    modes, maps = st.get("modeNames") or [], st.get("mapNames") or []
+    heads = [h if isinstance(h, str) else h.get("text") for h in st.get("headings") or []]
+
+    def rank_in(rid):
+        for b in _boxes_in(boxes, _roi(det, rid)):
+            m = rank_re.match((b.get("text") or "").replace(" ", ""))
+            if m and 1 <= int(m.group(1)) <= int(m.group(2)):
+                return int(m.group(1)), int(m.group(2))
+        return None
+
+    def first(rid, names):
+        for b in _boxes_in(boxes, _roi(det, rid)):
+            v = _named(b.get("text"), names)
+            if v:
+                return v
+        return None
+
+    rank = rank_in("ranking")
+    if rank:
+        heading = next((h for h in heads for b in _boxes_in(boxes, _roi(det, "heading"))
+                        if gt.ratio(gt.normalise(h), gt.normalise(b.get("text") or "")) >= 0.85), None)
+        mode = first("mode_value", modes)
+        if heading or mode:
+            mp = first("map_value", maps)
+            return {"screen": "card", "ownRank": rank[0], "teams": rank[1], "gameMode": mode,
+                    "map": mp.upper() if mp else None, "heading": heading}
+    rank = rank_in("strip_rank")
+    if rank:
+        for b in _boxes_in(boxes, _roi(det, "strip_mode")):
+            parts = [p for p in re.split(r"\s*-\s*", b.get("text") or "") if p.strip()]
+            if len(parts) != 2:
+                continue
+            mode, mp = _named(parts[0], modes), _named(parts[1], maps)
+            if mode:
+                return {"screen": "strip", "ownRank": rank[0], "teams": rank[1], "gameMode": mode,
+                        "map": mp.upper() if mp else None, "heading": None}
+    return None
+
+
+def parse_br_hud(boxes, det):
+    """BR top HUD from one frame -> {playersLeft, ownKills} (either may be None) or None when neither is read.
+    playersLeft: "N/total" in players_left (stats.playersRegex); ownKills: a whole number of 1-2 digits alone in
+    own_kills (the HUD's own kill counter)."""
+    st = det.get("stats") or {}
+    pre = re.compile(st.get("playersRegex") or r"^(\d{1,3})/(\d{2,3})$")
+    left = kills = None
+    for b in _boxes_in(boxes, _roi(det, "players_left")):
+        m = pre.match((b.get("text") or "").replace(" ", ""))
+        if m and int(m.group(1)) <= int(m.group(2)):
+            left = int(m.group(1))
+    found = [b for b in _boxes_in(boxes, _roi(det, "own_kills")) if (b.get("text") or "").strip().isdigit()]
+    if len(found) == 1 and len(found[0]["text"].strip()) <= 2:
+        kills = int(found[0]["text"].strip())
+    if left is None and kills is None:
+        return None
+    return {"playersLeft": left, "ownKills": kills}
 
 
 # ---------------------------------------------------------------- banner (round end vs match end)
@@ -226,11 +336,11 @@ def parse_scoreboard_kills(boxes, det, names, name_min, cfg):
 def frame_stats(boxes, pack, names, name_min, mode=None):
     """S1 for one OCR'd frame -> (hit rows, readings). Rows are detector-hit rows (no names; label "TOP 3" or
     "SCOREBOARD"; signal = the streamer's card or row was found). Readings: {kind: "top3"|"scoreboard", ...}."""
+    rows, readings = _br_stats(boxes, pack, mode)
     det = s1_detector(pack)
     if det is None:
-        return [], []
+        return rows, readings
     cfg = stats_config(pack)
-    rows, readings = [], []
     base = {"detector": "S1", "role": det.get("role", "context"), "clipReason": False, "weight": det.get("weight"),
             "detectorStatus": det.get("status", "unverified"), "mode": mode}
     top = parse_top3(boxes, det, names, name_min, cfg)
@@ -244,6 +354,30 @@ def frame_stats(boxes, pack, names, name_min, mode=None):
     if kills is not None:
         readings.append({"kind": "scoreboard", "ownKills": kills})
         rows.append({**base, "label": "SCOREBOARD", "signal": True, "why": [], "ocrScore": 0.0})
+    return rows, readings
+
+
+def _runs_in(det, mode):
+    return mode is None or not det.get("modes") or mode in det["modes"]
+
+
+def _br_stats(boxes, pack, mode):
+    """D441: S2 (BR end screen) and H1 (BR top HUD) for one frame -> (hit rows, readings). S2 adds a context hit row
+    (label "GAME OVER", a match end for the segmenter) and a br_end reading; H1 adds a br_hud reading only."""
+    rows, readings = [], []
+    s2 = br_end_detector(pack)
+    if s2 and _runs_in(s2, mode):
+        r = parse_br_end(boxes, s2)
+        if r:
+            readings.append({"kind": "br_end", **r})
+            rows.append({"detector": "S2", "label": "GAME OVER", "role": s2.get("role", "context"), "signal": True,
+                         "why": [], "clipReason": False, "weight": s2.get("weight"),
+                         "detectorStatus": s2.get("status", "unverified"), "mode": mode, "ocrScore": 0.0})
+    h1 = br_hud_detector(pack)
+    if h1 and _runs_in(h1, mode):
+        r = parse_br_hud(boxes, h1)
+        if r:
+            readings.append({"kind": "br_hud", **r})
     return rows, readings
 
 
@@ -414,6 +548,9 @@ def end_clusters(hits, cfg, kinds=None):
             continue
         if d == "M1" and "outside_roi" in (h.get("why") or []):
             continue
+        dm = (cfg.get("detectorModes") or {}).get(d) or []
+        if dm and h.get("mode") in ("mp", "br") and h["mode"] not in dm:
+            continue  # D441: e.g. a W1 VICTORY/DEFEAT read on a BR screen (MP-only detector) is a misread
         if _is_banner(h) and kinds.get(id(h), (None,))[0] != "match":
             continue  # round ends never close a match, and neither does a banner of unknown kind (never guess)
         t0 = float(h["t"])
@@ -498,7 +635,7 @@ def segment(hits, stats, duration, cfg):
              "endScreenAt": round(c["t0"], 2) if c else None, "resultConfirmed": False, "resultAt": None,
              "resultEnd": None, "gameMode": None, "roundKills": None, "rounds": [], "endBanner": None,
              "modeConfidence": None, "modeEvidence": [], "modeReason": None, "ownKillTimes": None,
-             "roundKillTimes": None, "spectateDropped": 0}
+             "roundKillTimes": None, "spectateDropped": 0, "map": None, "teams": None, "placementSource": None}
         m["rounds"] = [{"t": round(float(h["t"]), 2), "tEnd": round(float(h.get("tEnd", h["t"])), 2),
                         "result": h["label"], "source": kinds[id(h)][1], "subtitle": h.get("subtitle")}
                        for h in round_hits if start <= float(h["t"]) < play_end]
@@ -533,10 +670,17 @@ def segment(hits, stats, duration, cfg):
                     scores = Counter(r["ownScore"] for r in tops if r.get("ownRank") == m["ownRank"]
                                      and r.get("ownScore") is not None)
                     m["ownScore"] = scores.most_common(1)[0][0] if scores else None
+        br_ends = [r for r in readings if c and r.get("kind") == "br_end"
+                   and c["t0"] - 1 <= float(r.get("t", -1)) <= c["t1"] + 1]
+        if br_ends:
+            _apply_br_end(m, br_ends)
         boards = [r for r in readings if r.get("kind") == "scoreboard" and start <= float(r.get("t", -1)) <= end
                   and isinstance(r.get("ownKills"), int)]
+        hud_kills = br_hud_kills(readings, start, play_end) if _mode_of(hud) == "br" or br_ends else None
         if boards:
             m["ownKills"], m["killsSource"] = max(r["ownKills"] for r in boards), "scoreboard"
+        elif hud_kills is not None:
+            m["ownKills"], m["killsSource"] = hud_kills, "hud counter"
         elif kill_src:
             m["ownKills"] = sum(1 for t in kill_times if start <= t < play_end)
             m["killsSource"] = kill_src
@@ -556,9 +700,10 @@ def segment(hits, stats, duration, cfg):
         after = float(cfg.get("headerAfterSec") or 0)
         header = [h for h in hits if c and h.get("detector") == "C2" and h.get("signal") is True
                   and c["t0"] <= float(h["t"]) <= c["t1"] + after]
-        gm = game_mode(tops, in_match, m["rounds"], m["endBanner"], cfg, header)
+        gm = game_mode(tops, in_match, m["rounds"], m["endBanner"], cfg, header, br_ends)
         m["gameMode"], m["modeConfidence"], m["modeEvidence"], m["modeReason"] = gm
-        m["mode"] = m["gameMode"] or _mode_of(hud + (c["hudModes"] if c else Counter()))
+        m["family"] = "br" if br_ends else _mode_of(hud + (c["hudModes"] if c else Counter()))
+        m["mode"] = m["gameMode"] or m["family"]
         out.append(m)
     return out
 
@@ -574,7 +719,38 @@ def _cue_modes(cfg):
     return out
 
 
-def game_mode(tops, hits, rounds, end_banner, cfg, header=()):
+def _apply_br_end(m, br_ends):
+    """D441: a BR match end read from the end screen (S2 br_end readings of this match's end screens): placement
+    (ownRank of the most common #N/M; teams = M, the number of teams in the lobby, never turned into duo/squad),
+    map, result. Rank 1 is a win (VICTORY, confirmed); any other place is no result word (the BR screens show none);
+    W1 words read on BR screens are dropped (misreads)."""
+    pairs = Counter((r["ownRank"], r["teams"]) for r in br_ends if r.get("ownRank"))
+    if not pairs:
+        return
+    (rank, teams), _ = pairs.most_common(1)[0]
+    m["ownRank"], m["teams"], m["top3Seen"] = rank, teams, True
+    m["placementSource"] = "br end screen"
+    maps = Counter(r["map"] for r in br_ends if r.get("map"))
+    m["map"] = maps.most_common(1)[0][0] if maps else None
+    at = [float(r["t"]) for r in br_ends if r.get("ownRank") == rank]
+    if rank == 1:
+        m["result"], m["resultConfirmed"] = "VICTORY", True
+        m["resultAt"], m["resultEnd"] = round(min(at), 3), round(max(at), 3)
+    else:
+        m["result"], m["resultConfirmed"], m["resultAt"], m["resultEnd"] = None, False, None, None
+
+
+def br_hud_kills(readings, start, end, min_frames=2):
+    """D441: own kills of a BR match from the top-HUD kill counter (H1 br_hud readings in [start, end)): the largest
+    value read on at least min_frames frames (a lone misread never counts; the counter only goes up in a match).
+    None when no value repeats."""
+    seen = Counter(r["ownKills"] for r in readings if r.get("kind") == "br_hud" and isinstance(r.get("ownKills"), int)
+                   and start <= float(r.get("t", -1)) < end)
+    good = [k for k, n in seen.items() if n >= min_frames]
+    return max(good) if good else None
+
+
+def game_mode(tops, hits, rounds, end_banner, cfg, header=(), br_ends=()):
     """Game mode of one match from on-screen evidence -> (mode | None, confidence | None, evidence, reason).
     Evidence items {source, at, text, modes}: the mode name on the top-3 screen (S1 mode_label), the mode name in
     the summary-screen header (C2 hits given in `header`: segment() passes those of this match's end only), mode
@@ -589,6 +765,10 @@ def game_mode(tops, hits, rounds, end_banner, cfg, header=()):
     for r in tops:
         if r.get("gameMode"):
             ev.append({"source": "top-3 screen", "at": round(float(r["t"]), 2), "text": r["gameMode"],
+                       "modes": [r["gameMode"]]})
+    for r in br_ends:
+        if r.get("gameMode"):
+            ev.append({"source": "br end screen", "at": round(float(r["t"]), 2), "text": r["gameMode"],
                        "modes": [r["gameMode"]]})
     for h in header:
         if h.get("detector") == "C2" and h.get("signal") is True and h.get("label") in hcues:
@@ -620,7 +800,7 @@ def game_mode(tops, hits, rounds, end_banner, cfg, header=()):
         why = "evidence disagrees" if not allowed else "evidence fits more than one mode"
         return None, None, uniq, f"{why} ({', '.join(named)})"
     mode = allowed.pop()
-    named = any(e["source"] in ("top-3 screen", "summary header") for e in uniq)
+    named = any(e["source"] in ("top-3 screen", "summary header", "br end screen") for e in uniq)
     conf = "high" if named else "medium" if len(uniq) >= 2 else "low"
     return mode, conf, uniq, f"{len(uniq)} evidence item(s) agree"
 

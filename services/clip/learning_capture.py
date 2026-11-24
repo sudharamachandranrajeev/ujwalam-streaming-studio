@@ -77,9 +77,13 @@ def banner_kinds(pack):
     return [k["kind"] for k in (w1.get("banner") or {}).get("kinds") or [] if isinstance(k.get("kind"), str)]
 
 
-def mode_choices(cfg):
+def mode_choices(cfg, family=None):
     """Game modes the pack names (match_gate.stats_config: S1 modeNames, C1 cues, C2 header cues, banner subtitles),
-    lower case, sorted. The review offers only these."""
+    lower case, sorted. The review offers only these. family (D441, e.g. "br"): only the modes of that game family
+    (stats_config modeChoicesByFamily); a family the pack names no modes for -> []."""
+    by = cfg.get("modeChoicesByFamily")
+    if family and isinstance(by, dict):
+        return list(by.get(family) or [])
     out = set()
     for n in cfg.get("modeNames") or []:
         out.add((n if isinstance(n, str) else n.get("mode") or "").lower())
@@ -336,8 +340,7 @@ def queue_unknown_modes(data_dir, session, matches, cfg, frame_of=None, log=None
     log = log or (lambda *_: None)
     n = 0
     try:
-        choices = mode_choices(cfg)
-        if not choices:
+        if not mode_choices(cfg):
             return 0
         w = SessionWriter(data_dir, session)
         have = w.item_ids()
@@ -346,7 +349,12 @@ def queue_unknown_modes(data_dir, session, matches, cfg, frame_of=None, log=None
             if not m.get("endSeen") or m.get("gameMode"):
                 continue
             # D435: a match of another family (BR, DMZ) has none of these modes; asking would offer only wrong answers.
-            if m.get("mode") and fams and m.get("mode") not in fams:
+            # D441: a match of a known family is offered that family's modes only (a BR match gets BR modes).
+            fam = m.get("family") or m.get("mode")
+            if fam and fams and fam not in fams:
+                continue
+            choices = mode_choices(cfg, fam) if fam else mode_choices(cfg)
+            if not choices:
                 continue
             item_id = f"mode-{i:03d}"
             if item_id in have:
@@ -358,8 +366,8 @@ def queue_unknown_modes(data_dir, session, matches, cfg, frame_of=None, log=None
                 except Exception:  # noqa: BLE001
                     jpeg = None
             w.add_item({"v": 1, "id": item_id, "at": now_iso(), "t": m.get("endScreenAt"), "kind": "unknown-mode",
-                        "detector": None, "label": None, "mode": m.get("mode"), "ocrScore": None, "threshold": None,
-                        "value": None, "choices": choices, "modeFamilies": fams, "match": i, "matchStartUtc": m.get("startUtc"),
+                        "detector": None, "label": None, "mode": fam, "ocrScore": None, "threshold": None,
+                        "value": None, "choices": choices, "modeFamilies": [fam] if fam else fams, "match": i, "matchStartUtc": m.get("startUtc"),
                         "matchEndUtc": m.get("endUtc"), "modeReason": m.get("modeReason"),
                         "modeEvidence": [{"source": e.get("source"), "text": e.get("text")}
                                          for e in m.get("modeEvidence") or []][:8],
