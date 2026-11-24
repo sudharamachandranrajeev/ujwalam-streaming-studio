@@ -101,3 +101,28 @@ Test runs (TEMP/TMP under the scratch folder, focused only, no full CI):
 - A dependent set of 35 files (every test that imports record-clips, tasks, recording-cleanup or launch, plus `studio-qml-task-window`): 522 tests, 4 failures. All 4 were tests that read task files by the old id. They were fixed and re-run; both affected files then passed (44/44 above).
 - Python (`-I`, discover): `test_task_resume` 7 OK, `test_long*` 83 OK, `test_clip_pipeline*` 37 OK, `test_clip_e2e*` 7 OK, `test_clip_detector_pass` 37 OK, `test_g1_detector_pass` 1 OK, `test_clip_frame_reader` 40 OK.
 - `node tools/lint.mjs`: 0 findings. The commit hook's quick CI passed 9/9.
+### Codex review, round 2 (fix diff 54830dad..0fa5944b, 17 items)
+
+All 17 items were fixed. None was judged "not a defect". Tests are in `tests/task-manager-jobs.test.mjs` ("Codex round 2 #N") and `tests/py/test_task_resume.py` (`RoundTwo`).
+
+| Item | Finding | Fix | Test |
+|---|---|---|---|
+| R2-1 | An idle sample could authorise a spawn after a stream had started. | Main-session decision: no host reservation. Right before each spawn, `record-clips` asks the host for a fresh `outputs.status` (option `freshStatus`; `launch.mjs` uses the tick's own call). The job starts only if the answer comes back within 1 s, says no stream is on, and, for work that waits for idle outputs, says no recording is on. An error, an unknown state or a slow answer: no start. Residual: the spawn itself; the next tick's `pausedForLive` kill (whole tree) stays the backstop. | #1 |
+| R2-2 | A recording that was stopping counted as idle for continuations. | The long video, BeatDrop and every continuation wait while `outputsOnAir` (the existing fail-closed rule) is true. A stopping, starting, reconnecting or unknown sink counts as busy. | #2 |
+| R2-3 | A restart dropped controls the last launcher never read. | A request older than this launcher is applied to a carried-over job (same job id) before any start. For a job of this session it is still a leftover. | #3 |
+| R2-4 | A failed status commit left control changes active in memory. | Control changes are staged: if the `status.json` write fails, they are undone. A failed write also blocks `start()` until a write succeeds. Stopped tasks are finished and the child is signalled only after the commit. | #4 |
+| R2-5 | An older control could replay after a newer one was applied. | Request files get a random part in their name, which makes a unique key. Each job keeps the keys it applied (`applied`, last 32, in `status.json`); a request read again is skipped. | #5 |
+| R2-6 | The live-interruption exit bypassed dispatch. | That exit now runs `dispatch()` (Stop all, then the controls). The gates decide what may start. | #6 |
+| R2-7 | Safe-point and progress stages reached the log tail after a syntax check only. | Stages map from a fixed set of known values to fixed text (`LOG_STAGE_TEXT`); anything else is dropped. The step is not shown. | "log tail (Codex review 6)" |
+| R2-8 | Task-file reads accepted any log-tail string. | Task files keep versioned structured events (`logEvents`, `v: 1`, validated on read). `logTail` (at most 8 strings) is built from them on every read. A string tail from an older file is dropped. | "cleanTask" |
+| R2-9 | Migration left the old controllable task row beside the new one. | When an older job gets its id, its old name-only task row is removed, so the route answers 404 for that id. Controls are checked against the current job ids. | #9 |
+| R2-10 | The caption key held only the model and tool paths. | `_caption_assets`: the given or default speech model folder, the tool and a GPU model's fallback, each as file names, sizes and mtimes. Large files are not hashed. | `test_caption_key_follows_the_model_files` |
+| R2-11 | Relative overlay files were resolved against the wrong folder, and fonts were not in the key. | Overlay paths are resolved against the batch folder. The ASS and every font file are keyed by content. | `test_recording_mtime_and_overlay_files_from_the_batch_folder` |
+| R2-12 | The recording fingerprint missed edits in the middle of the file. | Main-session decision: size + first/last MB digest + mtime in ns; no full-file hash. Residual: an edit inside the middle that keeps the size, both end MBs and the mtime is not seen. | same test |
+| R2-13 | A failed overlay preparation was not marked degraded. | The overlay builder marks a batch as degraded when its info has a failure reason or status. Such a batch gets no manifest and is no safe point. | `test_degraded_overlay_gets_no_manifest` |
+| R2-14 | An empty file list still produced a completion marker. | With no expected output there is no marker, and so no safe point. | `test_no_marker_without_expected_outputs_and_sidecars_are_bound` |
+| R2-15 | The review marker did not cover subtitle sidecars. | The marker binds `transcript.json`, `captions.srt` and `captions.vtt` (their size and mtime, or their absence). | same test |
+| R2-16 | The review key held the mutable look history. | The review key leaves out the look history. Reuse is keyed on the stable inputs; the kept row carries the look it was made with. | `test_review_key_ignores_look_history` |
+| R2-17 | The review key held the style folder, not the effective style. | The review key holds the style this clip gets (the same seeded pick), its effective tuning and its files (names, sizes, mtimes). | covered by the key path; no separate test (UNVERIFIED) |
+
+Changed test: the D406 long-video test in `record-clips.test.mjs`. The long job's live-interruption exit now runs dispatch, so the next clip job (allowed beside a plain recording) starts first. The test finishes that job before it expects the long job again.

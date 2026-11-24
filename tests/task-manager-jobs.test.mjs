@@ -34,22 +34,26 @@ test('D442 categories: the seven named ones; a writer may name it, else it follo
 
 test('D442 cleanTask: controls filtered, pause reason only when not pausable, nextStart checked, parts and log tail bounded', () => {
   const t = cleanTask({ id: 'clip-a', title: 'x', state: 'running', kind: 'clips', controls: ['stop', 'pause', 'delete', 'next'], pausable: true, pauseReason: 'ignored',
-    paused: 'yes', nextStart: 'later', parts: Array.from({ length: 9 }, (_, i) => `p${i}`.repeat(30)), logTail: Array.from({ length: 30 }, (_, i) => `line ${i}`) });
+    paused: 'yes', nextStart: 'later', parts: Array.from({ length: 9 }, (_, i) => `p${i}`.repeat(30)), logTail: ['C:\\x\\raw line', 'token=abc'],
+    logEvents: [...Array.from({ length: 30 }, (_, i) => ({ v: 1, type: 'progress', stage: 'render', done: i, total: 40 })), { v: 1, type: 'progress', stage: 'a private name', done: 1 }, { type: 'end', code: 'done' }, 'raw'] });
   assert.deepEqual(t.controls, ['stop', 'pause', 'next']);
   assert.equal(t.category, 'clips');
   assert.deepEqual([t.pausable, t.pauseReason, t.paused, t.pausing, t.nextStart, t.question], [true, null, false, false, null, null]);
   assert.equal(t.parts.length, 6); assert.ok(t.parts.every((p) => p.length <= 40));
-  assert.equal(t.logTail.length, LOG_TAIL_LINES); assert.equal(t.logTail.at(-1), 'line 29', 'the newest lines are kept');
+  assert.equal(t.logTail.length, LOG_TAIL_LINES); assert.equal(t.logTail.at(-1), 'Making clip videos: 29 of 40', 'the newest events are kept');
+  assert.ok(!t.logTail.some((l) => /raw|token|private/.test(l)), 'Codex round 2: a string tail (older files) and unknown or unversioned events are dropped');
+  assert.equal(cleanTask({ id: 'x', title: 'x', state: 'done', logTail: ['C:\\x\\a.mkv'] }).logTail.length, 0);
   const n = cleanTask({ id: 'b', title: 'x', state: 'waiting', pausable: false, pauseReason: 'r'.repeat(300), nextStart: 'ask', question: 'Run it?' });
   assert.deepEqual([n.pausable, n.pauseReason.length, n.nextStart, n.question, n.controls], [false, 120, 'ask', 'Run it?', []]);
   assert.equal(DEFAULT_NEXT_START, 'notify', 'user 2026-11-24');
 });
 
 test('D442 log tail (Codex review 6): an allowlist of typed events with fixed text; anything else is not shown', () => {
-  assert.equal(logEventText({ type: 'progress', stage: 'render', done: 2, total: 5 }), 'render: 2 of 5');
-  assert.equal(logEventText({ type: 'progress', stage: 'long', done: 3, total: null, step: 'part' }), 'long (part): 3');
+  assert.equal(logEventText({ type: 'progress', stage: 'render', done: 2, total: 5 }), 'Making clip videos: 2 of 5');
+  assert.equal(logEventText({ type: 'progress', stage: 'long', done: 3, total: null, step: 'part' }), 'Making the long video: 3', 'fixed text; the step is not shown');
+  assert.equal(logEventText({ type: 'safepoint', stage: 'abc123token', done: 1 }), null, 'Codex round 2: a stage word that is not a known stage');
   assert.equal(logEventText({ type: 'progress', stage: 'chat from Someone', done: 1 }), null, 'a stage is a plain word only');
-  assert.equal(logEventText({ type: 'safepoint', stage: 'render', done: 1 }), 'Safe point: render 1');
+  assert.equal(logEventText({ type: 'safepoint', stage: 'render', done: 1 }), 'Safe point: Making clip videos 1');
   assert.equal(logEventText({ type: 'part', name: 'Video tools (ffmpeg)' }), 'Running: Video tools (ffmpeg)');
   assert.equal(logEventText({ type: 'part', name: 'D:\\Tools\\a.exe' }), null, 'part names come from the job\'s own list');
   assert.equal(logEventText({ type: 'end', code: 'failed' }), END_TEXT.failed);
@@ -58,7 +62,8 @@ test('D442 log tail (Codex review 6): an allowlist of typed events with fixed te
   const tail = [];
   for (let i = 0; i < 12; i++) pushLogEvent(tail, { type: 'progress', stage: 'render', done: i, total: 20 });
   pushLogEvent(tail, { type: 'progress', stage: 'render', done: 11, total: 20 });
-  assert.equal(tail.length, LOG_TAIL_LINES); assert.equal(tail.at(-1), 'render: 11 of 20', 'the newest kept; a repeat skipped');
+  assert.equal(tail.length, LOG_TAIL_LINES); assert.equal(logEventText(tail.at(-1)), 'Making clip videos: 11 of 20', 'the newest kept; a repeat skipped');
+  assert.deepEqual(tail.at(-1), { v: 1, type: 'progress', stage: 'render', done: 11, total: 20 }, 'kept as a versioned event');
 });
 
 test('D442 control files: atomic, one per request, applied in the order asked, bad ones removed, ids checked', () => {
@@ -296,7 +301,7 @@ test('D442 running task: category, parts, current step and a log tail of typed e
     err.write('opening D:\\Clips\\game-h-1.mkv\nchat line from a viewer\ntoken=abc123 ok\nujwalam-progress {"stage":"render","done":2,"total":5,"note":"C:\\\\x"}\n'); await tick();
     const t = s.task('clip-game-h-1');
     assert.deepEqual([t.category, t.state, t.stageText, t.parts], ['clips', 'running', 'Making clip videos', ['Clip maker (Python)', 'Video tools (ffmpeg)']]);
-    assert.deepEqual(t.logTail, ['render: 2 of 5', 'Running: Clip maker (Python)', 'Running: Video tools (ffmpeg)'], 'Codex review 6: no raw stderr');
+    assert.deepEqual(t.logTail, ['Making clip videos: 2 of 5', 'Running: Clip maker (Python)', 'Running: Video tools (ffmpeg)'], 'Codex review 6: no raw stderr');
     assert.match(readFileSync(path.join(s.dataDir, 'clips', 'run-game-h-1.log'), 'utf8'), /chat line from a viewer/, 'raw lines stay in the local log only');
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
@@ -417,6 +422,123 @@ test('Codex review 10: two jobs with the same name have their own task ids; an o
     rc.stop();
     const rc2 = s.make(); rc2.feed(s.S('stopped'));
     assert.deepEqual(s.status().queued.map((q) => q.jobId), ids.filter((_, i) => i !== 1), 'ids are kept across restarts');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+// ---- Codex review round 2 ----
+test('Codex round 2 #1: a fresh outputs status right before each spawn; on, slow, unknown or an error: no start', async () => {
+  for (const [what, fresh, starts] of [
+    ['idle', async () => RC_IDLE, true],
+    ['a stream started', async () => ({ sinks: [{ id: 'yt', kind: 'stream', state: 'starting' }] }), false],
+    ['no sinks', async () => ({}), false],
+    ['an error', async () => { throw new Error('host gone'); }, false],
+  ]) {
+    const s = setup();
+    try {
+      let slow = false;
+      const rc = s.make({ freshStatus: async () => { if (slow) s.advance(1500); return fresh(); } });
+      s.record(rc, s.files(1)); await tick(); await tick();
+      assert.equal(s.spawned.length, starts ? 1 : 0, what);
+      if (what === 'idle') {
+        s.record(rc, s.files(2)); s.spawned[0].c.emit('exit', 0); slow = true;
+        rc.feed(s.S('stopped')); await tick(); await tick();
+        assert.equal(s.spawned.length, 1, 'an answer that took a second or more: no start');
+      }
+    } finally { rmSync(s.d, { recursive: true, force: true }); }
+  }
+});
+const RC_IDLE = { sinks: [{ id: 'r-h', kind: 'record', state: 'stopped' }, { id: 'yt', kind: 'stream', state: 'stopped' }] };
+
+test('Codex round 2 #2: a continuation waits while the recording is stopping or its state is not known', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1));
+    const h9 = s.files(9);
+    rc.feed(s.S('live', { h: h9, stream: 'live' })); await tick(); await tick(); // the stream ends the job
+    const ran1 = () => s.spawned.slice(1).filter((x) => /game-h-1\b/.test(x.argv.join(' '))).length;
+    rc.feed(s.S('stopping', { h: h9 }));
+    assert.equal(ran1(), 0, 'stopping counts as busy');
+    rc.feed(s.S('flushing', { h: h9 }));
+    assert.equal(ran1(), 0, 'an unknown state counts as busy');
+    for (const x of s.spawned.slice(1)) x.c.emit('exit', 0); // a clip job of the h9 recording, if one started
+    rc.feed(s.S('stopped', { h: h9 }));
+    assert.equal(ran1(), 1, 'known to be off: it continues');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 2 #3: a control the last launcher never read is applied to its carried-over job before any start', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    s.ctl('clip-game-h-2', 'next', { nextStart: 'run' }); rc.feed(s.S('stopped'));
+    s.ctl('clip-game-h-2', 'stop'); // accepted by the route; the app closes before the next poll
+    rc.stop(); s.advance(10_000);
+    const rc2 = s.make(); rc2.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1, 'the stopped job did not run again');
+    assert.equal(s.task('clip-game-h-2').note, 'Stopped by you');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 2 #4: a status that cannot be saved undoes the controls; nothing starts or is signalled until it is', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    s.ctl('clip-game-h-2', 'pause'); rc.feed(s.S('stopped'));
+    s.spawned[0].c.emit('exit', 0); rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1);
+    const tmpPath = path.join(s.dataDir, 'clips', 'status.json.tmp');
+    mkdirSync(tmpPath); // the status write fails while this folder is there
+    s.ctl('clip-game-h-2', 'resume'); rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1, 'not saved: the resume is not in force');
+    assert.equal(s.status().queued[0].paused, true);
+    assert.equal(readdirSync(controlDir(s.dataDir)).length, 1, 'the request waits');
+    rmSync(tmpPath, { recursive: true });
+    rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 2, 'saved: it runs');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 2 #5: a request read again after a later one was applied is skipped (its key is kept with the job)', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    s.ctl('clip-game-h-2', 'pause');
+    const [pf] = readdirSync(controlDir(s.dataDir)); const pbody = readFileSync(path.join(controlDir(s.dataDir), pf), 'utf8');
+    rc.feed(s.S('stopped'));
+    s.advance(10); s.ctl('clip-game-h-2', 'resume'); rc.feed(s.S('stopped'));
+    writeFileSync(path.join(controlDir(s.dataDir), pf), pbody); // its delete had failed: the old pause is read again
+    rc.feed(s.S('stopped'));
+    assert.equal(s.task('clip-game-h-2').paused, false, 'the later resume stands');
+    assert.ok(s.status().queued[0].applied.length >= 2);
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 2 #6: the exit of a job the stream ended applies the waiting controls', async () => {
+  const s = setup();
+  try {
+    const rc = s.make();
+    s.record(rc, s.files(1)); s.record(rc, s.files(2));
+    rc.feed(s.S('stopped', { stream: 'live' })); // the stream starts: job 1 is ended (its exit comes later)
+    s.ctl('clip-game-h-2', 'stop');
+    await tick(); await tick();
+    assert.equal(s.task('clip-game-h-2').note, 'Stopped by you', 'applied at the exit, before any further status tick');
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});
+
+test('Codex round 2 #9: an older status: the old task row is retired when the job gets its id', async () => {
+  const s = setup();
+  try {
+    const h = s.files(1);
+    mkdirSync(path.join(s.dataDir, 'clips'), { recursive: true });
+    writeFileSync(path.join(s.dataDir, 'clips', 'status.json'), JSON.stringify({ queued: [{ type: 'full', kind: 'live', h, name: 'game-h-1' }] }));
+    writeTaskFile(s.dataDir, { id: 'clip-game-h-1', title: 'Clips from game-h-1', kind: 'clips', state: 'waiting', controls: ['stop'], startedAt: 1, updatedAt: 1 });
+    const rc = s.make(); rc.feed(s.S('stopped'));
+    assert.ok(!existsSync(path.join(s.dataDir, 'tasks', 'clip-game-h-1.json')), 'the old row is gone (the route answers 404 for it)');
+    assert.equal(s.ids('clip-game-h-1').length, 1);
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
 

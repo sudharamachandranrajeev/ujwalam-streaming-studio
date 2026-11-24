@@ -785,6 +785,10 @@ test('D406: the long video is its own job after the clip job; it waits while rec
     assert.equal(s.spawned.filter((x) => x.argv.includes('long')).length, 1, 'nothing starts again while recording');
     rc.feed(s.S('stopped', { h: 'C:/other/y-h.mkv' }));
     rc.feed(s.S('stopped', { h: 'C:/other/y-h.mkv' }));
+    // Codex round 2: the long job's exit runs dispatch, so the x-h clip job (allowed beside a plain recording) started
+    // then; the long job, a continuation, waits for idle outputs and its turn
+    const xh = s.spawned.find((x) => /x-h/.test(x.argv.join(' ')));
+    if (xh) { xh.c.emit('exit', 0); await tick(); rc.feed(s.S('stopped', { h: 'C:/other/y-h.mkv' })); }
     const again = s.spawned.filter((x) => x.argv.includes('long'));
     assert.equal(again.length, 2, 'it runs again once off air');
     rc.feed(s.S('stopped', { stream: 'live', h: 'C:/other/y-h.mkv' }));
@@ -822,8 +826,11 @@ test('D406: a long video alone reaches auto-post (countClips counts long/publish
     const before = runs.length; // the second clip job's run folder holds the first long video: packaged again, deduplicated there
     writeFileSync(path.join(out, 'long', 'long.json'), JSON.stringify({ status: 'failed', reason: 'the parts did not join' }));
     s.spawned.at(-1).c.emit('exit', 1); await tick();
-    const t2 = readTask(s.dataDir, 'long-practice-h-1');
-    assert.deepEqual([t2.state, t2.note], ['failed', 'Not made: the parts did not join']);
+    // two long jobs of one name: two tasks (Codex review 10); the second one's says why it was not made
+    const dir2 = path.join(s.dataDir, 'tasks');
+    const longs2 = readdirSync(dir2).filter((x) => /^long-practice-h-1-[0-9a-f]{8}\.json$/.test(x)).map((x) => JSON.parse(readFileSync(path.join(dir2, x), 'utf8')));
+    assert.equal(longs2.length, 2);
+    assert.ok(longs2.some((t2) => t2.state === 'failed' && t2.note === 'Not made: the parts did not join'));
     assert.equal(runs.length, before, 'a failed long video posts nothing');
     rc.stop();
   } finally { rmSync(s.d, { recursive: true, force: true }); }

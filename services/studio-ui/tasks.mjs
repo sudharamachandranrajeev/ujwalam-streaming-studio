@@ -6,6 +6,7 @@
 // atomic), and in-memory tasks of the UI server for its own long actions (createTasks().track). Finished or silent
 // tasks are dropped after PRUNE_MS. Text only: no chat text, no viewer names, no paths beyond the clips folder.
 
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,39 +34,54 @@ export const TASK_CONTROLS = Object.freeze(['stop', 'pause', 'resume', 'next']);
 export const LOG_TAIL_LINES = 8;
 const LOG_LINE_MAX = 160;
 // D442 log tail (Codex review: the deny-list leaked): an ALLOWLIST. The task shows only typed events the job emits,
-// turned into fixed text here: progress (stage, done, total, step), a safe point, the parts it runs (from its own list)
+// turned into fixed text here: progress (stage, done, total), a safe point, the parts it runs (from its own list)
 // and how it ended (known codes, fixed plain-language text). Raw tool output never leaves the launcher: it stays in
 // the job's local log file only.
-const STAGE_WORD = /^[a-z][a-z0-9-]{0,23}$/;
+// Codex round 2: a stage is shown only when it is one of the known values, as fixed text (anything else: dropped).
+export const LOG_STAGE_TEXT = Object.freeze({
+  detect: 'Reading the game screen', candidates: 'Finding the moments', gate: 'Sorting by match', render: 'Making clip videos',
+  review: 'Making clips from live saves', validate: 'Checking the clips', publish: 'Saving to your clips folder',
+  montage: 'Making the montage', long: 'Making the long video', train: 'Checking the game pack',
+});
 const PART_NAMES = Object.freeze(['Clip maker (Python)', 'Screen reader (OCR)', 'Video tools (ffmpeg)']);
 export const END_TEXT = Object.freeze({
   done: 'Finished', failed: 'Stopped with an error; the full log is on this computer', stopped: 'Stopped by you',
   paused: 'Paused by you', 'paused-live': 'Paused while the stream runs', 'paused-rec': 'Paused while recording',
 });
-const n = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
-/** The fixed text of one allowed event, or null (not shown). */
-export function logEventText(ev) {
-  if (!ev || typeof ev !== 'object') return null;
-  if (ev.type === 'progress' && STAGE_WORD.test(ev.stage ?? '')) {
-    const d = n(ev.done); const t = n(ev.total);
-    const step = STAGE_WORD.test(ev.step ?? '') ? ` (${ev.step})` : '';
-    return `${ev.stage}${step}${d === null ? '' : `: ${d}${t ? ` of ${t}` : ''}`}`;
+export const LOG_EVENT_VERSION = 1;
+const n = (v) => (Number.isSafeInteger(v) && v >= 0 && v <= 1e6 ? v : null);
+const stageText = (s) => (typeof s === 'string' && Object.hasOwn(LOG_STAGE_TEXT, s) ? LOG_STAGE_TEXT[s] : null);
+/** A clean, versioned log event { v, type, ... } with known values only, or null. */
+export function cleanLogEvent(ev) {
+  if (!ev || typeof ev !== 'object' || ev.v !== LOG_EVENT_VERSION) return null;
+  if ((ev.type === 'progress' || ev.type === 'safepoint') && stageText(ev.stage)) {
+    return { v: LOG_EVENT_VERSION, type: ev.type, stage: ev.stage, done: n(ev.done), ...(ev.type === 'progress' ? { total: n(ev.total) || null } : {}) };
   }
-  if (ev.type === 'safepoint' && STAGE_WORD.test(ev.stage ?? '')) return `Safe point: ${ev.stage} ${n(ev.done) ?? ''}`.trim();
-  if (ev.type === 'part' && PART_NAMES.includes(ev.name)) return `Running: ${ev.name}`;
-  if (ev.type === 'end' && Object.hasOwn(END_TEXT, ev.code)) return END_TEXT[ev.code];
+  if (ev.type === 'part' && PART_NAMES.includes(ev.name)) return { v: LOG_EVENT_VERSION, type: 'part', name: ev.name };
+  if (ev.type === 'end' && typeof ev.code === 'string' && Object.hasOwn(END_TEXT, ev.code)) return { v: LOG_EVENT_VERSION, type: 'end', code: ev.code };
   return null;
 }
-/** Adds an allowed event to a tail (array of at most LOG_TAIL_LINES strings); a repeat of the last line is skipped. */
-export function pushLogEvent(tail, ev) {
-  const s = logEventText(ev);
-  if (!s || tail.at(-1) === s) return tail;
-  tail.push(s);
-  while (tail.length > LOG_TAIL_LINES) tail.shift();
-  return tail;
+/** The fixed text of one allowed event, or null (not shown). */
+export function logEventText(ev) {
+  const e = cleanLogEvent(ev && typeof ev === 'object' ? { v: LOG_EVENT_VERSION, ...ev } : ev);
+  if (!e) return null;
+  if (e.type === 'progress') return `${stageText(e.stage)}${e.done === null ? '' : `: ${e.done}${e.total ? ` of ${e.total}` : ''}`}`;
+  if (e.type === 'safepoint') return `Safe point: ${stageText(e.stage)}${e.done === null ? '' : ` ${e.done}`}`;
+  if (e.type === 'part') return `Running: ${e.name}`;
+  return END_TEXT[e.code];
 }
-const cleanTail = (lines) => (Array.isArray(lines)
-  ? lines.filter((l) => typeof l === 'string').map((l) => cut(l.replace(/[\u0000-\u001f\u007f]/g, ' '), LOG_LINE_MAX)).filter(Boolean).slice(-LOG_TAIL_LINES) : []);
+/** Adds an allowed event to a job's event list (at most LOG_TAIL_LINES); a repeat of the last one's text is skipped. */
+export function pushLogEvent(events, ev) {
+  const e = cleanLogEvent({ ...ev, v: LOG_EVENT_VERSION });
+  if (!e) return events;
+  if (events.length && logEventText(events.at(-1)) === logEventText(e)) return events;
+  events.push(e);
+  while (events.length > LOG_TAIL_LINES) events.shift();
+  return events;
+}
+// Task files keep the structured events (logEvents); the text tail (logTail) is made from them on every read. A plain
+// string tail (older files) is dropped, never shown.
+const cleanEvents = (evs) => (Array.isArray(evs) ? evs.map(cleanLogEvent).filter(Boolean).slice(-LOG_TAIL_LINES) : []);
 /** A clean task from untrusted input (a file or a caller), or null. */
 export function cleanTask(t, id = t?.id) {
   if (!t || typeof t !== 'object' || typeof id !== 'string' || !ID.test(id)) return null;
@@ -99,7 +115,8 @@ function controlFields(t) {
     nextStart: NEXT_START.includes(t.nextStart) ? t.nextStart : null,
     question: cut(t.question, 160),
     parts: Array.isArray(t.parts) ? t.parts.slice(0, 6).map((p) => cut(p, 40)).filter(Boolean) : [],
-    logTail: cleanTail(t.logTail),
+    logEvents: cleanEvents(t.logEvents),
+    logTail: cleanEvents(t.logEvents).map(logEventText),
   };
 }
 
@@ -138,7 +155,8 @@ export function writeTaskControl(dataDir, id, req) {
   if (typeof id !== 'string' || !ID.test(id) || !c) return false;
   const dir = controlDir(dataDir);
   mkdirSync(dir, { recursive: true });
-  const f = path.join(dir, `${id}~${c.atMs}-${String(controlSeq++).padStart(6, '0')}.json`);
+  // Codex round 2: a random part makes each request's key unique (a UI server restart starts its seq again)
+  const f = path.join(dir, `${id}~${c.atMs}-${String(controlSeq++).padStart(6, '0')}-${randomBytes(3).toString('hex')}.json`);
   writeFileSync(`${f}.tmp`, JSON.stringify(c));
   renameSync(`${f}.tmp`, f);
   return true;
@@ -154,24 +172,24 @@ export function peekTaskControls(dataDir) {
   const out = [];
   for (const nm of names) {
     if (!nm.endsWith('.json')) continue;
-    const m = /^([A-Za-z0-9._-]{1,80})~(\d{1,16})-(\d{1,9})\.json$/.exec(nm);
+    const m = /^([A-Za-z0-9._-]{1,80})~(\d{1,16})-(\d{1,9})(?:-[0-9a-f]{6})?\.json$/.exec(nm);
     const f = path.join(dir, nm);
     let c = null;
     try { c = cleanControl(JSON.parse(readFileSync(f, 'utf8'))); } catch { c = null; }
-    if (c && m) out.push({ id: m[1], ...c, seq: Number(m[3]), file: f });
+    if (c && m) out.push({ id: m[1], ...c, seq: Number(m[3]), key: nm.slice(0, -5).slice(m[1].length + 1), file: f });
     else try { rmSync(f, { force: true }); } catch { /* next tick */ }
   }
   return out.sort((a, b) => a.atMs - b.atMs || a.seq - b.seq).map(({ seq: _s, ...r }) => r);
 }
 /** Removes applied requests (their files). */
 export function ackTaskControls(reqs) {
-  for (const r of reqs) try { rmSync(r.file, { force: true }); } catch { /* read again next tick; applying it twice is harmless */ }
+  for (const r of reqs) try { rmSync(r.file, { force: true }); } catch { /* read again next tick; the reader skips a request it applied (its key) */ }
 }
 /** Reads and removes the waiting requests at once (no state to commit in between). */
 export function takeTaskControls(dataDir) {
   const reqs = peekTaskControls(dataDir);
   ackTaskControls(reqs);
-  return reqs.map(({ file: _f, ...r }) => r);
+  return reqs.map(({ file: _f, key: _k, ...r }) => r);
 }
 
 export function removeTaskFile(dataDir, id) {
