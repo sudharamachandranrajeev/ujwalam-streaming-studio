@@ -4,7 +4,7 @@
 // 1 and 2, 2026-11-18).
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decide, hostExited, liveSinks, logForStart, stampSec } from '../tools/live-check.mjs';
+import { decide, hostExited, liveSinks, logForStart } from '../tools/live-check.mjs';
 
 const LIVE = '2026-11-18T19:20:00Z info: [host] sink yt-h live\n2026-11-18T19:20:01Z info: [host] sink rec-h live\n';
 const never = () => { throw new Error('no log is read when no installed host runs'); };
@@ -36,11 +36,11 @@ test('each host reads the log named after its own start', () => {
 });
 
 test('the log name is UTC: a host started in summer time still finds its log (Astra review)', () => {
-  // The process start comes from a local CreationDate stamp; the log name from hlog::utc_now.
+  // The process start is epoch seconds (Process.StartTime); the log name is hlog::utc_now.
   const start = Date.UTC(2026, 6, 18, 19, 15, 3) / 1000;
   assert.equal(logForStart(['host-2026-07-18T19-15-04.log'], start), 'host-2026-07-18T19-15-04.log');
-  const local = new Date(start * 1000);
-  const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())}T${pad(local.getHours())}-${pad(local.getMinutes())}-${pad(local.getSeconds())}`;
-  assert.equal(stampSec(stamp), start, 'the local CreationDate stamp reads back as the same instant');
+  // Codex: UK 2026-10-25 01:30 local happens twice (00:30 and 01:30 UTC); each host binds its own log.
+  const names = ['host-2026-10-25T00-30-00.log', 'host-2026-10-25T01-30-00.log'];
+  assert.equal(logForStart(names, Date.UTC(2026, 9, 25, 1, 30, 1) / 1000), names[1]);
+  assert.equal(logForStart(names, Date.UTC(2026, 9, 25, 0, 30, 1) / 1000), names[0]);
 });

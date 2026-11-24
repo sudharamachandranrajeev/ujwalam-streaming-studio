@@ -31,12 +31,6 @@ export function liveSinks(text) {
 /** The host wrote its "exit" line: the process that owned this log has ended. */
 export const hostExited = (text) => /\[host\] exit\b/.test(text);
 
-/** Seconds since 1970 of a local "YYYY-MM-DDTHH-MM-SS" stamp, or null. */
-export function stampSec(s) {
-  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)$/.exec(s);
-  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000 : null;
-}
-
 /** Seconds since 1970 of a UTC "YYYY-MM-DDTHH-MM-SS" stamp (the host's log names, hlog::utc_now), or null. */
 export function utcStampSec(s) {
   const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)$/.exec(s);
@@ -70,12 +64,13 @@ export function decide(hosts, readLog) {
     : { code: 0, line: 'live-check: off air (studio open, nothing live)' };
 }
 
-/** Start times (s) of running installed hosts, by path, never by name alone; null when any ujwalam-host.exe cannot
- *  be resolved or the process list fails. */
+/** Start times (s since 1970, UTC) of running installed hosts, by path, never by name alone; null when any
+ *  ujwalam-host.exe cannot be resolved or the process list fails. Codex: the start comes as epoch seconds from
+ *  Process.StartTime (a FILETIME), never as a local clock stamp, which repeats an hour each autumn. */
 export function installedHosts(base = process.env.LOCALAPPDATA) {
   if (process.platform !== 'win32' || !base) return null;
   const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    "Get-CimInstance Win32_Process -Filter \"Name='ujwalam-host.exe'\" | ForEach-Object { '{0}|{1}' -f $_.ExecutablePath, $(if ($_.CreationDate) { $_.CreationDate.ToString('yyyy-MM-ddTHH-mm-ss') } else { '' }) }"],
+    "Get-CimInstance Win32_Process -Filter \"Name='ujwalam-host.exe'\" | ForEach-Object { $t = try { [DateTimeOffset]::new([Diagnostics.Process]::GetProcessById($_.ProcessId).StartTime.ToUniversalTime()).ToUnixTimeSeconds() } catch { '' }; '{0}|{1}' -f $_.ExecutablePath, $t }"],
   { encoding: 'utf8', windowsHide: true, timeout: 30000 });
   if (r.status !== 0 || r.error) return null;
   const root = path.join(base, 'Ujwalam').toLowerCase() + path.sep;
@@ -84,8 +79,8 @@ export function installedHosts(base = process.env.LOCALAPPDATA) {
     const [exe, stamp] = line.split('|');
     if (!exe) return null; // an ujwalam-host.exe whose path cannot be read: maybe the user's
     if (!exe.toLowerCase().startsWith(root)) continue; // a dev or test host from a repo checkout
-    const t = stampSec(stamp ?? '');
-    if (t === null) return null;
+    if (!/^\d+$/.test(stamp ?? '')) return null; // the start time cannot be read: maybe the user's host
+    const t = Number(stamp);
     out.push(t);
   }
   return out;

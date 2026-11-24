@@ -1,0 +1,40 @@
+{
+  "$comment": "Long-video theme (user request 2026-11-22). Palette, grade, cards, transition and music are the agent's proposal until the user sees a render (UNVERIFIED).",
+  "id": "nuclear-wasteland",
+  "version": "1.0.0",
+  "status": "proposed",
+  "palette": {
+    "accent": "#B8E62E",
+    "secondary": "#F2A31B",
+    "text": "#F4F7E8",
+    "shadow": "#1A1C10"
+  },
+  "cardStyles": [
+    "stamp",
+    "slam",
+    "glitch"
+  ],
+  "grade": {
+    "blueShadows": -0.08,
+    "redMidtones": 0.05,
+    "greenHighlights": 0.08
+  },
+  "padSec": 1,
+  "transition": {
+    "kind": "smoothleft",
+    "xfade": "smoothleft",
+    "ms": 300
+  },
+  "music": {
+    "mood": "wasteland-drone",
+    "bars": 8,
+    "targetLufs": -33,
+    "underGameDb": 12,
+    "duck": {
+      "threshold": 0.023,
+      "ratio": 6,
+      "attackMs": 12,
+      "releaseMs": 330
+    }
+  }
+}

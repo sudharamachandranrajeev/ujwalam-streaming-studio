@@ -51,8 +51,8 @@ class Theme(unittest.TestCase):
             hits = [{"t": t, "detector": "M5", "label": "x", "signal": True} for t in (20, 50, 80)]
             (out / detector.HITS).write_text("\n".join(map(json.dumps, hits)), encoding="utf-8")
             a = argparse.Namespace(out=str(out), recording=str(rec), data_dir=d, ranking=None, encoder="libopenh264")
-            cfg = dict(lv.load_config(), minSec=2, maxSec=60, batchPieces=2)
-            theme = long_theme.active(d, cfg)
+            cfg = dict(lv.load_config(), minSec=2, maxSec=60, batchPieces=2, theme="cyberpunk")
+            theme = long_theme.active(d, cfg, rec.name)
             matches, _ = clipper._reel_matches(a, str(out / detector.HITS), 100)
             planned = lv.plan(hits, cc.load_config("ranking"), cc.load_config("montage"), 100,
                               matches, dict(cfg, padSec=theme["padSec"]), theme["transition"])
@@ -113,6 +113,35 @@ class Theme(unittest.TestCase):
             self.assertNotEqual(start, 0)
             self.assertIn(f"atrim=start_sample={start}:", " ".join(renders[1]))
             self.assertFalse(list((out / lv.SUBDIR).glob(lv.ATTEMPT_PREFIX + "*")))
+
+
+class Looks(unittest.TestCase):
+    """The four long-video looks (user request 2026-11-22): each loads, validates and has its own song settings."""
+
+    def test_every_listed_theme_loads_with_a_valid_song(self):
+        ids = lv.load_config()["theme"]
+        self.assertEqual(ids, ["cyberpunk", "nuclear-wasteland", "hellish-underground", "romance-pink"])
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, cc.LOCAL_FLAGS).write_text(json.dumps({"flags": {long_theme.FLAG: True}}), encoding="utf-8")
+            themes = [long_theme.active(d, {"theme": i}) for i in ids]
+        self.assertEqual([t["id"] for t in themes], ids)
+        self.assertEqual(len({t["palette"]["accent"] for t in themes}), 4, "each look has its own colour")
+        for t in themes:
+            self.assertTrue(set(t["cardStyles"]) <= set(long_teaching.KO_STYLES), t["id"])
+            self.assertLess(t["transition"]["ms"], 600, "entrance rule")
+            self.assertEqual(long_theme._mood(t["music"]["mood"])["id"], t["music"]["mood"])
+        own = {f[:-5] for f in os.listdir(long_theme.THEME_MOODS_DIR)}
+        self.assertFalse(own & set(scene_music.load_moods()), "theme songs stay out of the scene-music library")
+
+    def test_one_theme_per_recording_kept_on_a_re_render(self):
+        cfg = {"theme": ["cyberpunk", "nuclear-wasteland", "hellish-underground", "romance-pink"]}
+        picks = {long_theme.pick(cfg, f"rec-{i}.mkv") for i in range(40)}
+        self.assertEqual(len(picks), 4, "every look gets used")
+        self.assertEqual(long_theme.pick(cfg, "a.mkv"), long_theme.pick(cfg, "a.mkv"))
+        self.assertEqual(long_theme.pick({"theme": "cyberpunk"}, "a.mkv"), "cyberpunk")
+        for bad in ([], ["Bad Id"], [3]):
+            with self.assertRaises(cc.ClipError):
+                long_theme.pick({"theme": bad}, "a.mkv")
 
 
 class AstraReview(unittest.TestCase):

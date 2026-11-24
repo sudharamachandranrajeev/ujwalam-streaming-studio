@@ -79,3 +79,15 @@ After the fix (same render):
   the moments. Whether batch joins should also slide is a design question for the long video and is not changed here.
 - Synthetic sound only. A real stream recording has not been rendered with the theme.
 - A Codex second-opinion review of these fixes has not been run yet.
+
+## 2026-11-24 Codex review round (a60cb41..119b9a4) and the other looks
+
+Fixed: (1) host start times are UTC end to end: Python keeps timezone-aware UTC, `tools/live-check.mjs` takes epoch seconds from
+`Process.StartTime` (no local stamp; the repeated autumn hour binds each host to its own log; tests with 00:30 and 01:30 UTC).
+(2) `long.json` is written while the run-folder lock is still held. (3) The join resamples with `async=1:min_hard_comp=0.001`
+so every track stays on the picture's timeline. (4) PCM parts are MOV (MP4 takes PCM only from FFmpeg 6.1).
+Real NVENC two-batch render after the change: Main yuv420p, two AAC tracks, 19.200 s each, -14.1 LUFS, no packet gap on track 1.
+
+Looks: `long-video.json` theme is now a list (cyberpunk, nuclear-wasteland, hellish-underground, romance-pink); one is picked per
+recording by a seeded hash (kept on a re-render). Palettes, grades, transitions, card styles and the three songs
+(`data/clip/themes/moods/`) are the agent's proposal: UNVERIFIED until the user sees and hears a render.

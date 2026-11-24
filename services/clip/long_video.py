@@ -208,16 +208,22 @@ def _render_batches(segs, n, tr, music):
         offset += seconds
 
 
-# The batch parts carry their sound as PCM; the join encodes it to AAC once. AAC parts joined by stream copy kept
-# each part's 1024-sample encoder delay: a ~21 ms near-silent gap at every batch join and the sound drifting later
-# by that much per join (measured 2026-11-23, ffmpeg n8.1.3; docs/evidence/2026-11-23-astra-review-fixes.md).
+# The batch parts carry their sound as PCM in MOV (MP4 takes PCM only from FFmpeg 6.1; Codex); the join encodes it
+# to AAC once. AAC parts joined by stream copy kept each part's 1024-sample encoder delay: a ~21 ms near-silent gap at
+# every batch join and the sound drifting later by that much per join (measured 2026-11-23, ffmpeg n8.1.3;
+# docs/evidence/2026-11-23-astra-review-fixes.md).
 PART_AUDIO = ["-c:a", "pcm_s24le", "-ar", "48000", "-ac", "2"]
+PART_CONTAINER = "mov"
+# Codex: the concat demuxer starts each part at the previous part's container duration (its longest stream). A
+# track that ends a few ms short of the picture leaves a timestamp gap there; hard compensation fills any gap over
+# 1 ms with silence so every track stays on the picture's timeline across all joins.
+JOIN_AUDIO_SYNC = ["-af", "aresample=async=1:min_hard_comp=0.001:first_pts=0"]
 
 
 def concat_argv(ffmpeg, list_name, out_name, audio):
-    """Joins the batch files: the picture copied (encoded once in its part), the PCM sound encoded once with audio."""
+    """Joins the batch files: the picture copied (encoded once in its part), each PCM track encoded once with audio."""
     return [ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list_name, "-map", "0",
-            "-c:v", "copy", *audio, "-movflags", "+faststart", "-f", "mp4", out_name]
+            "-c:v", "copy", *JOIN_AUDIO_SYNC, *audio, "-movflags", "+faststart", "-f", "mp4", out_name]
 
 
 ATTEMPT_PREFIX = "attempt-"
@@ -250,7 +256,7 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
     try:
         parts, expected, first = [], 0.0, 1
         for i, (chunk, seconds, bed) in enumerate(_render_batches(segs, batch_pieces, tr, music)):
-            name = f"part-{i:03d}.mp4"
+            name = f"part-{i:03d}.{PART_CONTAINER}"
             pieces = [{"start": g["start"], "end": g["end"], "kills": g["kills"]} for g in chunk]
             ov = (overlay(chunk, first, adir) if overlay else None) or {}
             first += len(chunk)
@@ -258,7 +264,8 @@ def render(ffmpeg, src, segs, frame, encoder, wd, audio_tracks, fade_ms, tr, bat
             def mk(enc, pieces=pieces, name=name, ov=ov, bed=bed):
                 return mont.render_argv(ffmpeg, src, pieces, frame, encoders[enc], PART_AUDIO, fade_ms, name + ".part",
                                         audio_tracks=audio_tracks, transition=tr, captions=ov.get("ass"),
-                                        fontsdir=ov.get("fontsdir"), fx=ov.get("fx"), gain_db=gain_db, music=bed, grade=grade)
+                                        fontsdir=ov.get("fontsdir"), fx=ov.get("fx"), gain_db=gain_db, music=bed, grade=grade,
+                                        container=PART_CONTAINER)
             r, encoder = render_job(mk, encoder, adir, name + ".part", f"long video part {i + 1}")
             if r.returncode != 0 and (ov.get("ass") or ov.get("fx")):
                 if overlay_failed:

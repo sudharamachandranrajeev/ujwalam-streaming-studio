@@ -1,0 +1,126 @@
+{
+  "$comment": "Long-video theme song (user request 2026-11-22: one theme per long video, music matching it). Procedural, made here by services/clip/scene_music.py; schema data/schemas/music-mood.schema.json. Tempo, keys, chords and levels are the agent's proposal until the user listens (UNVERIFIED). Kept out of data/music/moods so the scene-music library does not include it.",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-24",
+  "generator": "procedural",
+  "loudness": {
+    "targetLufs": -23,
+    "toleranceLu": 1,
+    "peakCeilingDb": -1
+  },
+  "durationSec": 180,
+  "id": "romance-glow",
+  "title": "Romance pink: warm soft keys",
+  "tempo": {
+    "minBpm": 84,
+    "maxBpm": 94
+  },
+  "keys": [
+    48,
+    50,
+    53,
+    55
+  ],
+  "chordTypes": {
+    "maj7": [
+      0,
+      4,
+      7,
+      11
+    ],
+    "maj9": [
+      0,
+      4,
+      7,
+      11,
+      14
+    ],
+    "m7": [
+      0,
+      3,
+      7,
+      10
+    ],
+    "maj": [
+      0,
+      4,
+      7
+    ]
+  },
+  "progressions": [
+    {
+      "id": "I-vi-IV-V",
+      "chords": [
+        {
+          "root": 0,
+          "type": "maj7"
+        },
+        {
+          "root": 9,
+          "type": "m7"
+        },
+        {
+          "root": 5,
+          "type": "maj9"
+        },
+        {
+          "root": 7,
+          "type": "maj"
+        }
+      ]
+    },
+    {
+      "id": "IV-V-iii-vi",
+      "chords": [
+        {
+          "root": 5,
+          "type": "maj7"
+        },
+        {
+          "root": 7,
+          "type": "maj"
+        },
+        {
+          "root": 4,
+          "type": "m7"
+        },
+        {
+          "root": 9,
+          "type": "m7"
+        }
+      ]
+    }
+  ],
+  "instruments": {
+    "keys": {
+      "level": 0.5
+    },
+    "pad": {
+      "level": 0.4
+    },
+    "bell": {
+      "level": 0.3
+    },
+    "bass": {
+      "level": 0.35
+    },
+    "kick": {
+      "level": 0.4
+    },
+    "snare": {
+      "level": 0.2
+    },
+    "hat": {
+      "level": 0.15
+    }
+  },
+  "drums": "lofi",
+  "swing": 0.58,
+  "lowpassHz": 6000,
+  "reverb": {
+    "seconds": 2,
+    "mix": 0.25
+  },
+  "why": "Romance: major seventh and ninth chords on soft keys and bells, a gentle swung beat and a warm, open low pass. Bright but calm, so it stays further under the game."
+}

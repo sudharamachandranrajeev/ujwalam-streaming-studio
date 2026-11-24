@@ -1014,15 +1014,15 @@ def _long_video(a):
         except Exception as e:  # noqa: BLE001 - any error is reported; the shorts and reels stay as they are
             eprint(f"long video: FAILED: {type(e).__name__}: {str(e)[-200:]}")
             status = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[-200:]}"}
+        rec = getattr(a, "recording", None)
+        status = dict(status, createdAt=_now(), flag=lv.FLAG, recording=os.path.basename(rec) if rec else None,
+                      **lv.recording_identity(rec))
+        try:  # Codex: still under the lock, so a later render's outcome is never overwritten by this one
+            write_json_atomic(os.path.join(out, lv.STATUS), status)
+        except (OSError, ClipError) as e:
+            eprint(f"long video: status not saved ({type(e).__name__}); the recording is kept")
     finally:
         guard.__exit__(None, None, None)
-    rec = getattr(a, "recording", None)
-    status = dict(status, createdAt=_now(), flag=lv.FLAG, recording=os.path.basename(rec) if rec else None,
-                  **lv.recording_identity(rec))
-    try:
-        write_json_atomic(os.path.join(out, lv.STATUS), status)
-    except (OSError, ClipError) as e:
-        eprint(f"long video: status not saved ({type(e).__name__}); the recording is kept")
     print(f"long video: {status['status'].upper()} ({status.get('reason')})")
     progress_line("long", 1, 1, f"long video {status['status']}")
     return status
@@ -1057,7 +1057,7 @@ def _long_video_steps(a, lv, out):
     ranking = load_config("ranking", a.ranking)
     mcfg = load_config("montage", getattr(a, "montage_config", None))
     cfg = lv.load_config()
-    theme = long_theme.active(data_dir, cfg)
+    theme = long_theme.active(data_dir, cfg, os.path.basename(rec))
     if theme:
         cfg = dict(cfg, padSec=theme["padSec"])
     matches, _ = _reel_matches(a, hits_path, info["duration"])

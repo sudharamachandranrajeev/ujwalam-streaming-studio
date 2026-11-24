@@ -1,0 +1,118 @@
+{
+  "$comment": "Long-video theme song (user request 2026-11-22: one theme per long video, music matching it). Procedural, made here by services/clip/scene_music.py; schema data/schemas/music-mood.schema.json. Tempo, keys, chords and levels are the agent's proposal until the user listens (UNVERIFIED). Kept out of data/music/moods so the scene-music library does not include it.",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-24",
+  "generator": "procedural",
+  "loudness": {
+    "targetLufs": -23,
+    "toleranceLu": 1,
+    "peakCeilingDb": -1
+  },
+  "durationSec": 180,
+  "id": "wasteland-drone",
+  "title": "Nuclear wasteland: slow industrial drone",
+  "tempo": {
+    "minBpm": 70,
+    "maxBpm": 80
+  },
+  "keys": [
+    40,
+    41,
+    43,
+    45
+  ],
+  "chordTypes": {
+    "m": [
+      0,
+      3,
+      7
+    ],
+    "sus2": [
+      0,
+      2,
+      7
+    ],
+    "m7": [
+      0,
+      3,
+      7,
+      10
+    ]
+  },
+  "progressions": [
+    {
+      "id": "i-VI-VII-i",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 8,
+          "type": "sus2"
+        },
+        {
+          "root": 10,
+          "type": "sus2"
+        },
+        {
+          "root": 0,
+          "type": "m"
+        }
+      ]
+    },
+    {
+      "id": "i-iv-i-VII",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m7"
+        },
+        {
+          "root": 5,
+          "type": "m"
+        },
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 10,
+          "type": "sus2"
+        }
+      ]
+    }
+  ],
+  "instruments": {
+    "drone": {
+      "level": 0.5
+    },
+    "pad": {
+      "level": 0.3
+    },
+    "pulseBass": {
+      "level": 0.45
+    },
+    "kick": {
+      "level": 0.6
+    },
+    "snare": {
+      "level": 0.2
+    },
+    "hat": {
+      "level": 0.1
+    },
+    "crackle": {
+      "level": 0.35
+    }
+  },
+  "drums": "lofi",
+  "swing": 0.5,
+  "lowpassHz": 2400,
+  "reverb": {
+    "seconds": 2.5,
+    "mix": 0.3
+  },
+  "why": "Wasteland: a low minor drone with suspended chords (no clear major or minor colour), a slow pulsing bass, a heavy half-time beat and radio crackle. Low pass at 2.4 kHz keeps it dull and dusty, under the game sound."
+}

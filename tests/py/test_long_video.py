@@ -172,11 +172,15 @@ class Render(unittest.TestCase):
             self.assertIn("h264_nvenc", argv)
             self.assertEqual(argv[argv.index("-c:a") + 1], "pcm_s24le")  # the parts keep their sound as PCM ...
             self.assertNotIn("aac", argv)
+            self.assertEqual(argv[argv.index("-f") + 1], "mov")  # PCM in MOV: MP4 takes PCM only from FFmpeg 6.1
+            self.assertTrue(argv[-1].startswith("part-") and ".mov" in argv[-1])
             self.assertIn("scale=1920:1080:force_original_aspect_ratio=decrease", " ".join(argv))
             self.assertIn("xfade=transition=fade", " ".join(argv))
         join = calls[3]
         self.assertEqual(join[join.index("-c:v") + 1], "copy")  # the picture is copied when joined ...
         self.assertEqual(join[join.index("-c:a") + 1], "aac")  # ... and the sound encoded once (no AAC delay per join)
+        self.assertIn("aresample=async=1:min_hard_comp=0.001:first_pts=0", join)  # tracks stay on the picture's timeline
+        self.assertEqual(join[join.index("-f", join.index("-movflags")) + 1], "mp4")
         self.assertAlmostEqual(exp, 600 - 0.25 * (11 + 11 + 5))
 
     def test_failed_part_leaves_nothing(self):

@@ -1,0 +1,114 @@
+{
+  "$comment": "Long-video theme song (user request 2026-11-22: one theme per long video, music matching it). Procedural, made here by services/clip/scene_music.py; schema data/schemas/music-mood.schema.json. Tempo, keys, chords and levels are the agent's proposal until the user listens (UNVERIFIED). Kept out of data/music/moods so the scene-music library does not include it.",
+  "version": "1.0.0",
+  "status": "proposed",
+  "checked": "2026-11-24",
+  "generator": "procedural",
+  "loudness": {
+    "targetLufs": -23,
+    "toleranceLu": 1,
+    "peakCeilingDb": -1
+  },
+  "durationSec": 180,
+  "id": "underground-dread",
+  "title": "Hellish underground: dark phrygian pulse",
+  "tempo": {
+    "minBpm": 84,
+    "maxBpm": 96
+  },
+  "keys": [
+    38,
+    40,
+    41,
+    43
+  ],
+  "chordTypes": {
+    "m": [
+      0,
+      3,
+      7
+    ],
+    "maj": [
+      0,
+      4,
+      7
+    ],
+    "dim": [
+      0,
+      3,
+      6
+    ]
+  },
+  "progressions": [
+    {
+      "id": "i-bII-i-bVII",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 1,
+          "type": "maj"
+        },
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 10,
+          "type": "maj"
+        }
+      ]
+    },
+    {
+      "id": "i-bII-iidim-i",
+      "chords": [
+        {
+          "root": 0,
+          "type": "m"
+        },
+        {
+          "root": 1,
+          "type": "maj"
+        },
+        {
+          "root": 2,
+          "type": "dim"
+        },
+        {
+          "root": 0,
+          "type": "m"
+        }
+      ]
+    }
+  ],
+  "instruments": {
+    "drone": {
+      "level": 0.5
+    },
+    "bass": {
+      "level": 0.55
+    },
+    "pad": {
+      "level": 0.3
+    },
+    "kick": {
+      "level": 0.75
+    },
+    "snare": {
+      "level": 0.3
+    },
+    "hat": {
+      "level": 0.12
+    }
+  },
+  "drums": "lofi",
+  "swing": 0.5,
+  "lowpassHz": 3000,
+  "reverb": {
+    "seconds": 3,
+    "mix": 0.35
+  },
+  "why": "Hellish: the flat second over a minor chord (phrygian) is the classic menacing move, with a diminished chord for tension, a deep drone and bass, a heavy kick and a long dark reverb."
+}

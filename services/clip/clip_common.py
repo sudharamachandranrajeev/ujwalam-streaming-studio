@@ -578,7 +578,7 @@ _LOG_NAME = re.compile(r"^host-(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)\.log$"
 
 
 def installed_hosts(base=None):
-    """Start times (local naive datetime) of the running installed hosts: every ujwalam-host.exe whose image is
+    """Start times (UTC, timezone-aware datetime) of the running installed hosts: every ujwalam-host.exe whose image is
     under %LOCALAPPDATA%\\Ujwalam (by path, never by name alone: agents' test hosts run from the repo). [] when none
     runs. None when it cannot be told: the process list fails, or a process named ujwalam-host.exe whose path or
     start time cannot be read (an elevated host, say) - it may be the user's."""
@@ -638,7 +638,7 @@ def installed_hosts(base=None):
                 return None
             ft = (t[0].dwHighDateTime << 32) | t[0].dwLowDateTime
             utc = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(microseconds=ft // 10)
-            out.append(utc.astimezone().replace(tzinfo=None))
+            out.append(utc)  # Codex: UTC throughout; a local clock repeats an hour each autumn
         finally:
             k.CloseHandle(h)
     return out
@@ -656,17 +656,17 @@ def installed_host_running(base=None):
 
 
 def log_for_start(names, start):
-    """The host log of the host started at `start` (local naive datetime): the newest log whose name time lies
+    """The host log of the host started at `start` (UTC, timezone-aware datetime): the newest log whose name time lies
     within LOG_BIND_SEC around the start. None when no log belongs to it. The host names its log in UTC
-    (app/host/src/main.cpp, hlog::utc_now); the name is turned into local time before the compare (Astra review: a
-    local reading missed every log by an hour in summer time, so the guard said "unknown")."""
+    (app/host/src/main.cpp, hlog::utc_now) and both sides are compared in UTC (Astra review: a local reading missed
+    every log by an hour in summer time; Codex: local times are ambiguous in the repeated autumn hour)."""
     import datetime
     best = None
     for f in names:
         m = _LOG_NAME.match(f)
         if not m:
             continue
-        t = datetime.datetime(*map(int, m.groups()), tzinfo=datetime.timezone.utc).astimezone().replace(tzinfo=None)
+        t = datetime.datetime(*map(int, m.groups()), tzinfo=datetime.timezone.utc)
         if abs((t - start).total_seconds()) <= LOG_BIND_SEC and (best is None or t > best[0]):
             best = (t, f)
     return best and best[1]

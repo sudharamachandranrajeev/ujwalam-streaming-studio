@@ -1,0 +1,40 @@
+{
+  "$comment": "Long-video theme (user request 2026-11-22). Palette, grade, cards, transition and music are the agent's proposal until the user sees a render (UNVERIFIED).",
+  "id": "hellish-underground",
+  "version": "1.0.0",
+  "status": "proposed",
+  "palette": {
+    "accent": "#FF3B1F",
+    "secondary": "#FFB020",
+    "text": "#FFF1E8",
+    "shadow": "#1A0505"
+  },
+  "cardStyles": [
+    "slam",
+    "slash",
+    "zoom-punch"
+  ],
+  "grade": {
+    "blueShadows": -0.1,
+    "redMidtones": 0.1,
+    "greenHighlights": -0.04
+  },
+  "padSec": 1,
+  "transition": {
+    "kind": "slideright",
+    "xfade": "slideright",
+    "ms": 180
+  },
+  "music": {
+    "mood": "underground-dread",
+    "bars": 8,
+    "targetLufs": -33,
+    "underGameDb": 12,
+    "duck": {
+      "threshold": 0.023,
+      "ratio": 6,
+      "attackMs": 12,
+      "releaseMs": 330
+    }
+  }
+}

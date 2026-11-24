@@ -1,0 +1,39 @@
+{
+  "$comment": "Long-video theme (user request 2026-11-22). Palette, grade, cards, transition and music are the agent's proposal until the user sees a render (UNVERIFIED).",
+  "id": "romance-pink",
+  "version": "1.0.0",
+  "status": "proposed",
+  "palette": {
+    "accent": "#FF6FAE",
+    "secondary": "#FFC2DA",
+    "text": "#FFF6FA",
+    "shadow": "#3A0F24"
+  },
+  "cardStyles": [
+    "stamp",
+    "zoom-punch"
+  ],
+  "grade": {
+    "blueShadows": 0.04,
+    "redMidtones": 0.07,
+    "greenHighlights": -0.03
+  },
+  "padSec": 1,
+  "transition": {
+    "kind": "fade",
+    "xfade": "fade",
+    "ms": 400
+  },
+  "music": {
+    "mood": "romance-glow",
+    "bars": 8,
+    "targetLufs": -35,
+    "underGameDb": 15,
+    "duck": {
+      "threshold": 0.023,
+      "ratio": 6,
+      "attackMs": 12,
+      "releaseMs": 330
+    }
+  }
+}

@@ -492,7 +492,7 @@ def zoom_expr(z):
 
 def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, out_name, threads=4, audio_tracks=1, max_sec=None,
                 captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None,
-                fx=None, layout=None, gain_db=None, grade=None):
+                fx=None, layout=None, gain_db=None, grade=None, container="mp4"):
     """One ffmpeg run: each piece is its own input (-ss/-t, exact because it is re-encoded), scaled into the frame,
     audio faded in and out by fade_ms (no pop at a hard cut), then concatenated. Every audio track of the source
     (audio_tracks) is kept as its own track, in source order (track 1 = the studio mix); none is dropped or remixed.
@@ -674,7 +674,7 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     # filter can round a piece by up to one frame, so the output is also cut at the type's maximum.
     cap = ["-t", f"{float(max_sec):.3f}"] if max_sec else []
     argv += ["-filter_complex", ";".join(parts), *maps, *encoder_args, *(audio_args if n_audio else ["-an"]), *cap,
-             "-movflags", "+faststart", "-f", "mp4", out_name]
+             "-movflags", "+faststart", "-f", container, out_name]  # container: "mov" for PCM parts (long video)
     return argv
 
 
