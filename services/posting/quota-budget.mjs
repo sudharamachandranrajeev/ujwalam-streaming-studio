@@ -359,6 +359,8 @@ export function createQuotaBudget({ dataDir, nowMs = () => Date.now(), quota = n
     /** C1: check and charge one caption track (quota.json captionUnits) in one transaction: null (charged) or why not. */
     reserveCaption: () => step((s, q) => (Number.isFinite(q.captionUnits) ? writeWhy(s, q, q.captionUnits) : 'quota-unreadable'),
       (db, d, q) => add(db, 'units', d.pacific, q.captionUnits)),
+    /** D443 T4 review: `units` of reads inside a write flow are charged like a write, so they never eat the read reserve. */
+    reserveWriteRead: (units = 1) => step((s, q) => writeWhy(s, q, units), (db, d) => add(db, 'units', d.pacific, units)),
     /** D443 T4: check and charge one videos.update (quota.json updateUnits) like a caption track: never into the read reserve. */
     reserveUpdate: () => step((s, q) => (Number.isFinite(q.updateUnits) ? writeWhy(s, q, q.updateUnits) : 'quota-unreadable'),
       (db, d, q) => add(db, 'units', d.pacific, q.updateUnits)),

@@ -3,7 +3,7 @@
 // file in a temp dir. No real Google, no real model, no GPU.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -13,7 +13,7 @@ import { loadAiTextConfig } from '../services/posting/ai-text.mjs';
 import { composeField, createPostStore, packageUploads } from '../services/posting/index.mjs';
 import { CAPTIONS_SCOPE } from '../services/posting/oauth.mjs';
 import { createQuotaBudget, loadQuota } from '../services/posting/quota-budget.mjs';
-import { REWRITE_FLAG, readRewrites, rewriteLedgerFile, runRewrite, runUndo } from '../services/posting/rewrite.mjs';
+import { LOCK_NAME, REWRITE_FLAG, readRewrites, rewriteLedgerFile, rewritesFile, runRewrite, runUndo, scheduledCandidates } from '../services/posting/rewrite.mjs';
 
 const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'helpers', 'fake-llama-server.mjs');
 const CFG = loadConfig();
@@ -71,13 +71,14 @@ async function setup(n, { publishAt = FUTURE } = {}) {
 }
 const fakeFetch = (yt) => async (url, init) => {
   const u = new URL(url);
-  yt.calls.push({ method: init.method, part: u.searchParams.get('part'), body: init.body ? JSON.parse(init.body) : null, url });
+  yt.calls.push({ auth: init.headers?.Authorization, method: init.method, part: u.searchParams.get('part'), body: init.body ? JSON.parse(init.body) : null, url });
   const reply = (status, json) => ({ ok: status < 300, status, json: async () => json });
   if (init.method === 'GET') {
     const v = yt.videos[u.searchParams.get('id')];
     return reply(200, { items: v ? [{ snippet: v.snippet, status: { privacyStatus: v.privacyStatus, publishAt: v.publishAt } }] : [] });
   }
   const b = JSON.parse(init.body);
+  if (yt.dropAfterApply) { yt.videos[b.id].snippet = { ...b.snippet, publishedAt: yt.videos[b.id].snippet.publishedAt, channelId: 'UCx' }; throw new Error('connection dropped'); }
   if (yt.failUpdate) return reply(403, { error: { errors: [{ reason: 'forbidden' }] } });
   yt.videos[b.id].snippet = { ...b.snippet, publishedAt: yt.videos[b.id].snippet.publishedAt, channelId: 'UCx' }; // whole snippet replaced
   return reply(200, { id: b.id });
@@ -225,5 +226,107 @@ describe('undo', () => {
     assert.equal(r.skipped[0].why, 'changed-on-youtube'); assert.equal(e.yt.videos.vid0.snippet.title, 'Hand edit');
     const f = await runUndo({ ...base(e), force: true });
     assert.equal(f.restored.length, 1); assert.equal(e.yt.videos.vid0.snippet.title, before.title);
+  });
+});
+
+describe('review fixes', () => {
+  test('P1 defaultAudioLanguage is carried by the update and restored by undo', async () => {
+    const e = await setup(1);
+    e.yt.videos.vid0.snippet.defaultAudioLanguage = 'ml';
+    await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    const put = e.yt.calls.find((c) => c.method === 'PUT');
+    assert.equal(put.body.snippet.defaultLanguage, 'en'); assert.equal(put.body.snippet.defaultAudioLanguage, 'ml');
+    assert.equal(e.yt.videos.vid0.snippet.defaultAudioLanguage, 'ml');
+    await runUndo({ ...base(e) });
+    assert.equal(e.yt.videos.vid0.snippet.defaultAudioLanguage, 'ml');
+  });
+
+  test('P1 a dropped connection after the update was applied keeps the original (pending); undo restores it', async () => {
+    const e = await setup(1);
+    const before = structuredClone(e.yt.videos.vid0.snippet);
+    e.yt.dropAfterApply = true;
+    const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    assert.equal(r.skipped[0].why, 'update-unknown-pending');
+    const rec = readRewrites(e.dataDir).items.vid0;
+    assert.equal(rec.state, 'pending'); assert.deepEqual(rec.original, before);
+    assert.notEqual(e.yt.videos.vid0.snippet.title, before.title, 'the update did land');
+    e.yt.dropAfterApply = false;
+    const again = await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    assert.equal(again.skipped[0].why, 'pending-unresolved');
+    const u = await runUndo({ ...base(e) });
+    assert.equal(u.restored.length, 1); assert.equal(e.yt.videos.vid0.snippet.title, before.title);
+  });
+
+  test('P1 undo, even forced, never touches a video that is public now', async () => {
+    const e = await setup(1);
+    await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    e.yt.videos.vid0.privacyStatus = 'public'; e.yt.videos.vid0.publishAt = null;
+    const t = e.yt.videos.vid0.snippet.title;
+    const u = await runUndo({ ...base(e), force: true });
+    assert.equal(u.skipped[0].why, 'now-public'); assert.equal(e.yt.videos.vid0.snippet.title, t);
+    assert.equal(e.yt.calls.filter((c) => c.method === 'PUT').length, 1);
+  });
+
+  test('P1 lock: a live owner makes both actions busy; a dead owner is taken over; the lock is released', async () => {
+    const e = await setup(1);
+    const lock = path.join(e.dataDir, 'posting', LOCK_NAME);
+    writeFileSync(lock, String(process.pid));
+    assert.deepEqual(await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) }), { refused: 'busy' });
+    assert.deepEqual(await runUndo(base(e)), { refused: 'busy' });
+    assert.equal(e.yt.calls.length, 0);
+    writeFileSync(lock, '2147483000');
+    const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    assert.equal(r.rewritten.length, 1); assert.equal(existsSync(lock), false);
+  });
+
+  test('P1 a record another run wrote during generation is never replaced (no AI text saved as the original)', async () => {
+    const e = await setup(1);
+    const d = aiDeps(answer());
+    const grab = d.grab;
+    d.grab = async (...a) => { writeFileSync(rewritesFile(e.dataDir), JSON.stringify({ version: 1, items: { vid0: { id: e.ids[0], state: 'rewritten', original: { title: 'real original' }, written: {} } } })); return grab(...a); };
+    const r = await runRewrite({ ...base(e), aiDeps: d });
+    assert.equal(r.skipped[0].why, 'already-rewritten'); assert.equal(e.yt.calls.filter((c) => c.method === 'PUT').length, 0);
+    assert.equal(readRewrites(e.dataDir).items.vid0.original.title, 'real original');
+  });
+
+  test('P2 a video within 30 minutes of publishing is not a candidate; one that gets that close during generation is skipped', async () => {
+    const soon = await setup(1, { publishAt: '2026-11-24T18:10:00Z' });
+    const r0 = await runRewrite({ ...base(soon), aiDeps: aiDeps(answer()) });
+    assert.equal(r0.skipped.length, 0); assert.equal(soon.yt.calls.length, 0);
+    const e = await setup(1, { publishAt: '2026-11-24T18:40:00Z' });
+    let clock = NOW;
+    const d = aiDeps(answer()); const grab = d.grab;
+    d.grab = async (...a) => { clock = NOW + 20 * 60000; return grab(...a); };
+    const r = await runRewrite({ ...base(e, { nowMs: () => clock }), aiDeps: d });
+    assert.equal(r.skipped[0].why, 'too-close-to-publish'); assert.equal(e.yt.calls.filter((c) => c.method === 'PUT').length, 0);
+  });
+
+  test('P2 the access token is fetched again for each video', async () => {
+    const e = await setup(2);
+    let n = 0;
+    const a = { grantedScopes: async () => [CAPTIONS_SCOPE], accessToken: async () => `tok${++n}` };
+    await runRewrite({ ...base(e, { auth: a }), aiDeps: aiDeps(answer()) });
+    const puts = e.yt.calls.filter((c) => c.method === 'PUT').map((c) => c.auth);
+    assert.equal(new Set(puts).size, 2, puts.join());
+  });
+
+  test('P2 reads in a write flow are charged like writes: they cannot eat the read reserve', () => {
+    const b = budgetFor(mk(), { quotaUnitsPerDay: 160 });
+    assert.equal(b.reserveWriteRead(60), null);
+    assert.equal(b.reserveWriteRead(1), 'quota-day-used');
+    assert.equal(b.reserveRead(1), null, 'an ordinary read may still use the reserve');
+  });
+
+  test('P2 YouTube-normalised text (CRLF, trailing spaces) still counts as the uploaded text', async () => {
+    const e = await setup(1);
+    const d0 = e.yt.videos.vid0.snippet.description;
+    e.yt.videos.vid0.snippet.description = `${d0.split('\n').join('  \r\n')}  `;
+    const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    assert.equal(r.rewritten.length, 1, JSON.stringify(r));
+  });
+
+  test('P3 a ledger entry without sha256 or target is ignored, not a crash', () => {
+    const store = { ledger: { list: () => [{ status: 'uploaded', videoId: 'x', publishAt: FUTURE }, { sha256: 5, target: 'a', status: 'uploaded', videoId: 'x', publishAt: FUTURE }] } };
+    assert.deepEqual(scheduledCandidates({ store, nowMs: NOW }), []);
   });
 });

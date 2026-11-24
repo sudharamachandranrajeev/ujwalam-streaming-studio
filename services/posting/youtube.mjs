@@ -288,8 +288,10 @@ export async function uploadCaptions({ videoId, accessToken, srtPath, fetchImpl,
 const VIDEO_SNIPPET_URL = (videoId) => `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${encodeURIComponent(videoId)}`;
 const VIDEO_UPDATE_URL = 'https://www.googleapis.com/youtube/v3/videos?part=snippet';
 /** The snippet fields videos.update accepts back; the rest of a read snippet (publishedAt, channelId, thumbnails, ...) is read only. */
-export const WRITABLE_SNIPPET = Object.freeze(['title', 'description', 'tags', 'categoryId', 'defaultLanguage']);
-const quotaOrDenied = (r, what) => {
+export const WRITABLE_SNIPPET = Object.freeze(['title', 'description', 'tags', 'categoryId', 'defaultLanguage', 'defaultAudioLanguage']);
+// definite = YouTube answered 4xx (not 408/429): nothing was written. A timeout, a dropped connection or a 5xx may have applied it.
+const quotaOrDenied = (r, what) => Object.assign(quotaOrDenied0(r, what), { definite: r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429 });
+const quotaOrDenied0 = (r, what) => {
   const reasons = (r.json?.error?.errors ?? []).map((e) => e?.reason);
   if (reasons.includes('quotaExceeded') || reasons.includes('dailyLimitExceeded')) return new UploadError('quota-exceeded', 'YouTube quota used up; nothing more is sent');
   if (r.status === 401 || r.status === 403) return new UploadError('update-not-permitted', 'sign in again and allow Ujwalam to manage your YouTube account');
