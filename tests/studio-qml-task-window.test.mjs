@@ -28,12 +28,15 @@ const NOW = Date.now();
 const task = (dataDir, o) => writeTaskFile(dataDir, { kind: 'clips', startedAt: NOW - 5000, updatedAt: NOW, ...o });
 // A small set that covers every state, category and control combination the window decides on.
 const set = (d) => {
-  task(d, { id: 'clip-a', title: 'Editing clips (3 of 7)', state: 'running', category: 'clips', startedAt: NOW - 60_000, stage: 'render', stages: ['detect', 'render', 'validate'], stageText: 'Cutting the clips', done: 2, total: 7,
+  // Codex round 3: the control route accepts only jobs the launcher has running or queued (clips/status.json)
+  mkdirSync(path.join(d, 'clips'), { recursive: true });
+  writeFileSync(path.join(d, 'clips', 'status.json'), JSON.stringify({ running: { type: 'full', name: 'a', jobId: '0000000a' }, queued: [{ type: 'long', name: 'c', jobId: '0000000c' }] }));
+  task(d, { id: 'clip-a-0000000a', title: 'Editing clips (3 of 7)', state: 'running', category: 'clips', startedAt: NOW - 60_000, stage: 'render', stages: ['detect', 'render', 'validate'], stageText: 'Cutting the clips', done: 2, total: 7,
     controls: ['stop', 'pause', 'next'], pausable: true, nextStart: 'notify', parts: ['Clip 3', 'Clip 4'], logTail: ['Used <b>bold</b> text'],
     logEvents: [{ v: 1, type: 'progress', stage: 'render', done: 3, total: 7 }, { v: 1, type: 'part', name: 'Video tools (ffmpeg)' }] });
   task(d, { id: 'reel-b', title: 'Making the reel', state: 'running', category: 'reels', startedAt: NOW - 30_000, controls: ['stop'], pausable: false,
     pauseReason: 'This step cannot be paused' });
-  task(d, { id: 'long-c', title: 'Long video batch', state: 'waiting', category: 'long-video', startedAt: NOW - 90_000, controls: ['stop', 'resume', 'next'], paused: true,
+  task(d, { id: 'long-c-0000000c', title: 'Long video batch', state: 'waiting', category: 'long-video', startedAt: NOW - 90_000, controls: ['stop', 'resume', 'next'], paused: true,
     nextStart: 'ask', question: 'Carry on with the long video?' });
   task(d, { id: 'post-d', title: 'Posting to YouTube', state: 'running', category: 'posting', startedAt: NOW - 10_000, controls: ['stop'], pausing: true });
   task(d, { id: 'dl-e', title: 'Download finished', state: 'done', category: 'downloads', startedAt: NOW - 120_000 });
@@ -105,14 +108,14 @@ describe('QML studio: task manager window (headless probe)', { skip }, () => {
     const s = await probe({ prepare: set, actions: O });
     assert.deepEqual([s.m.sort, s.m.filterState, s.m.filterCat, s.m.sizeColumn], ['state', 'all', 'all', false], 'no size column: the snapshot has no size per task');
     assert.deepEqual([s.m.sortText, s.m.stateText, s.m.catText], ['State', 'All', 'All']);
-    assert.deepEqual(ids(s.m), ['post-d', 'reel-b', 'clip-a', 'long-c', 'maint-f', 'dl-e'], 'running (newest first), waiting, failed, done');
+    assert.deepEqual(ids(s.m), ['post-d', 'reel-b', 'clip-a-0000000a', 'long-c-0000000c', 'maint-f', 'dl-e'], 'running (newest first), waiting, failed, done');
     const st = await probe({ prepare: set, actions: [...O, 'tasks:sort:start'] });
     assert.deepEqual([st.m.sort, st.m.sortText], ['start', 'Start time (newest first)']);
-    assert.deepEqual(ids(st.m), ['post-d', 'maint-f', 'reel-b', 'clip-a', 'long-c', 'dl-e']);
+    assert.deepEqual(ids(st.m), ['post-d', 'maint-f', 'reel-b', 'clip-a-0000000a', 'long-c-0000000c', 'dl-e']);
     const c = await probe({ prepare: set, actions: [...O, 'tasks:sort:category'] });
-    assert.deepEqual(ids(c.m), ['clip-a', 'dl-e', 'long-c', 'maint-f', 'post-d', 'reel-b'], 'category name order');
+    assert.deepEqual(ids(c.m), ['clip-a-0000000a', 'dl-e', 'long-c-0000000c', 'maint-f', 'post-d', 'reel-b'], 'category name order');
     const f = await probe({ prepare: set, actions: [...O, 'tasks:filter-state:running'] });
-    assert.deepEqual([f.m.stateText, ids(f.m)], ['Running', ['post-d', 'reel-b', 'clip-a']]);
+    assert.deepEqual([f.m.stateText, ids(f.m)], ['Running', ['post-d', 'reel-b', 'clip-a-0000000a']]);
     const f2 = await probe({ prepare: set, actions: [...O, 'tasks:filter-cat:reels'] });
     assert.deepEqual([f2.m.catText, ids(f2.m)], ['Reels', ['reel-b']]);
     const f3 = await probe({ prepare: set, actions: [...O, 'tasks:filter-state:done', 'tasks:filter-cat:clips'] });
@@ -122,33 +125,33 @@ describe('QML studio: task manager window (headless probe)', { skip }, () => {
   test('each row shows only the buttons its job offers in `controls`; pausing and "cannot pause" say so in words', async () => {
     const { m } = await probe({ prepare: set, actions: O });
     const r = byId(m);
-    assert.deepEqual(r['clip-a'].buttons, ['stop', 'pause', 'next:run', 'next:ask', 'next:notify']);
+    assert.deepEqual(r['clip-a-0000000a'].buttons, ['stop', 'pause', 'next:run', 'next:ask', 'next:notify']);
     assert.deepEqual(r['reel-b'].buttons, ['stop']);
-    assert.deepEqual(r['long-c'].buttons, ['stop', 'resume', 'next:run', 'next:ask', 'next:notify']);
+    assert.deepEqual(r['long-c-0000000c'].buttons, ['stop', 'resume', 'next:run', 'next:ask', 'next:notify']);
     assert.deepEqual(r['post-d'].buttons, ['stop']);
     assert.deepEqual([r['dl-e'].buttons, r['maint-f'].buttons], [[], []], 'a finished task offers nothing');
     assert.equal(r['reel-b'].note, 'This step cannot be paused', 'the reason shown as plain text, no Pause button');
     assert.equal(r['post-d'].note, 'Pausing at the next safe point…');
-    assert.deepEqual([r['long-c'].stateText, r['long-c'].question], ['Paused', 'Carry on with the long video?']);
-    assert.deepEqual([r['clip-a'].nextStart, r['long-c'].nextStart], ['notify', 'ask']);
+    assert.deepEqual([r['long-c-0000000c'].stateText, r['long-c-0000000c'].question], ['Paused', 'Carry on with the long video?']);
+    assert.deepEqual([r['clip-a-0000000a'].nextStart, r['long-c-0000000c'].nextStart], ['notify', 'ask']);
   });
 
   test('a click posts the right body once; the row waits for the list to change; a control the job does not offer sends nothing', async () => {
-    const { p, m, dataDir } = await probe({ ms: 7000, prepare: set, actions: [...O, 'tasks:ctl:clip-a:pause', 'tasks:ctl:clip-a:stop', 'tasks:ctl:long-c:next:run',
-      'tasks:ctl:long-c:resume', 'tasks:ctl:reel-b:pause', 'tasks:ctl:clip-a:next:notify', 'tasks:ctl:dl-e:stop'] });
-    assert.deepEqual(done(p).slice(1), [['tasks:ctl:clip-a:pause', true], ['tasks:ctl:clip-a:stop', false], ['tasks:ctl:long-c:next:run', true],
-      ['tasks:ctl:long-c:resume', false], ['tasks:ctl:reel-b:pause', false], ['tasks:ctl:clip-a:next:notify', false], ['tasks:ctl:dl-e:stop', false]],
+    const { p, m, dataDir } = await probe({ ms: 7000, prepare: set, actions: [...O, 'tasks:ctl:clip-a-0000000a:pause', 'tasks:ctl:clip-a-0000000a:stop', 'tasks:ctl:long-c-0000000c:next:run',
+      'tasks:ctl:long-c-0000000c:resume', 'tasks:ctl:reel-b:pause', 'tasks:ctl:clip-a-0000000a:next:notify', 'tasks:ctl:dl-e:stop'] });
+    assert.deepEqual(done(p).slice(1), [['tasks:ctl:clip-a-0000000a:pause', true], ['tasks:ctl:clip-a-0000000a:stop', false], ['tasks:ctl:long-c-0000000c:next:run', true],
+      ['tasks:ctl:long-c-0000000c:resume', false], ['tasks:ctl:reel-b:pause', false], ['tasks:ctl:clip-a-0000000a:next:notify', false], ['tasks:ctl:dl-e:stop', false]],
     'second click on a task waits; Pause on a job that does not offer it, and the choice already made, send nothing');
     assert.equal(m.postsSent, 2);
     assert.deepEqual(sent(dataDir).map(({ id, op, nextStart }) => ({ id, op, ...(nextStart ? { nextStart } : {}) })).sort((a, b) => a.id.localeCompare(b.id)),
-      [{ id: 'clip-a', op: 'pause' }, { id: 'long-c', op: 'next', nextStart: 'run' }]);
+      [{ id: 'clip-a-0000000a', op: 'pause' }, { id: 'long-c-0000000c', op: 'next', nextStart: 'run' }]);
     const r = byId(m);
-    assert.deepEqual([r['clip-a'].busy, r['long-c'].busy, r['reel-b'].busy], [true, true, false], 'buttons wait until the row changes');
+    assert.deepEqual([r['clip-a-0000000a'].busy, r['long-c-0000000c'].busy, r['reel-b'].busy], [true, true, false], 'buttons wait until the row changes');
   });
 
   test('clicking a task shows its details: stage, progress, step, time, parts, and the log as plain text', async () => {
-    const { m } = await probe({ prepare: set, actions: [...O, 'tasks:select:clip-a'] });
-    assert.equal(m.selected, 'clip-a');
+    const { m } = await probe({ prepare: set, actions: [...O, 'tasks:select:clip-a-0000000a'] });
+    assert.equal(m.selected, 'clip-a-0000000a');
     const d = m.detail;
     assert.equal(d.title, 'Editing clips (3 of 7)');
     const f = Object.fromEntries(d.fields.map((x) => [x.k, x.v]));
