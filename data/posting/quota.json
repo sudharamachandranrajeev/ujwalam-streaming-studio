@@ -8,6 +8,8 @@
   "thumbnailUnits": 50,
   "captionUnits": 400,
   "captionUnitsSource": "captions.insert 400 units, needs youtube.force-ssl: https://developers.google.com/youtube/v3/docs/captions/insert (checked 2026-11-24). C1: one call per long highlights upload, reserved like an upload (never from readReserveUnits); a missing or bad value skips the caption track, never the video.",
+  "updateUnits": 50,
+  "updateUnitsSource": "videos.update 50 units: https://developers.google.com/youtube/v3/determine_quota_cost (per Google's docs; UNVERIFIED against real Google, checked 2026-11-24). D443 T4: one call per rewritten scheduled video, reserved like a caption track (never from readReserveUnits), plus 1 unit for the videos.list read of its snippet; a missing or bad value stops the rewrite.",
   "readReserveUnits": 100,
   "fallbackDays": 1,
   "source": "quotaUnitsPerDay 10000 (default allocation), thumbnailUnits 50, read calls 1 unit, and videos.insert in its own bucket of 100 calls a day: https://developers.google.com/youtube/v3/determine_quota_cost (fetched 2026-11-13; the bucket is UNVERIFIED for this project until a day with more than 6 uploads goes through). model upload-bucket as the default with the quotaExceeded fallback: user 2026-11-21 ('youtube permits upto 100 uploads a day'; plan docs/plan/2026-11-21-posting-text-schedule-growth.md PT2). insertUnits 1600 (fallback model only): docs/plan/2026-11-03-p16b-youtube-private-upload-plan.md. readReserveUnits 100, fallbackDays 1: agent, not a user instruction. maxUploadsPerDay 100: user 2026-11-22 (D434: \"YouTube allows me to upload 100 videos/reels a day - that's the max\"); read by services/posting/auto-post.mjs (MAX_PER_DAY), was 24 (D408).",
