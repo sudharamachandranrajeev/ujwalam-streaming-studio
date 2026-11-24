@@ -31,6 +31,7 @@ import { trustedRow } from './clips-source.mjs';
 import { cleanFacts, createTextHistory, creditMissing, draftText, legacyContext, legacyFor, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 import { keepsParts } from './ai-text-check.mjs';
+import { makeHookCover } from './ai-cover.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const POSTING_FLAG = 'posting';
@@ -526,8 +527,18 @@ export async function packageUploads(opts) {
       }
     }
     if (aiMeta.textSource !== 'ai' && hist && (d.title || d.lead)) hist.add(d.title?.line, d.lead?.line);
-    const at = uploadCoverAt(row, seconds);
-    const coverOk = await extractCover(ffmpeg, dst, at, path.join(dir, 'cover.jpg'));
+    let at = uploadCoverAt(row, seconds);
+    const coverFile = path.join(dir, 'cover.jpg');
+    // D443 T3: with checked AI text, the cover is the frame at thumbTime with the hook as big text (RP6 renderer). A reel that
+    // opens on its own edited start frame (row.thumbnail) keeps frame 0, as before. A failed render keeps the plain frame.
+    let coverOk = false; let hookCover = false;
+    if (aiMeta.textSource === 'ai' && row.thumbnail !== true) {
+      const want = Number(Math.min(aiMeta.ai.thumbTime, Number.isFinite(seconds) ? seconds : aiMeta.ai.thumbTime).toFixed(3));
+      hookCover = await (opts.coverMaker ?? makeHookCover)({ ffmpeg, video: dst, atSec: want, hook: aiMeta.ai.thumbHook, out: coverFile }) === true;
+      if (hookCover) { at = want; coverOk = true; }
+      aiMeta.ai.cover = hookCover ? 'hook' : 'plain';
+    }
+    if (!coverOk) coverOk = await extractCover(ffmpeg, dst, at, coverFile);
     const srt = CAPTION_UPLOAD_KINDS.includes(row.kind) ? `${file.slice(0, -path.extname(file).length)}.srt` : null;
     let captions = null;
     if (srt && isRealFile(srt)) { copyFileSync(srt, path.join(dir, 'captions.srt'), FS.COPYFILE_EXCL); captions = 'captions.srt'; }

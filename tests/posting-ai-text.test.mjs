@@ -281,3 +281,57 @@ describe('vocab', () => {
     assert.ok(loadVocab().has('clutch'));
   });
 });
+
+describe('D443 T3: the cover with the hook', () => {
+  const calls = [];
+  const maker = (ok = true) => async (a) => { calls.push(a); if (ok) writeFileSync(a.out, 'jpg'); return ok; };
+  const readCover = (e) => { const f = postFiles(e)[0]; return { j: JSON.parse(readFileSync(f, 'utf8')), dir: path.dirname(f) }; };
+  const go = async (e, o = {}, reply = answer({ thumbHook: 'NO WAY', thumbTime: 3 })) => {
+    calls.length = 0;
+    const { r: rn } = runner(reply);
+    const { coverMaker, ...deps } = o;
+    return withAiText({ cfg, profileTerms: [], vocab: new Set(['clutch']), grab, ocr, tmpRoot: mk(), runner: rn, isOn: () => true, ...deps },
+      (ai, why) => packageUploads({ dataDir: e.dataDir, ledgerFile: e.ledgerFile, profile: PROFILE, ffmpeg: process.execPath, ...(ai ? { aiText: ai } : { aiWhy: why }), ...(coverMaker ? { coverMaker } : {}) }));
+  };
+
+  test('checked hook and thumbTime go to the cover maker; cover.atSec is thumbTime; recorded as hook', async () => {
+    const e = setup([ROWS[0]]);
+    await go(e, { coverMaker: maker(true) });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].hook, 'NO WAY'); assert.equal(calls[0].atSec, 3);
+    const { j, dir } = readCover(e);
+    assert.deepEqual(j.cover, { file: 'cover.jpg', atSec: 3 });
+    assert.equal(j.ai.cover, 'hook');
+    assert.equal(path.dirname(calls[0].out), dir);
+  });
+
+  test('the maker fails: the plain frame path runs, recorded as plain', async () => {
+    const e = setup([ROWS[0]]);
+    await go(e, { coverMaker: maker(false) });
+    const { j } = readCover(e);
+    assert.equal(j.ai.cover, 'plain');
+    assert.equal(j.cover, null, 'the ffmpeg stand-in makes no frame, so the plain path ran and found none');
+  });
+
+  test('a reel that opens on its own start frame keeps frame 0; the maker is not called', async () => {
+    const e = setup([ROWS[0]]);
+    const u = path.join(e.dataDir, 'clips', 'uploads.json');
+    const f = JSON.parse(readFileSync(u, 'utf8')); f.files[0].thumbnail = true; writeFileSync(u, JSON.stringify(f));
+    await go(e, { coverMaker: maker(true) });
+    assert.equal(calls.length, 0);
+    assert.equal(readCover(e).j.ai.cover, undefined);
+  });
+
+  test('template fallback (rejected answer, flag off) or thumbTime past the end: the maker is never called', async () => {
+    const e = setup([ROWS[0]]);
+    await go(e, { coverMaker: maker(true) }, answer({ title: 'x'.repeat(400) }));
+    assert.equal(calls.length, 0);
+    assert.equal(readCover(e).j.textSource, 'template');
+    const e2 = setup([ROWS[1]]);
+    await go(e2, { coverMaker: maker(true), isOn: () => false });
+    assert.equal(calls.length, 0);
+    const e3 = setup([ROWS[0]]);
+    await go(e3, { coverMaker: maker(true) }, answer({ thumbTime: 99 }));
+    assert.equal(calls.length, 0);
+  });
+});
