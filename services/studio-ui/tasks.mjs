@@ -19,6 +19,43 @@ const FINISHED = new Set(['done', 'failed']);
 const cut = (v, n) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f]/g, ' ').slice(0, n) : null);
 const int = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : null);
 
+// ---- task manager, job side (D442, 2026-11-24) ----
+// Every task has a category (the window filters by it). A writer may name it; otherwise it follows the task's kind.
+export const TASK_CATEGORIES = Object.freeze(['clips', 'reels', 'long-video', 'posting', 'learning', 'downloads', 'maintenance']);
+const KIND_CATEGORY = { clips: 'clips', 'live-clips': 'clips', beatdrop: 'reels', reels: 'reels', montage: 'reels', long: 'long-video',
+  upload: 'posting', posting: 'posting', train: 'learning', learning: 'learning', download: 'downloads', downloads: 'downloads' };
+export const categoryOf = (t) => (TASK_CATEGORIES.includes(t?.category) ? t.category : KIND_CATEGORY[t?.kind] ?? 'maintenance');
+// What a task that did not finish does at the next start: run it, ask the user, or only say so (default, user 2026-11-24).
+export const NEXT_START = Object.freeze(['run', 'ask', 'notify']);
+export const DEFAULT_NEXT_START = 'notify';
+// The per-task controls a writer offers (the UI server refuses any other): stop, pause, resume, next (change nextStart).
+export const TASK_CONTROLS = Object.freeze(['stop', 'pause', 'resume', 'next']);
+export const LOG_TAIL_LINES = 8;
+const LOG_LINE_MAX = 160;
+// A log line can carry chat text, viewer names, paths or secrets (the clipper prints file names and tool errors):
+// a line that mentions chat, viewers, users, messages or an @name is dropped whole; paths, URLs, long tokens and
+// key=value secrets are masked; quotes (where quoted text sits) are cut out.
+const UNSAFE_LINE = /chat|viewer|user|message|comment|author|@\w/i;
+/** One log line made safe for the task window, or null (dropped). */
+export function safeLogLine(line) {
+  if (typeof line !== 'string') return null;
+  let s = line.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  if (!s || s.startsWith('ujwalam-progress')) return null;
+  s = s.replace(/\b(access_token|refresh_token|token|api[_-]?key|key|secret|password|authorization)\b\s*[:=]\s*\S+/gi, '$1=[hidden]')
+    .replace(/\bbearer\s+\S+/gi, 'Bearer [hidden]')
+    .replace(/https?:\/\/\S+/gi, '[link]')
+    .replace(/(?:[A-Za-z]:|\\\\)[\\/][^\s"']*/g, '[path]')
+    .replace(/(?:^|\s)\/[^\s"']*\/[^\s"']*/g, ' [path]')
+    .replace(/\b[A-Za-z0-9+/_=-]{24,}\b/g, '[hidden]')
+    .replace(/"[^"]*"|'[^']*'|“[^”]*”/g, '[text]')
+    .replace(/\s+/g, ' ').trim();
+  // checked after the masking, so a folder name (C:\Users) does not drop the line; the text left is what is shown
+  if (!s || UNSAFE_LINE.test(s)) return null;
+  return s.slice(0, LOG_LINE_MAX);
+}
+/** The last LOG_TAIL_LINES safe lines of an array of raw lines. */
+export const safeLogTail = (lines) => (Array.isArray(lines) ? lines.map(safeLogLine).filter(Boolean).slice(-LOG_TAIL_LINES) : []);
+
 /** A clean task from untrusted input (a file or a caller), or null. */
 export function cleanTask(t, id = t?.id) {
   if (!t || typeof t !== 'object' || typeof id !== 'string' || !ID.test(id)) return null;
@@ -35,7 +72,25 @@ export function cleanTask(t, id = t?.id) {
   return { id, title, kind: cut(t.kind, 24) ?? 'task', state, done, total: total === 0 ? null : total, stage: cut(t.stage, 24),
     note: cut(t.note, 160), startedAt: int(t.startedAt), updatedAt: int(t.updatedAt),
     stages: stages.length ? stages : null, stageText: cut(t.stageText, 60), unit: cut(t.unit, 16), activeAt: int(t.activeAt), progressAt: int(t.progressAt),
-    measured: t.measured === false ? false : null }; // false = this stage reports no progress while it works
+    measured: t.measured === false ? false : null, // false = this stage reports no progress while it works
+    ...controlFields(t) };
+}
+
+/** D442 fields of a clean task: category, the controls offered, pause (pausable + plain reason when not, paused,
+ *  pausing = asked, waits for the next safe point), nextStart (null = not an unfinished job), question (nextStart "ask":
+ *  the task waits for the user's answer), parts running (plain names) and a bounded, sanitised log tail. */
+function controlFields(t) {
+  const controls = Array.isArray(t.controls) ? TASK_CONTROLS.filter((c) => t.controls.includes(c)) : [];
+  const pausable = t.pausable === true;
+  return {
+    category: categoryOf(t), controls,
+    pausable, pauseReason: pausable ? null : cut(t.pauseReason, 120),
+    paused: t.paused === true, pausing: t.pausing === true,
+    nextStart: NEXT_START.includes(t.nextStart) ? t.nextStart : null,
+    question: cut(t.question, 160),
+    parts: Array.isArray(t.parts) ? t.parts.slice(0, 6).map((p) => cut(p, 40)).filter(Boolean) : [],
+    logTail: safeLogTail(t.logTail),
+  };
 }
 
 export const tasksDir = (dataDir) => path.join(dataDir, 'tasks');
@@ -52,6 +107,50 @@ export function writeTaskFile(dataDir, task) {
     renameSync(`${f}.tmp`, f);
     return true;
   } catch { return false; }
+}
+
+// D442 per-task control requests, UI server -> launcher (another process): one file per request,
+// <dataDir>/clips/control/<id>~<atMs>-<seq>.json { op, nextStart?, atMs }, written atomically. The launcher
+// (record-clips.mjs) reads and removes them on its status tick and applies them in the order they were asked
+// (atMs, then seq), so pause then resume or next then stop all count; a request older than the launcher is dropped.
+let controlSeq = 0;
+export const controlDir = (dataDir) => path.join(dataDir, 'clips', 'control');
+
+/** A clean control request or null: { op, nextStart (op 'next' only), atMs }. */
+export function cleanControl(r) {
+  if (!r || typeof r !== 'object' || !TASK_CONTROLS.includes(r.op) || !Number.isFinite(r.atMs)) return null;
+  if (r.op === 'next' && !NEXT_START.includes(r.nextStart)) return null;
+  return { op: r.op, ...(r.op === 'next' ? { nextStart: r.nextStart } : {}), atMs: Math.floor(r.atMs) };
+}
+
+export function writeTaskControl(dataDir, id, req) {
+  const c = cleanControl(req);
+  if (typeof id !== 'string' || !ID.test(id) || !c) return false;
+  const dir = controlDir(dataDir);
+  mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, `${id}~${c.atMs}-${String(controlSeq++).padStart(6, '0')}.json`);
+  writeFileSync(`${f}.tmp`, JSON.stringify(c));
+  renameSync(`${f}.tmp`, f);
+  return true;
+}
+
+/** Takes (reads and removes) the waiting control requests: [{ id, op, nextStart?, atMs }]; bad files are removed. */
+export function takeTaskControls(dataDir) {
+  const dir = controlDir(dataDir);
+  let names;
+  try { names = readdirSync(dir); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue;
+    const m = /^([A-Za-z0-9._-]{1,80})~(\d{1,16})-(\d{1,9})\.json$/.exec(n);
+    const id = m ? m[1] : '';
+    const f = path.join(dir, n);
+    let c = null;
+    try { c = cleanControl(JSON.parse(readFileSync(f, 'utf8'))); } catch { c = null; }
+    try { rmSync(f, { force: true }); } catch { continue; } // not removed: read again next tick, not applied twice
+    if (c && m) out.push({ id, ...c, seq: Number(m[3]) });
+  }
+  return out.sort((a, b) => a.atMs - b.atMs || a.seq - b.seq).map(({ seq: _s, ...r }) => r);
 }
 
 export function removeTaskFile(dataDir, id) {
@@ -184,7 +283,8 @@ export function createTasks({ dataDir = null, now = Date.now, stallAfterMs = loa
   function start({ title, kind = 'task', total = null, stage = null, note = null }) {
     const id = `ui-${now().toString(36)}-${(seq++).toString(36)}`;
     const t = now();
-    const rec = { id, title: cut(title, 120) ?? 'Working', kind: cut(kind, 24) ?? 'task', state: 'running', done: total === null ? null : 0, total: int(total), stage: cut(stage, 24), note: cut(note, 160), startedAt: t, updatedAt: t, activeAt: t, progressAt: null };
+    // D442: the UI server's own actions run inside it in one go; they cannot be paused or stopped one by one.
+    const rec = { ...controlFields({ kind, pauseReason: 'It runs inside the studio and takes only a moment' }), id, title: cut(title, 120) ?? 'Working', kind: cut(kind, 24) ?? 'task', state: 'running', done: total === null ? null : 0, total: int(total), stage: cut(stage, 24), note: cut(note, 160), startedAt: t, updatedAt: t, activeAt: t, progressAt: null };
     mem.set(id, rec);
     prune();
     const set = (p) => { Object.assign(rec, p, { updatedAt: now() }); };
