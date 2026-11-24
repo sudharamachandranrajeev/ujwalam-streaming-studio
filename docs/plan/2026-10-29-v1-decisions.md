@@ -3146,3 +3146,32 @@ User request 2026-11-22 (`docs/backlog/2026-11-22-task-manager-window.md`); plan
    elapsed and remaining time, the parts that are running and the log tail. Per-task CPU/GPU use is left out of the
    first version.
 4. **Routing**: job side on Opus, window on Sonnet, Codex second-opinion review of the job side before done.
+
+## D441 — BR end screen (S2) and BR top HUD (H1): placement, mode, map and own kills of a Battle Royale match (decided, 2026-11-24)
+
+User 2026-11-22: "use OCR to figure out" the Battle Royale end screens. Evidence: `docs/evidence/2026-11-24-br-end-screen.md`
+(6 BR matches of the 2026-11-22 recording, OCR at 1 fps; raw scans stay in the gitignored `docs/evidence/private/`).
+
+1. **S2 (BR end screen)**, pack 0.9.0, role context, mode br, status unverified. The card (GAME OVER, or MISSION
+   COMPLETED on a win) shows Ranking #N/M, Mode and MAP in a right-hand value column; the results strip after it shows
+   #N/M top left and "Mode - Map" bottom left. ROIs are the measured boxes plus small margins. A card reading needs #N/M
+   in `ranking` plus the heading or the mode value; a strip reading needs #N/M in `strip_rank` plus a Mode - Map line.
+   Only pack texts are returned (`modeNames` Battle Royale, `mapNames` VERDANSK, `headings`): never OCR text or names.
+   S2 joins S1 `stats.endScreenDetectors`, so a BR end screen closes a BR match.
+2. **Match fields**: `ownRank` (placement N), `teams` (M, the number of teams in the lobby; never turned into duo or
+   squad), `map`, `placementSource` "br end screen", `family` ("br" when S2 read the end, else the HUD family);
+   `gameMode` gains the BR end screen as a named evidence source (confidence high), so `mode` of a BR match is
+   "battle royale" when read, else "br". Placement 1 is a win (VICTORY, confirmed); any other placement has no result
+   word (the BR screens show none).
+3. **W1 misread guard**: an end-screen hit of a detector that does not run in the frame's family never closes a match
+   (`stats_config.detectorModes`); on 2026-11-22 W1 read VICTORY/DEFEAT on BR screens.
+4. **H1 (BR top HUD)**, role context, mode br, status unverified: players left (N/total, ROI kept right of x 0.12; an
+   N/M box at x 0.06-0.10 sits on every end frame) and the own kill counter (1-2 digits; the gulag countdown box to its
+   right stays outside). Readings only, no hit rows. A BR match without a scoreboard takes its own kills from the
+   counter: the largest value read on at least 2 frames (`killsSource` "hud counter"); otherwise the kill feed as before.
+5. **Review**: the unknown-mode question offers a match the modes of its own family only (`modeChoicesByFamily`); a BR
+   match is now asked with the BR mode names, a family with no mode names is still not asked (D435).
+6. **Not covered**: the older 2026-10-27 card layout (#N/M left of the heading, mode under it); maps other than
+   VERDANSK and BR modes other than Battle Royale (added when read on real end screens); whether the HUD counter shows a
+   teammate's kills while spectating; the strip's per-teammate KILLS N (the text does not tell which card is the
+   streamer). All values stay unverified until checked on more matches.
