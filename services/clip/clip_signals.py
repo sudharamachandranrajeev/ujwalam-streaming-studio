@@ -61,8 +61,12 @@ def recording_start(path, explicit=None):
 
 # ---------------------------------------------------------------- markers
 
+_VOICE_NOTE = re.compile(r"^voice: marker phrase ([a-z0-9-]{1,32}) (forced|word)$")
+
+
 def read_markers(paths, rec_start, duration, tolerance=MATCH_TOLERANCE_SEC):
-    """Returns ([{t, source}], stats). Rows that do not belong to this recording are counted, not returned."""
+    """Returns ([{t, source}], stats). An 'audio' marker written by the live voice marks (services/event-core/
+    voice-marks.mjs, note 'voice: marker phrase <id> forced|word') comes back as {t, source: 'voice', phrase, forced}. Rows that do not belong to this recording are counted, not returned."""
     out, stats = [], {"rows": 0, "matched": 0, "noRecord": 0, "otherRecording": 0, "outOfRange": 0, "bad": 0}
     for p in paths or []:
         with open(p, encoding="utf-8", errors="replace") as f:
@@ -93,7 +97,11 @@ def read_markers(paths, rec_start, duration, tolerance=MATCH_TOLERANCE_SEC):
                 if t > duration:
                     stats["outOfRange"] += 1
                     continue
-                out.append({"t": round(t, 3), "source": src})
+                vm = _VOICE_NOTE.match(r.get("note") or "") if src == "audio" and isinstance(r.get("note"), str) else None
+                if vm:  # D443 T6 live voice mark: its own source, never a force-kept marker.audio (review fix 2)
+                    out.append({"t": round(t, 3), "source": "voice", "phrase": vm.group(1), "forced": vm.group(2) == "forced"})
+                else:
+                    out.append({"t": round(t, 3), "source": src})
                 stats["matched"] += 1
     out.sort(key=lambda m: m["t"])
     return out, stats
