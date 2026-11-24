@@ -124,19 +124,22 @@ if ($installed) {
     }
     Start-Sleep -Seconds 20 # let the window draw, then look
     Save-Screenshot (Join-Path $Out 'first-start.png')
+    # what is there, before anything is stopped: the start program's exit, every log and the data folder
+    $startExit = if ($p.HasExited) { $p.ExitCode } else { 'running' }
+    $logOut = Join-Path $Out 'logs'
+    New-Item -ItemType Directory -Force -Path $logOut | Out-Null
+    Get-ChildItem $root -Recurse -Filter '*.log' -ErrorAction SilentlyContinue | Copy-Item -Destination $logOut -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $data -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($root.Length) } | Set-Content (Join-Path $Out 'data-files.txt')
     $running = @(Our-Processes | ForEach-Object { "$($_.ProcessName) $($_.Id)" })
     $studio = @(Our-Processes | Where-Object { $_.MainWindowHandle -ne 0 -and $_.ProcessName -like 'ujwalam-studio*' })
     foreach ($s in $studio) { [void]$s.CloseMainWindow() }
     $stopDeadline = (Get-Date).AddSeconds(60)
-    while ((Get-Date) -lt $stopDeadline -and (Our-Processes).Count -gt 0) { Start-Sleep -Seconds 2 }
+    while ((Get-Date) -lt $stopDeadline -and @(Our-Processes).Count -gt 0) { Start-Sleep -Seconds 2 }
     $left = @(Our-Processes | ForEach-Object { "$($_.ProcessName) $($_.Id)" })
     Our-Processes | Stop-Process -Force -ErrorAction SilentlyContinue
-    $logOut = Join-Path $Out 'logs'
-    if (Test-Path $logs) { Copy-Item -Recurse -Force $logs $logOut }
-    $hostLog = Join-Path $data 'host'
-    Get-ChildItem $hostLog -Recurse -Filter '*.log' -ErrorAction SilentlyContinue | Copy-Item -Destination $logOut -Force
+    Get-ChildItem $root -Recurse -Filter '*.log' -ErrorAction SilentlyContinue | Copy-Item -Destination $logOut -Force -ErrorAction SilentlyContinue
     $hostOk = [bool]($hostLine -and $hostLine -match 'host started')
-    @{ ok = ($ui -and $hostOk -and $studio.Count -gt 0 -and $left.Count -eq 0); ui = $ui; hostLine = $hostLine;
+    @{ ok = ($ui -and $hostOk -and $studio.Count -gt 0 -and $left.Count -eq 0); ui = $ui; hostLine = $hostLine; startExit = $startExit;
        studioWindows = $studio.Count; running = $running; leftAfterClose = $left; shortcut = $sc
        launcherLog = if ($launchLog) { $launchLog.Name } else { $null } }
   })

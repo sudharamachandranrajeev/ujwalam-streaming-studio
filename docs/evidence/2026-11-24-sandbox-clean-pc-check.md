@@ -35,4 +35,15 @@ bytes, paused at 13,909,471 and resumed, ready and verified in 6.6 s. `node --te
 
 | Setup | Date | install | first start | download | uninstall | Notes |
 |---|---|---|---|---|---|---|
-| 0.1.0-alpha.41 | 2026-11-24 | pending | pending | pending | pending | running |
+| 0.1.0-alpha.41 | 2026-11-24 (run 3) | PASS 38.2 s | FAIL | PASS 7 s | PASS 11.1 s | first start: no window, cause not yet captured (harness crashed on a StrictMode `.Count` before copying logs) |
+| 0.1.0-alpha.41 | 2026-11-24 (run 4) | PASS 69.4 s | FAIL | PASS 7 s | PASS 10.1 s | launcher log: `no profile at ...\data\profile.local.json ... Nothing was started.` (exit 2). A new PC has no profile, so the shortcut started nothing and showed nothing. |
+
+Runs 1 and 2 did not start the script: vGPU on with 6 GiB lost the Sandbox connection before the desktop on this PC.
+The harness now uses no vGPU and the default memory.
+
+Fix for run 4 (next build, alpha.42): `tools/package/run-installed.mjs` copies the build's `data/profile.example.json`
+(placeholders only) to the data folder's `profile.local.json` on first start. It never overwrites an existing profile.
+Test: `tests/package-alpha.test.mjs` "installed run without a profile: the first start makes one from the example
+and starts; an existing one is kept" (1/1). Clean-PC proof waits for the alpha.42 Sandbox run.
+
+Minor: after uninstall, `Ujwalam-Setup.exe` stays in the install root (the data folder is kept on purpose).

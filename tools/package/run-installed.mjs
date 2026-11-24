@@ -15,7 +15,7 @@
 // Usage: Ujwalam.cmd [launcher flags...]   e.g. --mock --no-open --stop-on-stdin, --allow-devices, --live
 //        Ujwalam.cmd diag [--out FILE]     diagnostics bundle (tools/diag/bundle.mjs), no host or UI needed
 // Node is checked first (release.json nodeMin) and the launcher is loaded only after the check passes.
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { closeSync, constants as fsConstants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -142,10 +142,21 @@ export async function main(args = process.argv.slice(2)) {
   try { spec = installedSpec({ dataRoot, userArgs: args }); } catch (e) { console.log(`[ujwalam] ${e.message}`); return 2; }
   for (const d of Object.values(spec.dirs)) mkdirSync(d, { recursive: true });
   if (!existsSync(spec.profile)) {
-    // The alpha project needs the profile's placeholder values; the package never carries a filled-in one.
-    console.log(`[ujwalam] no profile at ${spec.profile}. Copy ${path.join(INSTALL, 'data', 'profile.example.json')} there`);
-    console.log('[ujwalam] and fill in your values (it stays on this PC), or name another file with --profile. Nothing was started.');
-    return 2;
+    // The alpha project needs the profile's placeholder values; the package never carries a filled-in one. First start
+    // on a new PC (Sandbox check 2026-11-24: the shortcut started nothing and said nothing, the message went to a log
+    // with no window): the build's example (placeholders only) becomes the user's profile, never overwriting one.
+    const example = path.join(INSTALL, 'data', 'profile.example.json');
+    try {
+      mkdirSync(path.dirname(spec.profile), { recursive: true });
+      copyFileSync(example, spec.profile, fsConstants.COPYFILE_EXCL);
+      console.log(`[ujwalam] first start: made ${spec.profile} from the example (placeholder values; fill in your own any time, it stays on this PC)`);
+    } catch (e) {
+      if (!existsSync(spec.profile)) {
+        console.log(`[ujwalam] no profile at ${spec.profile} and the example could not be copied (${e.message}). Copy ${example} there,`);
+        console.log('[ujwalam] or name another file with --profile. Nothing was started.');
+        return 2;
+      }
+    }
   }
   Object.assign(process.env, spec.env);
   console.log(`[ujwalam] ${release.version} from ${spec.install}; data ${spec.dataRoot}; overlays ${existsSync(spec.overlayRoot) ? spec.overlayRoot : 'off (no overlay folder)'}; profile ${existsSync(spec.profile) ? 'found' : 'none'}`);

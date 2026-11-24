@@ -254,14 +254,31 @@ test('clip maker check: the package carries its Python (runtime/python); a damag
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-test('installed run without a profile stops before anything starts and says where the example is', () => {
+test('installed run without a profile: the first start makes one from the example and starts; an existing one is kept', () => {
+  // Sandbox check 2026-11-24: on a new PC the shortcut started nothing (exit 2, message only in the log).
   const d = tmp('noprof');
   try {
-    const r = spawnSync(process.execPath, [path.join(REPO, 'tools', 'package', 'run-installed.mjs'), '--mock'], { encoding: 'utf8', env: { ...process.env, UJWALAM_DATA_ROOT: path.join(d, 'data') }, windowsHide: true });
-    // In the repo there is no release.json at the root, so main() stops even earlier (exit 2); in a package it
-    // reaches the profile check. Both exit 2 without starting the launcher.
-    assert.equal(r.status, 2, r.stdout + r.stderr);
-    assert.ok(!/\[serve\]|\[studio\]/.test(r.stdout));
+    const pkg = path.join(d, 'pkg');
+    mkdirSync(path.join(pkg, 'tools', 'package'), { recursive: true });
+    mkdirSync(path.join(pkg, 'services', 'studio-ui'), { recursive: true });
+    mkdirSync(path.join(pkg, 'data'), { recursive: true });
+    copyFileSync(path.join(REPO, 'tools', 'package', 'run-installed.mjs'), path.join(pkg, 'tools', 'package', 'run-installed.mjs'));
+    copyFileSync(path.join(REPO, 'data', 'profile.example.json'), path.join(pkg, 'data', 'profile.example.json'));
+    writeFileSync(path.join(pkg, 'release.json'), JSON.stringify({ version: '0.1.0-alpha.0', nodeMin: '22.13.0' }));
+    writeFileSync(path.join(pkg, 'services', 'studio-ui', 'launch.mjs'), "export function main() { console.log('LAUNCHED'); return 0; }\n");
+    const dataRoot = path.join(d, 'data');
+    const run = () => spawnSync(process.execPath, [path.join(pkg, 'tools', 'package', 'run-installed.mjs'), '--mock'], { encoding: 'utf8', env: { ...process.env, UJWALAM_DATA_ROOT: dataRoot }, windowsHide: true });
+    const r = run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /first start: made .*profile\.local\.json from the example/);
+    assert.match(r.stdout, /LAUNCHED/);
+    const prof = path.join(dataRoot, 'profile.local.json');
+    assert.equal(readFileSync(prof, 'utf8'), readFileSync(path.join(REPO, 'data', 'profile.example.json'), 'utf8'));
+    writeFileSync(prof, '{"mine":true}');
+    const r2 = run();
+    assert.equal(r2.status, 0, r2.stdout + r2.stderr);
+    assert.doesNotMatch(r2.stdout, /first start/);
+    assert.equal(readFileSync(prof, 'utf8'), '{"mine":true}');
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
