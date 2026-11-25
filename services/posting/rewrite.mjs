@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // D443 T4: rewrite the text of scheduled, not yet public YouTube posts Ujwalam uploaded, and undo it.
-//   runRewrite({ dataDir, store, auth, budget, flags, aiDeps, fetchImpl, ffmpeg, nowMs, limits, outputsStatus?, only?, log? })
+//   runRewrite({ dataDir, store, auth, budget, flags, aiDeps, fetchImpl, ffmpeg, nowMs, limits, profile?, outputsStatus?, only?, log? })
+//     (profile: the local profile for {handles.x} in the game's description lines; a line it cannot fill is left out)
 //     -> { refused } | { rewritten: [id], skipped: [{ id, why }], left, stopped }
 //   runUndo({ dataDir, store, auth, budget, flags, fetchImpl, nowMs, only?, force? }) -> { refused } | { restored: [id], skipped, left, stopped }
 // Only videos in Ujwalam's own posting ledger (status uploaded, a videoId and the publish time Google got in the future)
@@ -17,8 +18,9 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import path from 'node:path';
 import { keepsParts } from './ai-text-check.mjs';
 import { withAiText } from './ai-text.mjs';
-import { dropTemplateLead, gameHashtags, gameTags, resolveGame } from './game-text.mjs';
-import { checkLimits, composeField, limitsFit, loadLimits, loadTemplates, unresolvedKeys } from './index.mjs';
+import { dropTemplateLead, gameHashtags, gameLines, gameTags, gameTitleTags, resolveGame } from './game-text.mjs';
+import { checkLimits, cleanProfile, composeField, limitsFit, loadLimits, loadTemplates, renderText, unresolvedKeys } from './index.mjs';
+import { readPrefs } from './post-prefs.mjs';
 import { CAPTIONS_SCOPE } from './oauth.mjs';
 import { WRITABLE_SNIPPET, getVideoSnippet, isStreamLive, updateVideoSnippet } from './youtube.mjs';
 
@@ -117,6 +119,8 @@ async function rewriteInner(o) {
   const room = budget.writeRoom?.(need) ?? { fit: cands.length, why: null };
   log(`rewrite: ${cands.length} scheduled video(s) from Ujwalam's list; today's quota has room for ${room.why ? 0 : room.fit}`);
   const margin = o.marginMs ?? MARGIN_MS;
+  const profile = cleanProfile(o.profile ?? {});
+  const ownTags = readPrefs(dataDir).prefs.text.tags ?? [];
 
   await withAiText(o.aiDeps ?? {}, async (gen, aiWhy) => {
     for (const { id, entry } of cands) {
@@ -157,10 +161,17 @@ async function rewriteInner(o) {
       if (!r.ok) { skip(`template-fallback-${String(r.code).slice(0, 30)}`); continue; }
       // the new text: AI title (with the game), AI lines then the old description without the template's own opening
       // line (links, credits stay), the game's tags first, then the AI tags, then the old ones; the game's hashtags
+      // 2026-11-25 style: the game's lines (Featured, subscribe, streamer) after the AI lines, the title hashtags when
+      // they fit, and the user's own tags (Settings) right after the game's
       const kept = dropTemplateLead(post.description, templates);
-      const p = { title: r.text.title, description: `${r.text.description}\n\n${kept}`, tags: [], hashtags: gameHashtags(r.game ?? null, post.target) ?? [...(post.hashtags ?? [])], target: post.target };
+      const lines = gameLines(r.game ?? null, post.target, facts.mode, (s) => { const m = new Set(); const t = renderText(s, { profile, n: 1, date: '' }, m); return m.size ? null : t; });
+      const titleMax = limits.targets?.[post.target]?.fields?.title?.max ?? null;
+      const p = { title: gameTitleTags(r.text.title, r.game ?? null, post.target, titleMax), description: [r.text.description, lines, kept].filter(Boolean).join('\n\n'), tags: [], hashtags: gameHashtags(r.game ?? null, post.target) ?? [...(post.hashtags ?? [])], target: post.target };
       const fits = limitsFit(p, limits);
-      for (const t of gameTags(r.game ?? null, post.target, facts.mode, [...r.text.tags, ...(post.tags ?? [])])) if (fits({ tags: [...p.tags, t] })) p.tags.push(t);
+      const seenTag = new Set();
+      for (const t of gameTags(r.game ?? null, post.target, facts.mode, [...ownTags, ...r.text.tags, ...(post.tags ?? [])])) {
+        if (!seenTag.has(t.toLowerCase()) && fits({ tags: [...p.tags, t] })) { p.tags.push(t); seenTag.add(t.toLowerCase()); }
+      }
       // a placeholder the old text already carried is not new; one the AI text brings is a reject
       const oldKeys = new Set(unresolvedKeys(post.title, post.description, ...(post.tags ?? [])));
       const newKeys = unresolvedKeys(p.title, r.text.description, ...r.text.tags).filter((k) => !oldKeys.has(k));

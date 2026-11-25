@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
-import { dropTemplateLead, gameHashtags, gamePost, gameTags, gameTitle, postGames, resolveGame } from '../services/posting/game-text.mjs';
+import { dropTemplateLead, gameHashtags, gameLines, gamePost, gameTags, gameTitle, gameTitleTags, postGames, resolveGame } from '../services/posting/game-text.mjs';
 import { loadTemplates } from '../services/posting/index.mjs';
 
 const tmp = [];
@@ -16,12 +16,37 @@ test('the committed game data: name, short name, tags per target, hashtags per t
   const g = gamePost('codm');
   assert.ok(g, 'data/games/codm/posting.json has a post block');
   assert.equal(g.short, 'CODM');
-  assert.deepEqual(gameHashtags(g, 'youtube-shorts'), ['#CODM', '#codmshorts', '#Shorts']);
-  assert.deepEqual(gameHashtags(g, 'instagram-reels'), ['#CODM', '#codmshorts', '#Shorts'], 'default for other targets');
-  assert.deepEqual(gameHashtags(g, 'youtube-video'), ['#CODM', '#CallOfDutyMobile']);
-  assert.deepEqual(gameTags(g, 'youtube-shorts', null, []), ['codm', 'call of duty mobile', 'cod mobile', 'codm shorts', 'codm highlights']);
-  assert.ok(!gameTags(g, 'youtube-video', null, []).includes('codm shorts'), 'no shorts tag on a long video');
+  const shortsTags = ['#CODM', '#CallOfDutyMobile', '#CODMShorts', '#CODMHighlights', '#MobileGaming', '#MobileFPS', '#GamingShorts'];
+  assert.deepEqual(gameHashtags(g, 'youtube-shorts'), shortsTags);
+  assert.deepEqual(gameHashtags(g, 'instagram-reels'), shortsTags, 'default for other targets');
+  assert.deepEqual(gameHashtags(g, 'youtube-video'), ['#CODM', '#CallOfDutyMobile', '#CODMHighlights', '#MobileGaming', '#MobileFPS']);
+  const st = gameTags(g, 'youtube-shorts', null, []);
+  assert.deepEqual(st.slice(0, 5), ['codm', 'call of duty mobile', 'cod mobile', 'codm shorts', 'codm highlights']);
+  assert.ok(st.includes('youtube shorts') && st.includes('mobile fps'));
+  assert.ok(!gameTags(g, 'youtube-video', null, []).some((t) => /shorts/.test(t)), 'no shorts tag on a long video');
+  // user's choice 2026-11-25: other games are named only on posts of that game
+  for (const t of ['youtube-shorts', 'youtube-video', 'instagram-reels']) {
+    const all = [...gameTags(g, t, 'mp', []), ...(gameHashtags(g, t) ?? []), gameLines(g, t, 'mp', (s) => s)].join(' ').toLowerCase();
+    assert.ok(!/delta force|rainbow|siege/.test(all), `${t}: no other game named`);
+  }
   assert.ok(postGames().includes('codm'));
+});
+
+test('2026-11-25 style: title hashtags on Shorts only and only when they fit; the game lines', () => {
+  const g = gamePost('codm');
+  assert.equal(gameTitleTags('CODM clutch 🔥', g, 'youtube-shorts', 100), 'CODM clutch 🔥 #codm #shorts');
+  assert.equal(gameTitleTags('CODM clutch #shorts', g, 'youtube-shorts', 100), 'CODM clutch #shorts #codm', 'one already there is not repeated');
+  assert.equal(gameTitleTags('CODM clutch', g, 'youtube-video', 100), 'CODM clutch', 'long video: none');
+  assert.equal(gameTitleTags('CODM clutch', g, 'instagram-reels', 100), 'CODM clutch', 'Reels have no title');
+  const long = `CODM ${'a'.repeat(85)}`;
+  assert.equal(gameTitleTags(long, g, 'youtube-shorts', 100), long, 'does not fit: the title as it is');
+  const fill = (s) => s.replace('{handles.youtube}', 'Chan');
+  assert.equal(gameLines(g, 'youtube-shorts', 'mp', fill),
+    '🎮 Featured: Call of Duty: Mobile (MP)\n🔴 Catch me live and subscribe for more CODM highlights\n🎥 Streamer: Chan');
+  assert.equal(gameLines(g, 'youtube-shorts', null).split('\n').length, 2, 'no profile value: the streamer line is left out; no mode: no brackets');
+  assert.ok(gameLines(g, 'youtube-shorts', null).startsWith('🎮 Featured: Call of Duty: Mobile\n'));
+  assert.equal(gameLines(null, 'youtube-shorts', 'mp'), '');
+  assert.deepEqual(gameTags(g, 'youtube-shorts', 'mp', []).filter((t) => / mp$|multiplayer/.test(t)), ['codm mp', 'codm multiplayer']);
 });
 
 test('title: the model\'s own mention is kept; else the short name is added when it fits; else null', () => {
@@ -35,8 +60,10 @@ test('title: the model\'s own mention is kept; else the short name is added when
 
 test('tags: game tags first, the mode tag, then the rest, duplicates out in any case', () => {
   const g = gamePost('codm');
-  assert.deepEqual(gameTags(g, 'youtube-shorts', 'br', ['CODM', 'clutch', 'Clutch']),
-    ['codm', 'call of duty mobile', 'cod mobile', 'codm shorts', 'codm highlights', 'codm battle royale', 'clutch']);
+  const t = gameTags(g, 'youtube-shorts', 'br', ['CODM', 'clutch', 'Clutch']);
+  assert.deepEqual(t.slice(-3), ['codm br', 'codm battle royale', 'clutch']);
+  assert.equal(t[0], 'codm');
+  assert.equal(new Set(t.map((x) => x.toLowerCase())).size, t.length, 'no duplicates');
   assert.deepEqual(gameTags(null, 'youtube-shorts', 'br', ['clutch', 'Clutch']), ['clutch'], 'no game: the rest only');
 });
 

@@ -224,7 +224,10 @@ async function youtubeMain(a, out, err, deps) {
       let r;
       if (sub === 'rewrite') {
         const runner = deps.runner ?? createModelRunner({ isOn: () => flags.isOn(LOCAL_MODEL_FLAG) });
-        r = await runRewrite({ ...common, ffmpeg: deps.ffmpeg ?? findFfmpeg(typeof a.ffmpeg === 'string' ? a.ffmpeg : undefined), aiDeps: { runner, isOn: () => flags.isOn(AI_TEXT_FLAG), ...(deps.aiDeps ?? {}) } });
+        const profileFile = typeof a.profile === 'string' ? a.profile : path.join(REPO, 'data', 'profile.local.json');
+        let profile = {};
+        try { if (existsSync(profileFile)) profile = JSON.parse(readFileSync(profileFile, 'utf8')); } catch { /* a line needing it is left out */ }
+        r = await runRewrite({ ...common, profile, ffmpeg: deps.ffmpeg ?? findFfmpeg(typeof a.ffmpeg === 'string' ? a.ffmpeg : undefined), aiDeps: { runner, isOn: () => flags.isOn(AI_TEXT_FLAG), ...(deps.aiDeps ?? {}) } });
       } else r = await runUndo({ ...common, force: a.force === true });
       if (r.refused) { err(`youtube: ${sub} refused (${r.refused}); nothing was changed${r.refused === 'flag-off' ? ` (switch '${REWRITE_FLAG}' on first)` : ''}`); return 1; }
       const done = r.rewritten ?? r.restored;

@@ -26,7 +26,7 @@ const STYLE = { emoji: { short: ['X1'], montage: ['M1'] } };
 describe('post prefs (PT5)', () => {
   test('defaults change nothing: hype, emoji off, no hashtags, no footer, even shares, suggestions on', () => {
     const d = defaultPrefs();
-    assert.deepEqual(d.text, { tone: 'hype', emoji: false, hashtags: [], footer: '' });
+    assert.deepEqual(d.text, { tone: 'hype', emoji: false, hashtags: [], tags: [], footer: '' });
     assert.equal(d.growthSuggestions, true);
     assert.deepEqual(d.kindShare, evenShares());
     assert.equal(Object.values(d.kindShare).reduce((a, b) => a + b, 0), 100);
@@ -113,7 +113,7 @@ describe('post prefs routes (PT5)', () => {
     let r = await t.get('/ui/api/posts/prefs');
     assert.equal(r.status, 200);
     assert.deepEqual(r.json().prefs, defaultPrefs());
-    const prefs = { text: { tone: 'clean', emoji: true, hashtags: ['#mobile', '#clutch'], footer: 'New clips daily' }, kindShare: { short: 40, montage: 30, 'won-reel': 10, 'impact-play': 10, 'long-highlights': 10 }, growthSuggestions: false };
+    const prefs = { text: { tone: 'clean', emoji: true, hashtags: ['#mobile', '#clutch'], tags: ['my channel', 'mobile gamer'], footer: 'New clips daily' }, kindShare: { short: 40, montage: 30, 'won-reel': 10, 'impact-play': 10, 'long-highlights': 10 }, growthSuggestions: false };
     assert.equal((await t.post('/ui/api/posts/prefs', { prefs }, { noCsrf: true })).status, 403);
     r = await t.post('/ui/api/posts/prefs', { prefs });
     assert.equal(r.status, 200);
@@ -172,5 +172,21 @@ describe('Codex review of PT5 (D410)', () => {
     const small = { ...post, description: 'short' };
     const ok = applyTextPrefs(small, { tone: 'hype', emoji: false, hashtags: ['#clutch'], footer: 'Live' }, { style: STYLE, fits: limitsFit(small, limits) });
     assert.equal(ok.description, 'short\n\nLive'); assert.deepEqual(ok.hashtags, ['#a', '#clutch']);
+  });
+
+  test('own tags (2026-11-25): checked, added after the post\'s tags without repeats and only while they fit; a post with no tags list is left alone', () => {
+    const good = { ...defaultPrefs(), text: { ...defaultPrefs().text, tags: ['my  channel ', 'Mobile Gamer', 'mobile gamer'] } };
+    assert.deepEqual(checkPrefs(good).values.text.tags, ['my channel', 'mobile gamer']);
+    for (const bad of [['#tag'], ['a'.repeat(31)], ['x<y'], Array(16).fill('t'), 'tag']) {
+      assert.equal(checkPrefs({ ...defaultPrefs(), text: { ...defaultPrefs().text, tags: bad } }).problems[0]?.key, 'tags', JSON.stringify(bad).slice(0, 40));
+    }
+    const { tags: _drop, ...noTags } = defaultPrefs().text;
+    assert.deepEqual(checkPrefs({ ...defaultPrefs(), text: noTags }).values.text.tags, [], 'an older caller sends none: none');
+    const text = { tone: 'hype', emoji: false, hashtags: [], tags: ['codm', 'my channel'], footer: '' };
+    const r = applyTextPrefs({ title: 'T', description: 'D', hashtags: [], tags: ['CODM', 'clutch'] }, text, { style: STYLE });
+    assert.deepEqual(r.tags, ['CODM', 'clutch', 'my channel']);
+    const tight = applyTextPrefs({ title: 'T', description: 'D', hashtags: [], tags: ['clutch'] }, text, { style: STYLE, fits: (p) => (p.tags ?? []).length <= 2 });
+    assert.deepEqual(tight.tags, ['clutch', 'codm'], 'the second would not fit: left out');
+    assert.equal(applyTextPrefs({ title: 'T', description: 'D', hashtags: [] }, text, { style: STYLE }).tags, undefined);
   });
 });

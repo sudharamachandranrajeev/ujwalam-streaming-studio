@@ -102,15 +102,17 @@ describe('rewrite', () => {
   test('happy path: new AI text, every other snippet field kept, original saved, one ledger line each', async () => {
     const e = await setup(2);
     const before = structuredClone(e.yt.videos);
-    const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    writeFileSync(path.join(e.dataDir, 'posting', 'prefs.json'), JSON.stringify({ text: { tags: ['my channel'] } }));
+    const r = await runRewrite({ ...base(e), profile: { handles: { youtube: 'Chan' } }, aiDeps: aiDeps(answer()) });
     assert.equal(r.rewritten.length, 2, JSON.stringify(r));
     for (const [vid, v] of Object.entries(e.yt.videos)) {
-      assert.equal(v.snippet.title, 'Clutch finish nobody saw coming | CODM');
-      assert.match(v.snippet.description, /^Everything on the line\./);
+      assert.equal(v.snippet.title, 'Clutch finish nobody saw coming | CODM #codm #shorts');
+      assert.match(v.snippet.description, /^Everything on the line\.\nThe last push settles it\.\n\n🎮 Featured: Call of Duty: Mobile\n🔴 Catch me live and subscribe for more CODM highlights\n🎥 Streamer: Chan\n\n/);
+      assert.ok(v.snippet.tags.includes('my channel'), 'the user\'s own tags (Settings)');
       const old = before[vid].snippet.description.split('\n');
       assert.ok(old.slice(1).filter((l) => l.trim() && !l.startsWith('#')).every((l) => v.snippet.description.includes(l)), 'the old credit lines are kept after the AI lines');
       assert.ok(!v.snippet.description.includes(old[0]), 'the template opening line is replaced: ' + old[0]);
-      assert.ok(v.snippet.description.endsWith('#CODM #codmshorts #Shorts'), v.snippet.description);
+      assert.ok(v.snippet.description.endsWith('#CODM #CallOfDutyMobile #CODMShorts #CODMHighlights #MobileGaming #MobileFPS #GamingShorts'), v.snippet.description);
       assert.equal(v.snippet.tags[0], 'codm');
       assert.equal(v.snippet.categoryId, '20'); assert.equal(v.snippet.defaultLanguage, 'en');
       assert.ok(v.snippet.tags.includes('clutch'));
@@ -205,7 +207,7 @@ describe('rewrite', () => {
     writeFileSync(rewritesFile(e.dataDir), JSON.stringify(st));
     const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer({ title: 'CODM clutch at the end' })) });
     assert.equal(r.rewritten.length, 1, JSON.stringify(r));
-    assert.equal(e.yt.videos[vid].snippet.title, 'CODM clutch at the end');
+    assert.equal(e.yt.videos[vid].snippet.title, 'CODM clutch at the end #codm #shorts');
     const rec = readRewrites(e.dataDir).items[vid];
     assert.deepEqual(rec.original, before[vid].snippet, 'undo still goes back to the upload text');
     assert.equal(rec.version, cfg.version); assert.equal(rec.redoOf, '0.9.0');

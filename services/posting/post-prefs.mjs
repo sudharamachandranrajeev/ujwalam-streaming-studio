@@ -4,7 +4,7 @@
 //   readPrefs(dataDir)            -> { prefs, defaults, error, limits, kinds }   never throws (a bad file: defaults + error)
 //   savePrefs(dataDir, body)      -> { ok: true, ...readPrefs } | { ok: false, problems: [{ key, text }] }
 //   checkPrefs(j)                 -> { values, problems }  pure
-//   applyTextPrefs(post, text, { kind, seed, titleMax, style }) -> { title, description, hashtags }  pure
+//   applyTextPrefs(post, text, { kind, seed, titleMax, style }) -> { title, description, hashtags, tags? }  pure
 //   userKindShares(dataDir)       -> { kind: fraction } | null (null = the shares are even: posting order as before)
 // The defaults change nothing: tone hype keeps the drafted lines as written, emoji off, no own hashtags, no footer, even
 // shares, growth suggestions on (requested feature, D410). Node stdlib only.
@@ -18,8 +18,10 @@ export const PREFS_NAME = 'prefs.json';
 export const DEFAULT_TEXT_STYLE = path.join(REPO, 'data', 'posting', 'text-style.json');
 export const prefsFile = (dataDir) => path.join(dataDir, 'posting', PREFS_NAME);
 export const TONES = Object.freeze(['hype', 'clean']);
-export const PREF_LIMITS = Object.freeze({ hashtags: 10, hashtagChars: 40, footer: 500 });
+export const PREF_LIMITS = Object.freeze({ hashtags: 10, hashtagChars: 40, footer: 500, tags: 15, tagChars: 30 });
 const HASHTAG = /^#[\p{L}\p{N}_]{1,39}$/u;
+// own search tags (user, 2026-11-25: the channel name and the audience tags stay out of the repo): words, spaces, ' and -
+const TAG = /^[\p{L}\p{N}][\p{L}\p{N} '-]{0,29}$/u;
 // the post editor's rule (services/posting/index.mjs edit): no control characters except a line break
 const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f]/;
 const CONTROL_G = /[\u0000-\u0009\u000b-\u001f\u007f]/g;
@@ -32,7 +34,7 @@ export function evenShares(kinds = RULE_KINDS) {
   return Object.fromEntries(kinds.map((k) => [k, base + (rest-- > 0 ? 1 : 0)]));
 }
 
-export const defaultPrefs = () => ({ text: { tone: 'hype', emoji: false, hashtags: [], footer: '' }, kindShare: evenShares(), growthSuggestions: true });
+export const defaultPrefs = () => ({ text: { tone: 'hype', emoji: false, hashtags: [], tags: [], footer: '' }, kindShare: evenShares(), growthSuggestions: true });
 
 /** Checks a whole prefs object (every key required). -> { values, problems }. Pure. */
 export function checkPrefs(j) {
@@ -46,6 +48,11 @@ export function checkPrefs(j) {
     add('hashtags', `own hashtags: up to ${PREF_LIMITS.hashtags}, each like #gaming (letters, numbers or _ after the #, at most ${PREF_LIMITS.hashtagChars} characters)`);
   } else if (t.hashtags.some((s) => s.toLowerCase() === '#shorts')) add('hashtags', 'leave #Shorts out of your own hashtags: Shorts get it already, and other videos must not have it');
   else tags = [...new Map(t.hashtags.map((s) => [s.toLowerCase(), s])).values()];
+  let own = null;
+  const ownIn = t.tags === undefined ? [] : t.tags; // a caller from before own tags (2026-11-25) sends none
+  if (!Array.isArray(ownIn) || ownIn.length > PREF_LIMITS.tags || !ownIn.every((s) => typeof s === 'string' && TAG.test(s.trim().replace(/\s+/g, ' ')))) {
+    add('tags', `own tags: up to ${PREF_LIMITS.tags}, each plain words (letters, numbers, spaces, ' or -, at most ${PREF_LIMITS.tagChars} characters)`);
+  } else own = [...new Map(ownIn.map((s) => s.trim().replace(/\s+/g, ' ')).map((s) => [s.toLowerCase(), s])).values()];
   if (typeof t.footer !== 'string' || t.footer.length > PREF_LIMITS.footer || /[<>]/.test(t.footer) || CONTROL.test(t.footer)) add('footer', `the description footer is plain text of at most ${PREF_LIMITS.footer} characters, without < or > or control characters`);
   const ks = isPlain(j.kindShare) ? j.kindShare : null;
   let share = null;
@@ -55,7 +62,7 @@ export function checkPrefs(j) {
   else share = Object.fromEntries(RULE_KINDS.map((k) => [k, ks[k]]));
   if (typeof j.growthSuggestions !== 'boolean') add('growthSuggestions', 'growth suggestions must be on or off');
   if (problems.length) return { values: null, problems };
-  return { values: { text: { tone: t.tone, emoji: t.emoji, hashtags: tags, footer: t.footer.trim() }, kindShare: share, growthSuggestions: j.growthSuggestions }, problems };
+  return { values: { text: { tone: t.tone, emoji: t.emoji, hashtags: tags, tags: own, footer: t.footer.trim() }, kindShare: share, growthSuggestions: j.growthSuggestions }, problems };
 }
 
 /** The saved prefs over the defaults. A missing file is the defaults; an unreadable or bad one too, with error set. */
@@ -104,7 +111,8 @@ const len = (s) => Array.from(s).length;
 
 /** The post text with the user's choices applied. Pure. text = prefs.text. Each addition (the emoji, the footer, each own
  *  hashtag) is kept only when the composed text still passes `fits` (the caller's checkLimits against
- *  data/posting/limits.json) and titleMax; otherwise it is left out. #Shorts from the user is never added. */
+ *  data/posting/limits.json) and titleMax; otherwise it is left out. #Shorts from the user is never added. Own tags are
+ *  added after the post's tags (only when the post has a tags list, and each only while the tags still fit). */
 export function applyTextPrefs(post, text, { kind = 'short', seed = '', titleMax = null, fits = () => true, style = loadTextStyle() } = {}) {
   let title = String(post.title ?? '');
   let description = String(post.description ?? '');
@@ -129,5 +137,13 @@ export function applyTextPrefs(post, text, { kind = 'short', seed = '', titleMax
     if (!fits({ title, description, hashtags: [...hashtags, h] })) continue;
     hashtags.push(h); seen.add(h.toLowerCase());
   }
-  return { title, description, hashtags };
+  if (!Array.isArray(post.tags)) return { title, description, hashtags };
+  const tags = [...post.tags];
+  const have = new Set(tags.map((g) => String(g).toLowerCase()));
+  for (const g of Array.isArray(t.tags) ? t.tags : []) {
+    if (typeof g !== 'string' || !TAG.test(g) || have.has(g.toLowerCase())) continue;
+    if (!fits({ title, description, hashtags, tags: [...tags, g] })) continue;
+    tags.push(g); have.add(g.toLowerCase());
+  }
+  return { title, description, hashtags, tags };
 }

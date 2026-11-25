@@ -75,10 +75,10 @@ describe('AI text lands in the draft', () => {
     for (const f of postFiles(e)) {
       const j = JSON.parse(readFileSync(f, 'utf8'));
       assert.equal(j.textSource, 'ai');
-      assert.equal(j.title, 'Clutch finish nobody saw coming | CODM', 'the game name is added when the model left it out');
+      assert.equal(j.title, 'Clutch finish nobody saw coming | CODM #codm #shorts', 'the game name is added when the model left it out; then the title hashtags');
       assert.deepEqual(j.tags.slice(0, 3), ['codm', 'call of duty mobile', 'cod mobile'], 'the game tags come first');
-      assert.deepEqual(j.hashtags, ['#CODM', '#codmshorts', '#Shorts']);
-      assert.match(j.description, /^Everything on the line\.\nThe last push settles it.\n\n/);
+      assert.deepEqual(j.hashtags, ['#CODM', '#CallOfDutyMobile', '#CODMShorts', '#CODMHighlights', '#MobileGaming', '#MobileFPS', '#GamingShorts']);
+      assert.match(j.description, /^Everything on the line\.\nThe last push settles it.\n\n🎮 Featured: Call of Duty: Mobile\n🔴 Catch me live and subscribe for more CODM highlights\n🎥 Streamer: @example-channel\n\n/);
       assert.match(j.description, /Live on @example-channel/, 'the template description (links) is kept after the AI lines');
       assert.ok(j.tags.includes('clutch') && j.tags.includes('gaming'), 'AI tags first, template tags kept');
       assert.deepEqual(j.ai.thumbHook, 'NO WAY');
@@ -93,7 +93,7 @@ describe('AI text lands in the draft', () => {
     const { r: rn } = runner(answer({ title: '3 kills to take the victory' }));
     await run(e, { runner: rn, isOn: () => true });
     const j = readPost(e);
-    assert.equal(j.textSource, 'ai'); assert.equal(j.factsSource, 'detector'); assert.equal(j.title, '3 kills to take the victory | CODM');
+    assert.equal(j.textSource, 'ai'); assert.equal(j.factsSource, 'detector'); assert.equal(j.title, '3 kills to take the victory | CODM #codm #shorts');
   });
 
   test('no detector facts, the model saw 4 kills: a kill claim is rejected (fact-unverified), template text; the seen facts do not verify', async () => {
@@ -173,7 +173,7 @@ describe('every failure keeps the template text and records why', () => {
     const { r: rn } = runner(answer(), { spawnServer: (exe, args) => spawn(process.execPath, [FAKE, ...args], { windowsHide: true, env: { ...process.env, FAKE_LLAMA_REPLIES: replies }, stdio: ['ignore', 'pipe', 'pipe'] }) });
     await run(e, { runner: rn, isOn: () => true });
     const j = readPost(e);
-    assert.equal(j.textSource, 'ai', j.aiReject); assert.equal(j.title, 'CODM clutch at the end');
+    assert.equal(j.textSource, 'ai', j.aiReject); assert.equal(j.title, 'CODM clutch at the end #codm #shorts');
   });
 
   test('limits: the composed description over the platform limit is rejected after composing (code limits)', async () => {

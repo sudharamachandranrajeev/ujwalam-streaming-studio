@@ -50,13 +50,15 @@ Column {
     property string skipProblem: ""
     property string rulesProblem: ""      // Codex round 3: a rules file that cannot be read; only Reset replaces it
     // PT5 (D410): post text and growth (ui/api/posts/prefs)
-    readonly property var prefsDefault: ({ text: { tone: "hype", emoji: false, hashtags: [], footer: "" }, kindShare: ({ short: 20, montage: 20, "won-reel": 20, "impact-play": 20, "long-highlights": 20 }), growthSuggestions: true })
+    readonly property var prefsDefault: ({ text: { tone: "hype", emoji: false, hashtags: [], tags: [], footer: "" }, kindShare: ({ short: 20, montage: 20, "won-reel": 20, "impact-play": 20, "long-highlights": 20 }), growthSuggestions: true })
     property var prefs: JSON.parse(JSON.stringify(prefsDefault))
     property string prefsOrig: ""
     property bool prefsLoaded: false
     property string prefsError: ""
     property string tagsText: ""
     property string tagsProblem: ""
+    property string ownTagsText: ""       // own search tags, comma-separated (2026-11-25)
+    property string ownTagsProblem: ""
     property var previewItems: []         // [{kind, title, description, hashtags}]
     property string previewInfo: ""
     readonly property var weekDays: [{ id: "mon", text: "Mon" }, { id: "tue", text: "Tue" }, { id: "wed", text: "Wed" }, { id: "thu", text: "Thu" }, { id: "fri", text: "Fri" }, { id: "sat", text: "Sat" }, { id: "sun", text: "Sun" }]
@@ -132,6 +134,7 @@ Column {
         : gridProblem !== "" ? gridProblem
         : skipProblem !== "" ? skipProblem
         : tagsProblem !== "" ? tagsProblem
+        : ownTagsProblem !== "" ? ownTagsProblem
         : prefsLoaded && shareSum !== 100 ? "The shares of each kind add up to " + shareSum + " %; make them add up to 100 %."
         : card.postsPerDayMin > card.postsPerDayMax ? "The fewest posts a day must not be more than the most."
         : minutesOf(card.windowEnd, 0) <= minutesOf(card.windowStart, 0) ? "The posting window must end after it starts." : ""
@@ -235,6 +238,8 @@ Column {
         prefsError = "";
         tagsText = "";
         tagsProblem = "";
+        ownTagsText = "";
+        ownTagsProblem = "";
         previewItems = [];
         previewInfo = "";
     }
@@ -262,11 +267,14 @@ Column {
         const p = b.prefs || prefsDefault, t = p.text || ({});
         const ks = ({});
         for (const k of kindList) ks[k.id] = clamp(p.kindShare ? p.kindShare[k.id] : 0, 0, 100, 0);
-        prefs = { text: { tone: t.tone === "clean" ? "clean" : "hype", emoji: t.emoji === true, hashtags: Array.isArray(t.hashtags) ? t.hashtags.map(String) : [], footer: String(t.footer || "") },
+        prefs = { text: { tone: t.tone === "clean" ? "clean" : "hype", emoji: t.emoji === true, hashtags: Array.isArray(t.hashtags) ? t.hashtags.map(String) : [],
+                tags: Array.isArray(t.tags) ? t.tags.map(String) : [], footer: String(t.footer || "") },
             kindShare: ks, growthSuggestions: p.growthSuggestions !== false };
         prefsError = b.error ? "Your post text settings could not be read (" + String(b.error) + "); the defaults are shown, and Save writes them again." : "";
         tagsText = prefs.text.hashtags.join(" ");
         tagsProblem = "";
+        ownTagsText = prefs.text.tags.join(", ");
+        ownTagsProblem = "";
         prefsOrig = JSON.stringify(prefs);
         prefsLoaded = true;
     }
@@ -286,6 +294,16 @@ Column {
             : parts.length > 10 ? "Own hashtags: at most 10." : "";
         if (tagsProblem !== "") return false;
         return setPref(p => { p.text.hashtags = parts.filter((x, i) => parts.findIndex(y => y.toLowerCase() === x.toLowerCase()) === i) });
+    }
+    // own search tags: comma-separated words (a tag may have spaces); same rule as post-prefs.mjs checkPrefs
+    function setOwnTags(text) {
+        ownTagsText = text;
+        const parts = String(text).split(",").map(x => x.trim().replace(/\s+/g, " ")).filter(x => x !== "");
+        const bad = parts.find(x => !/^[A-Za-z0-9À-￿][A-Za-z0-9À-￿ '-]{0,29}$/.test(x));
+        ownTagsProblem = bad !== undefined ? "Own tags: \"" + bad + "\" is not a tag (letters, numbers, spaces, ' or -, at most 30 characters)."
+            : parts.length > 15 ? "Own tags: at most 15." : "";
+        if (ownTagsProblem !== "") return false;
+        return setPref(p => { p.text.tags = parts.filter((x, i) => parts.findIndex(y => y.toLowerCase() === x.toLowerCase()) === i) });
     }
     function setShare(kind, n) {
         if (!kindList.some(k => k.id === kind)) return false;
@@ -1108,6 +1126,16 @@ Column {
             onTextEdited: ap.setTags(text)
         }
         Quiet { text: "Added to every new post after the usual ones, up to 10." }
+        Words { text: "Your own tags:" }
+        UField {
+            objectName: "autopostOwnTags"
+            width: Math.min(parent.width, 420)
+            label: "Your own tags"
+            placeholderText: "my channel, mobile gamer"
+            text: ap.ownTagsText
+            onTextEdited: ap.setOwnTags(text)
+        }
+        Quiet { text: "Search tags added to every new post, after the game's tags. Separate them with commas; up to 15." }
         Words { text: "Description footer:" }
         UField {
             objectName: "autopostFooter"
@@ -1388,10 +1416,11 @@ Column {
         if (a === "ap-move" && p.length >= 3) { move(arg, p.slice(2).join(":")); return true } // the time has colons: the rest of the action
         if (a === "ap-remove" && arg) { remove(arg); return true }
         if (a === "ap-run") { runNow(); return true }
-        // PT5: ap-tone:<hype|clean> | ap-emoji:<on|off> | ap-tags:<tags, space-separated, URI-encoded> | ap-footer:<URI-encoded text> | ap-share:<kind>:<n> | ap-growth:<on|off> | ap-preview
+        // PT5: ap-tone:<hype|clean> | ap-emoji:<on|off> | ap-tags:<tags, space-separated, URI-encoded> | ap-own-tags:<search tags, comma-separated, URI-encoded> | ap-footer:<URI-encoded text> | ap-share:<kind>:<n> | ap-growth:<on|off> | ap-preview
         if (a === "ap-tone") return setTone(arg);
         if (a === "ap-emoji") return setPref(q => { q.text.emoji = on(arg) });
         if (a === "ap-tags") return setTags(decodeURIComponent(p.slice(1).join(":")));
+        if (a === "ap-own-tags") return setOwnTags(decodeURIComponent(p.slice(1).join(":")));
         if (a === "ap-footer") return setPref(q => { q.text.footer = decodeURIComponent(p.slice(1).join(":")).slice(0, 500) });
         if (a === "ap-share" && p.length === 3) return setShare(arg, parseInt(p[2], 10));
         if (a === "ap-growth") return setPref(q => { q.growthSuggestions = on(arg) });

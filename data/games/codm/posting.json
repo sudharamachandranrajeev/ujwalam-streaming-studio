@@ -1,6 +1,6 @@
 {
   "$comment": "PT1 (D408, 2026-11-21): post text lines for this game, added to data/posting/templates.json textPools for the same kind (services/posting/post-text.mjs). Same rules: facts {medal} {killsText} {kills} {result} {mode} only (a line with a missing fact is not used), no {n} or {date}, no names of people, brands or channels.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "textPools": {
     "short": {
       "title": [
@@ -30,19 +30,37 @@
       "codm",
       "call of duty"
     ],
+    "$style": "0.3.0 (user, 2026-11-25, from the user's own sample post): titleHashtags go at the end of the title when they fit (Shorts only; Reels have no title); descLines follow the AI lines ({game} {gameShort}; {modeText} is ' (<modeNames>)' when the mode is known; {handles.x} from the local profile, a line with a missing value is left out); the longer tag and hashtag lists. Other games are named only on posts of that game (user's choice): never in this file's lists.",
     "tags": {
       "default": [
         "codm",
         "call of duty mobile",
         "cod mobile",
-        "codm highlights"
+        "codm highlights",
+        "codm live stream",
+        "codm gameplay",
+        "codm moments",
+        "codm streamer",
+        "mobile fps",
+        "mobile gaming",
+        "mobile esports",
+        "best mobile games"
       ],
       "youtube-shorts": [
         "codm",
         "call of duty mobile",
         "cod mobile",
         "codm shorts",
-        "codm highlights"
+        "codm highlights",
+        "codm live stream",
+        "codm gameplay",
+        "codm moments",
+        "codm streamer",
+        "mobile fps",
+        "mobile gaming",
+        "mobile esports",
+        "best mobile games",
+        "youtube shorts"
       ],
       "instagram-reels": [
         "codm",
@@ -53,18 +71,39 @@
       ]
     },
     "modeTags": {
-      "mp": "codm multiplayer",
-      "br": "codm battle royale"
+      "mp": ["codm mp", "codm multiplayer"],
+      "br": ["codm br", "codm battle royale"]
+    },
+    "modeNames": {
+      "mp": "MP",
+      "br": "Battle Royale"
+    },
+    "titleHashtags": {
+      "youtube-shorts": ["#codm", "#shorts"]
+    },
+    "descLines": {
+      "default": [
+        "🎮 Featured: {game}{modeText}",
+        "🔴 Catch me live and subscribe for more {gameShort} highlights",
+        "🎥 Streamer: {handles.youtube}"
+      ]
     },
     "hashtags": {
       "default": [
         "#CODM",
-        "#codmshorts",
-        "#Shorts"
+        "#CallOfDutyMobile",
+        "#CODMShorts",
+        "#CODMHighlights",
+        "#MobileGaming",
+        "#MobileFPS",
+        "#GamingShorts"
       ],
       "youtube-video": [
         "#CODM",
-        "#CallOfDutyMobile"
+        "#CallOfDutyMobile",
+        "#CODMHighlights",
+        "#MobileGaming",
+        "#MobileFPS"
       ]
     }
   }

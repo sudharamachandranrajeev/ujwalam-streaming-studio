@@ -31,7 +31,7 @@ import { trustedRow } from './clips-source.mjs';
 import { cleanFacts, createTextHistory, creditMissing, draftText, legacyContext, legacyFor, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 import { keepsParts } from './ai-text-check.mjs';
-import { dropTemplateLead, gameHashtags, gameTags, resolveGame } from './game-text.mjs';
+import { dropTemplateLead, gameHashtags, gameLines, gameTags, gameTitleTags, resolveGame } from './game-text.mjs';
 import { makeHookCover } from './ai-cover.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -259,9 +259,10 @@ export function uploadCoverAt(row, seconds) {
 }
 
 /**
- * D443 T2: the post with the checked AI text: the AI title; description = AI lines, then the template's own description
- * (links, credits) unchanged, then the user's footer and the music credit; tags = AI tags then the template's, within the
- * limit. -> { post } | { reject: code }. Pure.
+ * D443 T2: the post with the checked AI text: the AI title (+ the game's title hashtags when they fit); description = AI
+ * lines, the game's lines (game-text.mjs gameLines), then the template's own description (links, credits) unchanged, then
+ * the user's footer and the music credit; tags = game tags, mode tags, the user's own tags, AI tags, then the
+ * template's, within the limit. -> { post } | { reject: code }. Pure.
  */
 export function aiPost({ ai, tpl, ctx, post: base, music, limits, target, titleMax, kind, seed, prefs, game = null, mode = null, templates = null }) {
   const miss = new Set(); const tplMiss = new Set();
@@ -272,15 +273,20 @@ export function aiPost({ ai, tpl, ctx, post: base, music, limits, target, titleM
   const tplFull = renderText(tpl.description, ctx, tplMiss);
   const tplDesc = templates ? dropTemplateLead(tplFull, templates) : tplFull;
   if ([...miss].some((k) => !tplMiss.has(k))) return { reject: 'unresolved' };
-  const p = { title, description: `${aiDesc}\n\n${tplDesc}`, tags: [], hashtags: gameHashtags(game, target) ?? [...base.hashtags], target };
+  // the game's lines (Featured, subscribe, streamer; 2026-11-25 style) go between the AI lines and the template's credits
+  // (game: the gamePost() object from ai-text.mjs gen; null: no game data)
+  const lines = gameLines(game, target, mode, (s) => { const m = new Set(); const r = renderText(s, ctx, m); return m.size ? null : r; });
+  const p = { title, description: [aiDesc, lines, tplDesc].filter(Boolean).join('\n\n'), tags: [], hashtags: gameHashtags(game, target) ?? [...base.hashtags], target };
   const fits = limitsFit(p, limits);
   const seen = new Set();
-  for (const t of gameTags(game, target, mode, [...tags, ...base.tags])) {
+  const own = Array.isArray(prefs?.tags) ? prefs.tags : [];
+  for (const t of gameTags(game, target, mode, [...own, ...tags, ...base.tags])) {
     const k = t.toLowerCase();
     if (!t || seen.has(k)) continue;
     if (fits({ tags: [...p.tags, t] })) { p.tags.push(t); seen.add(k); }
   }
   Object.assign(p, applyTextPrefs(p, prefs, { kind, seed, titleMax, fits: limitsFit(p, limits) }));
+  p.title = gameTitleTags(p.title, game, target, titleMax);
   if (music.use === 'credit') p.description = `${p.description}\n\n${music.text}`;
   if (!p.title) return { reject: 'title' };
   if (!checkLimits(p, limits).ok) return { reject: 'limits' };

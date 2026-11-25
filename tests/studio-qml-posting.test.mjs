@@ -256,7 +256,7 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
   test('PT5: the post text and growth card shows the defaults, the quota model in plain words and growth suggestions on', async () => {
     const { ap } = await probe({ actions: [...open, ...WAIT] });
     assert.equal(ap.prefsLoaded, true);
-    assert.deepEqual(ap.prefs, { text: { tone: 'hype', emoji: false, hashtags: [], footer: '' }, kindShare: { short: 20, montage: 20, 'won-reel': 20, 'impact-play': 20, 'long-highlights': 20 }, growthSuggestions: true });
+    assert.deepEqual(ap.prefs, { text: { tone: 'hype', emoji: false, hashtags: [], tags: [], footer: '' }, kindShare: { short: 20, montage: 20, 'won-reel': 20, 'impact-play': 20, 'long-highlights': 20 }, growthSuggestions: true });
     assert.equal(ap.shareSum, 100);
     assert.equal(ap.prefsDirty, false);
     assert.match(ap.quotaModel, /^Quota model in use: YouTube's upload allowance\. It is the default/);
@@ -269,11 +269,12 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(exists(prefsFile(bad.dataDir)), false);
     const tags = encodeURIComponent('#mobile clutch');
     const footer = encodeURIComponent('Live most nights');
-    const r = await probe({ actions: [...open, ...WAIT, 'ap-tone:clean', 'ap-emoji:on', `ap-tags:${tags}`, `ap-footer:${footer}`, 'ap-share:short:40', 'ap-share:montage:0', 'ap-growth:off', ...WAIT, 'settings-save'], ms: 14000 });
+    const own = encodeURIComponent('my channel, Mobile Gamer, mobile gamer');
+    const r = await probe({ actions: [...open, ...WAIT, 'ap-tone:clean', 'ap-emoji:on', `ap-tags:${tags}`, `ap-own-tags:${own}`, `ap-footer:${footer}`, 'ap-share:short:40', 'ap-share:montage:0', 'ap-growth:off', ...WAIT, 'settings-save'], ms: 14000 });
     const d = done(r.p);
-    for (const a of ['ap-tone:clean', 'ap-emoji:on', 'ap-share:short:40', 'ap-growth:off', 'settings-save']) assert.equal(d[a], true, a);
+    for (const a of ['ap-tone:clean', 'ap-emoji:on', `ap-own-tags:${own}`, 'ap-share:short:40', 'ap-growth:off', 'settings-save']) assert.equal(d[a], true, a);
     const saved = JSON.parse(readFileSync(prefsFile(r.dataDir), 'utf8'));
-    assert.deepEqual(saved.text, { tone: 'clean', emoji: true, hashtags: ['#mobile', '#clutch'], footer: 'Live most nights' });
+    assert.deepEqual(saved.text, { tone: 'clean', emoji: true, hashtags: ['#mobile', '#clutch'], tags: ['my channel', 'Mobile Gamer'], footer: 'Live most nights' });
     assert.deepEqual(saved.kindShare, { short: 40, montage: 0, 'won-reel': 20, 'impact-play': 20, 'long-highlights': 20 });
     assert.equal(saved.growthSuggestions, false);
     assert.equal(exists(userScheduleFile(r.dataDir)), false, 'the schedule card did not change, so it is not written');

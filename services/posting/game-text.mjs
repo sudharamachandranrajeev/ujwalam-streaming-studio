@@ -5,6 +5,8 @@
 //   gameTitle(title, g, max) -> the title with the game in it, or null (it does not fit)
 //   gameTags(g, target, mode, rest) -> [game tags, mode tag, rest] (duplicates out, case-insensitive)
 //   gameHashtags(g, target) -> string[] | null (null: keep the template's)
+//   gameTitleTags(title, g, target, max) -> the title with the game's title hashtags when they fit
+//   gameLines(g, target, mode, fill) -> the game's description lines (Featured, subscribe, streamer) or ''
 //   dropTemplateLead(description, templates) -> the description without a first paragraph that is a template's own
 //     opening line ("Highlight 4 from the stream on 2026-11-12."): the AI lines replace it, the credit lines stay.
 import { readFileSync, readdirSync } from 'node:fs';
@@ -28,12 +30,13 @@ export function gamePost(game, { gamesDir = GAMES_DIR } = {}) {
   let p;
   try { p = JSON.parse(readFileSync(path.join(gamesDir, game, 'posting.json'), 'utf8'))?.post; } catch { return null; }
   if (!p || typeof p.name !== 'string' || typeof p.short !== 'string' || !p.name.trim() || !p.short.trim()) return null;
-  const per = (o) => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).map(([k, v]) => [k, strs(v)]));
+  const per = (o) => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).map(([k, v]) => [k, strs(typeof v === 'string' ? [v] : v)]));
   return {
     id: game, name: p.name.trim(), short: p.short.trim(),
     titleMatch: strs(p.titleMatch).map((s) => s.toLowerCase()).concat(p.short.trim().toLowerCase()),
-    tags: per(p.tags), hashtags: per(p.hashtags),
-    modeTags: Object.fromEntries(Object.entries(p.modeTags && typeof p.modeTags === 'object' ? p.modeTags : {}).filter(([, v]) => typeof v === 'string' && v.trim())),
+    tags: per(p.tags), hashtags: per(p.hashtags), titleHashtags: per(p.titleHashtags), descLines: per(p.descLines),
+    modeTags: per(p.modeTags),
+    modeNames: Object.fromEntries(Object.entries(p.modeNames && typeof p.modeNames === 'object' ? p.modeNames : {}).filter(([, v]) => typeof v === 'string' && v.trim()).map(([k, v]) => [k, v.trim()])),
   };
 }
 
@@ -56,7 +59,7 @@ const forTarget = (o, target) => (Object.hasOwn(o, target) ? o[target] : (o.defa
 
 export function gameTags(g, target, mode, rest = []) {
   const first = g ? [...forTarget(g.tags, target)] : [];
-  if (g && typeof mode === 'string' && mode.trim()) first.push(g.modeTags[mode] ?? (mode.trim().length <= 30 ? mode.trim().toLowerCase() : ''));
+  if (g && typeof mode === 'string' && mode.trim()) first.push(...(g.modeTags[mode] ?? [mode.trim().length <= 30 ? mode.trim().toLowerCase() : '']));
   const seen = new Set(); const out = [];
   for (const t of [...first, ...rest]) { const k = String(t ?? '').trim().toLowerCase(); if (!k || seen.has(k)) continue; seen.add(k); out.push(String(t).trim()); }
   return out;
@@ -66,6 +69,31 @@ export function gameHashtags(g, target) {
   if (!g) return null;
   const h = forTarget(g.hashtags, target);
   return h.length ? [...h] : null;
+}
+
+/** The title with the game's title hashtags for this target at the end ("... #codm #shorts"), when all of them fit in max;
+ *  else the title as it is. Only targets named in titleHashtags get them (no default: Reels have no title). */
+export function gameTitleTags(title, g, target, max = null) {
+  const t = String(title ?? '').trim();
+  const h = g && Object.hasOwn(g.titleHashtags, target) ? g.titleHashtags[target].filter((x) => !t.toLowerCase().split(/\s+/).includes(x.toLowerCase())) : [];
+  if (!h.length) return t;
+  const out = `${t} ${h.join(' ')}`;
+  return Number.isInteger(max) && [...out].length > max ? t : out;
+}
+
+/** The game's description lines for this target (style of 2026-11-25: Featured, subscribe, streamer), joined by line
+ *  breaks: {game} {gameShort} filled, {modeText} is " (<mode name>)" when the mode is known (else nothing), and
+ *  {handles.x}/{links.x} come from `fill` (the caller's profile fill: (s) -> text, or null when a value is missing). A
+ *  line whose value is missing is left out. -> string ('' when none) */
+export function gameLines(g, target, mode, fill = (s) => (/\{[\w.]+\}/.test(s) ? null : s)) {
+  if (!g) return '';
+  const modeName = typeof mode === 'string' && mode.trim() ? (g.modeNames[mode.trim()] ?? null) : null;
+  const out = [];
+  for (const l of forTarget(g.descLines, target)) {
+    const s = fill(l.replaceAll('{game}', g.name).replaceAll('{gameShort}', g.short).replaceAll('{modeText}', modeName ? ` (${modeName})` : ''));
+    if (typeof s === 'string' && s.trim()) out.push(s.trim());
+  }
+  return out.join('\n');
 }
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
