@@ -56,11 +56,18 @@ bool write_atomic(const fs::path &path, const std::string &text, std::string &er
 			return false;
 		}
 	}
-	if (!MoveFileExW(tmp.wstring().c_str(), path.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-		err = "rename failed (error " + std::to_string(GetLastError()) + ")";
-		return false;
+	// A reader (the studio, a test, a virus scan of the file just written) holding moment.json open makes the replace
+	// fail briefly with error 5: retry as discovery.cpp and frames.cpp do. Without it the capture stayed "pending"
+	// (full CI 2026-11-25: the done write landed in the same millisecond as the first one).
+	DWORD last = 0;
+	for (int i = 0; i < 50; i++) {
+		if (MoveFileExW(tmp.wstring().c_str(), path.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			return true;
+		last = GetLastError();
+		Sleep(10);
 	}
-	return true;
+	err = "rename failed (error " + std::to_string(last) + ")";
+	return false;
 }
 
 } // namespace
