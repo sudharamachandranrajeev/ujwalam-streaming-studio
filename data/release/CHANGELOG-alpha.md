@@ -2,6 +2,15 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.43 — 2026-11-25
+
+- Instagram Reels auto-post: the same clips as your Shorts can also go to Instagram as Reels, on their own schedule, as many a day as Instagram allows. Settings > Posting > Instagram Reels: save your Meta app's App ID and App Secret (kept in Windows Credential Manager), then click Connect. Not yet tried against a real Instagram account.
+- Post text names the game: every AI title now has CODM (or Call of Duty) in it; if the AI leaves it out, " | CODM" is added. Shorts get #CODM #codmshorts #Shorts, the long video #CODM #CallOfDutyMobile, and the game tags come first (codm, call of duty mobile, cod mobile, codm shorts, codm highlights). The "Highlight N from the stream on ..." line is replaced by the AI lines; your links stay.
+- Stricter post text: no streak, multi-kill or squad wipe claim unless the clip maker counted the kills; no places, colours or objects the pictures cannot prove ("red truck", "desert"). The AI gets up to 3 tries per clip.
+- Capture card sound: the capture card layer no longer opens its own sound when the mixer does not use it (your game sound comes from the card's separate audio input). Before, that unused copy kept falling behind and restarting every few seconds. When you add that layer's sound in the mixer, it opens then (a short picture gap).
+- Long video colour: the long video is made in the normal colour format again (it came out in a format some players show wrong).
+- AI post text on a new PC: one missing graphics-card file is now part of the download.
+
 ## 0.1.0-alpha.42 — 2026-11-24
 
 - Clip music: the music is now set 8 dB under each clip's own game sound (measured per clip), never louder than your music level (new default -20 dB). It also turns down 8 dB more while someone talks in the game, with smooth 0.2 s / 0.3 s ramps. The start music stays full until the name ends and then fades out; the end music fades in earlier so its full ending is not cut short. Fades use a smooth S-curve, 1.5 s, by default. Settings > Clips > Clip look has Music under the game, Quieter when someone talks, Fade in, Fade out and Fade shape, each with what it does.
