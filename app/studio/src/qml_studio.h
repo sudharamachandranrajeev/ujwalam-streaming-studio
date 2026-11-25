@@ -59,4 +59,5 @@ private:
 	Mode mode_ = Mode::Normal;
 	bool taskbarProps_ = false; // the window's taskbar id and relaunch values are set (taskbar_id.h); cleared at the end
 	QJsonArray layoutRuns_;
+	QJsonArray dragSamples_; // slowdrag: the slider sampled during a timed drag
 };

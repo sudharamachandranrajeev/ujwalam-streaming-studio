@@ -28,6 +28,11 @@
 #include <QMouseEvent>
 #include <QSGRendererInterface>
 #include <QWheelEvent>
+#include <QElapsedTimer>
+#include <QEventLoop>
+#include <QPointer>
+#include <QTimer>
+#include <algorithm>
 #include <cstdio>
 
 QmlStudio::QmlStudio(ApiClient *api, QObject *parent) : QObject(parent), api_(api) {}
@@ -425,6 +430,8 @@ QJsonObject QmlStudio::probe() const
 	o.insert(QStringLiteral("size"), QJsonArray{win_->width(), win_->height()});
 	if (!layoutRuns_.isEmpty())
 		o.insert(QStringLiteral("layout"), layoutRuns_);
+	if (!dragSamples_.isEmpty())
+		o.insert(QStringLiteral("drag"), dragSamples_);
 	return o;
 }
 
@@ -461,6 +468,68 @@ bool QmlStudio::probeAction(const QString &action)
 		const QPointF at = item->mapToScene(QPointF(item->width() / 2, item->height() / 2));
 		QWheelEvent ev(at, win_->mapToGlobal(at), QPoint(), QPoint(0, 120 * p[1].toInt()), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
 		QCoreApplication::sendEvent(win_, &ev);
+		return true;
+	}
+	if (action.startsWith(QStringLiteral("slowdrag:"))) {
+		// slowdrag:<from>~<to>:<ms>[/<moves>]:<objectName>: a press, <moves> moves (40) spread over <ms> with the event loop running (meter polls
+		// and host replies come in between), then the release. The slider is sampled after every move into "drag".
+		const QStringList p = action.split(QLatin1Char(':'));
+		QPointer<QQuickItem> item = p.size() >= 4 ? qobject_cast<QQuickItem *>(findNamed(win_, p.mid(3).join(QLatin1Char(':')))) : nullptr;
+		const QStringList f = p.size() >= 4 ? p[1].split(QLatin1Char('~')) : QStringList();
+		if (!item || !item->isVisible() || !item->isEnabled() || f.size() != 2)
+			return false;
+		const QString name = p.mid(3).join(QLatin1Char(':'));
+		const QStringList t = p[2].split(QLatin1Char('/')); // <ms>[/<moves>]
+		const int ms = std::max(100, t[0].toInt()), steps = t.size() > 1 ? std::clamp(t[1].toInt(), 1, 200) : 40;
+		auto at = [&item](double frac) {
+			const auto *h = item->property("handle").value<QQuickItem *>();
+			const double x = item->property("leftPadding").toDouble() + (h ? h->width() / 2 : 0) +
+					 frac * (item->property("availableWidth").toDouble() - (h ? h->width() : 0));
+			return item->mapToScene(QPointF(x, item->height() / 2));
+		};
+		auto send = [this](QEvent::Type t, QPointF pos, Qt::MouseButton b, Qt::MouseButtons bs) {
+			QMouseEvent ev(t, pos, pos, win_->mapToGlobal(pos), b, bs, Qt::NoModifier);
+			QCoreApplication::sendEvent(win_, &ev);
+		};
+		QElapsedTimer clock;
+		clock.start();
+		auto sample = [&](const char *what) {
+			QObject *now = findNamed(win_, name);
+			QJsonObject s{{QStringLiteral("t"), clock.elapsed()}, {QStringLiteral("at"), QString::fromLatin1(what)},
+				      {QStringLiteral("same"), now == item.data()}};
+			if (item) {
+				s.insert(QStringLiteral("value"), item->property("value").toDouble());
+				s.insert(QStringLiteral("pressed"), item->property("pressed").toBool());
+				s.insert(QStringLiteral("enabled"), item->isEnabled());
+				if (const auto *h = item->property("handle").value<QQuickItem *>())
+					s.insert(QStringLiteral("handleX"), h->x());
+				if (QObject *vs = item->parent())
+					s.insert(QStringLiteral("owner"), vs->property("value").toDouble());
+				s.insert(QStringLiteral("sceneX"), item->mapToScene(QPointF(0, 0)).x());
+			}
+			for (QQuickItem *a = item ? item->parentItem() : nullptr; a; a = a->parentItem()) // the list it scrolls in
+				if (a->property("contentX").isValid() && a->property("interactive").isValid()) {
+					s.insert(QStringLiteral("contentX"), a->property("contentX").toDouble());
+					s.insert(QStringLiteral("flicking"), a->property("moving").toBool());
+					s.insert(QStringLiteral("listInteractive"), a->property("interactive").toBool() && a->property("contentWidth").toDouble() > a->width());
+					break;
+				}
+			dragSamples_.append(s);
+		};
+		const QPointF start = at(f[0].toDouble()), end = at(f[1].toDouble());
+		send(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+		sample("press");
+		for (int i = 1; i <= steps; i++) {
+			QEventLoop loop;
+			QTimer::singleShot(ms / steps, &loop, &QEventLoop::quit);
+			loop.exec();
+			if (!item)
+				break;
+			send(QEvent::MouseMove, start + (end - start) * (double(i) / steps), Qt::NoButton, Qt::LeftButton);
+			sample("move");
+		}
+		send(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+		sample("release");
 		return true;
 	}
 	if (action.startsWith(QStringLiteral("drag:"))) {

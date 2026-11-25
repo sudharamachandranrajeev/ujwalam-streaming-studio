@@ -114,6 +114,21 @@ describe('QML studio devices and mixer (headless probe)', { skip }, () => {
     assert.equal(r.s.mixer.find((m) => m.id === 'scene-1/cam').volumeDb, 12, 'B10: the strip keeps the volume the host took');
   });
 
+  // User report 2026-11-25 (not reproduced here): dragging the game strip's volume, the handle fell to Off. A drag over
+  // 1.5 s with the meters and device reloads polling in between: the handle follows the hand the whole way; one change.
+  test('volume drag over time: the handle follows the hand while held; one change on release', async () => {
+    let seq = 0;
+    const r = await probe(['slowdrag:0.75~0.95:1500:vol:scene-1/game:slider'], { ms: 6000,
+      hostStatus: () => ({ devices: { seq: seq++, listed: true, busy: false, waiting: [], connected: {} } }) });
+    assert.deepEqual(r.done, [true]);
+    const held = r.p.drag.filter((s) => s.at === 'move');
+    for (let i = 1; i < held.length; i++)
+      assert.ok(held[i].value >= held[i - 1].value && held[i].pressed && held[i].enabled && held[i].same, `sample ${i}: ${JSON.stringify(held.slice(Math.max(0, i - 2), i + 2))}`);
+    const sent = r.calls.filter(([m, x]) => m === 'mixer.setVolume' && x.id === 'scene-1/game').map(([, x]) => x.db);
+    assert.equal(sent.length, 1, `one change: ${sent}`);
+    assert.ok(sent[0] > -6, `the value where the hand let go: ${sent}`);
+  });
+
   // Codex review round 2 (P1): the host never switches the headphones on a running studio; mixer.list carries its sentence.
   test('headphones plugged in after the start: the studio says the change applies on restart', async () => {
     const said = 'Headphones "<headphones>" are connected now. The headphones change applies when you restart the studio.';
