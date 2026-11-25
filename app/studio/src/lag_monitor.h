@@ -15,6 +15,7 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPointer>
 #include <QString>
 #include <QTimer>
 #include <algorithm>
@@ -115,16 +116,27 @@ public:
 		if (depth() > 0 || !state().started)
 			return Base::notify(receiver, e);
 		depth()++;
+		// The receiver may be deleted while its event is delivered (a DeferredDelete, a window closed and destroyed in its
+		// own handler). It is only named afterwards if it still exists: reading the class of a deleted object called a
+		// pure virtual function and crashed the studio (crash reports 2026-11-22 to 2026-11-25, lag_monitor.h:123).
+		const QPointer<QObject> alive(receiver);
+		const int type = int(e->type()); // the event itself may be gone too once delivered
 		const qint64 t0 = now();
 		const bool r = Base::notify(receiver, e);
 		const qint64 t1 = now();
 		depth()--;
 		if (t1 - t0 >= 20) {
-			const char *cls = receiver ? receiver->metaObject()->className() : "?";
-			// a QML object (a Timer, a popup window) also names its file
-			const QQmlContext *ctx = receiver ? qmlContext(receiver) : nullptr;
-			const QString file = ctx ? ctx->baseUrl().fileName() : QString();
-			record(QStringLiteral("event %1 %2%3").arg(int(e->type())).arg(QLatin1String(cls), file.isEmpty() ? QString() : QStringLiteral(" ") + file), t0, t1);
+			QString who = QStringLiteral("(deleted object)");
+			if (QObject *o = alive.data()) {
+				who = QLatin1String(o->metaObject()->className());
+				// a QML object (a Timer, a popup window) also names its file
+				const QQmlContext *ctx = qmlContext(o);
+				const QString file = ctx ? ctx->baseUrl().fileName() : QString();
+				if (!file.isEmpty())
+					who += QStringLiteral(" ") + file;
+			} else if (!receiver)
+				who = QStringLiteral("?");
+			record(QStringLiteral("event %1 %2").arg(type).arg(who), t0, t1);
 		}
 		return r;
 	}
