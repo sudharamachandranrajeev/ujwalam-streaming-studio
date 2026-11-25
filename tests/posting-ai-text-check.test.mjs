@@ -45,6 +45,9 @@ test('shape: description 2-4 lines, 5-12 tags, hook 2-4 words, thumbTime inside 
   const trimmed = run(withAns({ description: 'a\nb\nc\nd\ne' }));
   assert.equal(trimmed.ok, true, JSON.stringify(trimmed));
   assert.equal(trimmed.text.description.split('\n').length, 4);
+  // 1.3.0: an emoji after the first sentence stays on that line (seen on the first real redo, 2026-11-25)
+  assert.equal(run(withAns({ description: 'Fast moves, sharp shots. 🎮 Pure adrenaline.' })).text.description, 'Fast moves, sharp shots. 🎮\nPure adrenaline.');
+  assert.equal(run(withAns({ description: 'Fast moves.\n🎮\nPure adrenaline.' })).text.description, 'Fast moves. 🎮\nPure adrenaline.');
   reject(run(withAns({ tags: ['a', 'b', 'c'] })), 'tags');
   reject(run(withAns({ tags: Array.from({ length: 13 }, (_, i) => `tag${String.fromCharCode(97 + i)}`) })), 'tags');
   reject(run(withAns({ tags: ['a'.repeat(31), 'b', 'c', 'd', 'e'] })), 'tags');

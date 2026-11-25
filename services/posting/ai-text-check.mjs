@@ -113,7 +113,10 @@ function shape(answer, cfg, cover = true) {
   const tags = [...new Set(answer.tags.map((t) => t.trim()).filter(Boolean))];
   let lines = description.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean);
   // a small model often writes the lines as sentences in one paragraph: one sentence per line then
-  if (lines.length === 1) lines = lines[0].split(/(?<=[.!?])\s+/).map((l) => l.trim()).filter(Boolean);
+  // (an emoji right after the full stop stays with its sentence: "sharp shots. 🎮 Pure adrenaline.")
+  if (lines.length === 1) lines = lines[0].split(/(?<=[.!?](?:\s*[\p{Extended_Pictographic}\u{FE0F}\u{200D}]+)*)\s+(?=[\p{L}\p{N}])/u).map((l) => l.trim()).filter(Boolean);
+  // a line with no letter or digit (the emoji after "adrenaline." in 1.3.0) belongs to the line before it
+  lines = lines.reduce((a, l) => { if (a.length && !/[\p{L}\p{N}]/u.test(l)) a[a.length - 1] += ` ${l}`; else a.push(l); return a; }, []);
   if (lines.length > A.description.maxLines) lines = lines.slice(0, A.description.maxLines); // extra trailing sentences are dropped
   if (lines.length < A.description.minLines) return bad('description', `${lines.length} lines`);
   if (tags.length < A.tags.min || tags.length > A.tags.max) return bad('tags', `${tags.length} tags`);
