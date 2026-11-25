@@ -86,19 +86,20 @@ export function killClaims(text) {
 const CLAIM_WORD = '(?:wins?|won|victory|rank(?:ed)?|place|top|st|nd|rd|th)';
 const CLAIM_NUM = new RegExp(`\\b${CLAIM_WORD}\\s*:?\\s*(\\d{1,3})\\b|\\b(\\d{1,3})\\s*-?\\s*${CLAIM_WORD}\\b|\\b(\\d{1,3})\\s*/\\s*(\\d{1,3})\\b|\\bx\\s*(\\d{1,3})\\b|\\b(\\d{1,3})\\s*x\\b`, 'gi');
 const KILL_NUM = new RegExp(`\\d{1,3}\\s*(?:-|\\s)?\\s*(?:x\\s*)?${KILL_WORD}\\b`, 'gi');
-const textOf =(t) => [t.title, t.description, ...t.tags, t.thumbHook].join('\n');
+const textOf =(t) => [t.title, t.description, ...t.tags, t.thumbHook].filter((x) => x !== null).join('\n');
 
-/** Shape of the answer. -> text object | { code, detail } */
-function shape(answer, cfg) {
+/** Shape of the answer. -> text object | { code, detail }. cover false (the scheduled-post rewrite changes text only):
+ *  the cover hook and frame time are not used, so they are not checked and come back null. */
+function shape(answer, cfg, cover = true) {
   if (!isPlain(answer)) return bad('schema', 'the answer is not an object');
   const A = cfg.answer;
   const str = (k) => (typeof answer[k] === 'string' ? answer[k].trim() : null);
   const title = str('title'), description = str('description'), thumbHook = str('thumbHook');
   if (title === null || !title) return bad('schema', 'title');
   if (description === null || !description) return bad('schema', 'description');
-  if (thumbHook === null || !thumbHook) return bad('schema', 'thumbHook');
+  if (cover && (thumbHook === null || !thumbHook)) return bad('schema', 'thumbHook');
   if (!Array.isArray(answer.tags) || answer.tags.some((t) => typeof t !== 'string')) return bad('schema', 'tags');
-  if (typeof answer.thumbTime !== 'number' || !Number.isFinite(answer.thumbTime)) return bad('schema', 'thumbTime');
+  if (cover && (typeof answer.thumbTime !== 'number' || !Number.isFinite(answer.thumbTime))) return bad('schema', 'thumbTime');
   const fs = answer.factsSeen;
   if (!isPlain(fs)) return bad('schema', 'factsSeen');
   const seen = {};
@@ -116,6 +117,7 @@ function shape(answer, cfg) {
   if (lines.length < A.description.minLines) return bad('description', `${lines.length} lines`);
   if (tags.length < A.tags.min || tags.length > A.tags.max) return bad('tags', `${tags.length} tags`);
   if (tags.some((t) => UNIT.chars(t) > A.tags.maxChars)) return bad('tags', 'a tag is too long');
+  if (!cover) return { title, description: lines.join('\n'), tags, thumbHook: null, thumbTime: null, factsSeen: seen };
   const words = thumbHook.split(/\s+/).filter(Boolean);
   if (words.length < A.thumbHook.minWords || words.length > A.thumbHook.maxWords || UNIT.chars(thumbHook) > A.thumbHook.maxChars) return bad('hook', `${words.length} words`);
   return { title, description: lines.join('\n'), tags, thumbHook, thumbTime: answer.thumbTime, factsSeen: seen };
@@ -125,12 +127,12 @@ function shape(answer, cfg) {
  * opts: { answer, facts (cleanFacts output: medal, killsText, kills, result, mode), seconds, limits (limits.json
  *   targets[target]: { fields }), cfg (data/posting/ai-text.json), profileTerms: string[], forbidTerms: string[] }
  */
-export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileTerms = [], forbidTerms = [], screenWords, vocab }) {
-  const t = shape(answer, cfg);
+export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileTerms = [], forbidTerms = [], screenWords, vocab, cover = true }) {
+  const t = shape(answer, cfg, cover);
   if (t.ok === false) return t;
   // time of the thumbnail frame inside the clip
-  if (Number.isFinite(seconds) && (t.thumbTime < 0 || t.thumbTime > seconds)) return bad('thumb-time', 'outside the clip');
-  if (t.thumbTime < 0) return bad('thumb-time', 'negative');
+  if (cover && Number.isFinite(seconds) && (t.thumbTime < 0 || t.thumbTime > seconds)) return bad('thumb-time', 'outside the clip');
+  if (cover && t.thumbTime < 0) return bad('thumb-time', 'negative');
   // numbers: the facts' numbers (detector: kills, placement, teams; the model's kills only when the detector has none)
   const detKills = Number.isFinite(Number(facts.kills)) ? Number(facts.kills) : null;
   const factNums = new Set([detKills, Number(facts.placement), Number(facts.teams)].filter((n) => n !== null && Number.isFinite(n)));
@@ -146,6 +148,7 @@ export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileT
   if (Number.isInteger(tagsF.max) && tagsLength(t.tags) > tagsF.max) return bad('length', 'tags over the platform limit');
   // characters
   for (const [field, v] of [['title', t.title], ['description', t.description], ['tags', t.tags.join(' ')], ['thumbHook', t.thumbHook]]) {
+    if (v === null) continue; // no cover hook (cover false)
     if ((field === 'description' ? CONTROL_NO_NL : CONTROL).test(v)) return bad('control', field);
     if (/[<>]/.test(v)) return bad('markup', field);
     for (const f of [titleF, descF, tagsF]) if (typeof f.forbid === 'string' && [...f.forbid].some((c) => v.includes(c))) return bad('markup', field);
@@ -185,7 +188,7 @@ export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileT
     usedDetector = true;
   }
   // numbers in title, description and hook: a claim-context number must be a fact number; any other digit is rejected
-  let body = [t.title, t.description, t.thumbHook].join('\n').replace(OK_PLACEHOLDER, ' ');
+  let body = [t.title, t.description, t.thumbHook].filter((x) => x !== null).join('\n').replace(OK_PLACEHOLDER, ' ');
   for (const m of body.matchAll(CLAIM_NUM)) {
     for (const g of m.slice(1).filter((x) => x !== undefined)) if (!factNums.has(Number(g))) return bad('fact-number', 'a claimed number that is not a fact');
   }

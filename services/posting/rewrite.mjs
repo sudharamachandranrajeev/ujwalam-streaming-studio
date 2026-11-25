@@ -144,7 +144,7 @@ async function rewriteInner(o) {
       if (remote.privacyStatus !== 'private' || typeof remote.publishAt !== 'string' || !times(remote.publishAt, entry.publishAt) || !(Date.parse(remote.publishAt) > nowMs() + margin)) { skip('not-scheduled-now'); continue; }
       if (norm(remote.snippet.title) !== norm(composeField(post, ['title'])) || norm(remote.snippet.description) !== norm(composeField(post, ['description', 'hashtags']))) { skip('changed-on-youtube'); continue; }
       if (typeof remote.snippet.categoryId !== 'string') { skip('no-category'); continue; }
-      const r = await gen({ file: video.file, seconds, facts: post.source?.facts ?? {}, kind: post.source?.kind ?? 'short', limits: limits.targets?.[post.target], ffmpeg: o.ffmpeg });
+      const r = await gen({ file: video.file, seconds, facts: post.source?.facts ?? {}, kind: post.source?.kind ?? 'short', limits: limits.targets?.[post.target], ffmpeg: o.ffmpeg, cover: false }); // text only: the cover hook is not used
       if (!r.ok) { skip(`template-fallback-${String(r.code).slice(0, 30)}`); continue; }
       // the new text: AI title, AI lines then the old description unchanged (links, credits), AI tags then the old ones
       const p = { title: r.text.title, description: `${r.text.description}\n\n${post.description}`, tags: [], hashtags: [...(post.hashtags ?? [])], target: post.target };

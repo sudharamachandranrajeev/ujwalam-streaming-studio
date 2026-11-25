@@ -38,9 +38,9 @@
           "bytes": 473551360,
           "sha256": "2a896460bef60ed57ef32b0875812f355a6984e671d638bb632f5e8c1d7a831f",
           "archive": {
-            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/llama-b12675-bin-win-cuda-12.4-x64.zip",
-            "bytes": 358131652,
-            "sha256": "8eea9d965dc82d8f5ef151b4140e5c85d203ed378804b1d8eb37bca4449ad515",
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12675/cudart-llama-bin-win-cuda-12.4-x64.zip",
+            "bytes": 391443627,
+            "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
             "member": "cublasLt64_12.dll"
           }
         },

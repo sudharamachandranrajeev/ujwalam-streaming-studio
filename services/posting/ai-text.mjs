@@ -188,7 +188,7 @@ export async function withAiText(deps, fn) {
     done = Promise.resolve(deps.runner.withModel((m) => new Promise((rel) => { release = rel; resolveOpen({ m }); }))).catch((e) => resolveOpen({ err: e }));
   }));
   const fail = (code, detail) => { stats.rejected += 1; stats.rejects[code] = (stats.rejects[code] ?? 0) + 1; return { ok: false, code, detail }; };
-  const gen = async ({ file, seconds, facts = {}, kind, limits, ffmpeg }) => {
+  const gen = async ({ file, seconds, facts = {}, kind, limits, ffmpeg, cover = true }) => {
     const h = await open();
     if (h.err) return fail(h.err instanceof LocalModelError ? h.err.code : 'error', String(h.err?.message ?? '').slice(0, 120));
     let frames;
@@ -205,7 +205,7 @@ export async function withAiText(deps, fn) {
       const big = await (deps.grab ?? grabFrames)(ffmpeg, file, seconds, cfg, deps.tmpRoot, cfg.ocr.width);
       screenWords = await (deps.ocr ?? ocrWords)(big, { python: deps.ocrPython, tmpRoot: deps.tmpRoot, timeoutMs: cfg.ocr.timeoutMs });
     } catch (e) { return fail('ocr-unavailable', String(e?.message ?? '').slice(0, 120)); }
-    const r = checkAiText({ answer, facts, seconds, limits, cfg, profileTerms: terms, screenWords, vocab });
+    const r = checkAiText({ answer, facts, seconds, limits, cfg, profileTerms: terms, screenWords, vocab, cover });
     if (!r.ok) { deps.onReject?.(r, answer); return fail(r.code, r.detail); }
     return r;
   };

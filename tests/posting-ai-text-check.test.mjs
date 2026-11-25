@@ -54,6 +54,18 @@ test('shape: description 2-4 lines, 5-12 tags, hook 2-4 words, thumbTime inside 
   reject(run(withAns({ thumbTime: -1 })), 'thumb-time');
 });
 
+test('cover false (scheduled-post rewrite, text only): a bad or missing hook or frame time does not reject the text', () => {
+  for (const o of [{ thumbHook: 'WOW' }, { thumbHook: 'ONE TWO THREE FOUR FIVE' }, { thumbTime: 99 }, { thumbTime: -1 }, { thumbHook: undefined }, { thumbTime: 'soon' }]) {
+    const r = run(withAns(o), { cover: false });
+    assert.equal(r.ok, true, JSON.stringify([o, r]));
+    assert.equal(r.text.thumbHook, null);
+    assert.equal(r.text.thumbTime, null);
+  }
+  // the text itself is still checked in full
+  reject(run(withAns({ thumbHook: 'WOW', title: 'see https://example.com' }), { cover: false }), 'url');
+  reject(run(withAns({ thumbHook: 'WOW', title: 'Got 7 kills' }), { cover: false }), 'fact-unverified');
+});
+
 test('platform limits come from limits.json: title chars, description bytes, tags total, forbidden < >', () => {
   const max = limits.fields.title.max;
   reject(run(withAns({ title: 'x'.repeat(max + 1) })), 'length');
