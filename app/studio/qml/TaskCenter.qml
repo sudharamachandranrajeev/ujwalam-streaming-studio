@@ -100,8 +100,33 @@ Item {
         chipTip = lines.join("\n");
         rebuild();
     }
+    // GUI load (2026-11-25): the lists keep their rows. A new rows array as a list model made the panel and the task
+    // window destroy and build every row (buttons, texts) again on each status poll, and the tasks change on every poll
+    // while one runs: 20 ms of each 22 ms status answer in the realistic probe, 300-600 ms on the laptop while it
+    // recorded. The lists now show rowIds (ids in list order: moved, inserted and removed one by one, as the mixer
+    // strips, B4) and each row reads its data from rowById, so a poll only changes texts that changed.
+    property ListModel rowIds: ListModel {}
+    property var rowById: ({})
+    property int rowsMade: 0 // rows built by the panel and the task window (probe: a poll must not build them again)
+    readonly property var emptyRow: ({ id: "", title: "", state: "", note: "", stalled: false, stop: false, finished: false,
+        l: { text: "", stage: "", count: "", eta: "", last: "", warn: "", fraction: -1 }, category: "", controls: [], pausable: false,
+        pauseReason: "", paused: false, pausing: false, nextStart: "", question: "", parts: [], logTail: [], startedAt: 0, stageText: "" })
+    function rowOf(id) { const r = rowById[id]; return r !== undefined ? r : emptyRow }
+    // Keeps a ListModel of { rid } in the order of ids: removes, inserts and moves only (shared with TaskWindow.qml).
+    function syncIds(model, ids, then) {
+        const want = {};
+        for (const id of ids) want[id] = true;
+        for (let i = model.count - 1; i >= 0; i--) if (!want[model.get(i).rid]) model.remove(i);
+        if (then) then(); // the new data, before a new row's delegate reads it
+        for (let i = 0; i < ids.length; i++) {
+            let at = -1;
+            for (let j = i; j < model.count; j++) if (model.get(j).rid === ids[i]) { at = j; break }
+            if (at < 0) model.insert(i, { rid: ids[i] });
+            else if (at !== i) model.move(at, i, 1);
+        }
+    }
     function rebuild() {
-        rows = all.filter(t => !pDismissed[String(t.id || "")]).map(t => ({
+        const next = all.filter(t => !pDismissed[String(t.id || "")]).map(t => ({
             id: String(t.id || ""), title: String(t.title || ""), state: String(t.state || ""), note: t.note ? String(t.note) : "",
             stalled: t.state === "running" && t.stalled === true, stop: stoppable(t),
             finished: t.state === "done" || t.state === "failed", l: TaskText.lines(t),
@@ -112,6 +137,10 @@ Item {
             parts: Array.isArray(t.parts) ? t.parts.map(String) : [], logTail: Array.isArray(t.logTail) ? t.logTail.map(String) : [],
             startedAt: typeof t.startedAt === "number" ? t.startedAt : 0, stageText: t.stageText ? String(t.stageText) : ""
         }));
+        const by = {};
+        for (const r of next) by[r.id] = r;
+        syncIds(rowIds, next.map(r => r.id), () => { rowById = by });
+        rows = next;
         if (open && rows.length === 0) open = false; // nothing left to show: the panel folds away with its button
     }
     function dismiss(id) {
@@ -234,7 +263,7 @@ Item {
             toastPos.push({ x: x, y: y, width: w, right: W - (x + w) });
         }
         const o = {
-            running: running, waiting: waiting, stalled: stalled, total: all.length, rows: rows.length,
+            running: running, waiting: waiting, stalled: stalled, total: all.length, rows: rows.length, rowsMade: rowsMade,
             clearShown: anyFinished, chipHidden: rows.length === 0, chipQuiet: running + waiting === 0, chipText: chipText,
             chipTip: chipTip, chipInTopBar: true, panelOpen: open, toasts: toasts.count, toastsShown: toastsShown,
             toastClicks: toastClicks, lastToast: lastToast, toastLog: toastLog, startToasts: startToasts, stopsSent: stopsSent,
@@ -342,12 +371,14 @@ Item {
                 height: Math.min(contentHeight, 520)
                 clip: true
                 spacing: Theme.sp.s
-                model: center.rows
+                model: center.rowIds
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: Rectangle {
                     id: row
-                    required property var modelData
+                    required property string rid
                     required property int index
+                    readonly property var modelData: center.rowOf(rid)
+                    Component.onCompleted: center.rowsMade++
                     objectName: "taskRow:" + index
                     width: ListView.view.width
                     height: rowCol.implicitHeight + 20
@@ -399,18 +430,24 @@ Item {
                                 }
                             }
                         }
-                        Repeater {
-                            model: [row.modelData.l.stage, row.modelData.l.count]
-                            Text {
-                                required property var modelData
-                                visible: modelData !== ""
-                                width: rowCol.width
-                                text: modelData
-                                wrapMode: Text.Wrap
-                                color: Theme.c.text
-                                font.family: Theme.family
-                                font.pixelSize: Theme.ty.small
-                            }
+                        // fixed texts, not a Repeater over a new array (that built them again on every poll)
+                        Text {
+                            visible: text !== ""
+                            width: rowCol.width
+                            text: row.modelData.l.stage
+                            wrapMode: Text.Wrap
+                            color: Theme.c.text
+                            font.family: Theme.family
+                            font.pixelSize: Theme.ty.small
+                        }
+                        Text {
+                            visible: text !== ""
+                            width: rowCol.width
+                            text: row.modelData.l.count
+                            wrapMode: Text.Wrap
+                            color: Theme.c.text
+                            font.family: Theme.family
+                            font.pixelSize: Theme.ty.small
                         }
                         Rectangle { // progress: the fraction, a sweep when the amount of work is unknown
                             visible: row.modelData.state !== "done"
@@ -445,18 +482,32 @@ Item {
                                 }
                             }
                         }
-                        Repeater {
-                            model: [row.modelData.l.eta, row.modelData.l.last, row.modelData.note]
-                            Text {
-                                required property var modelData
-                                visible: modelData !== ""
-                                width: rowCol.width
-                                text: modelData
-                                wrapMode: Text.Wrap
-                                color: Theme.c.muted
-                                font.family: Theme.family
-                                font.pixelSize: Theme.ty.caption
-                            }
+                        Text {
+                            visible: text !== ""
+                            width: rowCol.width
+                            text: row.modelData.l.eta
+                            wrapMode: Text.Wrap
+                            color: Theme.c.muted
+                            font.family: Theme.family
+                            font.pixelSize: Theme.ty.caption
+                        }
+                        Text {
+                            visible: text !== ""
+                            width: rowCol.width
+                            text: row.modelData.l.last
+                            wrapMode: Text.Wrap
+                            color: Theme.c.muted
+                            font.family: Theme.family
+                            font.pixelSize: Theme.ty.caption
+                        }
+                        Text {
+                            visible: text !== ""
+                            width: rowCol.width
+                            text: row.modelData.note
+                            wrapMode: Text.Wrap
+                            color: Theme.c.muted
+                            font.family: Theme.family
+                            font.pixelSize: Theme.ty.caption
                         }
                         Text {
                             objectName: "taskWarn"

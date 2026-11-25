@@ -64,6 +64,21 @@ Window {
         return keyed.map(k => k.r);
     }
     readonly property var current: { for (const r of taskCenter.rows) if (r.id === selected) return r; return null }
+    // GUI load (2026-11-25): the list and the details keep their items between polls (TaskCenter.syncIds). A new array as
+    // a model built every row and its buttons again on each status poll while a task ran.
+    property ListModel shownIds: ListModel {}
+    onShownChanged: taskCenter.syncIds(shownIds, shown.map(r => r.id))
+    Component.onCompleted: taskCenter.syncIds(shownIds, shown.map(r => r.id))
+    property ListModel detailModel: ListModel {} // { k, v } of the clicked task
+    property ListModel partsModel: ListModel {}  // { p } the parts it runs
+    function syncList(model, list) { // same length: values set in place; the items stay
+        for (let i = 0; i < list.length; i++) { if (i < model.count) model.set(i, list[i]); else model.append(list[i]) }
+        while (model.count > list.length) model.remove(model.count - 1);
+    }
+    onCurrentChanged: { syncList(detailModel, detailFields(current)); syncList(partsModel, current ? current.parts.map(p => ({ p: p })) : []) }
+    readonly property var nextChoices: [{ v: "run", t: "Run", tip: "At the next start this task runs again by itself" },
+                                        { v: "ask", t: "Ask me", tip: "At the next start Ujwalam asks you first" },
+                                        { v: "notify", t: "Just notify", tip: "At the next start the task waits and a notice tells you" }]
 
     // The buttons a row offers, from its `controls` only (the one list the shown buttons and the probe both read).
     function buttonsOf(r) {
@@ -238,15 +253,16 @@ Window {
                         anchors.fill: parent
                         clip: true
                         spacing: Theme.sp.s
-                        model: win.shown
+                        model: win.shownIds
                         boundsBehavior: Flickable.StopAtBounds
                         ScrollBar.vertical: ScrollBar {}
                         delegate: Rectangle {
                             id: row
-                            required property var modelData
+                            required property string rid
                             required property int index
                             objectName: "mgrRow:" + index
-                            readonly property var r: modelData
+                            readonly property var r: win.taskCenter.rowOf(rid)
+                            Component.onCompleted: win.taskCenter.rowsMade++
                             readonly property bool busy: win.busyOf(r)
                             readonly property var btns: win.buttonsOf(r)
                             readonly property string note: win.pauseNote(r)
@@ -371,11 +387,10 @@ Window {
                                         font.pixelSize: Theme.ty.caption
                                     }
                                     Repeater {
-                                        model: row.btns.indexOf("next:run") >= 0 ? [{ v: "run", t: "Run", tip: "At the next start this task runs again by itself" },
-                                                                                   { v: "ask", t: "Ask me", tip: "At the next start Ujwalam asks you first" },
-                                                                                   { v: "notify", t: "Just notify", tip: "At the next start the task waits and a notice tells you" }] : []
+                                        model: win.nextChoices // a fixed model: the buttons are made once per row
                                         UButton {
                                             required property var modelData
+                                            visible: row.btns.indexOf("next:run") >= 0
                                             objectName: "mgrNext:" + modelData.v
                                             enabled: !row.busy
                                             text: modelData.t
@@ -429,24 +444,25 @@ Window {
                                 font.weight: Font.DemiBold
                             }
                             Repeater {
-                                model: win.detailFields(win.current)
+                                model: win.detailModel
                                 Row {
-                                    required property var modelData
+                                    required property string k
+                                    required property string v
                                     width: detCol.width
                                     spacing: Theme.sp.m
                                     Text {
                                         width: 96
-                                        text: modelData.k
+                                        text: k
                                         color: Theme.c.muted
                                         font.family: Theme.family
                                         font.pixelSize: Theme.ty.small
                                     }
                                     Text {
                                         width: parent.width - 96 - Theme.sp.m
-                                        text: modelData.v
+                                        text: v
                                         textFormat: Text.PlainText
                                         wrapMode: Text.Wrap
-                                        color: modelData.k === "Warning" ? Theme.c.danger : Theme.c.text
+                                        color: k === "Warning" ? Theme.c.danger : Theme.c.text
                                         font.family: Theme.family
                                         font.pixelSize: Theme.ty.small
                                     }
@@ -460,11 +476,11 @@ Window {
                                 font.pixelSize: Theme.ty.small
                             }
                             Repeater {
-                                model: win.current ? win.current.parts : []
+                                model: win.partsModel
                                 Text {
-                                    required property string modelData
+                                    required property string p
                                     width: detCol.width
-                                    text: "- " + modelData
+                                    text: "- " + p
                                     textFormat: Text.PlainText
                                     elide: Text.ElideRight
                                     color: Theme.c.text
