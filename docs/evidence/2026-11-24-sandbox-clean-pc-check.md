@@ -41,6 +41,7 @@ bytes, paused at 13,909,471 and resumed, ready and verified in 6.6 s. `node --te
 | 0.1.0-alpha.42 | 2026-11-24 17:49 | PASS 30.7 s | FAIL | PASS 9.5 s | PASS 9.1 s | studio, host and UI up (window shown, Settings and tour open); harness close did nothing |
 | 0.1.0-alpha.42 | 2026-11-24 17:53 | PASS 27 s | FAIL | PASS 8.2 s | PASS 11.1 s | `CloseMainWindow` refused (0 closes): modal Settings disables the main window |
 | 0.1.0-alpha.42 | 2026-11-24 17:56 | PASS 28.7 s | PASS 38.2 s | PASS 6.8 s | PASS 9.1 s | all steps passed in 1.9 min; WM_CLOSE to every visible studio window, every process gone |
+| 0.1.0-alpha.43 | 2026-11-25 11:48 | PASS 19.5 s | PASS 37.9 s | PASS 6.9 s | PASS 8.1 s | all steps passed in 1.6 min (`node tools/package/sandbox/sandbox-check.mjs`) |
 
 Runs 1 and 2 did not start the script: vGPU on with 6 GiB lost the Sandbox connection before the desktop on this PC.
 The harness now uses no vGPU and the default memory.
