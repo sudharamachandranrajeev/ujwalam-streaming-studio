@@ -2,6 +2,12 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.44 — 2026-11-25
+
+- Studio window crash fixed: the window could close by itself and reopen after 2 s (four times in one hour of recording). The cause was the app's own slowness monitor reading something that had just been deleted. Your recording was never affected.
+- Stream stats clock: shows the real stream or recording time, also after the window reopens (it used to start again from 0).
+- Post style: titles with one emoji and #codm #shorts on Shorts; the description adds Featured, subscribe and Streamer lines and seven game hashtags; longer tag lists. An emoji after a sentence stays on its line.
+- Your own tags: Settings > Posting & growth has a new "Your own tags" box (up to 15); they are added to every post, and the redo of scheduled posts keeps your own hashtags.
 ## 0.1.0-alpha.43 — 2026-11-25
 
 - Instagram Reels auto-post: the same clips as your Shorts can also go to Instagram as Reels, on their own schedule, as many a day as Instagram allows. Settings > Posting > Instagram Reels: save your Meta app's App ID and App Secret (kept in Windows Credential Manager), then click Connect. Not yet tried against a real Instagram account.
