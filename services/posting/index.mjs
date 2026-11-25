@@ -31,6 +31,7 @@ import { trustedRow } from './clips-source.mjs';
 import { cleanFacts, createTextHistory, creditMissing, draftText, legacyContext, legacyFor, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 import { keepsParts } from './ai-text-check.mjs';
+import { dropTemplateLead, gameHashtags, gameTags, resolveGame } from './game-text.mjs';
 import { makeHookCover } from './ai-cover.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -262,17 +263,19 @@ export function uploadCoverAt(row, seconds) {
  * (links, credits) unchanged, then the user's footer and the music credit; tags = AI tags then the template's, within the
  * limit. -> { post } | { reject: code }. Pure.
  */
-export function aiPost({ ai, tpl, ctx, post: base, music, limits, target, titleMax, kind, seed, prefs }) {
+export function aiPost({ ai, tpl, ctx, post: base, music, limits, target, titleMax, kind, seed, prefs, game = null, mode = null, templates = null }) {
   const miss = new Set(); const tplMiss = new Set();
   const title = renderText(ai.title, ctx, miss);
   const aiDesc = renderText(ai.description, ctx, miss);
   const tags = ai.tags.map((t) => renderText(t, ctx, miss));
-  const tplDesc = renderText(tpl.description, ctx, tplMiss);
+  // the template's own opening line ("Highlight 4 from the stream on ...") is replaced by the AI lines; credits stay
+  const tplFull = renderText(tpl.description, ctx, tplMiss);
+  const tplDesc = templates ? dropTemplateLead(tplFull, templates) : tplFull;
   if ([...miss].some((k) => !tplMiss.has(k))) return { reject: 'unresolved' };
-  const p = { title, description: `${aiDesc}\n\n${tplDesc}`, tags: [], hashtags: [...base.hashtags], target };
+  const p = { title, description: `${aiDesc}\n\n${tplDesc}`, tags: [], hashtags: gameHashtags(game, target) ?? [...base.hashtags], target };
   const fits = limitsFit(p, limits);
   const seen = new Set();
-  for (const t of [...tags, ...base.tags]) {
+  for (const t of gameTags(game, target, mode, [...tags, ...base.tags])) {
     const k = t.toLowerCase();
     if (!t || seen.has(k)) continue;
     if (fits({ tags: [...p.tags, t] })) { p.tags.push(t); seen.add(k); }
@@ -514,8 +517,8 @@ export async function packageUploads(opts) {
     // template text above stays and the reason is recorded.
     const aiMeta = {};
     if (typeof opts.aiText === 'function' || opts.aiWhy) {
-      const tried = typeof opts.aiText === 'function' ? await opts.aiText({ file, seconds, facts, kind: row.kind, limits: limits.targets[target], ffmpeg }) : { ok: false, code: opts.aiWhy };
-      const mixed = tried.ok ? aiPost({ ai: tried.text, tpl, ctx, post, music, limits, target, titleMax, kind: row.kind, seed: sha, prefs: readPrefs(opts.dataDir).prefs.text }) : { reject: tried.code };
+      const tried = typeof opts.aiText === 'function' ? await opts.aiText({ file, seconds, facts, kind: row.kind, limits: limits.targets[target], ffmpeg, game: resolveGame(game, opts.gamesDir ? { gamesDir: opts.gamesDir } : undefined) }) : { ok: false, code: opts.aiWhy };
+      const mixed = tried.ok ? aiPost({ ai: tried.text, tpl, ctx, post, music, limits, target, titleMax, kind: row.kind, seed: sha, prefs: readPrefs(opts.dataDir).prefs.text, game: tried.game ?? null, mode: facts.mode, templates }) : { reject: tried.code };
       if (mixed.post) {
         post = mixed.post;
         if (opts.aiText.stats) opts.aiText.stats.used += 1;

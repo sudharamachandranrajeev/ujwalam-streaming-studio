@@ -227,6 +227,21 @@ test('the checked config file is the one the prompt uses (versioned, placeholder
   const j = JSON.parse(readFileSync(new URL('../data/posting/ai-text.json', import.meta.url), 'utf8'));
   assert.match(j.version, /^\d+\.\d+\.\d+$/);
   const names = new Set([...j.prompt.matchAll(/\{(\w+)\}/g)].map((m) => m[1]));
-  for (const n of names) assert.ok(['language', 'tone', 'kind', 'seconds', 'facts', 'transcript', 'tagMin', 'tagMax', 'descMin', 'descMax', 'hookMin', 'hookMax'].includes(n), n);
+  for (const n of names) assert.ok(['language', 'tone', 'kind', 'seconds', 'facts', 'transcript', 'tagMin', 'tagMax', 'descMin', 'descMax', 'hookMin', 'hookMax', 'game', 'gameShort'].includes(n), n);
+  for (const n of [...j.system.matchAll(/{(w+)}/g)].map((m) => m[1])) assert.ok(['game', 'gameShort'].includes(n), n);
   assert.doesNotMatch(JSON.stringify(j), /handles\./);
+});
+
+test('1.2.0: a streak or multi-kill with no kill facts is a fact claim; with 2+ detector kills it passes', () => {
+  reject(run({ ...good(), title: 'Rapid Fire Kill Streak' }), 'fact-unverified');
+  reject(run({ ...good(), description: 'A squad wipe.\nGone in seconds.' }), 'fact-unverified');
+  assert.equal(run({ ...good(), title: '3 kills in a row, a real streak' }, { facts: { kills: '3', killsText: '3 KILLS' } }).ok, true);
+});
+
+test('1.2.0: scenery words reject the title or description; a scenery tag is dropped alone', () => {
+  reject(run({ ...good(), title: 'Red truck showdown' }), 'scenery');
+  reject(run({ ...good(), description: 'Fight in the desert.\nNo cover anywhere.' }), 'scenery');
+  const r = run({ ...good(), tags: [...good().tags, 'desert map'] });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.ok(!r.text.tags.includes('desert map'));
 });

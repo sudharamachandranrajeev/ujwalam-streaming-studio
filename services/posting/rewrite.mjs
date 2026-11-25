@@ -17,7 +17,8 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import path from 'node:path';
 import { keepsParts } from './ai-text-check.mjs';
 import { withAiText } from './ai-text.mjs';
-import { checkLimits, composeField, limitsFit, loadLimits, unresolvedKeys } from './index.mjs';
+import { dropTemplateLead, gameHashtags, gameTags, resolveGame } from './game-text.mjs';
+import { checkLimits, composeField, limitsFit, loadLimits, loadTemplates, unresolvedKeys } from './index.mjs';
 import { CAPTIONS_SCOPE } from './oauth.mjs';
 import { WRITABLE_SNIPPET, getVideoSnippet, isStreamLive, updateVideoSnippet } from './youtube.mjs';
 
@@ -108,6 +109,7 @@ export async function runRewrite(o) {
 async function rewriteInner(o) {
   const { dataDir, store, auth, budget, flags, nowMs = Date.now, fetchImpl, log = () => {} } = o;
   const limits = o.limits ?? loadLimits();
+  const templates = o.templates ?? loadTemplates();
   const stateFile = rewritesFile(dataDir);
   const cands = scheduledCandidates({ store, nowMs: nowMs(), only: o.only, marginMs: o.marginMs ?? MARGIN_MS });
   const rewritten = []; const skipped = []; let stopped = null;
@@ -121,7 +123,10 @@ async function rewriteInner(o) {
       const skip = (why) => { skipped.push({ id, why }); };
       const st = readState(stateFile);
       const prev = st.items[entry.videoId];
-      if (prev?.state === 'rewritten') { skip('already-rewritten'); continue; }
+      // a video rewritten under an older AI text version is rewritten again (2026-11-25: the game name, stricter facts);
+      // its record keeps the very first original, so undo still goes back to Ujwalam's own upload text
+      const redo = prev?.state === 'rewritten' && gen && prev.version !== gen.version;
+      if (prev?.state === 'rewritten' && !redo) { skip('already-rewritten'); continue; }
       if (prev?.state === 'pending') { skip('pending-unresolved'); continue; } // an update that may have been applied: undo checks it
       const dir = store.dir(id);
       const post = (() => { try { return JSON.parse(readFileSync(path.join(dir, 'post.json'), 'utf8')); } catch { return null; } })();
@@ -142,19 +147,24 @@ async function rewriteInner(o) {
       try { remote = await getVideoSnippet({ videoId: entry.videoId, accessToken, fetchImpl }); } catch (e) { if (apiWhy(e) === 'quota-exceeded') { stopped = 'quota-exceeded'; break; } skip(`read-${apiWhy(e)}`); continue; }
       if (!remote.found || !remote.snippet) { skip('video-not-found'); continue; }
       if (remote.privacyStatus !== 'private' || typeof remote.publishAt !== 'string' || !times(remote.publishAt, entry.publishAt) || !(Date.parse(remote.publishAt) > nowMs() + margin)) { skip('not-scheduled-now'); continue; }
-      if (norm(remote.snippet.title) !== norm(composeField(post, ['title'])) || norm(remote.snippet.description) !== norm(composeField(post, ['description', 'hashtags']))) { skip('changed-on-youtube'); continue; }
+      // the text on YouTube must still be the text Ujwalam wrote: the upload's, or (redo) this tool's last rewrite
+      const mine = redo ? { title: prev.written?.title, description: prev.written?.description } : { title: composeField(post, ['title']), description: composeField(post, ['description', 'hashtags']) };
+      if (norm(remote.snippet.title) !== norm(mine.title) || norm(remote.snippet.description) !== norm(mine.description)) { skip('changed-on-youtube'); continue; }
       if (typeof remote.snippet.categoryId !== 'string') { skip('no-category'); continue; }
-      const r = await gen({ file: video.file, seconds, facts: post.source?.facts ?? {}, kind: post.source?.kind ?? 'short', limits: limits.targets?.[post.target], ffmpeg: o.ffmpeg, cover: false }); // text only: the cover hook is not used
+      const facts = post.source?.facts ?? {};
+      const game = resolveGame(post.source?.game ?? null, o.gamesDir ? { gamesDir: o.gamesDir } : undefined);
+      const r = await gen({ file: video.file, seconds, facts, kind: post.source?.kind ?? 'short', limits: limits.targets?.[post.target], ffmpeg: o.ffmpeg, cover: false, game }); // text only: the cover hook is not used
       if (!r.ok) { skip(`template-fallback-${String(r.code).slice(0, 30)}`); continue; }
-      // the new text: AI title, AI lines then the old description unchanged (links, credits), AI tags then the old ones
-      const p = { title: r.text.title, description: `${r.text.description}\n\n${post.description}`, tags: [], hashtags: [...(post.hashtags ?? [])], target: post.target };
+      // the new text: AI title (with the game), AI lines then the old description without the template's own opening
+      // line (links, credits stay), the game's tags first, then the AI tags, then the old ones; the game's hashtags
+      const kept = dropTemplateLead(post.description, templates);
+      const p = { title: r.text.title, description: `${r.text.description}\n\n${kept}`, tags: [], hashtags: gameHashtags(r.game ?? null, post.target) ?? [...(post.hashtags ?? [])], target: post.target };
       const fits = limitsFit(p, limits);
-      const seen = new Set();
-      for (const t of [...r.text.tags, ...(post.tags ?? [])]) { const k = String(t).toLowerCase(); if (!t || seen.has(k)) continue; if (fits({ tags: [...p.tags, t] })) { p.tags.push(t); seen.add(k); } }
+      for (const t of gameTags(r.game ?? null, post.target, facts.mode, [...r.text.tags, ...(post.tags ?? [])])) if (fits({ tags: [...p.tags, t] })) p.tags.push(t);
       // a placeholder the old text already carried is not new; one the AI text brings is a reject
       const oldKeys = new Set(unresolvedKeys(post.title, post.description, ...(post.tags ?? [])));
       const newKeys = unresolvedKeys(p.title, r.text.description, ...r.text.tags).filter((k) => !oldKeys.has(k));
-      if (!p.title || newKeys.length || !checkLimits(p, limits).ok || keepsParts(p.description, [post.description]) !== null) { skip(`text-rejected-${!p.title ? 'title' : newKeys.length ? 'unresolved' : !checkLimits(p, limits).ok ? 'limits' : 'parts-lost'}`); continue; }
+      if (!p.title || newKeys.length || !checkLimits(p, limits).ok || keepsParts(p.description, [kept]) !== null) { skip(`text-rejected-${!p.title ? 'title' : newKeys.length ? 'unresolved' : !checkLimits(p, limits).ok ? 'limits' : 'parts-lost'}`); continue; }
       const next = { ...pick(remote.snippet), title: composeField(p, ['title']), description: composeField(p, ['description', 'hashtags']), tags: p.tags };
       // generation took a while: the video must still be far enough from going public
       if (!(Date.parse(remote.publishAt) > nowMs() + margin)) { skip('too-close-to-publish'); continue; }
@@ -164,9 +174,10 @@ async function rewriteInner(o) {
       // earlier run's record (and its text) is never taken as the original
       const at = new Date(nowMs()).toISOString();
       const fresh = readState(stateFile);
-      if (fresh.items[entry.videoId] && ['rewritten', 'pending'].includes(fresh.items[entry.videoId].state)) { skip('already-rewritten'); continue; }
+      const now = fresh.items[entry.videoId];
+      if (now && (now.state === 'pending' || (now.state === 'rewritten' && (!redo || now.version === gen.version)))) { skip('already-rewritten'); continue; }
       try { accessToken = await auth.accessToken(); } catch { stopped = 'not-signed-in'; break; }
-      fresh.items[entry.videoId] = { id, sha256: entry.sha256, target: entry.target, state: 'pending', original: remote.snippet, written: next, at };
+      fresh.items[entry.videoId] = { id, sha256: entry.sha256, target: entry.target, state: 'pending', original: redo && now?.original ? now.original : remote.snippet, written: next, at, version: gen.version ?? null, ...(redo ? { redoOf: now?.version ?? null } : {}) };
       writeState(stateFile, fresh);
       try { await updateVideoSnippet({ videoId: entry.videoId, snippet: next, accessToken, fetchImpl }); } catch (e) {
         // only a definite 4xx means nothing was written; a timeout or dropped connection may have applied it, so the record stays pending

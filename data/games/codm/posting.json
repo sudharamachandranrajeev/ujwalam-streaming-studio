@@ -1,16 +1,71 @@
 {
   "$comment": "PT1 (D408, 2026-11-21): post text lines for this game, added to data/posting/templates.json textPools for the same kind (services/posting/post-text.mjs). Same rules: facts {medal} {killsText} {kills} {result} {mode} only (a line with a missing fact is not used), no {n} or {date}, no names of people, brands or channels.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "textPools": {
     "short": {
-      "title": ["CODM {medal}", "CODM {mode}: {killsText}"],
-      "lead": ["Call of Duty: Mobile, {mode}, live on stream."]
+      "title": [
+        "CODM {medal}",
+        "CODM {mode}: {killsText}"
+      ],
+      "lead": [
+        "Call of Duty: Mobile, {mode}, live on stream."
+      ]
     },
     "montage": {
-      "title": ["CODM {killsText} montage"]
+      "title": [
+        "CODM {killsText} montage"
+      ]
     },
     "won-reel": {
-      "title": ["CODM {mode}: {result}"]
+      "title": [
+        "CODM {mode}: {result}"
+      ]
+    }
+  },
+  "post": {
+    "$comment": "D443 follow-up (user, 2026-11-25): every AI post names the game. name/short go into the AI prompt; the title must contain one of titleMatch (the AI writes it; if not, short is added at the end when it fits, else the AI text is rejected). tags: put first, then the mode tag, then the AI tags (per target, default for the rest). hashtags: replace the template hashtags per target (the user's own Settings hashtags are still added after). Answers chosen by the user 2026-11-25.",
+    "name": "Call of Duty: Mobile",
+    "short": "CODM",
+    "titleMatch": [
+      "codm",
+      "call of duty"
+    ],
+    "tags": {
+      "default": [
+        "codm",
+        "call of duty mobile",
+        "cod mobile",
+        "codm highlights"
+      ],
+      "youtube-shorts": [
+        "codm",
+        "call of duty mobile",
+        "cod mobile",
+        "codm shorts",
+        "codm highlights"
+      ],
+      "instagram-reels": [
+        "codm",
+        "call of duty mobile",
+        "cod mobile",
+        "codm shorts",
+        "codm highlights"
+      ]
+    },
+    "modeTags": {
+      "mp": "codm multiplayer",
+      "br": "codm battle royale"
+    },
+    "hashtags": {
+      "default": [
+        "#CODM",
+        "#codmshorts",
+        "#Shorts"
+      ],
+      "youtube-video": [
+        "#CODM",
+        "#CallOfDutyMobile"
+      ]
     }
   }
 }

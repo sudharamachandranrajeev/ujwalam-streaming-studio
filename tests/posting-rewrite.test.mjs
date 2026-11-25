@@ -105,9 +105,13 @@ describe('rewrite', () => {
     const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
     assert.equal(r.rewritten.length, 2, JSON.stringify(r));
     for (const [vid, v] of Object.entries(e.yt.videos)) {
-      assert.equal(v.snippet.title, 'Clutch finish nobody saw coming');
+      assert.equal(v.snippet.title, 'Clutch finish nobody saw coming | CODM');
       assert.match(v.snippet.description, /^Everything on the line\./);
-      assert.ok(v.snippet.description.includes(before[vid].snippet.description), 'the old description (links, credits) is kept after the AI lines');
+      const old = before[vid].snippet.description.split('\n');
+      assert.ok(old.slice(1).filter((l) => l.trim() && !l.startsWith('#')).every((l) => v.snippet.description.includes(l)), 'the old credit lines are kept after the AI lines');
+      assert.ok(!v.snippet.description.includes(old[0]), 'the template opening line is replaced: ' + old[0]);
+      assert.ok(v.snippet.description.endsWith('#CODM #codmshorts #Shorts'), v.snippet.description);
+      assert.equal(v.snippet.tags[0], 'codm');
       assert.equal(v.snippet.categoryId, '20'); assert.equal(v.snippet.defaultLanguage, 'en');
       assert.ok(v.snippet.tags.includes('clutch'));
       assert.equal(v.privacyStatus, 'private'); assert.equal(v.publishAt, FUTURE);
@@ -189,6 +193,35 @@ describe('rewrite', () => {
     const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
     assert.equal(r.skipped[0].why, 'already-rewritten');
     assert.equal(e.yt.calls.filter((c) => c.method === 'PUT').length, 1);
+  });
+
+  test('a newer AI text version rewrites again; the first original is kept for undo', async () => {
+    const e = await setup(1);
+    const before = structuredClone(e.yt.videos);
+    await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    const [vid] = Object.keys(e.yt.videos);
+    const st = readRewrites(e.dataDir);
+    st.items[vid].version = '0.9.0'; // as if written by an older version (records before 1.2.0 had none)
+    writeFileSync(rewritesFile(e.dataDir), JSON.stringify(st));
+    const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer({ title: 'CODM clutch at the end' })) });
+    assert.equal(r.rewritten.length, 1, JSON.stringify(r));
+    assert.equal(e.yt.videos[vid].snippet.title, 'CODM clutch at the end');
+    const rec = readRewrites(e.dataDir).items[vid];
+    assert.deepEqual(rec.original, before[vid].snippet, 'undo still goes back to the upload text');
+    assert.equal(rec.version, cfg.version); assert.equal(rec.redoOf, '0.9.0');
+    await runUndo({ ...base(e) });
+    assert.equal(e.yt.videos[vid].snippet.title, before[vid].snippet.title);
+  });
+
+  test('redo: a video edited by hand after the last rewrite is left alone', async () => {
+    const e = await setup(1);
+    await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    const [vid] = Object.keys(e.yt.videos);
+    const st = readRewrites(e.dataDir); st.items[vid].version = '0.9.0';
+    writeFileSync(rewritesFile(e.dataDir), JSON.stringify(st));
+    e.yt.videos[vid].snippet.title = 'my own title';
+    const r = await runRewrite({ ...base(e), aiDeps: aiDeps(answer()) });
+    assert.equal(r.skipped[0].why, 'changed-on-youtube');
   });
 
   test('YouTube refuses the update: nothing recorded, no ledger line', async () => {

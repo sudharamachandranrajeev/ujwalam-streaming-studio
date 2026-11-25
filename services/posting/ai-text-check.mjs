@@ -27,6 +27,7 @@ const URL_RE = /https?:|ftp:|www\.|\b[a-z0-9-]{2,}\.(?:com|net|org|tv|gg|io|me|c
 
 const WORD_NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const KILL_WORD = '(?:kills?|kill streak|eliminations?|frags?|downs?|knocks?|takedowns?)';
+const STREAK = /\b(?:kill[\s-]*streaks?|streaks?|multi[\s-]*kills?|squad[\s-]*wipes?|team[\s-]*wipes?|wiped|aces?|sprees?|collaterals?)\b/i;
 const WIN = /\b(?:victory|victorious|won|win|wins|winner|winning|champions?|booyah)\b/i;
 const LOSS = /\b(?:defeat|defeated|lost|loss|losing)\b/i;
 
@@ -139,6 +140,10 @@ export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileT
   // a tag with a number that is not a fact is dropped alone; the post stays
   const tagsBefore = t.tags.length;
   t.tags = t.tags.filter((g) => [...g.matchAll(/\d+/g)].every((m) => factNums.has(Number(m[0]))));
+  // a tag with a scenery word (cfg.sceneWords) is dropped alone too
+  const scene = new Set((Array.isArray(cfg?.sceneWords) ? cfg.sceneWords : []).map((w) => String(w).toLowerCase()));
+  const sceneHit = (v) => (String(v).toLowerCase().match(/[\p{L}\p{M}]+/gu) ?? []).some((w) => scene.has(w));
+  t.tags = t.tags.filter((g) => !sceneHit(g));
   const tagsDropped = tagsBefore - t.tags.length;
   // platform limits (data/posting/limits.json), per field
   const F = isPlain(limits?.fields) ? limits.fields : {};
@@ -180,6 +185,10 @@ export function checkAiText({ answer, facts = {}, seconds, limits, cfg, profileT
     if (c !== detKills) return bad('fact-kills', 'a kill count that the detector facts do not give');
     usedDetector = true;
   }
+  // 1.2.0 (2026-11-25): a streak or multi-kill with no number ("Rapid Fire Kill Streak") is a kill claim too
+  if (STREAK.test(rest) && !(detKills !== null && detKills >= 2)) return bad('fact-unverified', 'a streak or multi-kill claimed without detector facts');
+  // places, colours and objects in the title or description: a few frames cannot verify them (cfg.sceneWords, whole words)
+  if (sceneHit(rest)) return bad('scenery', 'a place, colour or object the frames cannot verify');
   const hasWin = WIN.test(rest), hasLoss = LOSS.test(rest);
   if (hasWin || hasLoss) {
     if (hasWin && hasLoss) return bad('fact-result', 'both a win and a loss');

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chatJson, LocalModelError } from '../local-model/runner.mjs';
 import { checkAiText, termsOfProfile } from './ai-text-check.mjs';
+import { gamePost, gameTitle } from './game-text.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const AI_TEXT_FLAG = 'ai-post-text';
@@ -110,6 +111,9 @@ export function loadVocab({ file = VOCAB_FILE, gamesDir = path.join(REPO, 'data'
   try {
     for (const g of readdirSync(gamesDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
       for (const f of ['events.json', 'screens.json']) { try { walk(JSON.parse(readFileSync(path.join(gamesDir, g.name, f), 'utf8'))); } catch { /* none */ } }
+      // the game's own name and post tags (posting.json post): the game's title on screen is not a player name
+      const gp = gamePost(g.name, { gamesDir });
+      if (gp) for (const w of [gp.name, gp.short, ...gp.titleMatch, ...Object.values(gp.tags).flat(), ...Object.values(gp.modeTags)]) tokens(w).forEach((t) => out.add(t));
     }
   } catch { /* none */ }
   return out;
@@ -160,14 +164,22 @@ const factsLine = (f) => {
   return l.length ? l.join('\n') : '(none)';
 };
 
-export function buildPrompt(cfg, { kind, seconds, facts, transcript }) {
+const fill = (s, v) => s.replace(/\{(\w+)\}/g, (m, k) => (Object.hasOwn(v, k) ? String(v[k]) : m));
+const gameVars = (g) => ({ game: g ? g.name : 'mobile shooter', gameShort: g ? g.short : 'the game' });
+
+export function buildPrompt(cfg, { kind, seconds, facts, transcript, game = null }) {
   const v = {
     language: cfg.language, tone: cfg.tone, kind: String(kind), seconds: Number.isFinite(seconds) ? String(Math.round(seconds)) : 'unknown',
     facts: factsLine(facts ?? {}), transcript: transcript || '', tagMin: cfg.answer.tags.min, tagMax: cfg.answer.tags.max,
     descMin: cfg.answer.description.minLines, descMax: cfg.answer.description.maxLines, hookMin: cfg.answer.thumbHook.minWords, hookMax: cfg.answer.thumbHook.maxWords,
+    ...gameVars(game),
   };
-  return cfg.prompt.replace(/\{(\w+)\}/g, (m, k) => (Object.hasOwn(v, k) ? String(v[k]) : m));
+  return fill(cfg.prompt, v);
 }
+export const buildSystem = (cfg, game = null) => fill(cfg.system, gameVars(game));
+// answers that another try may fix (a different answer from the model); OCR, frames and the model itself are not retried
+const RETRY = new Set(['schema', 'title', 'description', 'tags', 'hook', 'length', 'control', 'markup', 'hashtag', 'mention', 'placeholder',
+  'url', 'privacy', 'screen-name', 'fact-unverified', 'fact-kills', 'fact-result', 'fact-number', 'scenery', 'game-title']);
 
 /**
  * The batch. deps: { runner (createModelRunner), isOn: () => bool (flag ai-post-text), cfg?, profileTerms?: string[],
@@ -188,26 +200,39 @@ export async function withAiText(deps, fn) {
     done = Promise.resolve(deps.runner.withModel((m) => new Promise((rel) => { release = rel; resolveOpen({ m }); }))).catch((e) => resolveOpen({ err: e }));
   }));
   const fail = (code, detail) => { stats.rejected += 1; stats.rejects[code] = (stats.rejects[code] ?? 0) + 1; return { ok: false, code, detail }; };
-  const gen = async ({ file, seconds, facts = {}, kind, limits, ffmpeg, cover = true }) => {
+  // game: the post's game id (game-text.mjs resolveGame); its name goes into the prompt and must be in the title
+  const gen = async ({ file, seconds, facts = {}, kind, limits, ffmpeg, cover = true, game = null }) => {
     const h = await open();
     if (h.err) return fail(h.err instanceof LocalModelError ? h.err.code : 'error', String(h.err?.message ?? '').slice(0, 120));
+    const g = deps.gamePost ? deps.gamePost(game) : gamePost(game);
     let frames;
     try { frames = await (deps.grab ?? grabFrames)(ffmpeg, file, seconds, cfg, deps.tmpRoot); } catch { frames = []; }
     if (!frames.length) return fail('no-frames', 'no frame could be taken from the clip');
-    let answer;
-    try {
-      answer = await chatJson({ url: h.m.url, system: cfg.system, prompt: buildPrompt(cfg, { kind, seconds, facts, transcript: transcriptFor(file, cfg.transcriptMaxChars) }),
-        images: frames, schema: answerSchema(cfg), timeoutMs: cfg.timeoutMs, maxTokens: cfg.maxTokens, temperature: cfg.temperature });
-    } catch (e) { return fail(e instanceof LocalModelError ? e.code : 'error', String(e?.message ?? '').slice(0, 120)); }
     // screen names: OCR of larger frames of the same clip; if OCR cannot run, nothing is accepted (template text)
     let screenWords;
     try {
       const big = await (deps.grab ?? grabFrames)(ffmpeg, file, seconds, cfg, deps.tmpRoot, cfg.ocr.width);
       screenWords = await (deps.ocr ?? ocrWords)(big, { python: deps.ocrPython, tmpRoot: deps.tmpRoot, timeoutMs: cfg.ocr.timeoutMs });
     } catch (e) { return fail('ocr-unavailable', String(e?.message ?? '').slice(0, 120)); }
-    const r = checkAiText({ answer, facts, seconds, limits, cfg, profileTerms: terms, screenWords, vocab, cover });
-    if (!r.ok) { deps.onReject?.(r, answer); return fail(r.code, r.detail); }
-    return r;
+    const prompt = buildPrompt(cfg, { kind, seconds, facts, transcript: transcriptFor(file, cfg.transcriptMaxChars), game: g });
+    const titleMax = Number.isInteger(limits?.fields?.title?.max) ? limits.fields.title.max : null;
+    let last = null;
+    for (let n = 0; n < Math.max(1, Number(cfg.attempts) || 1); n++) {
+      let answer;
+      try {
+        answer = await chatJson({ url: h.m.url, system: buildSystem(cfg, g), prompt, images: frames, schema: answerSchema(cfg), timeoutMs: cfg.timeoutMs, maxTokens: cfg.maxTokens, temperature: n ? (cfg.retryTemperature ?? cfg.temperature) : cfg.temperature });
+      } catch (e) { return fail(e instanceof LocalModelError ? e.code : 'error', String(e?.message ?? '').slice(0, 120)); }
+      let r = checkAiText({ answer, facts, seconds, limits, cfg, profileTerms: terms, screenWords, vocab, cover });
+      if (r.ok && g) { // the game in the title: the model's own words, else the short name added when it fits
+        const title = gameTitle(r.text.title, g, titleMax);
+        r = title ? { ...r, text: { ...r.text, title }, game: g } : { ok: false, code: 'game-title', detail: 'the game name does not fit in the title' };
+      }
+      if (r.ok) return r;
+      deps.onReject?.(r, answer);
+      last = r;
+      if (!RETRY.has(r.code)) break;
+    }
+    return fail(last.code, last.detail);
   };
   gen.stats = stats;
   gen.version = cfg.version;
