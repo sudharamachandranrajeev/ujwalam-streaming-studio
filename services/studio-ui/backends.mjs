@@ -95,7 +95,9 @@ export function createHostClient({ dataDir = null, env = process.env } = {}) {
  *  outputsReady is passed (tests / UI work only), so start/stop stay disabled by default. */
 // waitingAudio (tests, 2026-11-18): project device sounds whose device is "not connected" ([{id, name}]): mixer.list shows
 // them as waiting rows (as the real host does, A2) until devices.rescan "finds" them (they become normal strips).
-export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'youtube-v', 'twitch', 'kick', 'record'], waitingAudio = [] } = {}) {
+// sessionAgeMs (tests): a stream or recording counts as started that long before its start call (host.status streamMs,
+// recordMs), as for a studio window that opens on a session already running.
+export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'youtube-v', 'twitch', 'kick', 'record'], waitingAudio = [], sessionAgeMs = 0 } = {}) {
   const waiting = waitingAudio.map((w) => ({ ...w }));
   const sinkState = new Map(sinks.map((id) => [id, 'idle']));
   const isRec = (id) => id === 'record' || id.startsWith('record-'); // "record" (H) and "record-v" (V, LC1)
@@ -114,14 +116,16 @@ export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'yo
   const mixer = [{ id: 'scene-1/cam', name: 'Camera', volumeDb: 0, muted: false, cue: false, audioSource: 'aud-cam', tracks: ['t1'] }, { id: 'scene-1/game', name: 'Game', volumeDb: -6, muted: false, cue: true, audioSource: 'aud-game', tracks: ['t1', 't2'] }, { id: 'scene-2/text', name: 'Music', volumeDb: -18, muted: true, cue: false, audioSource: 'aud-music', tracks: ['t1'] }];
   const TRACKS = [{ id: 't1', name: 'Stream' }, { id: 't2', name: 'Recording' }];
   const active = { H: 'scene-1', V: 'scene-3' };
-  const state = { live: false, recording: false };
+  const state = { live: false, recording: false, streamSince: 0, recordSince: 0 };
+  const clock = (since) => (since ? Date.now() - since : null); // the host's session clocks (Outputs::clocks)
   const noise = () => randomBytes(1)[0] / 255;
   const need = (o, what) => { if (!o) throw Object.assign(new Error(`unknown-${what}`), { code: 'UNKNOWN' }); return o; };
   return {
     kind: 'fake',
     async call(method, p = {}) {
       switch (method) {
-        case 'host.status': return { fake: true, live: state.live, recording: state.recording, droppedFrames: 0, totalFrames: 0, fps: 0, cpuPct: Math.round(noise() * 10), gpuPct: Math.round(noise() * 5), outputsReady: { stream: outputsReady, record: outputsReady } };
+        case 'host.status': return { fake: true, live: state.live, recording: state.recording, droppedFrames: 0, totalFrames: 0, fps: 0, cpuPct: Math.round(noise() * 10), gpuPct: Math.round(noise() * 5), outputsReady: { stream: outputsReady, record: outputsReady },
+          streamMs: clock(state.streamSince), recordMs: clock(state.recordSince) };
         case 'scenes.list': return { scenes: scenes.map((s) => ({ ...s, active: active[s.canvas] === s.id, layers: layers[s.id].length })) };
         case 'scenes.activate': { const s = need(scenes.find((x) => x.id === p.scene), 'scene'); active[s.canvas] = s.id; return { ok: true }; }
         case 'layers.list': { const sc = need(scenes.find((x) => x.id === p.scene), 'scene'); return { scene: sc.id, canvas: sc.canvas, layers: layers[sc.id].map((l) => structuredClone(l)) }; }
@@ -221,6 +225,11 @@ export function createFakeHost({ outputsReady = false, sinks = ['youtube-h', 'yo
           for (const id of ids) { if (!sinkState.has(id)) throw Object.assign(new Error(`unknown-sink ${id}`), { code: 'UNKNOWN' }); sinkState.set(id, method.endsWith('start') ? 'live' : 'stopped'); }
           const anyLive = (k) => [...sinkState].some(([id, st]) => isRec(id) === (k === 'record') && st === 'live');
           state.live = anyLive('stream'); state.recording = anyLive('record');
+          // as Outputs::clocks: set when the first sink of that kind goes live, cleared when none runs
+          if (state.live && !state.streamSince) state.streamSince = Date.now() - sessionAgeMs;
+          if (!state.live) state.streamSince = 0;
+          if (state.recording && !state.recordSince) state.recordSince = Date.now() - sessionAgeMs;
+          if (!state.recording) state.recordSince = 0;
           return { ok: true };
         }
         case 'outputs.status': return { sinks: [...sinkState].map(([id, st]) => ({ id, kind: isRec(id) ? 'record' : 'stream', state: st })) };

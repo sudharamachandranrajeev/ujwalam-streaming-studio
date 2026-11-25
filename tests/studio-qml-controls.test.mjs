@@ -44,11 +44,13 @@ describe('QML studio: Save clip, Mark moment and the alert strip (headless probe
   const dirs = [];
   after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
   // o.alerts: the live-test-kit setup of the widget test (flag on or off, a recovery event, an audio warning, live).
-  async function probe({ actions = [], ms = Math.max(5000, 3000 + actions.length * 700), alerts = null, live = false } = {}) {
+  // record: a recording runs; sessionAgeMs: the stream or recording started that long before (the host's clocks).
+  async function probe({ actions = [], ms = Math.max(5000, 3000 + actions.length * 700), alerts = null, live = false, record = false, sessionAgeMs = 0 } = {}) {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qmlctl-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
-    const fake = createFakeHost({ outputsReady: true });
+    const fake = createFakeHost({ outputsReady: true, sessionAgeMs });
     if (live) await fake.call('stream.start', {});
+    if (record) await fake.call('record.start', {});
     const calls = [];
     let host = { describe: () => fake.describe(), call: (m, p) => { calls.push([m, p]); return fake.call(m, p); } };
     if (alerts) {
@@ -161,8 +163,20 @@ describe('QML studio: Save clip, Mark moment and the alert strip (headless probe
     assert.ok(side[1] + side[3] <= cards[1] && cards[1] + cards[3] <= mixer[1], 'side column, then the cards, then the mixer');
     assert.equal(node(off.p, 'chipStats'), undefined, 'no stats chip in the top bar any more (the cards show it)');
     const on = await probe({ live: true, ms: 6000 });
-    assert.match(on.s.stats.session, /^00:00:0[1-9]$/, 'the clock runs while live');
+    assert.match(on.s.stats.session, /^00:00:[0-5]\d$/, 'the clock runs while live');
+    assert.notEqual(on.s.stats.session, '00:00:00');
     assert.equal(on.s.stats.note, 'On air');
+  });
+
+  // 2026-11-25 (alpha.43): a window opened again during a 66-minute recording showed "00:04:17": the clock counted from
+  // the window's first status. It shows the host's session clock (host.status recordMs / streamMs), ticking between reads.
+  test('stats cards: a window that opens on a session already running shows the host session time, not the time since it opened', async () => {
+    const rec = await probe({ record: true, sessionAgeMs: 3_723_000, ms: 6000 }); // recording for 1:02:03 when the window opens
+    assert.equal(rec.s.stats.note, 'Recording');
+    assert.match(rec.s.stats.session, /^01:02:(0[4-9]|[1-5]\d)$/, rec.s.stats.session);
+    const both = await probe({ live: true, record: true, sessionAgeMs: 600_000, ms: 6000 }); // live wins: the stream clock
+    assert.equal(both.s.stats.note, 'On air');
+    assert.match(both.s.stats.session, /^00:10:[0-5]\d$/, both.s.stats.session);
   });
 
   test('status line: a UI server that does not answer is said as such, not as a host that stopped', async () => {

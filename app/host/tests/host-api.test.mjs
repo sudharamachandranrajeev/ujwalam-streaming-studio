@@ -246,11 +246,13 @@ test('host.info / host.status contract (UI fields)', async () => {
     assert.ok(info.disabledModules.includes(m), `${m} disabled`);
   assert.ok('gpuPreference' in info);
   const st = await c.call('host.status');
-  for (const k of ['live', 'recording', 'droppedFrames', 'totalFrames', 'fps', 'cpuPct', 'gpuPct', 'outputsReady'])
+  for (const k of ['live', 'recording', 'droppedFrames', 'totalFrames', 'fps', 'cpuPct', 'gpuPct', 'outputsReady', 'streamMs', 'recordMs'])
     assert.ok(k in st, `host.status.${k}`);
   assert.deepEqual(Object.keys(st.outputsReady).sort(), ['record', 'stream']);
   assert.equal(st.live, false);
   assert.equal(st.recording, false);
+  // the session clocks (the stats card's time): null while nothing runs
+  assert.deepEqual([st.streamMs, st.recordMs], [null, null]);
 });
 
 test('scenes and layers: list, activate, case-insensitive canvas, visibility, move', async () => {
@@ -333,6 +335,10 @@ test('record start/stop on a file sink; project.load refused while active; strea
   assert.equal((await rpcErr('project.load', { project: proj })).code, -32009);
   assert.equal((await rpcErr('outputs.configure', { rungs: [RUNG], audio: AUDIO, sinks: [sink({ transport: 'file', name: 'b.mkv' }, { proto: 'file', platform: 'local' })] })).code, -32009);
   await new Promise((r) => setTimeout(r, 1500));
+  // the session clock the studio's stats card shows: running since the recording went live; no stream clock
+  const clk = await c.call('host.status');
+  assert.ok(clk.recordMs >= 1000 && clk.recordMs < 60_000, `recordMs ${clk.recordMs}`);
+  assert.equal(clk.streamMs, null);
   await c.call('record.stop', {});
   for (let i = 0; i < 50; i++) {
     st = await c.call('outputs.status');

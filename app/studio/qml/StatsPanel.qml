@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Stream stats (the widget's StatsCards, D287): the session clock while live or recording, and GPU, CPU and FPS each with
+// Stream stats (the widget's StatsCards, D287): the session clock while live or recording (the host's clock), and GPU, CPU and FPS each with
 // its value and a line of the last 3 minutes (one sample per status read, every 2 s). Under the side column, always in view.
 import QtQuick
 import Ujwalam.Core
@@ -31,8 +31,18 @@ Item {
         fps = push(fps, h.fps);
         dropped = h.droppedFrames || 0;
         const on = h.live === true || h.recording === true;
-        if (on && !active) { since = Date.now(); tick(); clock.start() } // the only timer here, and only while on air or recording
-        else if (!on && active) { clock.stop(); session = "Not live" }
+        if (on) {
+            // The host's session clock (host.status streamMs while live, else recordMs): a window opened again (a restart
+            // after a crash) shows the real session time, not the time since it opened. It ticks here between reads and is
+            // set again only when it drifts more than 1.5 s (no jumps from the request's own delay). An older host without
+            // the clocks: the time since this window first saw the session.
+            const ms = h.live === true ? h.streamMs : h.recordMs;
+            const hostSince = typeof ms === "number" && ms >= 0 ? Date.now() - ms : -1;
+            if (hostSince >= 0 && (!active || Math.abs(hostSince - since) > 1500)) since = hostSince;
+            else if (hostSince < 0 && !active) since = Date.now();
+            tick();
+            if (!active) clock.start(); // the only timer here, and only while on air or recording
+        } else if (active) { clock.stop(); session = "Not live" }
         active = on;
     }
     function two(n) { return (n < 10 ? "0" : "") + n }

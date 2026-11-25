@@ -1054,7 +1054,7 @@ export function createStudioServer(opts) {
     const snap = {
       at: now(),
       host: { kind: h.kind, available: hs !== null, blockedOnHost: h.kind === 'fake',
-        ...(hs ? pick(hs, ['live', 'recording', 'droppedFrames', 'totalFrames', 'fps', 'cpuPct', 'gpuPct', 'outputsReady', 'previewEditing', 'previewSnap', 'previewSelection', 'uptimeMs']) : {}),
+        ...(hs ? pick(hs, ['live', 'recording', 'droppedFrames', 'totalFrames', 'fps', 'cpuPct', 'gpuPct', 'outputsReady', 'previewEditing', 'previewSnap', 'previewSelection', 'uptimeMs', 'streamMs', 'recordMs']) : {}),
         ...(hs && hs.audioHealth ? { audioHealth: audioReadiness(hs.audioHealth) } : {}),
         ...(previewLast ? { previewEdit: previewLast } : {}),
         ...(dev ? { devices: { seq: dev.seq, waiting: dev.waiting, connectable: deviceRoutes.connectable() } } : {}),

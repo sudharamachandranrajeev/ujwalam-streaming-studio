@@ -134,6 +134,12 @@ json::Value host_status_json(App &a)
 	const json::Value *gp = gpu.find("gpuPct");
 	r.set("gpuPct", gp ? *gp : json::Value());
 	r.set("outputsReady", ready(a));
+	// The session clocks (the same ones markers and moments use): ms since the stream or recording started, null when
+	// none runs. The studio's stats card shows them, so a reopened window keeps the real session time.
+	int64_t stream_ms = -1, record_ms = -1;
+	a.outputs->clocks(stream_ms, record_ms);
+	r.set("streamMs", stream_ms >= 0 ? json::Value(stream_ms) : json::Value());
+	r.set("recordMs", record_ms >= 0 ? json::Value(record_ms) : json::Value());
 	// details
 	r.set("render", std::move(render));
 	r.set("gpu", std::move(gpu));
