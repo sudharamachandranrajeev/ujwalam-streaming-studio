@@ -764,7 +764,9 @@ QtObject {
     function takeFlags(list) {
         const f = {};
         for (const x of list) f[x.id] = x.on === true;
-        if (JSON.stringify(f) !== JSON.stringify(flags)) {
+        let same = Object.keys(f).length === Object.keys(flags).length;
+        for (const k in f) if (same && flags[k] !== f[k]) same = false;
+        if (!same) {
             // RareUI slice 1 (D384): the decorated look needs rareui-look; the pack's components block (button style, spinner)
             // is read only with theme-components too. Both off: nothing changes anywhere.
             const look = f["rareui-look"] === true;
@@ -772,8 +774,13 @@ QtObject {
             Theme.setComponentsOn(look && f["theme-components"] === true);
             flags = f;
         }
-        if (JSON.stringify(list) !== JSON.stringify(flagList)) flagList = list;
+        // GUI load (2026-11-25): compared field by field in one pass, not by two JSON texts of the whole list on every poll
+        // (7 ms a poll, up to 36 ms, in the realistic probe).
+        let sig = "";
+        for (const x of list) { for (const k in x) sig += k + "\u0001" + x[k] + "\u0001"; sig += "\u0002" }
+        if (sig !== pFlagSig) { pFlagSig = sig; flagList = list; }
     }
+    property string pFlagSig: ""
 
     // ---- Settings (the widget's saveSettings and setFlag) ----
     // An older server that does not know the match filter refuses the whole change (400): everything else is saved again

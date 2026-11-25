@@ -162,13 +162,53 @@ ApplicationWindow {
     // Tasks still running and not live: ask first (the widget closeEvent): keep them in the tray, stop them, or keep the
     // window. Live: the window closes as before.
     onClosing: (close) => {
+        if (closingText !== "") { close.accepted = false; return } // already closing: a second click changes nothing
         if (!closeConfirmed && studioStore.activeTasks > 0 && !studioStore.live) {
             close.accepted = false;
             closeDlg.open();
             return;
         }
+        close.accepted = false; // the window stays up and says what happens until the studio has quit
+        beginClose();
+    }
+    // Close feedback (2026-11-25, user report: after the X and the close question the window looked frozen, "can't tell
+    // if closing, running or not responding"). The window first shows what closing does, waits until that picture is on
+    // screen (one frame, at most 250 ms), then quits; it stays on screen while the studio ends, the launcher then stops
+    // the tasks and the host (which saves a recording). Quit explicitly: a hidden test window is no "last visible window".
+    property string closingText: ""
+    property double closingAt: 0
+    function closingWhat() {
+        const n = studioStore.activeTasks;
+        const parts = [];
+        if (studioStore.live) parts.push("ending the stream");
+        if (studioStore.recording) parts.push("saving the recording");
+        if (n > 0) parts.push("stopping " + (n === 1 ? "1 task" : n + " tasks"));
+        return parts.length ? parts.join(", ") : "closing the services";
+    }
+    function beginClose() {
+        closingText = closingWhat();
+        closingAt = Date.now();
         if (Tray.active) Tray.end();
-        Qt.callLater(Qt.quit); // a hidden test window is no "last visible window": quit explicitly (exit 0)
+        Api.log("studio closing: " + closingText);
+        closeWait.start();
+    }
+    function quitNow(why) {
+        if (closeWait.done) return;
+        closeWait.done = true;
+        closeWait.stop();
+        Api.log("studio closing: shown after " + (Date.now() - closingAt) + " ms (" + why + "), quitting");
+        Qt.quit();
+    }
+    Timer { // the picture did not come within 250 ms (a busy screen): quit anyway, closing comes first
+        id: closeWait
+        property bool done: false
+        interval: 250
+        onTriggered: win.quitNow("timeout")
+    }
+    Connections { // the first frame with the closing card is on screen
+        target: win
+        enabled: win.closingText !== "" && !closeWait.done
+        function onFrameSwapped() { if (Date.now() > win.closingAt) Qt.callLater(win.quitNow, "frame") }
     }
 
     // Layout (D389 C2): one gap from the spacing scale, and column and mixer sizes that follow the window, so a small window
@@ -415,6 +455,54 @@ ApplicationWindow {
         anchors.fill: parent
         z: 50
         onSettingsChanged: { win.guideSent = true; if (settingsDlg.item) settingsDlg.item.guideFrom(guide) }
+    }
+
+    // The closing card (see beginClose): over everything in the window, it takes every click so nothing starts while closing.
+    Rectangle {
+        objectName: "closingCard"
+        visible: win.closingText !== ""
+        anchors.fill: parent
+        z: 1000
+        color: Qt.rgba(0, 0, 0, 0.55)
+        MouseArea { anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = true }
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 2 * Theme.sp.l, 460)
+            height: closingCol.implicitHeight + 2 * Theme.sp.l
+            radius: Theme.radius
+            color: Theme.c.panel
+            border.color: Theme.c.border
+            Column {
+                id: closingCol
+                anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: Theme.sp.l }
+                spacing: Theme.sp.s
+                Text {
+                    width: parent.width
+                    text: "Closing Ujwalam…"
+                    color: Theme.c.text
+                    font.family: Theme.ty.displayFamily
+                    font.pixelSize: Theme.ty.title
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    objectName: "closingText"
+                    width: parent.width
+                    text: win.closingText.charAt(0).toUpperCase() + win.closingText.slice(1) + "."
+                    wrapMode: Text.Wrap
+                    color: Theme.c.text
+                    font.family: Theme.family
+                    font.pixelSize: Theme.ty.body
+                }
+                Text {
+                    width: parent.width
+                    text: "The window goes away by itself in a few seconds. Do not switch off the computer yet."
+                    wrapMode: Text.Wrap
+                    color: Theme.c.muted
+                    font.family: Theme.family
+                    font.pixelSize: Theme.ty.small
+                }
+            }
+        }
     }
 
     CloseDialog {
