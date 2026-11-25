@@ -28,6 +28,20 @@ earlier request: "different realistic graphics filters, post processing or resha
    read with RL5 and offered as a look.
 2. Reels: a local AI sharpen/denoise model may be downloaded later, **asking before the download**; never while live.
 
+### References read (2026-11-25, 4 local videos in `C:\AI\Claude\_data\Ujwalam\video reference`, never committed)
+
+Frames looked at by the lead (20/50/80 %); measured numbers come in RL5.
+- A (landscape, dark castle map): "Dark cinematic" look: crushed blacks, orange-red highlights against blue-teal
+  shadows (split tone), strong local contrast and clarity, wet glossy surfaces, vignette. Closest to Cinematic + HDR.
+- B (vertical): a scene layout more than a grade: the streamer's lit room (purple neon) on top, the game below with
+  natural, slightly bright colours. Feeds the scene-builder work (camera-room top, game bottom), not a look.
+- C (vertical, snow): "Cold high-key": near-white, blue-cast, low saturation, with red kept strong (selective
+  colour on the red reticle and UI). Closest to Gritty war, cold variant.
+- D (vertical): the game shown on a monitor in a dark room with a red glow and RGB keyboard ("screen in a room"
+  framing) and a bold caption above. A scene/reel framing, plus a dark red ambient grade.
+So the looks become: Cinematic, Dark cinematic (A), Cold high-key (C), Gritty war, HDR vivid, Night neon, Filmic; and
+two framings for the scene builder and reels: camera-room over game (B) and game-on-a-monitor (D).
+
 Status: **approved** for RL1-RL5 with these looks. Order: after the studio slowness fix and alpha.44 push.
 
 ## Notes
