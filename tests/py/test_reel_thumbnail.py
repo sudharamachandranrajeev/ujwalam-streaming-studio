@@ -127,14 +127,14 @@ class ArgvTests(unittest.TestCase):
                          ["-loop", "1", "-framerate", "60", "-t", "0.016667", "-i", "thumbnail.png"])
         fc = a[a.index("-filter_complex") + 1]
         self.assertIn("[vcat]subtitles=c.ass[vcap]", fc, "captions on the reel, not on the start frame")
-        self.assertIn("[vth][vcap]concat=n=2:v=1:a=0[vout]", fc)
+        self.assertIn("[vth][vcap]concat=n=2:v=1:a=0[vfin]", fc)
         self.assertIn("[2:v]scale=", fc)
         for k in (0, 1):
             self.assertIn(f"[ab{k}]adelay=delays=800S:all=1[aout{k}]", fc)
         fc = mont.render_argv("ffmpeg", "s.mp4", [piece(0, 5)], FRAME, [], [], 80, "o.mp4", audio_tracks=0,
                               thumbnail="thumbnail.png")
         fc = fc[fc.index("-filter_complex") + 1]
-        self.assertIn("[vth][vcat]concat=n=2:v=1:a=0[vout]", fc)
+        self.assertIn("[vth][vcat]concat=n=2:v=1:a=0[vfin]", fc)
         self.assertNotIn("adelay", fc)
 
 

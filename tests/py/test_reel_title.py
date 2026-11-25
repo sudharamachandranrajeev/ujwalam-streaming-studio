@@ -130,7 +130,7 @@ class AssTests(unittest.TestCase):
         d = {"ass": "name.ass", "fontsdir": "title-fonts"}
         g = mont.render_argv("ffmpeg", "s.mp4", ps, FRAME, [], [], 80, "o.mp4", title=d)
         g = g[g.index("-filter_complex") + 1]
-        self.assertIn("[vjoin]subtitles=name.ass:fontsdir=title-fonts[vout]", g)
+        self.assertIn("[vjoin]subtitles=name.ass:fontsdir=title-fonts[vfin]", g)
         self.assertNotRegex(g, BLUR)
         g2 = mont.render_argv("ffmpeg", "s.mp4", ps, FRAME, [], [], 80, "o.mp4", title=d, captions="c.ass", thumbnail="t.png")
         g2 = g2[g2.index("-filter_complex") + 1]

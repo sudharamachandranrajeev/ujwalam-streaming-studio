@@ -84,7 +84,7 @@ class ArgvTests(unittest.TestCase):
 
     def test_no_transition_is_the_hard_concat_of_before(self):
         fc = self.argv([piece(0, 5), piece(10, 15)], None)
-        self.assertIn("concat=n=2:v=1:a=1[vout][aout0]", fc)
+        self.assertIn("concat=n=2:v=1:a=1[vfin][aout0]", fc)
         self.assertNotIn("xfade", fc)
         self.assertEqual(fc.count("afade=t=in"), 2)
 
@@ -93,7 +93,7 @@ class ArgvTests(unittest.TestCase):
         self.assertNotIn("concat=", fc)
         # offsets: the first join at 5 - 0.25, the second at (5 + 4) - 2 * 0.25
         self.assertIn("[v0][v1]xfade=transition=fade:duration=0.250:offset=4.750[vx1]", fc)
-        self.assertIn("[vx1][v2]xfade=transition=fade:duration=0.250:offset=8.500[vout]", fc)
+        self.assertIn("[vx1][v2]xfade=transition=fade:duration=0.250:offset=8.500[vfin]", fc)
         for k in (0, 1):
             self.assertIn(f"[a0_{k}][a1_{k}]acrossfade=d=0.250:c1=tri:c2=tri[ax1_{k}]", fc)
             self.assertIn(f"[ax1_{k}][a2_{k}]acrossfade=d=0.250:c1=tri:c2=tri[aout{k}]", fc)
@@ -104,10 +104,10 @@ class ArgvTests(unittest.TestCase):
     def test_picture_only_and_captions(self):
         fc = self.argv([piece(0, 5), piece(10, 15)], FADE, tracks=0)
         self.assertNotIn("acrossfade", fc)
-        self.assertIn("xfade=transition=fade:duration=0.250:offset=4.750[vout]", fc)
+        self.assertIn("xfade=transition=fade:duration=0.250:offset=4.750[vfin]", fc)
         fc = self.argv([piece(0, 5), piece(10, 15)], FADE, captions="c.ass")
         self.assertIn("offset=4.750[vcat]", fc)
-        self.assertIn("[vcat]subtitles=c.ass[vout]", fc)
+        self.assertIn("[vcat]subtitles=c.ass[vfin]", fc)
 
 
 def yavg(path, cwd):

@@ -3212,5 +3212,5 @@ clips as YouTube Shorts go to Instagram Reels; as many posts a day as Meta allow
 `content_publishing_limit`), at least the auto-post gap apart, never while live. Upload through the Instagram Graph API
 with Facebook Login and a resumable upload from this PC (no public video URL). Instagram has no scheduled publish, so
 Ujwalam publishes at the time itself. Tokens and the app secret in Windows Credential Manager only. A clip file is
-deleted (post-delete-uploaded) only after every target that wants it has posted it. Flag `instagram-autopost` ON
+deleted (post-delete-uploaded) only after every target that wants it has posted it. Flag `instagram-autopost` ON by default
 (user-requested); it does nothing until connected. The first real post waits for the user's yes.
