@@ -184,7 +184,7 @@ class MontageTests(unittest.TestCase):
         argv = mont.render_argv("ffmpeg", "v.mkv", pieces, {"width": 1080, "height": 1920}, ["-c:v", "x"],
                                 ["-c:a", "aac"], 80, "o.mp4", audio_tracks=2)
         g = argv[argv.index("-filter_complex") + 1]
-        self.assertIn("[v0][a0_0][a0_1][v1][a1_0][a1_1]concat=n=2:v=1:a=2[vout][aout0][aout1]", g)
+        self.assertIn("[v0][a0_0][a0_1][v1][a1_0][a1_1]concat=n=2:v=1:a=2[vfin][aout0][aout1]", g)
         self.assertIn("[1:a:1]", g)
         maps = [argv[i + 1] for i, x in enumerate(argv) if x == "-map"]
         self.assertEqual(maps, ["[vout]", "[aout0]", "[aout1]"])
@@ -198,6 +198,16 @@ class MontageTests(unittest.TestCase):
         self.assertEqual(g.count("afade=t=in:d=0.080"), 2)
         self.assertIn("afade=t=out:st=4.420:d=0.080", g)
         self.assertEqual(argv.count("-i"), 2)
+
+    def test_render_argv_last_video_step_is_yuv420p(self):
+        # 2026-11-24 triage: the long video came out yuv444p (fx/subtitles after the grade); the encoder gets 4:2:0
+        pieces = [{"start": 10.0, "end": 14.5, "kills": 1}, {"start": 30.0, "end": 34.5, "kills": 1}]
+        for extra in ({}, {"captions": "c.ass"}, {"grade": {"blueShadows": 0.1, "redMidtones": 0, "greenHighlights": 0}}):
+            argv = mont.render_argv("ffmpeg", "v.mkv", pieces, {"width": 1080, "height": 1920}, ["-c:v", "x"],
+                                    ["-c:a", "aac"], 80, "o.mp4", **extra)
+            chains = argv[argv.index("-filter_complex") + 1].split(";")
+            outs = [c for c in chains if c.endswith("[vout]")]
+            self.assertEqual(outs, ["[vfin]format=yuv420p[vout]"], extra)
 
 
 def result(t, word="VICTORY"):

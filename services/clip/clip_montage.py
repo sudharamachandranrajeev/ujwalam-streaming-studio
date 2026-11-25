@@ -669,6 +669,10 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         parts.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,{vol}{limit}"
                      + (",adelay=delays=800S:all=1" if thumbnail else "") + "[aout0]")
     n_audio = audio_tracks or (1 if bed_only else 0)
+    # 2026-11-24 triage: the fx and subtitle filters after the graded picture can hand the encoder 4:4:4 (the long
+    # video came out yuv444p, which many players and the concat step do not take); the very last step is always 4:2:0
+    parts = [p.replace("[vout]", "[vfin]") for p in parts]
+    parts.append("[vfin]format=yuv420p[vout]")
     maps = ["-map", "[vout]"] + [x for k in range(n_audio) for x in ("-map", f"[aout{k}]")]
     # CL1 (D350): nothing here adds time (no pad or hold; a crossfade only shortens: each join overlaps by xd); the fps
     # filter can round a piece by up to one frame, so the output is also cut at the type's maximum.
