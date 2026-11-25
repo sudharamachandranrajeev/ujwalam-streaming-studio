@@ -66,6 +66,7 @@ test('the capture layer sound is metered but in no track before it is added', as
   const cap = (await rows()).find((r) => r.id === 'main/cap');
   assert.ok(cap, 'a strip for the game capture');
   assert.deepEqual([cap.audioSource, cap.mixers], [null, 0]);
+  assert.equal(cap.deviceAudio, false, 'no audio entry: the card\'s own audio is not opened');
   assert.ok(!(await rows()).some((r) => r.id.startsWith('audio:')), 'no device sound yet');
 });
 
@@ -74,6 +75,7 @@ test('add a layer sound: on track 1 at its project volume, CUE late (it has vide
   assert.deepEqual([r.kind, r.cueDelayed], ['layer', true]);
   const cap = (await rows()).find((x) => x.id === 'main/cap');
   assert.deepEqual([cap.audioSource, cap.mixers, cap.tracks, Math.round(cap.volumeDb)], ['aud-cap', 1, ['t1'], -3]);
+  assert.equal(cap.deviceAudio, true, 'attached: the card\'s own audio is opened');
   assert.equal((await rpcErr('audio.addFromProject', { project: withSources(CAP), audio: 'aud-cap' })).code, CONFLICT);
   assert.equal((await rpcErr('audio.addFromProject', { project: withSources(CAP), audio: 'nope' })).code, INVALID, 'only an entry in the project');
 });
@@ -106,6 +108,16 @@ test('remove needs the project without the entry; remove, then undo (add again) 
   assert.deepEqual([r.removed, r.kind], [true, 'layer']);
   const cap = (await rows()).find((x) => x.id === 'main/cap');
   assert.deepEqual([cap.audioSource, cap.mixers], [null, 0], 'the strip stays, out of the stream');
+  assert.equal(cap.deviceAudio, false, 'detached: the card\'s own audio is closed again');
   r = await c.call('audio.removeFromProject', { project: withSources(MICSRC), audio: 'aud-cap' });
   assert.equal(r.removed, false, 'removing twice changes nothing');
+});
+
+test('a project loaded with the capture layer\'s audio entry opens the card\'s own audio; without it, not', async () => {
+  await loadIntoHost(c, withSources(CAP));
+  let cap = (await rows()).find((x) => x.id === 'main/cap');
+  assert.deepEqual([cap.audioSource, cap.deviceAudio], ['aud-cap', true]);
+  await loadIntoHost(c, base());
+  cap = (await rows()).find((x) => x.id === 'main/cap');
+  assert.deepEqual([cap.audioSource, cap.deviceAudio], [null, false]);
 });

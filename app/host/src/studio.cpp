@@ -1227,6 +1227,36 @@ bool Studio::device_loss_pending(const devices::List &l)
 	return false;
 }
 
+// A project capture layer's own device audio on or off (model::build turns it off without a bound audio entry).
+// win-dshow has no "none" audio mode; custom audio with an empty audio_device_id makes UpdateAudioConfig set the
+// audio inactive. obs_source_update re-activates the device (a short video gap), so it runs only on a change.
+// Only dshow_input / its test stand-in: the host test format's dshow_video keeps its explicit audioDeviceId.
+static bool capture_type(obs_source_t *src)
+{
+	const char *id = obs_source_get_unversioned_id(src);
+	return id && (!strcmp(id, "dshow_input") || !strcmp(id, "ujw_test_capture"));
+}
+
+static bool capture_audio_on(obs_source_t *src)
+{
+	obs_data_t *st = obs_source_get_settings(src);
+	const bool on = !obs_data_get_bool(st, "use_custom_audio_device");
+	obs_data_release(st);
+	return on;
+}
+
+static void set_capture_audio(obs_source_t *src, bool on)
+{
+	if (!capture_type(src) || capture_audio_on(src) == on)
+		return;
+	obs_data_t *d = obs_data_create();
+	obs_data_set_bool(d, "use_custom_audio_device", !on);
+	obs_data_set_string(d, "audio_device_id", "");
+	obs_source_update(src, d);
+	obs_data_release(d);
+	hlog::info("capture layer %s: device audio %s", obs_source_get_name(src), on ? "on" : "off");
+}
+
 // Seconds without a frame before attempt n + 1 (index n - 1); kConnectAttempts attempts in all.
 static constexpr uint32_t kConnectDelaysMs[Studio::kConnectAttempts] = {3000, 6000, 12000, 24000, 30000};
 // After attempt n: the wait before the next one. The fast attempts, then once a minute for as long as there is no picture
@@ -1860,8 +1890,13 @@ json::Value Studio::layer_add_model(const json::Value &doc, const std::string &s
 		if (spec == p.sources.end())
 			throw Error(rpc::UNAVAILABLE, "layer " + lid + ": source layer " + pi.source_layer + " is not built");
 		l.src = find_src(pi.source_layer);
-		if (!l.src)
+		if (!l.src) {
 			l.src = make_src(spec->second, pi.source_layer);
+			// layers.addFromProject binds no audio entry: a capture layer built here is in no track, so its device
+			// audio stays closed until audio.addFromProject binds it (the plan opened it if the document has an entry)
+			if (l.src->audio_id.empty())
+				set_capture_audio(l.src->src, false);
+		}
 		overlay = overlay || spec->second.overlay;
 		l.effects = pi.effects;
 		try {
@@ -2030,6 +2065,7 @@ json::Value Studio::audio_add_model(const json::Value &doc, const std::string &a
 		audio_tools::attach_playlist(target->src, x->playlist, x->playlist_loop, x->playlist_root); // AU1 folder playlist
 	if (x->music)
 		scene_music::attach(target->src); // MU2
+	set_capture_audio(target->src, true); // a capture layer opens its device audio now (after every step that can fail)
 	model_doc_ = doc;
 	dirty_ = false;
 	music_from_plan(p);
@@ -2085,6 +2121,7 @@ json::Value Studio::audio_remove_model(const json::Value &doc, const std::string
 					l.src->audio_name.clear();
 					obs_source_set_monitoring_type(l.src->src, OBS_MONITORING_TYPE_NONE);
 					obs_source_set_audio_mixers(l.src->src, 0); // metered, in no track (as built without an entry)
+					set_capture_audio(l.src->src, false);       // a capture layer closes its device audio
 					kind = "layer";
 				}
 	model_doc_ = doc;
@@ -3271,6 +3308,8 @@ json::Value Studio::mixer_list() const
 		// libobs holds back monitoring of a source with video until its frame is shown: CUE on such a source is late.
 		o.set("cueDelayed", (obs_source_get_output_flags(src.src) & OBS_SOURCE_VIDEO) != 0);
 		o.set("active", obs_source_active(src.src));
+		// capture layers: is the device's own audio opened (only with a bound audio entry); null for other sources
+		o.set("deviceAudio", capture_type(src.src) ? json::Value(capture_audio_on(src.src)) : json::Value());
 		float pk = src.meter->held_peak(), mg = src.meter->magnitude;
 		o.set("peakDb", std::isfinite(pk) ? json::Value((double)pk) : json::Value());
 		o.set("magnitudeDb", std::isfinite(mg) ? json::Value((double)mg) : json::Value());

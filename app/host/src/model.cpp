@@ -1137,6 +1137,23 @@ Plan build(const json::Value &doc, const Options &o)
 		plan.audio.push_back(std::move(x));
 	}
 
+	// A capture layer opens its device's own audio only when a built audio entry is bound to it. Without one the
+	// host puts it in no track, so the decoded copy only fills buffers (and lags: "Restarting source audio"); game
+	// sound usually comes from the card's separate WASAPI input. win-dshow has no "no audio" mode: custom audio with
+	// an empty audio_device_id fails DecodeDeviceId in UpdateAudioConfig, which sets the source's audio inactive and
+	// opens no audio filter (win-dshow logs "Audio configuration failed, ignoring audio" on each activation). Studio's set_capture_audio flips it when an entry is added or removed.
+	{
+		std::set<std::string> heard;
+		for (auto &a : plan.audio)
+			if (!a.layer.empty())
+				heard.insert(a.layer);
+		for (auto &[lid, s] : plan.sources)
+			if (s.type == "capture" && !heard.count(lid)) {
+				s.settings.set("use_custom_audio_device", true);
+				s.settings.set("audio_device_id", "");
+			}
+	}
+
 	// unavailable sources are not built; drop them (and their items) from the plan
 	for (auto &[lid, u] : unavailable)
 		plan.sources.erase(lid);
@@ -1203,6 +1220,10 @@ json::Value to_json(const Plan &p)
 			o.set("device", s.device);
 			o.set("matchedBy", s.matched_by);
 			o.set("waiting", s.waiting);
+		}
+		if (s.type == "capture") { // the device's own audio is opened (only with a bound audio entry)
+			const json::Value *c = s.settings.find("use_custom_audio_device");
+			o.set("deviceAudio", !(c && c->is_bool() && c->as_bool()));
 		}
 		if (s.obs_type == "browser_source") { // page URLs carry ports and the feed query only, never a token
 			o.set("url", *s.settings.find("url"));
