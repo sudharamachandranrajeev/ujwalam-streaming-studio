@@ -120,7 +120,9 @@ async function rewriteInner(o) {
   log(`rewrite: ${cands.length} scheduled video(s) from Ujwalam's list; today's quota has room for ${room.why ? 0 : room.fit}`);
   const margin = o.marginMs ?? MARGIN_MS;
   const profile = cleanProfile(o.profile ?? {});
-  const ownTags = readPrefs(dataDir).prefs.text.tags ?? [];
+  const { text: ownText } = readPrefs(dataDir).prefs;
+  const ownTags = ownText.tags ?? [];
+  const ownHashtags = (ownText.hashtags ?? []).filter((h) => h.toLowerCase() !== '#shorts');
 
   await withAiText(o.aiDeps ?? {}, async (gen, aiWhy) => {
     for (const { id, entry } of cands) {
@@ -171,6 +173,10 @@ async function rewriteInner(o) {
       const seenTag = new Set();
       for (const t of gameTags(r.game ?? null, post.target, facts.mode, [...ownTags, ...r.text.tags, ...(post.tags ?? [])])) {
         if (!seenTag.has(t.toLowerCase()) && fits({ tags: [...p.tags, t] })) { p.tags.push(t); seenTag.add(t.toLowerCase()); }
+      }
+      // the user's own hashtags (Settings) after the game's; the footer is already in the kept text, so only these
+      for (const h of ownHashtags) {
+        if (!p.hashtags.some((x) => x.toLowerCase() === h.toLowerCase()) && fits({ tags: p.tags, hashtags: [...p.hashtags, h] })) p.hashtags.push(h);
       }
       // a placeholder the old text already carried is not new; one the AI text brings is a reject
       const oldKeys = new Set(unresolvedKeys(post.title, post.description, ...(post.tags ?? [])));

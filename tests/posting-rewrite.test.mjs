@@ -102,7 +102,7 @@ describe('rewrite', () => {
   test('happy path: new AI text, every other snippet field kept, original saved, one ledger line each', async () => {
     const e = await setup(2);
     const before = structuredClone(e.yt.videos);
-    writeFileSync(path.join(e.dataDir, 'posting', 'prefs.json'), JSON.stringify({ text: { tags: ['my channel'] } }));
+    writeFileSync(path.join(e.dataDir, 'posting', 'prefs.json'), JSON.stringify({ text: { tags: ['my channel'], hashtags: ['#MyChan'] } }));
     const r = await runRewrite({ ...base(e), profile: { handles: { youtube: 'Chan' } }, aiDeps: aiDeps(answer()) });
     assert.equal(r.rewritten.length, 2, JSON.stringify(r));
     for (const [vid, v] of Object.entries(e.yt.videos)) {
@@ -112,7 +112,7 @@ describe('rewrite', () => {
       const old = before[vid].snippet.description.split('\n');
       assert.ok(old.slice(1).filter((l) => l.trim() && !l.startsWith('#')).every((l) => v.snippet.description.includes(l)), 'the old credit lines are kept after the AI lines');
       assert.ok(!v.snippet.description.includes(old[0]), 'the template opening line is replaced: ' + old[0]);
-      assert.ok(v.snippet.description.endsWith('#CODM #CallOfDutyMobile #CODMShorts #CODMHighlights #MobileGaming #MobileFPS #GamingShorts'), v.snippet.description);
+      assert.ok(v.snippet.description.endsWith('#CODM #CallOfDutyMobile #CODMShorts #CODMHighlights #MobileGaming #MobileFPS #GamingShorts #MyChan'), v.snippet.description);
       assert.equal(v.snippet.tags[0], 'codm');
       assert.equal(v.snippet.categoryId, '20'); assert.equal(v.snippet.defaultLanguage, 'en');
       assert.ok(v.snippet.tags.includes('clutch'));
