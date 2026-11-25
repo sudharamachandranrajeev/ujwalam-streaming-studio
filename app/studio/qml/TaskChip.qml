@@ -5,6 +5,10 @@
 // The task button in the on-air bar (the widget's TaskChip): a slowly pulsing dot while something runs, "2 tasks
 // running" (or a quiet "Tasks" when only finished ones are listed), a red dot and edge when a task may be stuck. Hidden
 // while no task is listed. A click opens or closes the task panel (TaskCenter.qml).
+// GUI load (2026-11-25): the spinner and the breathing dot move in steps from one 8 Hz timer, not with animations that
+// run every frame. A frame animation redrew the whole studio window at about 60 frames per second for as long as a task
+// was listed, also a paused one waiting for days (measured: 1876 frames in 30 s against 164 with no task). They move
+// only while a task really runs; a waiting or paused task shows a still dot.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -13,6 +17,17 @@ Rectangle {
     id: chip
     required property var center
     readonly property bool active: center.running + center.waiting > 0
+    readonly property bool moving: center.running > 0 && visible // the spinner or the breath moves only while a task works
+    property int step: 0 // 8 steps a second (stepper below)
+    Timer {
+        id: stepper
+        objectName: "taskStepper"
+        interval: 125
+        repeat: true
+        running: chip.moving && (spin.active || Theme.motion)
+        onTriggered: chip.step = (chip.step + 1) % 576 // 72 s: whole rounds of the ring and bars (1 s), the dots (0.9 s) and the breath (1.6 s)
+        onRunningChanged: if (!running) chip.step = 0
+    }
     readonly property string text: center.chipText
     visible: center.listed > 0
     implicitWidth: label.implicitWidth + 36
@@ -31,7 +46,7 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         width: 14
         height: 14
-        active: Theme.rareui && chip.active && chip.visible && chip.center.stalled === 0
+        active: Theme.rareui && chip.moving && chip.center.stalled === 0
         sourceComponent: Theme.spinnerStyle === "bars" ? barsC : Theme.spinnerStyle === "dots" ? dotsC : ringC
     }
     Component {
@@ -54,7 +69,7 @@ Rectangle {
                 c.beginPath(); c.arc(cx, cx, r, 0, 49 * Math.PI / 180); c.stroke();
             }
             Connections { target: Theme; function onChanged() { ring.requestPaint() } }
-            RotationAnimation on rotation { from: 0; to: 360; duration: 1000; loops: Animation.Infinite; running: true }
+            rotation: (chip.step % 8) * 45 // a turn a second in 8 steps (the picture is only rotated, never painted again)
         }
     }
     Component {
@@ -64,8 +79,7 @@ Rectangle {
             objectName: "taskSpinner"
             property string style: "bars"
             property bool loop: true
-            property real phase: 0
-            NumberAnimation on phase { from: 0; to: 8; duration: 1000; loops: Animation.Infinite; running: true }
+            readonly property real phase: chip.step % 8 // one bar a step, a round a second (as before)
             Repeater {
                 model: 8
                 Rectangle {
@@ -89,8 +103,7 @@ Rectangle {
             objectName: "taskSpinner"
             property string style: "dots"
             property bool loop: true
-            property real phase: 0
-            NumberAnimation on phase { from: 0; to: 3; duration: 900; loops: Animation.Infinite; running: true }
+            readonly property real phase: (chip.step * 0.125 / 0.9 * 3) % 3 // a round in 0.9 s, as before
             Repeater {
                 model: 3
                 Rectangle {
@@ -114,13 +127,8 @@ Rectangle {
         height: 8
         radius: 4
         color: chip.center.stalled > 0 ? Theme.c.danger : chip.active ? Theme.c.accentHi : Theme.c.muted
-        SequentialAnimation on opacity { // a slow breath while something runs
-            running: chip.active && chip.visible && Theme.motion
-            loops: Animation.Infinite
-            NumberAnimation { from: 1; to: 0.35; duration: 800; easing.type: Easing.InOutSine }
-            NumberAnimation { from: 0.35; to: 1; duration: 800; easing.type: Easing.InOutSine }
-            onStopped: dot.opacity = 1
-        }
+        // a slow breath while a task works (1.6 s from full to faint and back, in the stepper's steps)
+        opacity: chip.moving && Theme.motion ? 0.675 + 0.325 * Math.cos(2 * Math.PI * (chip.step * 0.125) / 1.6) : 1
     }
     Text {
         id: label
