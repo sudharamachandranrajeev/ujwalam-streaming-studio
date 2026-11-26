@@ -2767,7 +2767,7 @@ def main(argv=None):
         if getattr(a, "out", None):
             a.out = os.path.abspath(a.out)
             check_out_dir(a.out, corpus_dir())
-        lower_own_priority()
+        lower_own_priority(background_io=True)  # post-stream job: the user's clicks come first (2026-11-26)
         contain_children()  # ffmpeg and other children end with this process, however it ends (D311 proposed)
         end_tree_when_parent_gone()  # started by Ujwalam: ends with it, ffmpeg children included (D311 proposed)
         return a.fn(a)

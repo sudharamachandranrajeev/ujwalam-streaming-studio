@@ -2748,11 +2748,21 @@ json::Value Studio::layer_set_effects(const std::string &sid, const std::string 
 	return r;
 }
 
-bool Studio::preview_items(const std::string &cv, std::string &sid, std::vector<pedit::Item> &top_first) const
+bool Studio::preview_items(const std::string &cv, std::string &sid, std::vector<pedit::Item> &top_first, bool wait) const
 {
-	std::lock_guard<std::recursive_mutex> lk(m_);
+	// wait = false (the preview window thread, 2026-11-26): never block on the model lock. That thread owns child
+	// windows of the studio window in another process, so Windows joins both threads' input queues; while it waits
+	// here (a project load, a layer add, a browser source being made) every click and key in the studio stalls too.
+	// A busy model answers "busy" and the caller tries again on its next tick.
+	std::unique_lock<std::recursive_mutex> lk(m_, std::defer_lock);
 	top_first.clear();
 	sid.clear();
+	if (wait)
+		lk.lock();
+	else if (!lk.try_lock()) {
+		sid = "busy";
+		return false;
+	}
 	const Canvas *c = canvas(cv);
 	if (!c || c->active.empty() || format_ == TEST_FORMAT)
 		return false;

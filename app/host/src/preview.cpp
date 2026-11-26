@@ -438,8 +438,16 @@ Previews::~Previews()
 		delete kv.second;
 }
 
+static thread_local bool t_preview_ui = false;
+
+bool Previews::on_ui_thread()
+{
+	return t_preview_ui;
+}
+
 void Previews::ui_loop()
 {
+	t_preview_ui = true;
 	SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 	WNDCLASSEXW wc = {sizeof(wc)};
 	wc.lpfnWndProc = wnd_proc;

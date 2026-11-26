@@ -148,7 +148,8 @@ public:
 			       const std::string &dir);
 	// Preview mouse editing (preview_edit.h): the visible layers of the canvas's active scene that have a project v1
 	// placement, topmost first, as rectangles. false: no such canvas / scene, or not a project v1 model.
-	bool preview_items(const std::string &canvas, std::string &scene, std::vector<pedit::Item> &top_first) const;
+	bool preview_items(const std::string &canvas, std::string &scene, std::vector<pedit::Item> &top_first,
+			   bool wait = true) const;
 
 	// Panic (panic.h): hides every visible browser layer (overlays and effect pages) on every scene of every canvas
 	// and returns what it hid; restore_layers shows those again (skipping layers that no longer exist or were shown

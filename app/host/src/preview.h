@@ -62,6 +62,9 @@ public:
 	~Previews();
 	// Mouse editing (flag preview-edit). Usable headless too (preview.editSim drives it without a window).
 	pedit::Editor &editor() { return editor_; }
+	// True on the thread that owns the preview windows. That thread must never block (2026-11-26): an embedded
+	// preview is a child of the studio window in another process, so the two threads share one input queue.
+	static bool on_ui_thread();
 
 	struct OpenArgs {
 		std::string canvas; // "H" | "V"

@@ -552,7 +552,8 @@ int wmain(int argc, wchar_t **wargv)
 		{
 			Studio *st = app.studio.get();
 			edit.layers = [st](const std::string &canvas, std::string &scene, std::vector<pedit::Item> &items) {
-				return st->preview_items(canvas, scene, items);
+				// The preview window thread never waits for the model lock (input queue shared with the studio).
+				return st->preview_items(canvas, scene, items, !Previews::on_ui_thread());
 			};
 			edit.apply = [st](const std::string &canvas, const std::string &scene, const std::string &layer,
 					  const json::Value &patch) -> std::string {

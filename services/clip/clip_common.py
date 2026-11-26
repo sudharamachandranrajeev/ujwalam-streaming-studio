@@ -414,7 +414,13 @@ def child_kwargs(creationflags=0):
     return {}
 
 
-def lower_own_priority():
+PROCESS_MODE_BACKGROUND_BEGIN = 0x00100000
+
+
+def lower_own_priority(background_io=False):
+    """Below-normal CPU priority. background_io=True (post-stream jobs only, 2026-11-26: the user's clicks come first)
+    also enters Windows background mode: low disk and memory priority, so a clip job never makes the studio stutter.
+    The live clipper does not use it (it must keep up with the stream)."""
     if os.name == "nt":
         import ctypes
         from ctypes import wintypes
@@ -422,6 +428,8 @@ def lower_own_priority():
         k.GetCurrentProcess.restype = wintypes.HANDLE
         k.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         k.SetPriorityClass(k.GetCurrentProcess(), subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+        if background_io:
+            k.SetPriorityClass(k.GetCurrentProcess(), PROCESS_MODE_BACKGROUND_BEGIN)
     else:
         try:
             os.nice(10)

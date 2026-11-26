@@ -205,6 +205,27 @@ describe('QML studio: task chip, task panel and notifications (headless probe)',
     assert.equal(p.tree.filter((n) => n.name === 'taskStop' && n.visible).length, 3, 'Stop on each of the three jobs');
   });
 
+  // 2026-11-26 (user): a job that waits for the user showed only Stop and could not be started; Clear finished was
+  // pushed outside the panel by the header row. Held jobs show Start / Resume, no Stop; the header buttons fit.
+  test('task panel: a held job offers Start (or Resume when paused), not Stop; Clear finished sits inside the panel', async () => {
+    const { t, p } = await probe({ ms: 4000, actions: ['tasks:open'], prepare: (d) => {
+      task(d, { id: 'clip-held', title: 'Clips from practice-4', state: 'waiting', note: 'Did not finish last time; it waits until you start it',
+        controls: ['stop', 'resume', 'next'], nextStart: 'notify' });
+      task(d, { id: 'clip-paused', title: 'Clips from practice-5', state: 'waiting', paused: true, note: 'Paused by you; press Resume to continue',
+        controls: ['stop', 'resume', 'next'], nextStart: 'run' });
+      task(d, { id: 'clip-old', title: 'Clips ready from practice-1', state: 'done' });
+    } });
+    assert.equal(t.panelOpen, true);
+    const starts = p.tree.filter((n) => n.name === 'taskStart' && n.visible).map((n) => n.text).sort();
+    assert.deepEqual(starts, ['Resume', 'Start']);
+    assert.equal(p.tree.filter((n) => n.name === 'taskStop' && n.visible).length, 0, 'no Stop on a job that is not running');
+    assert.ok(p.tree.some((n) => n.name === 'taskState' && n.visible && n.text === 'Waiting for you'));
+    assert.ok(p.tree.some((n) => n.name === 'taskState' && n.visible && n.text === 'Paused'));
+    const clear = p.tree.find((n) => n.name === 'taskClear' && n.visible);
+    assert.ok(clear, 'Clear finished is shown');
+    if (clear.x !== undefined) assert.ok(clear.x >= t.panel.x, `inside the panel: ${JSON.stringify(clear)} ${JSON.stringify(t.panel)}`);
+  });
+
   test('the "may be stuck" notification is at the top right; a click opens the panel; Stop reaches the stop route', async () => {
     const { t, p, dataDir } = await probe({ actions: ['tasks:toast-click', 'tasks:stop'], prepare: (d) => hung(d) });
     assert.ok(t.toastLog.includes('May be stuck: Finding the best moments in practice-h-7'), JSON.stringify(t.toastLog));

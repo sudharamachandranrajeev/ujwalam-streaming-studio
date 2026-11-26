@@ -23,6 +23,9 @@ Window {
     minimumHeight: 480
     title: "Ujwalam - Tasks"
     color: Theme.c.bg
+    // Opened from a click inside the task panel's own popup window: without this it could open behind the studio window
+    // and look as if "Open in own window" did nothing (2026-11-26).
+    onVisibleChanged: if (visible) Qt.callLater(() => { win.raise(); win.requestActivate() })
     onClosing: (close) => { close.accepted = true; taskCenter.dockWindow() } // the window's own X: back to the panel
 
     // ---- sort and filter ----
@@ -43,13 +46,7 @@ Window {
     readonly property var stateRank: ({ running: 0, waiting: 1, failed: 2, done: 3 })
 
     function catText(c) { for (const m of catModel) if (m.value === c) return m.text; return String(c) }
-    function stateText(r) {
-        if (r.state === "done") return "Done";
-        if (r.state === "failed") return "Failed";
-        if (r.state === "waiting") return r.paused ? "Paused" : "Waiting";
-        if (r.paused) return "Paused";
-        return r.stalled ? "May be stuck" : "Running";
-    }
+    function stateText(r) { return taskCenter.stateWord(r) } // one wording for the panel and this window (2026-11-26)
     // The rows to show: filtered, then sorted (stable: ties keep the list's own order).
     readonly property var shown: {
         const rs = taskCenter.rows.filter(r => (filterState === "all" || r.state === filterState) && (filterCat === "all" || r.category === filterCat));
@@ -370,11 +367,11 @@ Window {
                                         objectName: "mgrResume"
                                         visible: row.btns.indexOf("resume") >= 0
                                         enabled: !row.busy
-                                        text: "Resume"
+                                        text: row.r.paused ? "Resume" : "Start"
                                         kind: "primary"
                                         implicitHeight: 28
                                         focusPolicy: Qt.NoFocus
-                                        tip: "Carry on from where it paused"
+                                        tip: row.r.paused ? "Carry on from where it paused" : "Start this task now"
                                         onClicked: win.control(row.r.id, "resume")
                                     }
                                     Text {
