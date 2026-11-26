@@ -1,0 +1,61 @@
+{
+  "id": "layer-chromatic",
+  "version": "0.1.0",
+  "category": "effects",
+  "family": "layer-filters",
+  "name": "Layer lens colour fringe",
+  "description": "Chromatic aberration (D445 realism looks): red drawn slightly inwards and blue outwards, none in the centre; amount 1 = 0.5 % of the shorter side at the corners (ujw_chromatic.effect).",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effect"
+      ],
+      "properties": {
+        "effect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "amount"
+          ],
+          "properties": {
+            "type": {
+              "const": "chromatic"
+            },
+            "amount": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    },
+    "defaults": {
+      "effect": {
+        "type": "chromatic",
+        "amount": 0.3
+      }
+    },
+    "safeRanges": {
+      "amount": [
+        0,
+        1
+      ]
+    }
+  },
+  "canvases": [
+    "H",
+    "V"
+  ],
+  "themeTokens": [],
+  "durationMs": 0,
+  "maxConcurrent": 0,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "native-shader",
+  "planSection": "4.2"
+}

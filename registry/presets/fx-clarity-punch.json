@@ -1,0 +1,34 @@
+{
+  "id": "fx-clarity-punch",
+  "version": "0.1.0",
+  "function": "layer-clarity",
+  "functionVersion": "^0.1.0",
+  "name": "Clarity punch",
+  "params": {
+    "effect": {
+      "type": "clarity",
+      "amount": 0.35,
+      "size": 2
+    }
+  },
+  "themeOverrides": {},
+  "family": "layer-filters",
+  "tags": {
+    "motion": "none",
+    "flashes": "none",
+    "intensity": "medium",
+    "mood": "neutral",
+    "colourUse": "none"
+  },
+  "canvases": [
+    "H",
+    "V"
+  ],
+  "status": "in-progress",
+  "parity": "none",
+  "similar": [
+    "fx-sharpen-light",
+    "fx-bloom-soft",
+    "fx-realism-grade"
+  ]
+}

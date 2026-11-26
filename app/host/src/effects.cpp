@@ -30,6 +30,7 @@ const char *PIN_ID = "ujw_corner_pin";
 const char *BLINDS_ID = "ujw_blinds";
 const char *PASS_ID = "ujw_pass";             // D291
 const char *IMAGE_MASK_ID = "ujw_image_mask"; // D291
+const char *LOCAL_ID = "ujw_local";           // D445: bloom, clarity
 
 // Canvas px a shadow or glow reaches past the layer's box on every side: its offset plus its blur (size = 3 sigma).
 double outset_of(const model::Effect &e)
@@ -336,6 +337,139 @@ void blur_render(void *data, gs_effect_t *)
 const char *blur_name(void *)
 {
 	return "Ujwalam Gaussian blur";
+}
+
+// --- ujw_local (D445 realism looks) -----------------------------------------------------------------------------------
+// Bloom and clarity: effects that need a blurred copy of the layer. Settings: kind ("bloom" | "clarity"), amount 0..1,
+// threshold 0..1 (bloom), size 1..20 (reach, % of the layer's shorter side). Once per frame (however many times the item
+// is drawn): the target into `base`; bloom draws the bright pass at half size into `bright` and blurs that with sigma =
+// reach / 2; clarity blurs the layer itself with sigma = reach / 2. Both blurs go through gauss_run, which halves the
+// texture until sigma <= 6.5 texels, so a wide reach stays cheap. Then one full-size pass combines (ujw_local.effect).
+
+enum LocalKind { L_BLOOM, L_CLARITY };
+
+struct Local {
+	obs_source_t *ctx = nullptr;
+	int kind = L_BLOOM;
+	Gauss g;
+	gs_effect_t *effect = nullptr;
+	gs_eparam_t *p_image = nullptr, *p_soft = nullptr, *p_p = nullptr;
+	gs_texrender_t *base = nullptr, *bright = nullptr;
+	std::atomic<float> amount{0}, threshold{0.8f}, size{3};
+	bool processed = false; // graphics thread only
+	gs_texture_t *in = nullptr, *soft = nullptr;
+};
+
+void local_update(void *data, obs_data_t *s)
+{
+	auto *t = static_cast<Local *>(data);
+	t->amount = (float)std::clamp(obs_data_get_double(s, "amount"), 0.0, 1.0);
+	t->threshold = (float)std::clamp(obs_data_get_double(s, "threshold"), 0.0, 1.0);
+	t->size = (float)std::clamp(obs_data_get_double(s, "size"), 1.0, 20.0);
+}
+
+void *local_create(obs_data_t *s, obs_source_t *src)
+{
+	auto *t = new Local();
+	t->ctx = src;
+	t->kind = std::strcmp(obs_data_get_string(s, "kind"), "clarity") == 0 ? L_CLARITY : L_BLOOM;
+	gauss_create(t->g);
+	t->effect = make_effect(ujw_local_effect, "ujw_local.effect");
+	if (t->effect) {
+		t->p_image = gs_effect_get_param_by_name(t->effect, "image");
+		t->p_soft = gs_effect_get_param_by_name(t->effect, "soft");
+		t->p_p = gs_effect_get_param_by_name(t->effect, "p");
+	}
+	obs_enter_graphics();
+	t->base = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+	t->bright = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+	obs_leave_graphics();
+	local_update(t, s);
+	return t;
+}
+
+void local_destroy(void *data)
+{
+	auto *t = static_cast<Local *>(data);
+	gauss_destroy(t->g);
+	obs_enter_graphics();
+	gs_texrender_destroy(t->base);
+	gs_texrender_destroy(t->bright);
+	gs_effect_destroy(t->effect);
+	obs_leave_graphics();
+	delete t;
+}
+
+void local_tick(void *data, float)
+{
+	static_cast<Local *>(data)->processed = false;
+}
+
+// The bloom bright pass of `in` (cx x cy) into t->bright at half size. Framebuffer sRGB on: linear light.
+gs_texture_t *local_bright(Local *t, gs_texture_t *in, uint32_t w, uint32_t h)
+{
+	gs_texrender_reset(t->bright);
+	if (!in || !gs_texrender_begin(t->bright, w, h))
+		return nullptr;
+	gs_ortho(0.0f, (float)w, 0.0f, (float)h, -100.0f, 100.0f);
+	const bool prev_srgb = gs_framebuffer_srgb_enabled();
+	gs_enable_framebuffer_srgb(true);
+	struct vec4 p;
+	vec4_set(&p, t->amount, t->threshold, 0.0f, 0.0f);
+	gs_effect_set_texture_srgb(t->p_image, in);
+	gs_effect_set_vec4(t->p_p, &p);
+	while (gs_effect_loop(t->effect, "Bright"))
+		gs_draw_sprite(in, 0, w, h);
+	gs_enable_framebuffer_srgb(prev_srgb);
+	gs_texrender_end(t->bright);
+	return gs_texrender_get_texture(t->bright);
+}
+
+void local_render(void *data, gs_effect_t *)
+{
+	auto *t = static_cast<Local *>(data);
+	obs_source_t *target = obs_filter_get_target(t->ctx), *parent = obs_filter_get_parent(t->ctx);
+	const uint32_t cx = target ? obs_source_get_base_width(target) : 0, cy = target ? obs_source_get_base_height(target) : 0;
+	if (!t->effect || !t->g.effect || !target || !parent || !cx || !cy || t->amount <= 0.0f) {
+		obs_source_skip_video_filter(t->ctx);
+		return;
+	}
+	if (!t->processed) { // once per frame, however many times the item is drawn
+		gs_blend_state_push();
+		gs_blend_function(GS_BLEND_ONE, GS_BLEND_ZERO);
+		t->in = render_target(t->base, target, parent, cx, cy);
+		const double sigma = (double)t->size / 100.0 * (double)std::min(cx, cy) / 2.0; // source px
+		if (t->kind == L_BLOOM) {
+			const uint32_t hw = std::max(1u, cx / 2), hh = std::max(1u, cy / 2);
+			gs_texture_t *b = local_bright(t, t->in, hw, hh);
+			t->soft = b ? gauss_run(t->g, b, hw, hh, sigma / 2.0, sigma / 2.0) : nullptr;
+		} else {
+			t->soft = t->in ? gauss_run(t->g, t->in, cx, cy, sigma, sigma) : nullptr;
+		}
+		gs_blend_state_pop();
+		t->processed = true;
+	}
+	if (!t->in)
+		return;
+	if (!t->soft) { // nothing to combine with: the plain layer
+		draw_copy(t->g, t->in, cx, cy);
+		return;
+	}
+	const bool prev_srgb = gs_framebuffer_srgb_enabled();
+	gs_enable_framebuffer_srgb(true);
+	struct vec4 p;
+	vec4_set(&p, t->amount, t->threshold, 0.0f, 0.0f);
+	gs_effect_set_texture_srgb(t->p_image, t->in);
+	gs_effect_set_texture_srgb(t->p_soft, t->soft);
+	gs_effect_set_vec4(t->p_p, &p);
+	while (gs_effect_loop(t->effect, t->kind == L_BLOOM ? "Bloom" : "Clarity"))
+		gs_draw_sprite(t->in, 0, cx, cy);
+	gs_enable_framebuffer_srgb(prev_srgb);
+}
+
+const char *local_name(void *)
+{
+	return "Ujwalam bloom / clarity";
 }
 
 // --- ujw_rounded_corners ----------------------------------------------------------------------------------------
@@ -851,8 +985,9 @@ const char *blinds_name(void *)
 // seed (p.w, from the filter's name). Each kind's shader compiles once per process (shared_effect), so changing effects
 // while live does not stall the graphics thread on a shader compile after the first use of a kind.
 
-enum PassKind { K_VIGNETTE, K_GRAIN, K_PIXELATE, K_POSTERIZE, K_FLIP, K_OPACITY, K_GRADIENT, K_SHAPE, K_COUNT };
-const char *const PASS_KINDS[K_COUNT] = {"vignette", "grain", "pixelate", "posterize", "flip", "opacity", "gradient", "shape"};
+enum PassKind { K_VIGNETTE, K_GRAIN, K_PIXELATE, K_POSTERIZE, K_FLIP, K_OPACITY, K_GRADIENT, K_SHAPE, K_CHROMATIC, K_COUNT };
+const char *const PASS_KINDS[K_COUNT] = {"vignette", "grain", "pixelate", "posterize", "flip", "opacity", "gradient", "shape",
+					 "chromatic"};
 
 gs_effect_t *shared_effect(int kind)
 {
@@ -860,10 +995,11 @@ gs_effect_t *shared_effect(int kind)
 	static gs_effect_t *cache[K_COUNT] = {};
 	static bool tried[K_COUNT] = {};
 	static const char *const src[K_COUNT] = {ujw_vignette_effect, ujw_grain_effect, ujw_pixelate_effect, ujw_posterize_effect,
-						 ujw_flip_effect, ujw_opacity_effect, ujw_gradient_mask_effect, ujw_shape_mask_effect};
+						 ujw_flip_effect, ujw_opacity_effect, ujw_gradient_mask_effect, ujw_shape_mask_effect,
+						 ujw_chromatic_effect};
 	static const char *const file[K_COUNT] = {"ujw_vignette.effect", "ujw_grain.effect", "ujw_pixelate.effect",
 						  "ujw_posterize.effect", "ujw_flip.effect", "ujw_opacity.effect",
-						  "ujw_gradient_mask.effect", "ujw_shape_mask.effect"};
+						  "ujw_gradient_mask.effect", "ujw_shape_mask.effect", "ujw_chromatic.effect"};
 	if (kind < 0 || kind >= K_COUNT)
 		return nullptr;
 	std::lock_guard<std::mutex> g(lock);
@@ -972,7 +1108,7 @@ const char *pass_name(void *)
 // The ujw_pass kind for a D291 effect type, or null.
 const char *pass_kind(const model::Effect &e)
 {
-	if (e.type == "vignette" || e.type == "grain" || e.type == "pixelate" || e.type == "posterize")
+	if (e.type == "vignette" || e.type == "grain" || e.type == "pixelate" || e.type == "posterize" || e.type == "chromatic")
 		return e.type.c_str();
 	if (e.type == "mirror" || e.type == "flip")
 		return "flip";
@@ -995,6 +1131,8 @@ void pass_params(const model::Effect &e, double *p)
 	} else if (e.type == "grain") {
 		p[0] = e.amount;
 		p[1] = e.size;
+	} else if (e.type == "chromatic") { // D445
+		p[0] = e.amount;
 	} else if (e.type == "pixelate") {
 		p[0] = e.size;
 	} else if (e.type == "posterize") {
@@ -1621,7 +1759,18 @@ void register_types()
 	im.destroy = imask_destroy;
 	im.video_render = imask_render;
 	obs_register_source(&im);
-	hlog::info("effect source types registered: %s, %s", PASS_ID, IMAGE_MASK_ID);
+	struct obs_source_info lo = {};
+	lo.id = LOCAL_ID;
+	lo.type = OBS_SOURCE_TYPE_FILTER;
+	lo.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_SRGB;
+	lo.get_name = local_name;
+	lo.create = local_create;
+	lo.destroy = local_destroy;
+	lo.update = local_update;
+	lo.video_tick = local_tick;
+	lo.video_render = local_render;
+	obs_register_source(&lo);
+	hlog::info("effect source types registered: %s, %s, %s", PASS_ID, IMAGE_MASK_ID, LOCAL_ID);
 
 	struct obs_source_info pm = {};
 	pm.id = PERSON_ID;
@@ -1720,6 +1869,12 @@ obs_source_t *create_chain(obs_source_t *target, const std::string &name, const 
 				obs_data_set_double(s, "dy", std::sin(a) * e.distance);
 			}
 			obs_data_set_double(s, "pad", outset_of(e));
+		} else if (e.type == "bloom" || e.type == "clarity") { // D445: ujw_local
+			id = LOCAL_ID;
+			obs_data_set_string(s, "kind", e.type.c_str());
+			obs_data_set_double(s, "amount", e.amount);
+			obs_data_set_double(s, "threshold", e.threshold);
+			obs_data_set_double(s, "size", e.size);
 		} else if (e.type == "sharpen") { // D291: OBS's own sharpness filter (obs-filters), 0..1
 			id = "sharpness_filter_v2";
 			obs_data_set_double(s, "sharpness", e.amount);

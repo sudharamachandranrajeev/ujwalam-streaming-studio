@@ -39,6 +39,9 @@ const FX291 = {
   sharpen: { amount: [0, 1] },
   vignette: { amount: [0, 1], size: [0, 1], softness: [0, 1], color: 'color' },
   grain: { amount: [0, 1], size: [1, 10] },
+  bloom: { amount: [0, 1], threshold: [0, 1], size: [1, 20] }, // D445 realism looks
+  clarity: { amount: [0, 1], size: [1, 20] },
+  chromatic: { amount: [0, 1] },
   pixelate: { size: [2, 200] },
   posterize: { levels: [2, 32, 'int'] },
   lut: { file: 'file', amount: [0, 1] },

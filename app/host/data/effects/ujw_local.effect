@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ujwalam-host: passes of the ujw_local filter (src/effects.cpp, D445 realism looks). Embedded into the host exe at
+// build time (CMakeLists.txt generates ujw_effects.h). Direct3D 11 (libobs-d3d11) only.
+// The filter reads its textures through sRGB views and draws with the framebuffer in sRGB, so every sample here is in
+// linear light. p.x = amount 0..1, p.y = bloom threshold 0..1 (display brightness where the glow starts).
+//   Bright:  bloom bright pass, drawn at half size (the bilinear sample is a 2 x 2 box). Only what is brighter than the
+//            threshold passes, with a soft knee (squared ramp), so a light that crosses it fades in instead of popping.
+//   Bloom:   the layer plus the blurred bright pass (soft) times 2 x amount. No time input: a still picture gives a
+//            still result, so bloom adds no flash of its own.
+//   Clarity: local contrast. The layer's brightness against its blurred copy (soft), in a gamma-2 perceptual scale,
+//            raised by 1.5 x amount and weighted towards the mid tones (none at black or white), capped at +-0.2 so
+//            hard edges do not get halos. Colour keeps its hue: rgb is scaled by the brightness ratio.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform texture2d soft;
+uniform float4 p;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float luma(float3 c)
+{
+	return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+float4 PSBright(VertData v_in) : TARGET
+{
+	float4 c = image.Sample(linearClamp, v_in.uv);
+	float t = p.y * p.y; // display threshold to linear (gamma 2)
+	float k = saturate((luma(c.rgb) - t) / max(1.0 - t, 0.05));
+	return float4(c.rgb * (k * k), c.a);
+}
+
+float4 PSBloom(VertData v_in) : TARGET
+{
+	float4 c = image.Sample(linearClamp, v_in.uv);
+	float3 b = soft.Sample(linearClamp, v_in.uv).rgb;
+	c.rgb = c.rgb + b * (p.x * 2.0);
+	return c;
+}
+
+float4 PSClarity(VertData v_in) : TARGET
+{
+	float4 c = image.Sample(linearClamp, v_in.uv);
+	float3 s = soft.Sample(linearClamp, v_in.uv).rgb;
+	float yc = sqrt(max(luma(c.rgb), 0.0));
+	float ys = sqrt(max(luma(s), 0.0));
+	float w = 4.0 * yc * (1.0 - yc);
+	float yn = saturate(yc + clamp(yc - ys, -0.2, 0.2) * (p.x * 1.5) * w);
+	c.rgb = c.rgb * ((yn * yn) / max(yc * yc, 0.00001));
+	return c;
+}
+
+technique Bright
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBright(v_in);
+	}
+}
+
+technique Bloom
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBloom(v_in);
+	}
+}
+
+technique Clarity
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSClarity(v_in);
+	}
+}

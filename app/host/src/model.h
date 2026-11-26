@@ -92,6 +92,10 @@ struct Source {
 //   grain: amount 0..1, size 1..10 source px (grain cell); seeded per layer, new pattern every frame, zero mean
 //   pixelate: size 2..200 source px (cell)          posterize: levels 2..32 (kept in value)
 //   lut: file (pathRef, .cube or 512 x 512 .png; resolved into path), amount 0..1 (OBS clut_filter)
+// D445 realism looks (reach and fringe are shares of the layer's shorter side, so a look is the same at any size):
+//   bloom: amount 0..1, threshold 0..1 (display brightness where the glow starts), size 1..20 (reach, %)
+//   clarity: amount 0..1 (local contrast in the mid tones), size 1..20 (reach, %)
+//   chromatic: amount 0..1 (colour fringe at the corners; 1 = 0.5 % of the shorter side)
 //   mirror (left-right), flip (upside down): no settings
 //   circleMask: ellipse filling the frame; roundMask: rounded rectangle, radius 0..50 % of the shorter side (value);
 //               both feather 0..25 and borderWidth 0..25 (% of the shorter side), borderColor (kept in color)

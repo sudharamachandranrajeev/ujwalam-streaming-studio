@@ -1,0 +1,72 @@
+{
+  "id": "layer-clarity",
+  "version": "0.1.0",
+  "category": "effects",
+  "family": "layer-filters",
+  "name": "Layer clarity",
+  "description": "Local contrast in the mid tones (D445 realism looks): the layer against a blurred copy of itself, capped so hard edges get no halo (ujw_local.effect). Reach is a share of the layer's shorter side.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effect"
+      ],
+      "properties": {
+        "effect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "amount",
+            "size"
+          ],
+          "properties": {
+            "type": {
+              "const": "clarity"
+            },
+            "amount": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "size": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 20
+            }
+          }
+        }
+      }
+    },
+    "defaults": {
+      "effect": {
+        "type": "clarity",
+        "amount": 0.3,
+        "size": 2
+      }
+    },
+    "safeRanges": {
+      "amount": [
+        0,
+        1
+      ],
+      "size": [
+        1,
+        20
+      ]
+    }
+  },
+  "canvases": [
+    "H",
+    "V"
+  ],
+  "themeTokens": [],
+  "durationMs": 0,
+  "maxConcurrent": 0,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "native-shader",
+  "planSection": "4.2"
+}

@@ -304,6 +304,21 @@ std::vector<Effect> parse_effects(const json::Value *e, const std::string &what,
 			chk::require(x, {"amount", "size"}, w);
 			fx.amount = chk::get_num(x, "amount", 0, 0, 1, w);
 			fx.size = chk::get_num(x, "size", 1, 1, 10, w);
+		} else if (fx.type == "bloom") { // D445
+			chk::only_keys(x, {"type", "amount", "threshold", "size"}, w);
+			chk::require(x, {"amount", "threshold", "size"}, w);
+			fx.amount = chk::get_num(x, "amount", 0, 0, 1, w);
+			fx.threshold = chk::get_num(x, "threshold", 0.8, 0, 1, w);
+			fx.size = chk::get_num(x, "size", 3, 1, 20, w);
+		} else if (fx.type == "clarity") { // D445
+			chk::only_keys(x, {"type", "amount", "size"}, w);
+			chk::require(x, {"amount", "size"}, w);
+			fx.amount = chk::get_num(x, "amount", 0, 0, 1, w);
+			fx.size = chk::get_num(x, "size", 2, 1, 20, w);
+		} else if (fx.type == "chromatic") { // D445
+			chk::only_keys(x, {"type", "amount"}, w);
+			chk::require(x, {"amount"}, w);
+			fx.amount = chk::get_num(x, "amount", 0, 0, 1, w);
 		} else if (fx.type == "pixelate") {
 			chk::only_keys(x, {"type", "size"}, w);
 			chk::require(x, {"size"}, w);
@@ -408,7 +423,7 @@ std::vector<Effect> parse_effects(const json::Value *e, const std::string &what,
 			fx.end = chk::get_num(x, "end", 1, 0, 1, w);
 		} else {
 			throw Error(rpc::INVALID_PARAMS, w + ": type must be blur, rounded, chromaKey, shadow, glow, color, toner, cornerPin, blinds, "
-							      "sharpen, vignette, grain, pixelate, posterize, lut, mirror, flip, circleMask, roundMask, "
+							      "sharpen, vignette, grain, bloom, clarity, chromatic, pixelate, posterize, lut, mirror, flip, circleMask, roundMask, "
 							      "opacity, blendAdd, blendSubtract, blendMultiply, blendScreen, blendLighten, blendDarken, "
 							      "gradientMask, imageMask, personMask, autoFrame or faceSticker");
 		}
@@ -501,6 +516,15 @@ json::Value effects_json(const std::vector<Effect> &e)
 		} else if (fx.type == "grain") {
 			o.set("amount", fx.amount);
 			o.set("size", fx.size);
+		} else if (fx.type == "bloom") { // D445
+			o.set("amount", fx.amount);
+			o.set("threshold", fx.threshold);
+			o.set("size", fx.size);
+		} else if (fx.type == "clarity") {
+			o.set("amount", fx.amount);
+			o.set("size", fx.size);
+		} else if (fx.type == "chromatic") {
+			o.set("amount", fx.amount);
 		} else if (fx.type == "pixelate") {
 			o.set("size", fx.size);
 		} else if (fx.type == "posterize") {

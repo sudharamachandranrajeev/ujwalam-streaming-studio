@@ -1,0 +1,33 @@
+{
+  "id": "fx-chromatic-subtle",
+  "version": "0.1.0",
+  "function": "layer-chromatic",
+  "functionVersion": "^0.1.0",
+  "name": "Subtle lens fringe",
+  "params": {
+    "effect": {
+      "type": "chromatic",
+      "amount": 0.3
+    }
+  },
+  "themeOverrides": {},
+  "family": "layer-filters",
+  "tags": {
+    "motion": "none",
+    "flashes": "none",
+    "intensity": "low",
+    "mood": "neutral",
+    "colourUse": "none"
+  },
+  "canvases": [
+    "H",
+    "V"
+  ],
+  "status": "in-progress",
+  "parity": "none",
+  "similar": [
+    "fx-film-grain-light",
+    "fx-soft-vignette",
+    "fx-bloom-soft"
+  ]
+}

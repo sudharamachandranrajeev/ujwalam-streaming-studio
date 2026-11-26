@@ -1,0 +1,35 @@
+{
+  "id": "fx-bloom-soft",
+  "version": "0.1.0",
+  "function": "layer-bloom",
+  "functionVersion": "^0.1.0",
+  "name": "Soft bloom",
+  "params": {
+    "effect": {
+      "type": "bloom",
+      "amount": 0.2,
+      "threshold": 0.8,
+      "size": 3
+    }
+  },
+  "themeOverrides": {},
+  "family": "layer-filters",
+  "tags": {
+    "motion": "none",
+    "flashes": "none",
+    "intensity": "low",
+    "mood": "calm",
+    "colourUse": "none"
+  },
+  "canvases": [
+    "H",
+    "V"
+  ],
+  "status": "in-progress",
+  "parity": "none",
+  "similar": [
+    "fx-realism-grade",
+    "fx-clarity-punch",
+    "fx-soft-vignette"
+  ]
+}

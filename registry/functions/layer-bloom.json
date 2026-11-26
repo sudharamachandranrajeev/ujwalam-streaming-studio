@@ -1,0 +1,83 @@
+{
+  "id": "layer-bloom",
+  "version": "0.1.0",
+  "category": "effects",
+  "family": "layer-filters",
+  "name": "Layer bloom",
+  "description": "Glow around bright lights (D445 realism looks): a half-size bright pass above a threshold, blurred and added back (ujw_local.effect). Reach is a share of the layer's shorter side. No time input, so it adds no flash of its own.",
+  "params": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effect"
+      ],
+      "properties": {
+        "effect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "amount",
+            "threshold",
+            "size"
+          ],
+          "properties": {
+            "type": {
+              "const": "bloom"
+            },
+            "amount": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "size": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 20
+            }
+          }
+        }
+      }
+    },
+    "defaults": {
+      "effect": {
+        "type": "bloom",
+        "amount": 0.2,
+        "threshold": 0.8,
+        "size": 3
+      }
+    },
+    "safeRanges": {
+      "amount": [
+        0,
+        1
+      ],
+      "threshold": [
+        0,
+        1
+      ],
+      "size": [
+        1,
+        20
+      ]
+    }
+  },
+  "canvases": [
+    "H",
+    "V"
+  ],
+  "themeTokens": [],
+  "durationMs": 0,
+  "maxConcurrent": 0,
+  "flashesPerSec": 0,
+  "budgetCost": 0,
+  "status": "in-progress",
+  "format": "native-shader",
+  "planSection": "4.2"
+}

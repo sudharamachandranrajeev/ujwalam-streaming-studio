@@ -270,6 +270,21 @@ test('D291 filter, camera and compositing effects are valid (schema and validato
   assert.deepEqual(validateProject(d).errors, []);
 });
 
+test('D445 realism look effects (bloom, clarity, chromatic) are valid; out of range is refused by both', () => {
+  const d = sample();
+  d.scenes[0].layers[3].effects = [{ type: 'bloom', amount: 0.3, threshold: 0.75, size: 3 }, { type: 'clarity', amount: 0.4, size: 2 },
+    { type: 'chromatic', amount: 0.25 }];
+  assert.equal(schemaCheck(d), true, JSON.stringify(schemaCheck.errors));
+  assert.deepEqual(validateProject(d).errors, []);
+  for (const bad of [{ type: 'bloom', amount: 0.3, size: 3 }, { type: 'bloom', amount: 0.3, threshold: 0.8, size: 21 },
+    { type: 'clarity', amount: 1.5, size: 2 }, { type: 'clarity', amount: 0.5, size: 2, threshold: 1 }, { type: 'chromatic', amount: -0.1 }]) {
+    const x = sample();
+    x.scenes[0].layers[3].effects = [bad];
+    assert.equal(schemaCheck(x), false, `schema: ${JSON.stringify(bad)}`);
+    assert.equal(validateProject(x).ok, false, `validator: ${JSON.stringify(bad)}`);
+  }
+});
+
 test('face AI effects (D295 proposed) are valid (schema and validator)', () => {
   const d = sample();
   d.scenes[0].layers[3].effects = [

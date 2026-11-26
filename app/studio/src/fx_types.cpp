@@ -44,6 +44,13 @@ const std::vector<FxType> &fxTypes()
 		{"vignette", "Vignette", {fxNum("amount", "Amount", 0, 1, 0.5, 0.05, 2), fxNum("size", "Clear centre", 0, 1, 0.4, 0.05, 2),
 					  fxNum("softness", "Softness", 0, 1, 0.5, 0.05, 2), fxCol("color", "Colour", "#000000")}, "filter"},
 		{"grain", "Film grain", {fxNum("amount", "Amount", 0, 1, 0.15, 0.05, 2), fxNum("size", "Grain size (px)", 1, 10, 1, 1, 0)}, "filter"},
+		// D445 realism looks
+		{"bloom", "Bloom (glow on lights)", {fxNum("amount", "Amount", 0, 1, 0.2, 0.05, 2),
+						    fxNum("threshold", "Starts at brightness", 0, 1, 0.8, 0.05, 2),
+						    fxNum("size", "Reach (% of layer)", 1, 20, 3, 0.5, 1)}, "light"},
+		{"clarity", "Clarity (local contrast)", {fxNum("amount", "Amount", 0, 1, 0.3, 0.05, 2),
+							 fxNum("size", "Reach (% of layer)", 1, 20, 2, 0.5, 1)}, "filter"},
+		{"chromatic", "Lens colour fringe", {fxNum("amount", "Amount", 0, 1, 0.3, 0.05, 2)}, "filter"},
 		{"pixelate", "Pixelate", {fxNum("size", "Block size (px)", 2, 200, 16, 1, 0)}, "filter"},
 		{"posterize", "Posterize", {fxNum("levels", "Levels", 2, 32, 6, 1, 0)}, "filter"},
 		{"mirror", "Mirror", {}, "camera"},

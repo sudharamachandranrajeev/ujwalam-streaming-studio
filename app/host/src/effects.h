@@ -22,6 +22,9 @@
 //                        (circle / rounded camera mask with a border ring). Each shader compiles once per process.
 //   ujw_image_mask       filter (D291): alpha from an image file's luma or alpha, inverted on request, feathered
 //                        once with the blur's Gaussian when it loads.
+//   ujw_local            filter (D445 realism looks): bloom (half-size bright pass, blurred, added back) or clarity
+//                        (local contrast against a blurred copy, mid tones only), picked by `kind`. The blurs use the
+//                        Gaussian above. ujw_pass also has kind chromatic (D445): the colour fringe of a lens.
 //   sharpen and lut use OBS's own sharpness_filter_v2 and clut_filter (obs-filters; .cube or 512 x 512 PNG).
 //   The blend effects also set the scene item's blending mode (blending(), applied with the placement).
 // Shaders: app/host/data/effects/*.effect, embedded into the exe by CMakeLists.txt (no runtime file lookup).

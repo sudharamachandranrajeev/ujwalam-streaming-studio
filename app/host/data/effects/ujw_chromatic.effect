@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ujwalam-host: ujw_chromatic (src/effects.cpp "ujw_pass", D445 realism looks). Embedded into the host exe at build time
+// (CMakeLists.txt generates ujw_effects.h). Direct3D 11 (libobs-d3d11) only.
+// Chromatic aberration, the colour fringe of a real lens: red is drawn slightly towards the centre and blue slightly
+// outwards, more towards the edges and none in the centre. p.x = amount 0..1; at amount 1 the fringe is 0.5 % of the
+// shorter side at the corners (5 px on a 1080 px layer). No time input, so it adds no flash. Alpha is kept.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 size;
+uniform float4 p;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float4 PSChromatic(VertData v_in) : TARGET
+{
+	float s = p.x * 0.005 * min(size.x, size.y);
+	float2 d = (v_in.uv - 0.5) * 2.0 * s / max(size, float2(1.0, 1.0));
+	float4 rgba = image.Sample(linearClamp, v_in.uv);
+	rgba.r = image.Sample(linearClamp, v_in.uv - d).r;
+	rgba.b = image.Sample(linearClamp, v_in.uv + d).b;
+	return rgba;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSChromatic(v_in);
+	}
+}
