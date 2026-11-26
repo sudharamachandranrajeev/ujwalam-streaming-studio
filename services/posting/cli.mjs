@@ -38,7 +38,7 @@ export const EXIT_FLAG_OFF = 3;
  *  also printed, so it can be pasted into a browser by hand. It comes from authUrl() (our own query-string
  *  builder), never from user-typed text. */
 export function defaultBrowserOpen(url, { spawnImpl = spawn, log = (s) => console.log(s) } = {}) {
-  log(`If no browser opens, paste this into the browser signed in to the channel's Google account:\n${url}`);
+  log(`If no browser opens, paste this into the browser signed in to the right account (Google for YouTube, Facebook for Instagram):\n${url}`);
   return new Promise((resolve, reject) => {
     const p = spawnImpl('rundll32', ['url.dll,FileProtocolHandler', url], { windowsHide: true });
     p.on('error', reject);
