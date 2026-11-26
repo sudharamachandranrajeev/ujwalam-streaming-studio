@@ -35,7 +35,7 @@ function setup({ live = false, failHost = null, lostReply = false, failUndo = fa
   const host = {
     call: async (m, p) => {
       calls.push([m, structuredClone(p)]);
-      if (m === failHost) throw Object.assign(new Error('refused'), { code: -32602 });
+      if (m === failHost) throw Object.assign(new Error('refused'), { code: 'RPC_-32602' } /* backends.mjs rpc form */);
       if (failUndo && m === 'audio.removeFromProject') throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' });
       if (m === 'audio.addFromProject') attached = true;
       if (m === 'audio.removeFromProject') attached = false;
@@ -45,7 +45,7 @@ function setup({ live = false, failHost = null, lostReply = false, failUndo = fa
       }
       if (m === 'music.status') return { attached, mood: 'lobby', playing: true, reason: '', scenes, previewing: null };
       if (m === 'music.preview') {
-        if (live && p.mood !== null) throw Object.assign(new Error('Listening is only possible off air'), { code: -32009 });
+        if (live && p.mood !== null) throw Object.assign(new Error('Listening is only possible off air'), { code: 'RPC_-32009' } /* backends.mjs rpc form */);
         played.push(p.mood ?? 'stop');
         return { previewing: p.mood };
       }

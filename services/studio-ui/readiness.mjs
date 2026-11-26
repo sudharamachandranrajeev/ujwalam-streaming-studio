@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { systemTool } from '../event-core/config.mjs';
 import { loadPlatforms } from '../outputs/validate.mjs';
 import { liveSchemesOf } from '../../app/host/lib/outputs-plan.mjs';
+import { isHostError } from './backends.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const READINESS_FLAG = 'readiness';
@@ -350,7 +351,7 @@ export async function defaultAudioCheck(ctx) {
   // caught the 2026-11-08 game audio loss. An old host without the method fails too; the override still goes live.
   let r = Array.isArray(ctx.hostStatus.audioHealth?.sources) ? ctx.hostStatus.audioHealth : null;
   if (!r) try { r = await ctx.host.call(ctx.config.audio.method, {}); } catch (e) {
-    const missing = e?.code === 'RPC_-32601' || e?.code === 'NO_METHOD' || /method.not.found/i.test(String(e?.message));
+    const missing = isHostError(e, -32601) || e?.code === 'NO_METHOD' || /method.not.found/i.test(String(e?.message));
     return audioUnreadable(missing ? 'the host cannot report it (update the studio)' : 'the host did not answer', mutedNote);
   }
   // An answer without a sources list (null, {}, a string) is unreadable state, not "no sources" (2026-11-09 failure

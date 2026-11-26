@@ -54,7 +54,7 @@ describe('QML studio scene music (headless probe)', { skip }, () => {
       if (m === 'music.status') return { attached: true, scene: '', mood: '', playing: false, reason: '' };
       if (m === 'music.setScene' || m === 'audio.addFromProject') return {};
       if (m === 'music.preview') {
-        if (opts.live && p.mood !== null) throw Object.assign(new Error('Listening is only possible off air'), { code: -32009 });
+        if (opts.live && p.mood !== null) throw Object.assign(new Error('Listening is only possible off air'), { code: 'RPC_-32009' });
         played.push(p.mood ?? 'stop');
         return { previewing: p.mood };
       }

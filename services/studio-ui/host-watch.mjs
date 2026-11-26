@@ -22,6 +22,7 @@ import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isHostError } from './backends.mjs';
 import { systemTool } from '../event-core/config.mjs';
 
 export const HOST_WATCH_FLAG = 'host-watchdog';
@@ -103,7 +104,7 @@ export function createHostWatch({ cfg, probe, canCheck = () => true, flagOn = ()
       inFlight = true;
       const g = gen;
       let ok = false; let status = null;
-      try { status = await probe(); ok = true; } catch (e) { ok = e?.code === METHOD_NOT_FOUND; } finally { inFlight = false; }
+      try { status = await probe(); ok = true; } catch (e) { ok = isHostError(e, METHOD_NOT_FOUND); } finally { inFlight = false; }
       if (g !== gen || !canCheck()) return null; // the host was replaced meanwhile
       const d = judge.observe({ now: now(), ok, status });
       if (d.state !== 'stale') { if (d.state === 'ok') acted = false; return d; }

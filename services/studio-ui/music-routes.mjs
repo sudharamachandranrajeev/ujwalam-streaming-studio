@@ -15,6 +15,7 @@
 //                       stops it before any output starts (scene_music::preview_stop), so it is never heard on air.
 //                       {op: 'preview', mood: null} stops it.
 // The library is <data dir>/music (MU1 makes it off air: services/clip/scene_music.py --out <it>).
+import { isHostError } from './backends.mjs';
 import { loadProject, saveProject } from '../project/store.mjs';
 import { validateProject } from '../project/index.mjs';
 import { MOOD_RE, VOLUME_DB, libraryExists, libraryState, listMoods, musicStrip, newMusicStrip, sceneMusicProblems } from '../project/scene-music.mjs';
@@ -122,7 +123,7 @@ export function createMusicRoutes(opts) {
     // Puts the host back to the file's state. Removing an added strip restores every scene's music from r.doc (host
     // audio_remove_model -> music_from_doc); otherwise the one scene is set back.
     const undo = async () => {
-      if (x.added) await host.call('audio.removeFromProject', { project: r.doc, audio: x.added.id }).catch((e) => { if (e?.code !== -32602) throw e; });
+      if (x.added) await host.call('audio.removeFromProject', { project: r.doc, audio: x.added.id }).catch((e) => { if (!isHostError(e, -32602)) throw e; });
       await host.call('music.setScene', { scene: body.scene, music: old });
     };
     // A failed or lost reply may still have been applied: read back what the host holds before deciding.
@@ -177,7 +178,7 @@ export function createMusicRoutes(opts) {
       const r = await host.call('music.preview', { mood: body.mood });
       return json(res, 200, { ok: true, previewing: r?.previewing ?? null });
     } catch (e) {
-      if (e?.code === -32009) return refuse(res, 'on-air', 409, String(e?.message ?? '').slice(0, 200));
+      if (isHostError(e, -32009)) return refuse(res, 'on-air', 409, String(e?.message ?? '').slice(0, 200));
       return json(res, 502, { error: 'host-error', text: MUSIC_ERROR_TEXT['host-unavailable'] });
     }
   }

@@ -306,7 +306,7 @@ describe('QML studio editing (headless probe)', { skip }, () => {
       hostCall: (m, x) => {
         if (m !== 'preview.select' || x.layer !== 'cam') return undefined;
         at.push(Date.now());
-        if (at.length === 1) throw Object.assign(new Error('a drag is running on that preview'), { code: -32009 });
+        if (at.length === 1) throw Object.assign(new Error('a drag is running on that preview'), { code: 'RPC_-32009' });
         return { layer: 'cam' };
       },
     });
@@ -318,7 +318,7 @@ describe('QML studio editing (headless probe)', { skip }, () => {
   test('preview selection: a refused retry puts the list back to the host\'s selection, not sent back', async () => {
     const r = await probe(['select-layer:cam'], { ms: 9000,
       hostStatus: () => ({ previewEditing: true, previewSelection: sel(0, 0, { scene: 'scene-1', layer: 'game' }, null) }),
-      hostCall: (m, x) => { if (m === 'preview.select' && x.layer === 'cam') throw Object.assign(new Error('busy: try again'), { code: -32009 }); return undefined; },
+      hostCall: (m, x) => { if (m === 'preview.select' && x.layer === 'cam') throw Object.assign(new Error('busy: try again'), { code: 'RPC_-32009' }); return undefined; },
     });
     assert.equal(selects(r.calls, 'cam').length, 2, 'one retry, no more');
     assert.equal(r.s.selected, 'game', 'the list shows the layer the preview edits');
