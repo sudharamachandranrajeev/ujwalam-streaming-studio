@@ -69,6 +69,7 @@ QtObject {
     signal audioToolsReady(var info, string audio, string name) // AU2: a strip's Tools window (ranges, presets, saved tools)
     signal sceneMusicReady(var info, string scene, string mood) // MU2: a scene's Music window (moods, its music, what plays)
     signal settingsWanted(string page) // open Settings, on this page ("" = Clips)
+    signal scheduleWanted()            // open the scheduling manager (the Settings > Posting button; SM1)
     signal goLiveWanted(var options)   // Go live with a YouTube output on and signed in: the chooser opens first (D389)
     signal connectionsWanted(string output) // open Settings > Connections with only this output (the chooser's "Add the key")
     signal youtubeEventsWanted()       // open the YouTube window on its Presets tab (a Go live was refused for a missing event, D386, D388)

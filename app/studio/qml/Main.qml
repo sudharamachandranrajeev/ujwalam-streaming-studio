@@ -58,6 +58,7 @@ ApplicationWindow {
                     reviewShown: studioStore.flags["learning-review"] === true && studioStore.reviewCount > 0, reviewCount: studioStore.reviewCount };
         s.alerts = alerts.probe();
         s.tasks = taskCenter.probe();
+        s.schedule = scheduleCenter.probe();
         s.tray = Object.assign(Tray.probe(), { closeAsked: closeDlg.asked, closeChoice: closeDlg.choice, stay: trayFlow.stay });
         s.windowShown = win.visible;
         s.edit = studioStore.edit.probe();
@@ -120,6 +121,7 @@ ApplicationWindow {
         if (String(action).startsWith("close-choice:")) return closeDlg.choose(String(action).slice(13));
         if (String(action).startsWith("tray:")) return trayFlow.probeAction(String(action));
         if (String(action).startsWith("tasks:")) return taskCenter.probeAction(String(action));
+        if (String(action).startsWith("sched:")) return scheduleCenter.probeAction(String(action));
         // Editing (plan Q4): the layer and scene menus, their keys, reorder and the window keys (undo, redo, arrows).
         if (String(action).startsWith("select-layer:") || String(action).startsWith("layer-")) return layers.probeAction(String(action));
         if (String(action).startsWith("select-scene:") || String(action).startsWith("scene-")) return scenes.probeAction(String(action));
@@ -230,6 +232,7 @@ ApplicationWindow {
         objectName: "onAirBar"
         store: studioStore
         taskCenter: taskCenter
+        scheduleCenter: scheduleCenter
         guide: guide
         windows: ({ youtube: ytWin, growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg, beatdrop: beatdropDlg, sceneBuilder: sceneBuilderDlg })
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
@@ -421,6 +424,19 @@ ApplicationWindow {
         anchors { left: parent.left; right: parent.right; top: parent.top }
         topY: bar.y + bar.height + Theme.sp.s
         windowHeight: win.height
+    }
+    // Scheduling manager (SM1-SM4): panel under the bar and its own window; reads the schedule only while open.
+    ScheduleCenter {
+        id: scheduleCenter
+        objectName: "scheduleCenter"
+        store: studioStore
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        topY: bar.y + bar.height + Theme.sp.s
+        windowHeight: win.height
+    }
+    Connections {
+        target: studioStore
+        function onScheduleWanted() { scheduleCenter.openFromSettings() }
     }
     // A theme pack that changed on disk and was refused (LU2): the last good look stays, a notification says why.
     Connections {

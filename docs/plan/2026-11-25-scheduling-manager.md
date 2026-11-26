@@ -1,6 +1,6 @@
 # Scheduling manager window, 2026-11-25
 
-Status: **approved** (user request 2026-11-25, after Instagram Reels connected).
+Status: **approved**; SM1-SM4 built 2026-11-26 (evidence: docs/evidence/2026-11-26-scheduling-manager.md); SM5 later.
 
 ## Request
 

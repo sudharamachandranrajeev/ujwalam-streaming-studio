@@ -10,6 +10,7 @@ Rectangle {
     id: bar
     required property var store
     property var taskCenter: null // TaskCenter.qml: the task chip opens its panel
+    property var scheduleCenter: null // ScheduleCenter.qml: More > Scheduled posts opens its panel
     property var guide: null      // Guide.qml: the ? button opens its help panel
     property var windows: ({})    // the More menu's windows (Main.qml): importer, feedback, posts, growth, report
     color: Theme.c.panel
@@ -234,6 +235,9 @@ Rectangle {
                 UMenuItem { objectName: "moreMenu:posts"; text: "Posts…"; visible: moreMenu.f["posting"] === true; height: visible ? implicitHeight : 0
                             tip: "Review clip packages. Nothing is uploaded until you click Upload."
                             onTriggered: bar.windows.posts.show() }
+                UMenuItem { objectName: "moreMenu:schedule"; text: "Scheduled posts…"; visible: moreMenu.f["posting"] === true; height: visible ? implicitHeight : 0
+                            tip: "Every scheduled post in one list: move, remove, upload now or retry. Opens a panel, or its own window."
+                            onTriggered: if (bar.scheduleCenter) bar.scheduleCenter.toggle() }
                 UMenuItem { objectName: "moreMenu:growth"; text: "Growth numbers…"; visible: moreMenu.f["growth"] === true; height: visible ? implicitHeight : 0
                             tip: "Your own YouTube numbers for the videos Ujwalam posted. Read only."
                             onTriggered: bar.windows.growth.show() }

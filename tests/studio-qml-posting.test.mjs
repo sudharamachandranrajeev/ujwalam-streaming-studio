@@ -100,9 +100,9 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.match(ap.fit, /About 100 uploads a day fit/); assert.match(ap.fit, /own upload allowance/); // PT2 (D408): the upload bucket
     assert.match(ap.flags, /Auto post and Scheduled posting are on/);
     assert.match(ap.flags, /stay in the clips folder/);
-    assert.ok(ap.times.length >= 11, ap.times.join(' | '));
-    assert.match(ap.times[0], /queued clip, scheduled/);
-    assert.ok(ap.times.slice(1).every((t) => /Scheduled/.test(t)), ap.times.join(' | '));
+    // SM1: the card is one line (the list is in the scheduling manager, studio-qml-schedule-manager.test.mjs)
+    assert.equal(ap.schedCount, 1);
+    assert.match(ap.schedLine, /^1 scheduled post, the next on /);
     assert.match(ap.timesInfo, /not been read yet/);
   });
 
@@ -196,21 +196,12 @@ describe('QML studio Settings > Posting & growth > Auto-post (headless probe)', 
     assert.equal(r.s.settings.dirty, false);
   });
 
-  test('Move and Remove act on their own click: the queued clip moves, then is taken out of the queue', async () => {
-    const mv = await probe({ actions: [...open, ...WAIT, 'ap-move:clip1:2026-11-13T20:00:00Z', ...WAIT, ...WAIT] });
-    assert.equal(done(mv.p)['ap-move:clip1:2026-11-13T20:00:00Z'], true);
-    assert.match(mv.ap.message, /^Moved to .+\.$/);
-    assert.equal(mv.item().publishAt, '2026-11-13T20:00:00.000Z');
-    assert.equal(mv.s.settings.dirty, false, 'moving changes no setting');
-    assert.ok(node(mv.p, 'autopostMove:clip1')?.visible, 'a queued clip has Move and Remove buttons');
-    const bad = await probe({ actions: [...open, ...WAIT, 'ap-move:nope:2026-11-13T20:00:00Z', ...WAIT] });
-    assert.match(bad.ap.message, /^Not moved: /);
-    assert.equal(bad.item().publishAt, '2026-11-13T12:00:00.000Z', 'unchanged');
-    const rm = await probe({ actions: [...open, ...WAIT, 'ap-remove:clip1', ...WAIT, ...WAIT] });
-    assert.equal(rm.ap.message, 'Taken out of the upload queue.');
-    assert.equal(rm.item().state, 'removed');
-    const again = await probe({ actions: [...open, ...WAIT, 'ap-remove:nope', ...WAIT] });
-    assert.match(again.ap.message, /^Not removed: /);
+  test('the card has no per-post rows and no Move or Remove: one short line and the button that opens the scheduling manager (SM1)', async () => {
+    const r = await probe({ actions: [...open, ...WAIT] });
+    assert.ok(!r.p.tree.some((n) => /^autopost(Time:|Move|Remove)/.test(n.name)), 'no per-post controls in Settings');
+    assert.ok(node(r.p, 'autopostOpenManager')?.visible);
+    assert.match(node(r.p, 'autopostSchedLine').text, /^1 scheduled post, the next on /);
+    assert.equal(r.item().state, 'queued', 'opening Settings changes no post');
   });
 
   test('Check the channel again reads the channel (no network here: the card says so in plain words)', async () => {

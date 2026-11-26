@@ -107,6 +107,9 @@ qt_add_qml_module(ujwalam-studio
 		qml/TaskCenter.qml
 		qml/TaskWindow.qml
 		qml/TaskChip.qml
+		qml/ScheduleCenter.qml
+		qml/ScheduleView.qml
+		qml/ScheduleWindow.qml
 		qml/UpdateButton.qml
 		qml/DownloadsList.qml
 		qml/TrayFlow.qml

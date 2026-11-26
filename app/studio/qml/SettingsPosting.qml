@@ -35,10 +35,12 @@ Column {
     property int maxPerDayLimit: 100
     property string flagsText: ""
     property string timesInfo: "Loading..."
-    property var times: []                // [{text, id, movable}]
+    property int schedCount: 0            // scheduled posts (the list itself is in the scheduling manager, SM1)
+    property string schedNext: ""          // the next one, UTC
+    property bool schedLoaded: false
+    readonly property string schedLine: !schedLoaded ? "Loading..." : schedCount === 0 ? "No scheduled posts yet."
+        : schedCount + (schedCount === 1 ? " scheduled post" : " scheduled posts") + (schedNext !== "" ? ", the next on " + localTime(schedNext) : "") + "."
     property string message: ""
-    property string movingId: ""          // the clip whose new time is being typed
-    property string moveText: ""
     property string stuckLockId: ""       // D409 fifth review: a posting lock left by a closed copy (empty = none)
     // "What gets posted" (user 2026-11-20): the rules in use when they are the user's own shape (edited in place, unknown
     // rules and keys kept by the server); otherwise the card's own controls below write the rules.
@@ -205,6 +207,7 @@ Column {
     function hhmm(n) { return two(Math.floor(n / 60)) + ":" + two(n % 60) }
     function clamp(n, lo, hi, def) { return Math.max(lo, Math.min(hi, typeof n === "number" && !isNaN(n) ? n : def)) }
     function round1(n) { return Math.round(n * 10) / 10 }
+    function two(n) { return (n < 10 ? "0" : "") + n }
     function localTime(iso) {
         const d = new Date(iso);
         return isNaN(d.getTime()) ? String(iso) : Qt.formatDateTime(d, "ddd d MMM, HH:mm");
@@ -220,10 +223,10 @@ Column {
         quota = ({});
         flagsText = "";
         timesInfo = "Loading...";
-        times = [];
+        schedCount = 0;
+        schedNext = "";
+        schedLoaded = false;
         message = "";
-        movingId = "";
-        moveText = "";
         rulesOwn = false;
         rulesEdit = ({ autoUpload: false, maxUploadsPerDay: 1, rules: [] });
         rulesOrig = "";
@@ -383,7 +386,7 @@ Column {
 
     function loadTimes(fresh) {
         const g = gen;
-        Api.get("ui/api/posts/auto/schedule?count=10" + (fresh ? "&fresh=1" : ""), (ok, b, err) => {
+        Api.get("ui/api/posts/auto/schedule?brief=1&count=0" + (fresh ? "&fresh=1" : ""), (ok, b, err) => {
             if (g !== gen) return;
             if (!ok) { timesInfo = "The posting times are not available: " + err; return }
             renderTimes(b);
@@ -399,24 +402,20 @@ Column {
         else if (err !== "")
             info = "The schedule settings are not valid, so no time is given.";
         else if (b.source === "none")
-            info = "The channel has not been read yet; the times below may move once it is.";
+            info = "The channel has not been read yet; the times may move once it is.";
         else
             info = "Channel read " + (b.channelReadAt ? localTime(b.channelReadAt) : "earlier") + ". Times are in your time zone; each post is at least "
                 + (b.placement === "random-daily" ? (b.minGapMinutes || 0) + " min" : b.placement === "grid-tiers" ? (b.gridGapMinutes || 0) + " min" : (b.intervalHours || 0) + " h") + " from the next.";
         if (live === "schedule-scope-missing") info += " Could not read the channel: sign in again so YouTube allows reading scheduled posts.";
         else if (live !== "") info += " Could not read the channel just now (" + live + ").";
         timesInfo = info;
-        const rows = [];
-        const queue = Array.isArray(b.queue) ? b.queue : [], channel = Array.isArray(b.channel) ? b.channel : [], next = Array.isArray(b.next) ? b.next : [];
-        for (const q of queue) {
-            const at = q.publishAt || "", st = q.state;
-            const what = st === "done" ? "uploaded, scheduled" : st === "uploading" ? "uploading, scheduled" : "queued clip, scheduled";
-            rows.push({ text: (at === "" ? "time not set yet" : localTime(at)) + "  -  " + what, id: q.id || "", movable: q.movable === true && at !== "" });
-        }
-        for (const c of channel) rows.push({ text: localTime(c) + "  -  already scheduled on the channel", id: "", movable: false });
-        for (const n of next) rows.push({ text: localTime(n) + "  -  free: the next clip goes up Scheduled for this time", id: "", movable: false });
-        if (rows.length === 0) rows.push({ text: "No posting times yet.", id: "", movable: false });
-        times = rows;
+        const g = gen; // the count and the next time are the manager's own (YouTube, Instagram, the channel), counts only
+        Api.get("ui/api/posts/schedule/list?brief=1", (ok, c) => {
+            if (g !== gen || !ok) return;
+            schedCount = (c.counts && c.counts.total) || 0;
+            schedNext = typeof c.nextAt === "string" ? c.nextAt : "";
+            schedLoaded = true;
+        });
     }
 
     // ---- custom times (user 2026-11-20) ----
@@ -559,24 +558,6 @@ Column {
         });
     }
 
-    function move(id, at) {
-        const g = gen;
-        Api.post("ui/api/posts/auto/queue/move", { id: id, at: at }, (ok, b, err) => {
-            if (g !== gen) return;
-            message = ok ? "Moved to " + localTime(b.publishAt || "") + "." : "Not moved: " + ((b && b.text) ? b.text : err);
-            if (ok) movingId = "";
-            loadTimes(false);
-        });
-    }
-    function remove(id) {
-        const g = gen;
-        Api.post("ui/api/posts/auto/queue/remove", { id: id }, (ok, b, err) => {
-            if (g !== gen) return;
-            message = ok ? "Taken out of the upload queue." : "Not removed: " + ((b && b.text) ? b.text : err);
-            loadTimes(false);
-        });
-    }
-
     // PT3 (D408): one click asks for an auto-post pass now (refused while a stream is live or starting).
     function runNow() {
         const g = gen;
@@ -597,21 +578,6 @@ Column {
                 : "Not cleared: the lock changed or its owner is still running (" + ((b && b.error) ? b.error : err) + ").";
             loadTimes(false);
         });
-    }
-
-    // The Move box takes the PC's own time on the hour, "2026-11-14 18:00" (the widget has a calendar window for it).
-    function two(n) { return (n < 10 ? "0" : "") + n }
-    function startMove(id) {
-        const d = new Date(Date.now() + 3 * 3600 * 1000);
-        movingId = id;
-        moveText = d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) + " " + two(d.getHours()) + ":00";
-    }
-    function goMove() {
-        const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2})(?::\d{2})?$/.exec(moveText.trim());
-        if (!m) { message = "Not moved: type the new time like 2026-11-14 18:00 (your time zone, on the hour)."; return }
-        const d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), parseInt(m[4], 10), 0, 0);
-        if (isNaN(d.getTime())) { message = "Not moved: that time does not exist."; return }
-        move(movingId, d.toISOString().replace(/\.\d+Z$/, "Z"));
     }
 
     component Words: Text {
@@ -1202,59 +1168,15 @@ Column {
     }
 
     UCard {
-        title: "NEXT POSTING TIMES"
+        title: "SCHEDULED POSTS"
+        Quiet { objectName: "autopostSchedLine"; text: ap.schedLine }
         Quiet { objectName: "autopostTimesInfo"; text: ap.timesInfo }
-        Repeater {
-            model: ap.times
-            delegate: Item {
-                id: tr
-                required property var modelData
-                required property int index
-                width: parent.width
-                height: Math.max(label.implicitHeight, 34)
-                Text {
-                    id: label
-                    objectName: "autopostTime:" + tr.index
-                    anchors { left: parent.left; right: btns.left; rightMargin: Theme.sp.s; verticalCenter: parent.verticalCenter }
-                    wrapMode: Text.Wrap
-                    text: tr.modelData.text
-                    color: Theme.c.text
-                    font.family: Theme.family
-                    font.pixelSize: Theme.ty.small
-                }
-                Row {
-                    id: btns
-                    anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                    spacing: Theme.sp.s
-                    visible: tr.modelData.movable
-                    UButton { objectName: "autopostMove:" + tr.modelData.id; text: "Move"; onClicked: ap.startMove(tr.modelData.id) }
-                    UButton {
-                        objectName: "autopostRemove:" + tr.modelData.id
-                        text: "Remove"
-                        tip: "Takes this clip out of the upload queue. Its post stays in the Posts window."
-                        onClicked: ap.remove(tr.modelData.id)
-                    }
-                }
-            }
-        }
-        Column {
-            objectName: "autopostMoveBox"
-            visible: ap.movingId !== ""
-            width: parent.width
-            spacing: Theme.sp.s
-            Words { text: "New publish time (your time zone, on the hour):" }
-            Row {
-                spacing: Theme.sp.s
-                UField {
-                    objectName: "autopostMoveText"
-                    width: 200
-                    label: "New publish time"
-                    text: ap.moveText
-                    onTextEdited: ap.moveText = text
-                }
-                UButton { objectName: "autopostMoveGo"; text: "Move"; kind: "primary"; onClicked: ap.goMove() }
-                UButton { objectName: "autopostMoveCancel"; text: "Cancel"; onClicked: ap.movingId = "" }
-            }
+        UButton {
+            objectName: "autopostOpenManager"
+            text: "Open scheduling manager"
+            kind: "primary"
+            tip: "Every scheduled post in one list: search, filter, move, remove, upload now or retry. Opens in its own window."
+            onClicked: ap.box.store.scheduleWanted()
         }
         UButton {
             objectName: "autopostRefresh"
@@ -1355,7 +1277,7 @@ Column {
     function probe() {
         return { loaded: loaded, card: JSON.parse(JSON.stringify(card)), dirty: dirty, fit: fit, flags: flagsText, problem: problem,
             rulesOwn: rulesOwn, rulesProblem: rulesProblem, rules: JSON.parse(JSON.stringify(rulesEdit)), notices: notices.slice(), customNext: customNext.slice(),
-            timesInfo: timesInfo, times: times.map(t => t.text), message: message, stuckLockId: stuckLockId,
+            timesInfo: timesInfo, schedCount: schedCount, schedNext: schedNext, schedLine: schedLine, message: message, stuckLockId: stuckLockId,
             prefsLoaded: prefsLoaded, prefs: JSON.parse(JSON.stringify(prefs)), prefsDirty: prefsDirty, prefsError: prefsError, shareSum: shareSum, quotaModel: quotaModel,
             previewInfo: previewInfo, preview: previewItems.map(i => String(i.title)), gridProblem: gridProblem, offsetsText: offsetsText,
             ig: { loaded: igLoaded, hasApp: ig.hasApp === true, connected: ig.connected === true, username: ig.username || "", flagOn: ig.flagOn === true, connecting: ig.connecting === true,
@@ -1363,7 +1285,7 @@ Column {
     }
 
     // ap-upload:<on|off> | ap-kind:<id>:<on|off> | ap-score:<n> | ap-perday:<n> | ap-gap:<h> | ap-days:<n> | ap-placement:<id>
-    // | ap-daymin:<n> | ap-daymax:<n> | ap-gapmin:<n> | ap-window:<from min>:<until min> | ap-quota:<n> | ap-refresh | ap-move:<id>:<UTC time> | ap-remove:<id>
+    // | ap-daymin:<n> | ap-daymax:<n> | ap-gapmin:<n> | ap-window:<from min>:<until min> | ap-quota:<n> | ap-refresh
     function probeAction(p) {
         if (!loaded) return false;
         const a = p[0], arg = p[1];
@@ -1413,8 +1335,7 @@ Column {
         if (a === "ap-rule-max" && p.length === 3) return setRuleMax(arg, parseInt(p[2], 10));
         if (a === "ap-rules-upload") return setRules(r => { r.autoUpload = on(arg) });
         if (a === "ap-refresh") { loadTimes(true); return true }
-        if (a === "ap-move" && p.length >= 3) { move(arg, p.slice(2).join(":")); return true } // the time has colons: the rest of the action
-        if (a === "ap-remove" && arg) { remove(arg); return true }
+        if (a === "ap-open-manager") { box.store.scheduleWanted(); return true }
         if (a === "ap-run") { runNow(); return true }
         // PT5: ap-tone:<hype|clean> | ap-emoji:<on|off> | ap-tags:<tags, space-separated, URI-encoded> | ap-own-tags:<search tags, comma-separated, URI-encoded> | ap-footer:<URI-encoded text> | ap-share:<kind>:<n> | ap-growth:<on|off> | ap-preview
         if (a === "ap-tone") return setTone(arg);
