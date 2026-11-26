@@ -11,8 +11,9 @@ or kept: only the measured numbers are saved (no path, no file name, no picture)
   look's LUT effect points at file base "userluts" (= <data>/looks; the host and the reel path resolve it there).
   services/project/looks.mjs and clip_realism.load_looks merge these with the built-in looks.
 
-  Colour: the reference's Lab statistics against a neutral picture (NEUTRAL: a = b = 0, mid brightness, a typical
-  spread). A blue cast in the reference becomes the same blue push in the LUT (capped as above).
+  Colour: the reference's Lab statistics (black bars left out) against a neutral picture (NEUTRAL: a = b = 0, mid
+  brightness, a typical spread). A blue cast in the reference becomes the same blue push in the LUT (capped as above);
+  brightness and contrast move by TONE_SHARE of their difference only (content, not grade, drives most of them).
   Effects: glow, grain, vignette, clarity and the rest start from the nearest built-in look by colour distance (the
   LUT's shift on a grey ramp, Lab units; contrast weighted CONTRAST_WEIGHT per unit of factor). The studio says so.
 
@@ -46,6 +47,10 @@ MAX_USER_LOOKS = 40
 # frame. UNVERIFIED value for the spread (20 L units); tune after RL6 if user looks come out too flat or too punchy.
 NEUTRAL = {"L": 50.0, "a": 0.0, "b": 0.0, "contrast": 20.0}
 CONTRAST_WEIGHT = 40.0          # nearest look: 0.1 of contrast factor counts as 4 Lab units
+# Brightness and contrast are taken at this share of the measured difference (the colour cast in full): a reference's
+# mean brightness says as much about its content (a night map, a dark room) as about its grade. UNVERIFIED (RL6).
+TONE_SHARE = 0.5
+BORDER_MAX = 16                 # rows and columns this dark all the way across are bars around the picture, not the look
 IMAGE_EXT = {".png": True, ".jpg": True, ".jpeg": True, ".bmp": True, ".webp": True}
 MAX_IMAGE_MB = 40
 VIDEO_FRAMES = 12
@@ -96,14 +101,32 @@ def _video(path):
     return imgs
 
 
+def crop_bars(img):
+    """The picture without black bars (letterbox, pillarbox, a vertical reel on a black frame): rows and columns whose
+    brightest pixel is at most BORDER_MAX are cut from the edges. All dark: the picture as it is."""
+    import numpy as np  # noqa: PLC0415
+    m = img.max(axis=2)
+    rows = np.where(m.max(axis=1) > BORDER_MAX)[0]
+    cols = np.where(m.max(axis=0) > BORDER_MAX)[0]
+    if len(rows) < 4 or len(cols) < 4:
+        return img
+    return img[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+
+
+def lut_target(m):
+    """The colour the LUT aims for: the cast in full, brightness and contrast at TONE_SHARE of their difference."""
+    return {"L": NEUTRAL["L"] + TONE_SHARE * (m["L"] - NEUTRAL["L"]), "a": m["a"], "b": m["b"],
+            "contrast": NEUTRAL["contrast"] + TONE_SHARE * (m["contrast"] - NEUTRAL["contrast"])}
+
+
 def measure_reference(path):
-    """-> Lab statistics {L, a, b, contrast} of the reference (reel_style.frame_colour)."""
+    """-> Lab statistics {L, a, b, contrast} of the reference (reel_style.frame_colour), black bars left out."""
     import reel_style as rs  # noqa: PLC0415
     if not isinstance(path, str) or not os.path.isabs(path) or not os.path.isfile(path):
         raise ClipError("pick a picture or video file that exists")
     ext = os.path.splitext(path)[1].lower()
     frames = _image(path) if IMAGE_EXT.get(ext) else _video(path)
-    m = rs.frame_colour(frames)
+    m = rs.frame_colour([crop_bars(f) for f in frames])
     if not m:
         raise ClipError(f"{os.path.basename(path)}: no picture could be read")
     return m
@@ -229,7 +252,7 @@ def make_look(data_dir, path, name=None, looks=None, luts_dir=None):
     taken = {x["id"] for x in builtins}
     look_id = free_id(data_dir, nm, taken)
     cube = os.path.join(d, look_id + ".cube")
-    shift = rs.write_lut(cube, m, 1.0, NEUTRAL)  # same writer and caps as the Reel styles colour
+    shift = rs.write_lut(cube, lut_target(m), 1.0, NEUTRAL)  # same writer and caps as the Reel styles colour
     try:
         n, rows = cr.read_cube(cube)
         got = lut_shift(n, rows, 1.0)

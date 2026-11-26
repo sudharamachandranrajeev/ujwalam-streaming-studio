@@ -89,6 +89,23 @@ class FromReferenceTests(unittest.TestCase):
         self.assertLessEqual(err_ab, TOL_AB)
         self.assertLessEqual(abs(got[0] - src[0]), TOL_L)
 
+    def test_black_bars_are_left_out_and_brightness_moves_by_half(self):
+        img = _gradient(5.0, -6.0, 180, 320)
+        framed = np.zeros((640, 360, 3), np.uint8)
+        framed[160:480, 90:270] = img  # a vertical reel on a black frame
+        a = lr.measure_reference(self._ref("plain.png", img))
+        b = lr.measure_reference(self._ref("framed.png", framed))
+        for k in ("L", "a", "b", "contrast"):
+            self.assertAlmostEqual(a[k], b[k], delta=0.5, msg=k)
+        # a dark reference (mean L 30, no cast): the LUT darkens by half the difference (-10), not by all of it
+        dark = _gradient(0.0, 0.0)
+        dark_lab = cv2.cvtColor(dark.astype(np.float32) / 255.0, cv2.COLOR_BGR2Lab)
+        dark_lab[..., 0] -= 20
+        dark_img = (np.clip(cv2.cvtColor(dark_lab, cv2.COLOR_Lab2BGR), 0, 1) * 255 + 0.5).astype(np.uint8)
+        r = lr.make_look(self.data, self._ref("dark.png", dark_img), "Dark")
+        got, src = _lab_mean(_through(r["look"], self.data, _gradient())), _lab_mean(_gradient())
+        self.assertAlmostEqual(float(got[0] - src[0]), lr.TONE_SHARE * (r["measured"]["L"] - 50.0), delta=TOL_L)
+
     def test_cast_beyond_the_caps_is_capped(self):
         ref = self._ref("blue.png", _gradient(0.0, -30.0))
         r = lr.make_look(self.data, ref, "Very blue")
