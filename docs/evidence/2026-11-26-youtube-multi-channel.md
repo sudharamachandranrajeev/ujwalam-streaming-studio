@@ -29,7 +29,7 @@ sign-in, no real post. Studio not running (`node tools/live-check.mjs`: off air;
 
 ## Commands and results
 
-- `node --test tests/posting-multi-channel.test.mjs`: 15 pass (migration of an old folder and an old queue item, defaults
+- `node --test tests/posting-multi-channel.test.mjs`: 15 pass (18 after the review fixes) (migration of an old folder and an old queue item, defaults
   as data, two separate tokens with sign-out of one, dealing in turn with caps and the Shorts-only rule, never past
   today's count, no clip twice and each with its own channel's token, a failing token skipped and its clips re-dealt,
   uploadLimitExceeded pausing only that channel with the project quota open, one shared budget counted once, removal).
@@ -40,11 +40,21 @@ sign-in, no real post. Studio not running (`node tools/live-check.mjs`: off air;
 - Existing posting and studio-ui posting tests (`tests/posting-*.test.mjs`, `tests/studio-ui-posting*.test.mjs`,
   `tests/studio-ui-schedule-manager.test.mjs`) and the QML schedule, Instagram and posting probes: pass.
 
+## Review fixes 2026-11-26
+
+- Uploads per day (Auto-post card) is the main channel's own count; each added channel keeps its own 3-6. With added
+  channels listed, the shared counter guards the project quota only, and approvals get room for each switched-on added
+  channel's most a day.
+- With an added channel listed but not ready (sign-in failed, paused), main takes only its own count; the rest waits in
+  the pool and goes to that channel when it is back.
+- YouTube's uploadLimitExceeded pauses only the channel that got it, main included; only real project quota answers pause
+  every channel.
+- `node --test tests/posting-multi-channel.test.mjs`: 18 pass; the 3 new tests fail on the code before the fix.
+
 ## Not done / UNVERIFIED
 
 - UNVERIFIED: Google's Brand Account channel chooser on a real sign-in; YouTube's per-channel upload limit for new channels
   (the app reacts to the `uploadLimitExceeded` answer instead of guessing a number).
 - Not per channel yet (YM3/YM7 partial): the posting window and gap settings are shared; the "Streamer:" name line uses the
   main channel's name; rewrite of scheduled posts, analytics and growth suggestions stay main-only.
-- The rules' "uploads per day" is the total over all channels; main's own share is that number.
 - YM8 (first real run) needs the user. Looks on a real screen not checked (headless only).

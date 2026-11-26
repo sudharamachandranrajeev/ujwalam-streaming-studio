@@ -279,3 +279,45 @@ describe('removing a channel', () => {
     assert.equal(row.posted[0].account, A);
   });
 });
+
+describe('review 2026-11-26: per-channel counts, no lost clips, per-channel upload limit', () => {
+  const setRules = (e, perDay) => writeFileSync(e.rulesFile, JSON.stringify({ autoUpload: true, maxUploadsPerDay: perDay, rules: [{ id: 'top', target: 'youtube-shorts', minScore: 5, maxPerDay: perDay }] }));
+
+  test("main's Uploads per day is main's own count: an added channel posts its own 3 on top", async () => {
+    const e = env(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
+    setRules(e, 2);
+    addChannels(e.dataDir, [{ id: A, label: 'Channel A', postsPerDay: { min: 3, max: 3 } }]);
+    const yt = fakeYt(); const { c } = chain(e, { yt });
+    await ticks(c, 8);
+    const done = (acct) => e.queue().items().filter((i) => accountOf(i) === acct && i.state === 'done').length;
+    assert.deepEqual([done(MAIN), done(A)], [2, 3], 'main 2 (its own count), A 3 (its own count)');
+    assert.equal(yt.inits.length, 5);
+  });
+
+  test("an added channel that cannot post now does not hand its clips to main for good", async () => {
+    const e = env(['a', 'b', 'c', 'd', 'e', 'f']);
+    setRules(e, 2);
+    addChannels(e.dataDir, [{ id: A, label: 'Channel A', postsPerDay: { min: 3, max: 3 } }]);
+    const auths = { ...AUTHS(), [A]: auth('tok-A', { fail: true }) };
+    const clock = { t: T0 };
+    const yt = fakeYt(); const { c } = chain(e, { yt, auths, clock });
+    await ticks(c, 3);
+    const mainHas = e.queue().items().filter((i) => accountOf(i) === MAIN).length;
+    assert.ok(mainHas <= 2, `main holds only its count for today (${mainHas})`);
+    assert.equal(e.queue().items().filter((i) => accountOf(i) === null).length, 3, "A's 3 wait in the pool (approvals: main 2 + A 3)");
+    auths[A] = auth('tok-A'); clock.t += 2 * 3600_000; // its sign-in works again after the pause
+    await ticks(c, 6);
+    assert.equal(e.queue().items().filter((i) => accountOf(i) === A && i.state === 'done').length, 3, 'A gets its clips back');
+  });
+
+  test("YouTube's upload limit on main pauses main only; the added channel keeps posting (no project-wide wait)", async () => {
+    const e = env(['a', 'b', 'c', 'd']);
+    addChannels(e.dataDir, [{ id: A, label: 'Channel A', postsPerDay: { min: 4, max: 4 } }]);
+    const yt = fakeYt({ limitFor: new Set(['tok-main']) }); const { c } = chain(e, { yt });
+    await ticks(c, 6);
+    assert.equal(readChannelState(e.dataDir).paused[MAIN]?.reason, 'upload-limit');
+    assert.equal(exhaustedUntil(e.dataDir, T0), null, 'the shared quota stays open');
+    assert.ok(yt.inits.some((x) => x.token === 'tok-A'), 'A still uploads');
+    assert.ok(!yt.inits.some((x) => x.token === 'tok-main'));
+  });
+});

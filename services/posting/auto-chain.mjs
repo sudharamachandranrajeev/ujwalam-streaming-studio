@@ -354,14 +354,14 @@ export async function sendCaptions({ store, id, videoId, auth, budget, fetchImpl
  * -> { blocked: why } (nothing sent) | { result } ; a quota answer rethrows with e.exhaustedUntil (ms | null).
  * send() must pass a publishAt to uploadPost (uploadPost refuses one without).
  */
-// YM5: channelLimit true (an added channel): YouTube's uploadLimitExceeded answer is that channel's own daily limit, not
-// the project's quota: it rethrows as 'upload-limit-exceeded' and records nothing, so the other channels keep posting.
-// Main keeps the PT2 handling (any quota answer records the project-wide wait).
-export async function sendGated({ dataDir, budget, capOf = null, nowMs = Date.now, send, channelLimit = false }) {
+// YM5: YouTube's uploadLimitExceeded answer is the channel's own daily limit (main's too), not the project's quota: it
+// rethrows as 'upload-limit-exceeded' and records nothing, so only that channel pauses and the others keep posting. Every
+// other quota answer (quotaExceeded, dailyLimitExceeded...) records the project-wide wait (PT2).
+export async function sendGated({ dataDir, budget, capOf = null, nowMs = Date.now, send }) {
   const why = budget.reserveUpload(capOf);
   if (why) return { blocked: why };
   try { return { result: await send() }; } catch (e) {
-    if (e?.code === 'quota-exceeded' && channelLimit && e.youtubeReason === 'uploadLimitExceeded') { e.code = 'upload-limit-exceeded'; throw e; }
+    if (e?.code === 'quota-exceeded' && e.youtubeReason === 'uploadLimitExceeded') { e.code = 'upload-limit-exceeded'; throw e; }
     if (e?.code === 'quota-exceeded') {
       let until = null;
       try { until = Date.parse(recordQuotaExceeded(dataDir, nowMs()).exhaustedUntil); } catch { /* the budget still blocks on the next quota answer */ }
@@ -491,7 +491,7 @@ const REASON_TEXT = {
   'schedule-busy': 'Waiting: another post is being scheduled or sent right now; tried again in a few minutes',
   'request-timeout': 'Waiting: YouTube did not answer in time; tried again in a few minutes',
   'channel-day-full': "Waiting: this channel's uploads for today are used up (Settings > Posting & growth > YouTube channels); continues tomorrow (UTC)",
-  'channel-upload-limit': 'YouTube said this channel reached its own upload limit for today; the clip goes to another channel',
+  'channel-upload-limit': 'YouTube said this channel reached its own upload limit for today; it waits until the limit resets (another channel takes new clips meanwhile)',
   'channel-off': 'Waiting: this channel is switched off, signed out or paused; the clip goes to another channel',
   'sender-elsewhere': 'Not sending: another copy of Ujwalam is uploading, or left its posting lock behind. Close the other copy; tried again in a few minutes',
 };
@@ -825,8 +825,9 @@ export function createPostChain(opts) {
   }
 
   /** limit: at most this many uploads in this pass (0 = no limit; several channels: 1 each, taking turns). cap: the
-   *  channel's own uploads for today (null = none, main). channelLimit: an added channel (sendGated). */
-  async function processQueue(store, rules, { limit = 0, cap = null, channelLimit = false } = {}) {
+   *  channel's own uploads for today, counted per channel (null = none: one channel only, the shared counter holds the
+   *  rules' uploads per day). ownCap: added channels are listed, so the shared counter guards the project quota only. */
+  async function processQueue(store, rules, { limit = 0, cap = null, ownCap = false } = {}) {
     const due = queue.items().filter((i) => i.state === 'queued' && (!i.nextAt || Date.parse(i.nextAt) <= nowMs()));
     if (!due.length) return;
     // D375: an automatic upload always has a publish time. Without scheduled posting nothing uploads: the items wait.
@@ -855,7 +856,9 @@ export function createPostChain(opts) {
       return;
     }
     // The daily budget first: a pass that cannot upload anything does not read the channel either.
-    const capOf = Number.isInteger(rules?.maxUploadsPerDay) ? rules.maxUploadsPerDay : null;
+    // Review 2026-11-26: with added channels listed, each channel is held to its OWN count (cap, counted per channel:
+    // main = the rules' uploads per day, added = 3-6); the shared counter then guards the project quota only.
+    const capOf = !ownCap && Number.isInteger(rules?.maxUploadsPerDay) ? rules.maxUploadsPerDay : null;
     const overBudget = (items, why) => {
       // After YouTube's quotaExceeded the items wait until the next Pacific midnight (one wait, no attempt used).
       const until = why === 'quota-exceeded' ? (exhaustedUntil(dataDir, nowMs()) ?? nowMs() + SIGNIN_WAIT_MS) : nowMs() + SIGNIN_WAIT_MS;
@@ -867,14 +870,15 @@ export function createPostChain(opts) {
     // YM3: an added channel's own count for today (3-6 by default); the rest waits for the next UTC day.
     if (cap !== null && doneToday(allQueue.items(), acct, nowMs()) >= cap) {
       const until = new Date(nextUtcMidnight(nowMs())).toISOString();
-      for (const i of due) queue.patch(i.id, { reason: 'channel-day-full', nextAt: until });
-      log(`posting: ${REASON_TEXT['channel-day-full']}; ${due.length} clip(s) wait`);
+      const why = acct === MAIN ? 'daily-cap-reached' : 'channel-day-full';
+      for (const i of due) queue.patch(i.id, { reason: why, nextAt: until });
+      log(`posting: ${REASON_TEXT[why]}; ${due.length} clip(s) wait`);
       return;
     }
     const busyWait = (items) => { for (const i of items) queue.patch(i.id, { reason: 'schedule-busy', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() }); };
     // D409 (second Codex review): the whole pass (reads, checks, budget charge, every session start) runs in ONE hold of
     // the schedule lock, so no channel read is reused after the lock was let go.
-    try { await withScheduleLock(dataDir, (hold) => uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold, limit, cap, channelLimit }), opts.lockOpts); } catch (e) {
+    try { await withScheduleLock(dataDir, (hold) => uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold, limit, cap }), opts.lockOpts); } catch (e) {
       if (e?.code === 'schedule-hold-cap') {
         // Third Codex review (D409): the pass held the lock past its cap (a request hung). The lock is released, the hold's
         // requests are aborted and nothing more is sent in it; the item in flight waits (no attempt used) for the next pass.
@@ -899,7 +903,7 @@ export function createPostChain(opts) {
   /** Read failures that keep an item waiting (no attempt used) when they stop a session start. */
   const READ_WAITS = new Set(['schedule-read-failed', 'schedule-read-incomplete', 'schedule-scope-missing', 'schedule-config-bad', 'quota-day-used', 'quota-unreadable', 'quota-busy', 'not-signed-in', 'no-oauth-client', 'schedule-busy', 'request-timeout']);
 
-  async function uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold, limit = 0, cap = null, channelLimit = false }) {
+  async function uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold, limit = 0, cap = null }) {
     let started = 0;
     holdTimes = null; freshUnused = false; readFail = null; curHold = hold; // a new hold: nothing read in it yet
     const cfg = await ensureSlots(auth, new Set(due.map((i) => i.id)));
@@ -992,7 +996,7 @@ export function createPostChain(opts) {
       try {
         // Every upload start or resume goes through sendGated: today's budget is checked and charged right before it,
         // and YouTube's quota answer is recorded there.
-        const g = await sendGated({ dataDir, budget, capOf, nowMs, channelLimit, send: () => uploadPost({
+        const g = await sendGated({ dataDir, budget, capOf, nowMs, send: () => uploadPost({
           id: item.id, store, auth, outputsStatus, fetchImpl: opts.fetchImpl, chunkSize: opts.chunkSize, sessions, publishAt, beforeNewSession,
           // Third Codex review (D409): every YouTube request has a deadline, and the hold's cap aborts them all.
           signal: hold.signal, ...(opts.requestMs ? { requestMs: opts.requestMs } : {}), ...(opts.chunkRequestMs ? { chunkRequestMs: opts.chunkRequestMs } : {}),
@@ -1062,8 +1066,9 @@ export function createPostChain(opts) {
           queue.setNote({ blocked: 'stream-live' });
           return;
         } else if (code === 'upload-limit-exceeded') {
-          // YM5: an added channel reached YouTube's own upload limit for it: only this channel pauses until the next
-          // Pacific midnight; the clip (no session was made) goes back to the pool and the other channels keep posting.
+          // YM5: a channel (main too) reached YouTube's own upload limit for it: only this channel pauses until the next
+          // Pacific midnight; the clip (no session was made) waits (an added channel's goes back to the pool), the others
+          // keep posting.
           taskEnd = { state: 'waiting', note: 'Waiting: this channel reached its upload limit for today' };
           pauseChannel(acct, nextPacificMidnight(nowMs()), 'upload-limit');
           queue.patch(item.id, { state: 'queued', reason: 'channel-upload-limit', nextAt: null });
@@ -1114,7 +1119,7 @@ export function createPostChain(opts) {
   return { processQueue };
   }
 
-  /** YM2/YM5: an added channel stops taking clips until untilMs (its token failed, or YouTube's upload limit for it). */
+  /** YM2/YM5: a channel stops taking clips until untilMs (an added one's token failed, or YouTube's upload limit for it). */
   function pauseChannel(acct, untilMs, reason) {
     try { const st = readChannelState(dataDir); st.paused[acct] = { until: new Date(untilMs).toISOString(), reason }; writeChannelState(dataDir, st); } catch { /* the next failure pauses it again */ }
     log(`posting: channel ${acct} takes no clips until ${new Date(untilMs).toISOString()} (${reason})`);
@@ -1125,7 +1130,7 @@ export function createPostChain(opts) {
   async function readiness(accounts, state, t) {
     const ready = new Map();
     for (const a of accounts) {
-      if (a.id === MAIN) { ready.set(MAIN, a.enabled !== false); continue; }
+      if (a.id === MAIN) { ready.set(MAIN, a.enabled !== false && !pausedNow(state, MAIN, t)); continue; }
       let ok = a.enabled !== false && !pausedNow(state, a.id, t);
       if (ok) { try { const st = await authFor(a.id).status(); ok = st?.signedIn === true && st?.hasClient === true; } catch { ok = false; } }
       ready.set(a.id, ok);
@@ -1142,6 +1147,17 @@ export function createPostChain(opts) {
    *  3. each channel's own pass (slots, checks, upload) in turn; with several channels one upload each per pass, and the
    *     first channel changes every pass. One shared quota budget and sender lock for all.
    */
+  /** Review 2026-11-26: "Uploads per day" stays main's own count (YM3). Approvals are counted per day for all channels
+   *  together (auto-post.mjs planAuto), so each switched-on added channel adds its most a day (3-6 -> 6) to the approval
+   *  caps; each channel's uploads stay held to its own count (runChannels). One channel only: the rules as they are. */
+  function approvalRules(rules) {
+    let extra = 0;
+    try { for (const a of readAccounts(dataDir).accounts) if (a.id !== MAIN && a.enabled !== false && a.postsPerDay) extra += a.postsPerDay.max; } catch { extra = 0; }
+    if (!extra) return rules;
+    const up = (n) => (Number.isInteger(n) ? n + extra : n);
+    return { ...rules, ...(Number.isInteger(rules.maxUploadsPerDay) ? { maxUploadsPerDay: up(rules.maxUploadsPerDay) } : {}), rules: rules.rules.map((r) => ({ ...r, maxPerDay: up(r.maxPerDay) })) };
+  }
+
   let passTurn = 0;
   async function runChannels(store, rules) {
     const t = nowMs();
@@ -1159,13 +1175,16 @@ export function createPostChain(opts) {
         ...(i.state === 'queued' ? { reason: gone ? null : 'channel-off', nextAt: null } : {}) });
     }
     const multi = accounts.some((a) => a.id !== MAIN && ready.get(a.id));
+    // Review 2026-11-26: any added channel listed (ready or not) = every channel takes only its count for today; what
+    // nobody can take stays in the pool, so clips of a paused channel are not swallowed by main for good.
+    const listed = accounts.some((a) => a.id !== MAIN);
     const items = allQueue.items();
     const pool = items.filter((i) => accountOf(i) === null && i.state === 'queued');
     if (pool.length) {
       const mainCap = Number.isInteger(rules?.maxUploadsPerDay) ? rules.maxUploadsPerDay : MAX_PER_DAY;
       const chans = accounts.filter((a) => ready.get(a.id)).map((a) => {
         const cap = a.id === MAIN ? mainCap : dayCap(a, utcDay(t)) ?? mainCap;
-        return { id: a.id, shortsOnly: a.shortsOnly === true, room: multi ? cap - doneToday(items, a.id, t) - waitingOf(items, a.id) : Infinity };
+        return { id: a.id, shortsOnly: a.shortsOnly === true, room: listed ? cap - doneToday(items, a.id, t) - waitingOf(items, a.id) : Infinity };
       });
       const { assign, turn } = dealPool({ pool: pool.map((i) => ({ id: i.id, target: store.get(i.id)?.target ?? null })), channels: chans, turn: state.turn });
       for (const [id, acc] of assign) allQueue.patch(id, { account: acc, ...(allQueue.get(id)?.reason === 'channel-off' ? { reason: null } : {}) });
@@ -1178,7 +1197,8 @@ export function createPostChain(opts) {
     for (let k = 0; k < order.length; k++) {
       if (halted) return;
       const a = order[(first + k) % order.length];
-      await channelOf(a.id).processQueue(store, rules, a.id === MAIN ? (multi ? { limit: 1 } : {}) : { limit: 1, cap: dayCap(a, utcDay(nowMs())), channelLimit: true });
+      const own = a.id === MAIN ? (Number.isInteger(rules?.maxUploadsPerDay) ? rules.maxUploadsPerDay : MAX_PER_DAY) : dayCap(a, utcDay(nowMs()));
+      await channelOf(a.id).processQueue(store, rules, !listed ? {} : { limit: multi ? 1 : 0, cap: own, ownCap: true });
     }
   }
 
@@ -1298,7 +1318,7 @@ export function createPostChain(opts) {
     if (!kindShares) { try { kindShares = userKindShares(dataDir); } catch { kindShares = null; } }
     // D403: with the random-daily placement the backlog goes out shuffled (seeded), kinds mixed, split reels in part order.
     const order = backlogOrderFn(store);
-    const r = await runAuto({ store, rules, outputsStatus, logFile: autoLogFile, now: () => new Date(nowMs()), kindShares, unscoredFloor: rankerMinScore(), order });
+    const r = await runAuto({ store, rules: approvalRules(rules), outputsStatus, logFile: autoLogFile, now: () => new Date(nowMs()), kindShares, unscoredFloor: rankerMinScore(), order });
     if (rules.autoUpload) {
       const autoApproved = new Set(createAutoLog(autoLogFile).list().filter((e) => e.action === 'approve').map((e) => e.id));
       // Oldest clip first (D375), or the backlog order (D403): the queue's order is the order slots are given out in.
