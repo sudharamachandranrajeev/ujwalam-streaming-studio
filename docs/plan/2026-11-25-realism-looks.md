@@ -44,6 +44,8 @@ two framings for the scene builder and reels: camera-room over game (B) and game
 
 Status: **approved** for RL1-RL5 with these looks. Order: after the studio slowness fix and alpha.44 push.
 
+RL5 built 2026-11-26: `docs/evidence/2026-11-26-realism-looks-reference.md` (looks it makes unverified until RL6).
+
 ## Notes
 
 - A neural "photoreal" filter stays out of the live path (D381: 6 GB VRAM, three NVENC sessions). Reels have no such limit.
