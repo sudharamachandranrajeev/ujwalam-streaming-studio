@@ -192,6 +192,28 @@ Item {
 
     // Stop (2026-11-10): the background jobs end (clip making, uploads; the same route as the tray's Stop all while
     // live); the studio and host stay. The click acts at once (D332).
+    // A row's own buttons (2026-11-26, user: a paused job offered only Stop and could not be started). A job that waits
+    // for the user (paused by them, or carried over from last time) shows Start / Resume; its Stop acts on that job only
+    // (ui/api/tasks/control), never on every background job. Jobs without per-task controls keep the global Stop.
+    property int controlsSent: 0
+    function held(r) { return r.paused || (r.state === "waiting" && r.controls.indexOf("resume") >= 0) }
+    function stateWord(r) {
+        if (r.state === "done") return "Done";
+        if (r.state === "failed") return "Failed";
+        if (r.paused) return "Paused";
+        if (held(r)) return "Waiting for you";
+        if (r.pausing) return "Pausing";
+        if (r.state === "waiting") return "Waiting";
+        return r.stalled ? "May be stuck" : "Running";
+    }
+    function control(id, op) {
+        controlsSent++;
+        Api.post("ui/api/tasks/control", { id: id, op: op }, (ok, b, err) => {
+            if (!ok) store.say((b && b.reason) ? String(b.reason) : "Could not do that: " + err);
+        });
+        return true;
+    }
+    function stopRow(r) { if (r.controls.indexOf("stop") >= 0) control(r.id, "stop"); else stopTasks() }
     function stopTasks() {
         stopsSent++;
         Api.post("ui/api/tasks/stop", {}, (ok, b, err) => store.say(ok ? "Stopping the background jobs..." : "Could not stop the tasks: " + err));
@@ -307,9 +329,12 @@ Item {
         }
         contentItem: Column {
             spacing: Theme.sp.s
+            // Header (2026-11-26): title and count on one line, the buttons on their own line below. One right-anchored
+            // Row with the count and three buttons was wider than the 440 px panel: it ran out past the panel's left
+            // edge, over "TASKS" and outside the popup window, where "Clear finished" could not be clicked at all.
             Item {
                 width: parent.width
-                height: 28
+                height: 22
                 Text {
                     anchors { left: parent.left; verticalCenter: parent.verticalCenter }
                     text: "TASKS"
@@ -319,42 +344,46 @@ Item {
                     font.weight: Font.Bold
                     font.letterSpacing: 1
                 }
-                Row {
+                Text {
+                    objectName: "taskCount"
                     anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                    spacing: Theme.sp.s
-                    Text {
-                        objectName: "taskCount"
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: center.listed ? center.running + " running, " + center.listed + " listed" : ""
-                        color: Theme.c.muted
-                        font.family: Theme.family
-                        font.pixelSize: Theme.ty.caption
-                    }
-                    UButton {
-                        objectName: "taskClear"
-                        visible: center.anyFinished
-                        text: "Clear finished"
-                        implicitHeight: 26
-                        tip: "Remove all finished and failed tasks from this list"
-                        focusPolicy: Qt.NoFocus
-                        onClicked: center.clearFinished()
-                    }
-                    UButton {
-                        objectName: "taskOwnWindow"
-                        visible: center.listed > 0
-                        text: "Open in own window"
-                        implicitHeight: 26
-                        tip: "Open the task list in its own window, with sorting, filters and a button for each task"
-                        focusPolicy: Qt.NoFocus
-                        onClicked: center.openWindow()
-                    }
-                    UButton {
-                        objectName: "taskHide"
-                        text: "Hide"
-                        implicitHeight: 26
-                        focusPolicy: Qt.NoFocus
-                        onClicked: center.setOpen(false)
-                    }
+                    width: parent.width - 80
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideLeft
+                    text: center.listed ? center.running + " running, " + center.listed + " listed" : ""
+                    color: Theme.c.muted
+                    font.family: Theme.family
+                    font.pixelSize: Theme.ty.caption
+                }
+            }
+            Flow {
+                width: parent.width
+                layoutDirection: Qt.RightToLeft
+                spacing: Theme.sp.s
+                UButton {
+                    objectName: "taskHide"
+                    text: "Hide"
+                    implicitHeight: 26
+                    focusPolicy: Qt.NoFocus
+                    onClicked: center.setOpen(false)
+                }
+                UButton {
+                    objectName: "taskOwnWindow"
+                    visible: center.listed > 0
+                    text: "Open in own window"
+                    implicitHeight: 26
+                    tip: "Open the task list in its own window, with sorting, filters and a button for each task"
+                    focusPolicy: Qt.NoFocus
+                    onClicked: center.openWindow()
+                }
+                UButton {
+                    objectName: "taskClear"
+                    visible: center.anyFinished
+                    text: "Clear finished"
+                    implicitHeight: 26
+                    tip: "Remove all finished and failed tasks from this list"
+                    focusPolicy: Qt.NoFocus
+                    onClicked: center.clearFinished()
                 }
             }
             Text {
@@ -386,8 +415,8 @@ Item {
                     color: Theme.c.field
                     border.width: 1
                     border.color: row.modelData.stalled ? Theme.c.danger : Theme.c.border
-                    readonly property string stateText: modelData.state === "done" ? "Done" : modelData.state === "failed" ? "Failed"
-                                                      : modelData.state === "waiting" ? "Waiting" : modelData.stalled ? "May be stuck" : "Running"
+                    readonly property string stateText: center.stateWord(modelData)
+                    readonly property bool held: center.held(modelData)
                     Column {
                         id: rowCol
                         anchors { left: parent.left; right: parent.right; top: parent.top; margins: Theme.sp.m; leftMargin: Theme.sp.m }
@@ -520,19 +549,33 @@ Item {
                             font.pixelSize: Theme.ty.small
                             font.weight: Font.DemiBold
                         }
-                        Item {
-                            visible: row.modelData.stop
+                        Flow {
+                            visible: row.modelData.stop || row.held
                             width: rowCol.width
-                            height: visible ? 30 : 0
+                            layoutDirection: Qt.RightToLeft
+                            spacing: Theme.sp.s
+                            UButton {
+                                objectName: "taskStart"
+                                visible: row.held
+                                text: row.modelData.paused ? "Resume" : "Start"
+                                kind: "primary"
+                                implicitHeight: 28
+                                focusPolicy: Qt.NoFocus
+                                tip: row.modelData.paused ? "Carry on from where it paused" : "Start this task now"
+                                onClicked: center.control(row.modelData.id, "resume")
+                            }
                             UButton {
                                 objectName: "taskStop"
-                                anchors.right: parent.right
+                                // A held job is not running: Stop there would only throw its unfinished work away. That
+                                // is in the task window ("Open in own window"), next to the other choices.
+                                visible: row.modelData.stop && !row.held
                                 text: "Stop"
                                 kind: "danger"
                                 implicitHeight: 28
                                 focusPolicy: Qt.NoFocus
-                                tip: "Stop the background jobs (clip making and uploads). Unfinished clip jobs run again at the next start."
-                                onClicked: center.stopTasks()
+                                tip: row.modelData.controls.indexOf("stop") >= 0 ? "Stop this task. Unfinished work is kept and starts again at the next start."
+                                     : "Stop the background jobs (clip making and uploads). Unfinished clip jobs run again at the next start."
+                                onClicked: center.stopRow(row.modelData)
                             }
                         }
                     }
