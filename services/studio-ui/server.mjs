@@ -1383,6 +1383,7 @@ export function createStudioServer(opts) {
     if (r.error) return json(res, 409, { error: r.error, ...(r.errors ? { detail: r.errors.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300) } : {}) });
     const canvases = doc.canvases.map((c) => c.id.toUpperCase());
     let waiting = null; // a capture layer added while its device is not connected: the host's plain sentence (D329)
+    let note = null; // the host's plain sentence when an added overlay shows fully only after the next start
     let later = []; // new-scene layers the host shows only after the next start (2026-11-26 scene-loss fix)
     try {
       if (op === 'scene.add') for (const canvas of canvases) await host.call('scenes.create', { scene: { id: r.scene.id, canvas, name: r.scene.name } });
@@ -1390,14 +1391,18 @@ export function createStudioServer(opts) {
       else if (op === 'layer.add') {
         const a = await host.call('layers.addFromProject', await addLayerParams(host, { project: r.project, scene: body.scene, layer: r.layer.id }));
         if (typeof a?.waiting?.message === 'string') waiting = a.waiting.message.slice(0, 300);
+        if (typeof a?.note === 'string') note = a.note.slice(0, 200);
       }
       else if (op === 'layer.move') await host.call('layers.orderFromProject', { project: r.project, scene: body.scene });
       else if (op === 'layer.duplicate') {
-        await host.call('layers.addFromProject', await addLayerParams(host, { project: r.project, scene: body.scene, layer: r.layer.id }));
+        const a = await host.call('layers.addFromProject', await addLayerParams(host, { project: r.project, scene: body.scene, layer: r.layer.id }));
+        if (typeof a?.note === 'string') note = a.note.slice(0, 200);
         await host.call('layers.orderFromProject', { project: r.project, scene: body.scene }); // the copy lands just above its source
       } else if (op === 'scene.duplicate' || op === 'scene.realism') {
         // a layer the host cannot show yet is saved and shows after the next start; any other refusal undoes the scene
-        later = (await createSceneInHost(host, { project: r.project, scene: { id: r.scene.id, name: r.scene.name, layers: r.layers }, canvases })).later;
+        const made = await createSceneInHost(host, { project: r.project, scene: { id: r.scene.id, name: r.scene.name, layers: r.layers }, canvases });
+        later = made.later;
+        if (made.notes.length) note = made.notes[0];
       } else if (op === 'layer.rename' || op === 'scene.rename') {
         // The host has no rename call: it takes the name from the saved project at its next load. Until then the lists
         // below carry the new name (renamed), so the studio shows it at once.
@@ -1412,7 +1417,7 @@ export function createStudioServer(opts) {
     history.clear();
     broadcast('edits', history.state());
     broadcast('layers', { source: 'structure', edit: { op, scene: r.scene?.id ?? body.scene, layer: r.layer?.id ?? body.layer ?? null } });
-    return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(r.graded ? { graded: r.graded.length } : {}), ...(r.look ? { look: r.look } : {}), ...(later.length ? { later: later.length } : {}), saved });
+    return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(note ? { note } : {}), ...(r.graded ? { graded: r.graded.length } : {}), ...(r.look ? { look: r.look } : {}), ...(later.length ? { later: later.length } : {}), saved });
   }
   // B7 (2026-11-18): a capture layer's own sound whose card's audio input is in the mix already carries sameAs (the name
   // of that sound), so the studio shows it once instead of offering it twice. The project file is read only for this.

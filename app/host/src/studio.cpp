@@ -1840,15 +1840,24 @@ json::Value Studio::layer_add_model(const json::Value &doc, const std::string &s
 		throw Error(rpc::INVALID_PARAMS, "project must be a project v1 document");
 	// Overlay page URLs sent with this call (a layer added live, e.g. a copied overlay): merged over the last load's,
 	// kept only when the layer is built. The ports are the host's own overlay server (set by the RPC layer).
+	// The caller sends the URLs of every overlay layer of the document, so they replace the old set (no growth). The
+	// ports are always the RPC layer's fresh ones: 0 when the overlay server is down, so an overlay layer is listed as
+	// unavailable (-32004) instead of being built with stale ports.
 	LoadOptions opts = last_opts_;
+	std::string note;
 	if (urls) {
-		for (auto &kv : urls->browser_urls)
-			opts.browser_urls[kv.first] = kv.second;
-		if (opts.relay_scope.empty())
-			opts.relay_scope = urls->relay_scope;
-		if (urls->overlay_port) {
-			opts.overlay_port = urls->overlay_port;
-			opts.overlay_feed_port = urls->overlay_feed_port;
+		opts.browser_urls = urls->browser_urls;
+		opts.overlay_port = urls->overlay_port;
+		opts.overlay_feed_port = urls->overlay_feed_port;
+		if (!relay_) {
+			if (!urls->relay_scope.empty())
+				opts.relay_scope = urls->relay_scope;
+		} else {
+			// The relay is never rebuilt here: it feeds every overlay page already on air. A display page added while
+			// the relay is effects-only gets its display feed after the next start (full project load).
+			opts.relay_scope = relay_scope_;
+			if (urls->relay_scope == "display" && relay_scope_ != "display")
+				note = "This overlay shows fully after the next start.";
 		}
 	}
 	devices::List list;
@@ -1934,14 +1943,24 @@ json::Value Studio::layer_add_model(const json::Value &doc, const std::string &s
 		last_opts_.overlay_port = opts.overlay_port;
 		last_opts_.overlay_feed_port = opts.overlay_feed_port;
 	}
-	if (overlay && !relay_)
-		make_relay(last_opts_);
+	if (overlay && !relay_) {
+		// The layer is already in the scene: a relay failure is logged and noted, never thrown, so the reply and
+		// model_doc_ match what is on air.
+		try {
+			make_relay(last_opts_);
+		} catch (const std::exception &e) {
+			hlog::warn("overlay relay not created after layer add: %s", e.what());
+			note = "This overlay shows fully after the next start.";
+		}
+	}
 	model_doc_ = doc;
 	dirty_ = false;
 	json::Value r = json::Value::object();
 	r.set("scene", sid);
 	r.set("layer", lid);
 	r.set("canvases", std::move(cvs));
+	if (!note.empty())
+		r.set("note", note);
 	// D329: a capture layer whose device is not connected is added waiting; the studio shows the message.
 	std::string src_layer = lid;
 	for (auto &t : todo)

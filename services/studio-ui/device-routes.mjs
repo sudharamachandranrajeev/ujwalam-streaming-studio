@@ -23,7 +23,7 @@ import { loadProject } from '../project/store.mjs';
 import { loadDevicePresets, matchRoles } from '../project/device-roles.mjs';
 import { placeholderRoles, rebindPlaceholders } from '../project/rebind-roles.mjs';
 import { upgradePresets } from './alpha.mjs';
-import { addLayerParams } from './scene-layers.mjs';
+import { overlayExtra } from './scene-layers.mjs';
 
 export const DEVICE_ROUTES = Object.freeze(['/ui/api/devices/connect', '/ui/api/devices/rescan']);
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
@@ -110,10 +110,11 @@ export function createDeviceRoutes(opts) {
       const now = nowRead.error ? doc : nowRead.doc;
       const has = (scene, layer) => now.scenes.some((s) => s.id === scene && (layer === undefined || s.layers.some((l) => l.id === layer)));
       let ok = true;
+      const extra = removed.length ? await overlayExtra(host, now) : {}; // one overlay.status for the whole undo
       for (const a of [...added].reverse()) { try { await host.call('layers.remove', a); } catch { ok = false; } }
       for (const m of removed) {
         if (!has(m.scene, m.layer)) continue;
-        try { await host.call('layers.addFromProject', await addLayerParams(host, { project: now, scene: m.scene, layer: m.layer })); } catch { ok = false; }
+        try { await host.call('layers.addFromProject', { project: now, scene: m.scene, layer: m.layer, ...extra }); } catch { ok = false; }
       }
       for (const scene of new Set(removed.map((m) => m.scene))) {
         if (!has(scene)) continue;
@@ -127,9 +128,10 @@ export function createDeviceRoutes(opts) {
         await host.call('layers.remove', { scene, layer: lid });
         removed.push({ scene, layer: lid });
       }
+      const extra = removed.length ? await overlayExtra(host, x.project) : {}; // one overlay.status for every re-add
       const order = (lid) => (x.rebound.some((rb) => rb.real === lid) ? 0 : 1);
       for (const { scene, layer } of [...removed].sort((a, b) => order(a.layer) - order(b.layer))) {
-        await host.call('layers.addFromProject', await addLayerParams(host, { project: x.project, scene, layer }));
+        await host.call('layers.addFromProject', { project: x.project, scene, layer, ...extra });
         added.push({ scene, layer });
       }
       for (const scene of new Set(removed.map((m) => m.scene))) await host.call('layers.orderFromProject', { project: x.project, scene });
