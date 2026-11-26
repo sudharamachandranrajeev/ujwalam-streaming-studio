@@ -16,7 +16,8 @@ import { createInstagramPoster } from '../posting/instagram-queue.mjs';
 const PLAIN_ERR = {
   'no-app': 'Save the App ID and App Secret first.',
   'no-fb-page': 'Facebook shared no Page with Ujwalam. Click Connect again; in the Facebook window click "Edit previous settings" (or "Choose what you allow") and tick your Facebook Page and your Instagram account.',
-  'no-ig-account':'No Instagram professional account is linked to your Facebook Pages. Link it in the Instagram app (Settings > Account type and tools), then Connect again.',
+  'no-ig-account': 'None of the Facebook Pages shared with Ujwalam has an Instagram professional account linked. In the Instagram app: Edit profile > Page > connect the Page; or in Meta Business Suite > Settings > Instagram accounts, add the account to the same business as the Page. Then click Connect again and tick the Page and the Instagram account.',
+  'permission-declined': 'A permission was left out in the Facebook window. Click Connect again and allow everything it asks for.',
   'state-mismatch': 'The sign-in answer did not match; click Connect again.',
   'oauth-timeout': 'No answer from Facebook within 3 minutes; click Connect again.',
   'oauth-denied': 'The sign-in was not allowed in the browser.',
@@ -24,7 +25,13 @@ const PLAIN_ERR = {
   'bad-app-id': 'The App ID is a number of 5 to 25 digits.',
   'bad-app-secret': 'The App Secret is 16 to 64 letters and digits.',
 };
-export const plainError = (code) => PLAIN_ERR[code] ?? `Instagram sign-in failed (${String(code ?? 'error').slice(0, 40)})`;
+// What Facebook shared (counts and permission names only, never Page or account names) follows the advice, so the user
+// sees which link is missing.
+const SEEN = new Set(['no-fb-page', 'no-ig-account', 'permission-declined']);
+export const plainError = (code, detail) => {
+  const text = PLAIN_ERR[code] ?? `Instagram sign-in failed (${String(code ?? 'error').slice(0, 40)})`;
+  return SEEN.has(code) && typeof detail === 'string' && /^Facebook shared \d+ Page\(s\)(; not allowed: [a-z_, ]+)?$/.test(detail) ? `${text} (${detail}.)` : text;
+};
 
 /** opts: { dataDir, flags, auth? (test seam), browserOpen? } */
 export function createInstagramRoutes(opts) {
@@ -56,7 +63,7 @@ export function createInstagramRoutes(opts) {
       if (route === '/ui/api/posts/instagram/connect') {
         if (connecting) { json(res, 200, await view()); return true; }
         lastError = null;
-        connecting = getAuth().signIn().then(() => { lastError = null; }, (e) => { lastError = plainError(e?.code); }).finally(() => { connecting = null; });
+        connecting = getAuth().signIn().then(() => { lastError = null; }, (e) => { lastError = plainError(e?.code, e?.message); }).finally(() => { connecting = null; });
         json(res, 202, await view()); return true;
       }
       if (route === '/ui/api/posts/instagram/drop') {

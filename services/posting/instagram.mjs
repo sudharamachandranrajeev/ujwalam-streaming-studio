@@ -104,7 +104,8 @@ export const redirectUriFor = (cfg, port = cfg.redirectPort) => `http://${cfg.re
 
 /** The Facebook Login dialog URL. Pure. */
 export function dialogUrl({ appId, redirectUri, state, cfg, endpoints = DEFAULT_ENDPOINTS }) {
-  const q = new URLSearchParams({ client_id: appId, redirect_uri: redirectUri, state, response_type: 'code', scope: cfg.scopes.join(',') });
+  // auth_type=rerequest: Facebook asks again for a permission or Page the user left out on an earlier Connect
+  const q = new URLSearchParams({ client_id: appId, redirect_uri: redirectUri, state, response_type: 'code', scope: cfg.scopes.join(','), auth_type: 'rerequest' });
   return `${base(endpoints, cfg, 'dialog')}/dialog/oauth?${q}`;
 }
 
@@ -176,12 +177,33 @@ export function createInstagramAuth(opts = {}) {
     const short = await graph(fetchImpl, 'GET', `${base(endpoints, cfg, 'graph')}/oauth/access_token`, { params: { client_id: c.id, client_secret: c.secret, redirect_uri: redirectUri, code: got.code } });
     if (typeof short.access_token !== 'string' || !short.access_token) throw new InstagramError('token-exchange-failed', 'no token in the answer');
     const ll = await longLived(c, cfg, short.access_token);
-    const pages = await graph(fetchImpl, 'GET', `${base(endpoints, cfg, 'graph')}/me/accounts`, { params: { fields: 'name,instagram_business_account{id,username}', access_token: ll.token } });
-    const acct = pickAccount(pages);
-    // no Page at all = the Page was not ticked in Facebook's dialog (or sits in a business portfolio); a Page with no
-    // Instagram = the account is not professional or not linked to that Page. Different fixes, so different codes.
-    if (!acct && !(Array.isArray(pages?.data) && pages.data.length)) throw new InstagramError('no-fb-page', 'no Facebook Page was shared with the app');
-    if (!acct) throw new InstagramError('no-ig-account', 'no Instagram professional account is linked to your Facebook Pages');
+    const g = base(endpoints, cfg, 'graph');
+    const IG_FIELDS = 'instagram_business_account{id,username}';
+    const pages = await graph(fetchImpl, 'GET', `${g}/me/accounts`, { params: { fields: `name,${IG_FIELDS}`, access_token: ll.token } });
+    let acct = pickAccount(pages);
+    // A Page owned by a business portfolio (Meta Business Suite) is often missing from me/accounts; it is listed under
+    // the business's owned or client Pages (needs business_management, user report 2026-11-26).
+    let bizPages = 0;
+    if (!acct) {
+      const biz = await graph(fetchImpl, 'GET', `${g}/me/businesses`, { params: { fields: `owned_pages{${IG_FIELDS}},client_pages{${IG_FIELDS}}`, access_token: ll.token } }).catch(() => null);
+      const all = (Array.isArray(biz?.data) ? biz.data : []).flatMap((b) => [...(b?.owned_pages?.data ?? []), ...(b?.client_pages?.data ?? [])]);
+      bizPages = all.length;
+      acct = pickAccount({ data: all });
+    }
+    if (!acct) {
+      // what Facebook shared, as counts and permission names only (no Page or account names), so the message says which
+      // link is missing
+      const perms = await graph(fetchImpl, 'GET', `${g}/me/permissions`, { params: { access_token: ll.token } }).catch(() => null);
+      const granted = new Set((Array.isArray(perms?.data) ? perms.data : []).filter((p) => p?.status === 'granted').map((p) => p.permission));
+      const missing = perms ? cfg.scopes.filter((s) => !granted.has(s)) : [];
+      const nPages = (Array.isArray(pages?.data) ? pages.data.length : 0) + bizPages;
+      const seen = `Facebook shared ${nPages} Page(s)${missing.length ? `; not allowed: ${missing.join(', ')}` : ''}`;
+      // no Page at all = the Page was not ticked in Facebook's dialog; a Page with no Instagram = the account is not
+      // professional or not linked to that Page. Different fixes, so different codes.
+      if (missing.length) throw new InstagramError('permission-declined', seen, { missing });
+      if (!nPages) throw new InstagramError('no-fb-page', seen);
+      throw new InstagramError('no-ig-account', seen);
+    }
     await writeToken({ ...ll, ...acct, renewedAt: now() });
     return { username: acct.username, expiresAt: ll.expiresAt };
   }

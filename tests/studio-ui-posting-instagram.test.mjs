@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createInstagramRoutes } from '../services/studio-ui/instagram-routes.mjs';
+import { createInstagramRoutes, plainError } from '../services/studio-ui/instagram-routes.mjs';
 
 const call = async (r, method, route, body = null) => {
   let out = null;
@@ -46,7 +46,7 @@ test('a failed Connect is said in plain words', async () => {
   await call(r, 'POST', '/ui/api/posts/instagram/connect');
   await new Promise((res) => setImmediate(res));
   const s = await call(r, 'GET', '/ui/api/posts/instagram');
-  assert.match(s.j.lastError, /No Instagram professional account/);
+  assert.match(s.j.lastError, /has an Instagram professional account linked/);
 });
 
 test('Drop Instagram queue: one click drops every job not posted yet; posted ones stay', async () => {
@@ -58,4 +58,11 @@ test('Drop Instagram queue: one click drops every job not posted yet; posted one
   const s = await call(r, 'POST', '/ui/api/posts/instagram/drop');
   assert.equal(s.code, 200); assert.equal(s.j.dropped, 1); assert.equal(s.j.queue.dropped, 1);
   assert.equal(readInstagramStates(d).a.state, 'dropped'); assert.equal(readInstagramStates(d).b.state, 'done');
+});
+
+test('Connect errors add what Facebook shared (counts and permission names only); any other text is dropped', () => {
+  assert.match(plainError('no-ig-account', 'Facebook shared 2 Page(s)'), /\(Facebook shared 2 Page\(s\)\.\)$/);
+  assert.match(plainError('permission-declined', 'Facebook shared 0 Page(s); not allowed: business_management'), /not allowed: business_management\.\)$/);
+  assert.doesNotMatch(plainError('no-ig-account', 'Page My Real Name'), /Real Name/);
+  assert.doesNotMatch(plainError('no-app', 'Facebook shared 1 Page(s)'), /shared/);
 });
