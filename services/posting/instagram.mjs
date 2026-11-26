@@ -178,6 +178,9 @@ export function createInstagramAuth(opts = {}) {
     const ll = await longLived(c, cfg, short.access_token);
     const pages = await graph(fetchImpl, 'GET', `${base(endpoints, cfg, 'graph')}/me/accounts`, { params: { fields: 'name,instagram_business_account{id,username}', access_token: ll.token } });
     const acct = pickAccount(pages);
+    // no Page at all = the Page was not ticked in Facebook's dialog (or sits in a business portfolio); a Page with no
+    // Instagram = the account is not professional or not linked to that Page. Different fixes, so different codes.
+    if (!acct && !(Array.isArray(pages?.data) && pages.data.length)) throw new InstagramError('no-fb-page', 'no Facebook Page was shared with the app');
     if (!acct) throw new InstagramError('no-ig-account', 'no Instagram professional account is linked to your Facebook Pages');
     await writeToken({ ...ll, ...acct, renewedAt: now() });
     return { username: acct.username, expiresAt: ll.expiresAt };

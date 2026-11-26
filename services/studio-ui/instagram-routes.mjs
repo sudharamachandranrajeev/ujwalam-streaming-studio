@@ -15,7 +15,8 @@ import { createInstagramPoster } from '../posting/instagram-queue.mjs';
 
 const PLAIN_ERR = {
   'no-app': 'Save the App ID and App Secret first.',
-  'no-ig-account': 'No Instagram professional account is linked to your Facebook Pages. Link it in the Instagram app (Settings > Account type and tools), then Connect again.',
+  'no-fb-page': 'Facebook shared no Page with Ujwalam. Click Connect again; in the Facebook window click "Edit previous settings" (or "Choose what you allow") and tick your Facebook Page and your Instagram account.',
+  'no-ig-account':'No Instagram professional account is linked to your Facebook Pages. Link it in the Instagram app (Settings > Account type and tools), then Connect again.',
   'state-mismatch': 'The sign-in answer did not match; click Connect again.',
   'oauth-timeout': 'No answer from Facebook within 3 minutes; click Connect again.',
   'oauth-denied': 'The sign-in was not allowed in the browser.',

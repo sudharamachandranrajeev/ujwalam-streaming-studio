@@ -29,6 +29,7 @@ async function fakeMeta(script = {}) {
       if (script.httpFail) return send(500, { error: { code: 2, message: 'temporary' } });
       if (script.expired) return send(400, { error: { code: 190, message: 'expired' } });
       if (p.endsWith('/oauth/access_token')) return send(200, u.searchParams.get('grant_type') === 'fb_exchange_token' ? { access_token: `LL-${log.length}`, expires_in: 5184000 } : { access_token: 'SHORT' });
+      if (p.endsWith('/me/accounts') && script.pages) return send(200, { data: script.pages });
       if (p.endsWith('/me/accounts')) return send(200, { data: [{ name: 'Page A' }, { name: 'Page B', instagram_business_account: { id: '1784000000', username: 'placeholder_account' } }] });
       if (p.endsWith('/content_publishing_limit')) return send(200, { data: [{ quota_usage: script.used ?? 3, config: { quota_total: 100, quota_duration: 86400 } }] });
       if (p.endsWith('/1784000000/media') && req.method === 'POST') return send(200, { id: '9990001', uri: 'https://rupload.facebook.com/ig-api-upload/x/9990001' });
@@ -196,6 +197,22 @@ describe('instagram sign-in', () => {
       assert.equal((await auth.signIn()).username, 'placeholder_account');
     } finally { await meta.close(); }
   });
+
+  for (const [pages, code] of [[[], 'no-fb-page'], [[{ name: 'Page A' }], 'no-ig-account']]) {
+    test(`Connect with ${pages.length} shared Page(s) and no Instagram account -> ${code}; nothing saved`, async () => {
+      const meta = await fakeMeta({ pages });
+      try {
+        const tokenStore = memStore();
+        const auth = authWith(meta, null, { tokenStore, port: 0, browserOpen: async (u) => {
+          const o = new URL(u); const r = new URL(o.searchParams.get('redirect_uri'));
+          r.searchParams.set('code', 'C'); r.searchParams.set('state', o.searchParams.get('state'));
+          setImmediate(() => fetch(r.href).catch(() => {}));
+        } });
+        await assert.rejects(auth.signIn(), { code });
+        assert.equal(tokenStore.peek(), null);
+      } finally { await meta.close(); }
+    });
+  }
 
   test('a wrong state is refused; no token is asked for', async () => {
     const meta = await fakeMeta();
