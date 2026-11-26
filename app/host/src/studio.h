@@ -117,7 +117,9 @@ public:
 	// Project v1 (D240): builds layer `layer` of scene `scene` from `doc` (the project after the change, as the UI server
 	// saves it) with the options of the last load, on every canvas it has a placement on, sharing an existing source
 	// (duplicates, the other canvas). The doc becomes the host's model document.
-	json::Value layer_add_model(const json::Value &doc, const std::string &scene, const std::string &layer);
+	// urls (optional): browserUrls/relayScope sent with layers.addFromProject, merged over the last load's.
+	json::Value layer_add_model(const json::Value &doc, const std::string &scene, const std::string &layer,
+				    const LoadOptions *urls = nullptr);
 	json::Value layer_order_model(const json::Value &doc, const std::string &scene);
 	// Mixer "Add audio" (D393 proposed): builds project audio source `audio` of `doc` (the project after the change)
 	// like project.load does: a device source on the next free output channel, or the binding of a built layer's

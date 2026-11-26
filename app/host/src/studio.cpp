@@ -1830,15 +1830,29 @@ static std::string plain_unavailable(const json::Value &u)
 	return "Layer " + lid + " cannot be added: " + reason + ".";
 }
 
-json::Value Studio::layer_add_model(const json::Value &doc, const std::string &sid, const std::string &lid)
+json::Value Studio::layer_add_model(const json::Value &doc, const std::string &sid, const std::string &lid,
+				    const LoadOptions *urls)
 {
 	std::lock_guard<std::recursive_mutex> lk(m_);
 	if (format_ != "project-v1")
 		throw Error(rpc::CONFLICT, "no project v1 is loaded");
 	if (!model::is_model(doc))
 		throw Error(rpc::INVALID_PARAMS, "project must be a project v1 document");
+	// Overlay page URLs sent with this call (a layer added live, e.g. a copied overlay): merged over the last load's,
+	// kept only when the layer is built. The ports are the host's own overlay server (set by the RPC layer).
+	LoadOptions opts = last_opts_;
+	if (urls) {
+		for (auto &kv : urls->browser_urls)
+			opts.browser_urls[kv.first] = kv.second;
+		if (opts.relay_scope.empty())
+			opts.relay_scope = urls->relay_scope;
+		if (urls->overlay_port) {
+			opts.overlay_port = urls->overlay_port;
+			opts.overlay_feed_port = urls->overlay_feed_port;
+		}
+	}
 	devices::List list;
-	model::Options mo = model_options(doc, last_opts_, list, flags_.allow_devices);
+	model::Options mo = model_options(doc, opts, list, flags_.allow_devices);
 	model::Plan p = model::build(doc, mo);
 	for (auto &u : p.unavailable.as_array())
 		if (const json::Value *l = u.find("layer"); l && l->is_string() && l->as_string() == lid)
@@ -1913,6 +1927,12 @@ json::Value Studio::layer_add_model(const json::Value &doc, const std::string &s
 		t.s->layers.insert(t.s->layers.begin() + (ptrdiff_t)at, std::move(l));
 		apply_order(*t.s);
 		cvs.push(t.s->canvas);
+	}
+	if (urls) { // built: later rescans and layer adds keep the URLs (bases stay the last load's)
+		last_opts_.browser_urls = opts.browser_urls;
+		last_opts_.relay_scope = opts.relay_scope;
+		last_opts_.overlay_port = opts.overlay_port;
+		last_opts_.overlay_feed_port = opts.overlay_feed_port;
 	}
 	if (overlay && !relay_)
 		make_relay(last_opts_);
