@@ -151,9 +151,9 @@ class FilterTests(unittest.TestCase):
         self.assertIn("val-153", frag)  # threshold 0.6
         self.assertIn("chromatic 2px", steps)
         frag, _ = cr.filter_graph(_look("hdr-vivid"), 1080, 1920, 1)
-        self.assertIn("unsharp=lx=23:ly=23:la=0.450:cx=3:cy=3:ca=0", frag)  # 2.5 % of 1080 = 27 -> capped at 23
+        self.assertIn("unsharp=lx=13:ly=13:la=0.450:cx=3:cy=3:ca=0", frag)  # 2.5 % of 1080 = 27 -> capped at 13 (ffmpeg: lx + ly <= 25)
         frag, _ = cr.filter_graph(_look("gritty-war"), 1080, 1920, 1)
-        self.assertIn("unsharp=lx=23:ly=23:la=0.300", frag)  # 2 % of 1080 = 21.6 -> 22 -> odd 23
+        self.assertIn("unsharp=lx=13:ly=13:la=0.300", frag)
         self.assertIn("noise=c0s=12:", frag)  # 0.18 x 64
         self.assertLess(frag.index("unsharp"), frag.index("noise=c0s"), "grain last: never sharpened")
         frag, steps = cr.filter_graph(_look("night-neon"), 270, 480, 1)

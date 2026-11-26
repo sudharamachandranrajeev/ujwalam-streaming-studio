@@ -23,7 +23,7 @@ One source of truth: the look JSON. Its amounts are mapped to ffmpeg filters her
               = size % of the shorter side / 2 (host: reach / 2), back to full size; blend screen at 2 x amount
     chromatic rgbashift: red one way, blue the other, amount x 0.5 % of the shorter side in px (host: radial, the
               same size at the corners); left out when that rounds to 0 px
-    clarity   unsharp on luma with a large matrix (size % of the shorter side, odd, 3..23), luma amount = amount
+    clarity   unsharp on luma with its largest matrix (size % of the shorter side, odd, 3..13: ffmpeg allows lx+ly <= 25), luma amount = amount
               (host: 1.5 x amount weighted to mid tones, about 1 x on average)
     sharpen   cas (contrast adaptive sharpen) on luma only, strength = amount (on chroma it shifts flat colours)
     vignette  vignette with the angle that darkens the corners as much as the host does (cos^4 falloff)
@@ -248,7 +248,7 @@ def vignette_angle(e):
     return math.acos(max(0.0, f) ** 0.25)
 
 
-def _odd(x, lo=3, hi=23):
+def _odd(x, lo=3, hi=13):
     v = int(round(x))
     v = v if v % 2 else v + 1
     return max(lo, min(hi, v))
