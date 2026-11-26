@@ -309,8 +309,27 @@ export async function getVideoSnippet({ videoId, accessToken, fetchImpl, request
     requestMs, { outer: signal, read: async (res) => ({ status: res.status, json: await res.json().catch(() => null) }) });
   if (r.status < 200 || r.status >= 300) throw quotaOrDenied(r, 'read');
   const it = r.json?.items?.[0];
-  if (!it) return { found: false, snippet: null, privacyStatus: null, publishAt: null };
-  return { found: true, snippet: it.snippet ?? null, privacyStatus: it.status?.privacyStatus ?? null, publishAt: it.status?.publishAt ?? null };
+  if (!it) return { found: false, snippet: null, privacyStatus: null, publishAt: null, status: null };
+  return { found: true, snippet: it.snippet ?? null, privacyStatus: it.status?.privacyStatus ?? null, publishAt: it.status?.publishAt ?? null, status: it.status ?? null };
+}
+
+// Hold (2026-11-26): take a private video off its schedule. videos.update part=status (50 units, same updateUnits as the
+// snippet update) REPLACES the whole status part: a writable field left out goes back to its default, and publishAt left
+// out means "no scheduled publish time" (the video stays private). So the read status is carried over field by field,
+// privacyStatus is forced to 'private' and publishAt is left out. UNVERIFIED against real Google: that omitting publishAt
+// clears the schedule (the API reference says publishAt "can only be set if the privacy status of the video is private"
+// and that update overwrites the part's mutable values; null is not sent, as a null value is not documented to clear it).
+const VIDEO_STATUS_UPDATE_URL = 'https://www.googleapis.com/youtube/v3/videos?part=status';
+export const WRITABLE_STATUS = Object.freeze(['embeddable', 'license', 'publicStatsViewable', 'selfDeclaredMadeForKids', 'containsSyntheticMedia']);
+/** Sends status { privacyStatus: 'private', carried writable fields } with no publishAt. -> { ok: true } or throws UploadError. */
+export async function clearVideoSchedule({ videoId, status, accessToken, fetchImpl, requestMs = REQUEST_MS, signal = null }) {
+  const body = { privacyStatus: 'private' };
+  for (const k of WRITABLE_STATUS) if (status?.[k] !== undefined) body[k] = status[k];
+  const text = JSON.stringify({ id: videoId, status: body });
+  const r = await timedFetch(fetchImpl ?? fetch, VIDEO_STATUS_UPDATE_URL, { method: 'PUT', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' }, body: text },
+    requestMs, { outer: signal, read: async (res) => ({ status: res.status, json: await res.json().catch(() => null) }) });
+  if (r.status >= 200 && r.status < 300) return { ok: true };
+  throw quotaOrDenied(r, 'update');
 }
 /** Sends `snippet` (writable fields only, whole) for videoId. -> { ok: true } or throws UploadError. */
 export async function updateVideoSnippet({ videoId, snippet, accessToken, fetchImpl, requestMs = REQUEST_MS, signal = null }) {

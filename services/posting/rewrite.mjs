@@ -34,7 +34,7 @@ export const LOCK_NAME = 'rewrite.lock';
 const norm = (s) => String(s ?? '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.trimEnd()).join('\n').trim();
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
 /** One rewrite or undo at a time: exclusive lock file (wx); a dead owner's lock is taken over. -> release fn | null (busy). */
-function takeLock(dataDir) {
+export function takeLock(dataDir) {
   const f = path.join(dataDir, 'posting', LOCK_NAME);
   mkdirSync(path.dirname(f), { recursive: true });
   for (let n = 0; n < 2; n++) {
@@ -71,7 +71,7 @@ function ledgerLine(dataDir, line) {
   appendFileSync(f, `${JSON.stringify(line)}\n`);
 }
 
-async function gate({ flags, auth, outputsStatus }) {
+export async function gate({ flags, auth, outputsStatus }) {
   if (!flags?.isOn?.(REWRITE_FLAG)) return 'flag-off';
   if (outputsStatus) {
     let o; try { o = await outputsStatus(); } catch { return 'live-state-unreadable'; }
@@ -91,6 +91,7 @@ export function scheduledCandidates({ store, nowMs, only = null, marginMs = MARG
   for (const e of store.ledger.list()) {
     if (!e || typeof e.sha256 !== 'string' || typeof e.target !== 'string' || e.status !== 'uploaded' || typeof e.videoId !== 'string' || !e.videoId) continue;
     if (typeof e.publishAt !== 'string' || !TIME.test(e.publishAt)) continue;
+    if (typeof e.heldAt === 'string') continue; // held (hold.mjs): no longer scheduled on YouTube
     if (!(Date.parse(e.publishAt) > nowMs + marginMs)) continue; // public, past or about to go public: untouched
     const id = `${e.sha256.slice(0, 16)}.${e.target}`;
     if (Array.isArray(only) && !only.includes(id)) continue;

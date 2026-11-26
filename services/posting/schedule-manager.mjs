@@ -6,7 +6,7 @@
 //   scheduleManagerView(dataDir, { posts, nowMs, brief, channel }) -> { error, source, channelReadAt, counts, nextAt, channels, rows }
 //   Row: { key, id, channel, channelText, platform, target, targetText, kind, title, state, stateText, reasonText, at, movable,
 //          removable, retryable, postable, postText }
-//   state: waiting | uploading | scheduled | failed | channel   (Instagram: waiting | posting | failed)
+//   state: waiting | uploading | scheduled | held | failed | channel   (Instagram: waiting | posting | failed)
 //   SM5 (YM6): `channel` is the local id of the YouTube channel the row goes to ('main', 'ch-...'; '' = not given to a
 //   channel yet, and every Instagram row); channelText is its label. `channels` lists the channels ([{ id, label }]);
 //   opts.channel ('' = all) keeps only that channel's rows (counts and nextAt follow the filter).
@@ -21,7 +21,7 @@ const ms = (s) => { const t = typeof s === 'string' ? Date.parse(s) : NaN; retur
 const clean = (s, n = 140) => (typeof s === 'string' ? s.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, n) : '');
 
 const YT_STATE = Object.freeze({ queued: 'waiting', uploading: 'uploading', done: 'scheduled', failed: 'failed' });
-const YT_TEXT = Object.freeze({ waiting: 'Waiting to upload', uploading: 'Uploading to YouTube', scheduled: 'Uploaded, goes public at its time', failed: 'Failed' });
+const YT_TEXT = Object.freeze({ waiting: 'Waiting to upload', uploading: 'Uploading to YouTube', scheduled: 'Uploaded, goes public at its time', failed: 'Failed', held: 'Held for Instagram test' });
 const IG_STATE = Object.freeze({ waiting: 'waiting', posting: 'posting', failed: 'failed' });
 const IG_TEXT = Object.freeze({ waiting: 'Waiting to post', posting: 'Posting now', failed: 'Failed' });
 
@@ -33,12 +33,13 @@ export function scheduleManagerView(dataDir, { posts = [], nowMs = Date.now(), b
   const rows = [];
   const queue = createUploadQueue(path.join(dataDir, 'posting', QUEUE_NAME), () => nowMs);
   for (const i of queue.items()) {
-    const state = YT_STATE[i.state];
+    // hold.mjs: an uploaded video taken off its schedule (private, no publish time) is listed as held, without a time
+    const state = i.state === 'done' && typeof i.heldAt === 'string' ? 'held' : YT_STATE[i.state];
     if (!state) continue; // removed items are not listed
     const at = shownPublishAt(i);
     if (state === 'scheduled' && !(ms(at) > nowMs)) continue; // already public: history, not a schedule
     const p = byId.get(i.id);
-    const reason = state === 'failed' || state === 'waiting' ? reasonText(i.reason) : null;
+    const reason = state === 'failed' || state === 'waiting' ? reasonText(i.reason) : state === 'held' ? reasonText('held-instagram-test') : null;
     const ch = accountOf(i) ?? '';
     rows.push({
       key: `yt:${i.id}`, id: i.id, channel: ch, channelText: ch === '' ? channelLabel(accounts, null) : chText(ch), platform: 'youtube', target: p?.target === 'youtube-video' ? 'youtube-video' : 'youtube-shorts',
@@ -70,7 +71,7 @@ export function scheduleManagerView(dataDir, { posts = [], nowMs = Date.now(), b
   const count = (s) => rows.filter((r) => r.state === s).length;
   const out = {
     error: pv.error, source: pv.source, channelReadAt: pv.channelReadAt,
-    counts: { total: rows.length, waiting: count('waiting'), uploading: count('uploading'), scheduled: count('scheduled'), failed: count('failed'), channel: count('channel'), posting: count('posting') },
+    counts: { total: rows.length, waiting: count('waiting'), uploading: count('uploading'), scheduled: count('scheduled'), failed: count('failed'), channel: count('channel'), posting: count('posting'), held: count('held') },
     nextAt: times.length ? new Date(times[0]).toISOString() : null,
     channels: accounts.map((a) => ({ id: a.id, label: a.label })),
   };

@@ -63,7 +63,7 @@ import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadTemplates, packageRun, 
 import { createTextHistory } from './post-text.mjs';
 import { AI_TEXT_FLAG, withAiText } from './ai-text.mjs';
 import { FLAG as LOCAL_MODEL_FLAG, createModelRunner } from '../local-model/runner.mjs';
-import { AUTO_FLAG, AUTO_LOG_NAME, MAX_PER_DAY, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
+import { AUTO_FLAG, AUTO_LOG_NAME, MAX_PER_DAY, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, instagramWinnerCandidates, liveBlock, oldestFirst, rankerMinScore, runAuto, youtubeFromWinners } from './auto-post.mjs';
 import { scanClipsFolder } from './clips-source.mjs';
 import { outputsOnAir } from '../studio-ui/record-clips.mjs';
 import { DELETED_LOG_NAME, DELETE_FLAG, FINAL_KEEP, deleteUploadedFile } from './delete-uploaded.mjs';
@@ -493,6 +493,7 @@ const REASON_TEXT = {
   'channel-day-full': "Waiting: this channel's uploads for today are used up (Settings > Posting & growth > YouTube channels); continues tomorrow (UTC)",
   'channel-upload-limit': 'YouTube said this channel reached its own upload limit for today; it waits until the limit resets (another channel takes new clips meanwhile)',
   'channel-off': 'Waiting: this channel is switched off, signed out or paused; the clip goes to another channel',
+  'held-instagram-test': 'Held for Instagram test: private on YouTube, no publish time',
   'sender-elsewhere': 'Not sending: another copy of Ujwalam is uploading, or left its posting lock behind. Close the other copy; tried again in a few minutes',
 };
 
@@ -515,7 +516,8 @@ export function reasonText(code) {
 }
 
 /** The publish time to show for a queue item: for an uploaded one, the time Google really got (null = none). */
-export const shownPublishAt = (i) => (i?.state === 'done' ? (i.sentPublishAt ?? null) : (i?.publishAt ?? null));
+// A held item (hold.mjs: taken off its YouTube schedule, still private) has no publish time any more.
+export const shownPublishAt = (i) => (typeof i?.heldAt === 'string' ? null : i?.state === 'done' ? (i.sentPublishAt ?? null) : (i?.publishAt ?? null));
 
 /** Plain-language state for the control page. Counts and short fixed texts only. */
 export function readQueueSummary(dataDir, flags = null, nowMs = Date.now()) {
@@ -1319,7 +1321,18 @@ export function createPostChain(opts) {
     // D403: with the random-daily placement the backlog goes out shuffled (seeded), kinds mixed, split reels in part order.
     const order = backlogOrderFn(store);
     const r = await runAuto({ store, rules: approvalRules(rules), outputsStatus, logFile: autoLogFile, now: () => new Date(nowMs()), kindShares, unscoredFloor: rankerMinScore(), order });
-    if (rules.autoUpload) {
+    let igFeed = null;
+    if (rules.autoUpload && youtubeFromWinners(rules)) {
+      // 2026-11-26 (user: "Hold all for Instagram test"): clips no longer go straight to YouTube. Only what the
+      // Instagram-winner promoter returns is queued; with none, nothing in the YouTube queue is sent (a clip queued
+      // before the switch waits too). Instagram is still fed the auto-approved Shorts, as the YouTube queue fed it before.
+      const autoApproved = new Set(createAutoLog(autoLogFile).list().filter((e) => e.action === 'approve').map((e) => e.id));
+      const winners = instagramWinnerCandidates({ dataDir, store, nowMs: nowMs() });
+      for (const id of winners) { const p = store.get(id); if (p && p.status === 'approved' && UPLOAD_TARGETS.includes(p.target)) queue.add(id); }
+      if (winners.length) await runChannels(store, rules);
+      const inQueue = new Set(queue.items().map((i) => i.id));
+      igFeed = [...queue.items(), ...(order ?? oldestFirst)(store.list()).filter((p) => p.status === 'approved' && autoApproved.has(p.id) && !inQueue.has(p.id)).map((p) => ({ id: p.id, state: 'queued' }))];
+    } else if (rules.autoUpload) {
       const autoApproved = new Set(createAutoLog(autoLogFile).list().filter((e) => e.action === 'approve').map((e) => e.id));
       // Oldest clip first (D375), or the backlog order (D403): the queue's order is the order slots are given out in.
       for (const p of (order ?? oldestFirst)(store.list())) if (p.status === 'approved' && UPLOAD_TARGETS.includes(p.target) && autoApproved.has(p.id)) queue.add(p.id);
@@ -1327,7 +1340,7 @@ export function createPostChain(opts) {
     }
     if (ig) {
       ig.resetPass();
-      try { await ig.sync(queue.items(), store); await ig.pass(store); } catch (e) { log(`posting: Instagram error (${String(e?.code ?? e?.name ?? 'error').slice(0, 40)})`); }
+      try { await ig.sync(igFeed ?? queue.items(), store); await ig.pass(store); } catch (e) { log(`posting: Instagram error (${String(e?.code ?? e?.name ?? 'error').slice(0, 40)})`); }
     }
     const deleted = await deletePass(store);
     // Last, and only when nothing this pass said more (a sign-in wait outranks it).

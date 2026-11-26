@@ -259,7 +259,7 @@ export function schedulePreview(dataDir, { nowMs = Date.now(), count = 10, chann
   const truncated = channel ? channel.truncated === true : doc.schedule?.truncated === true;
   const n = Math.max(0, Math.min(50, Math.trunc(count) || 0));
   const next = truncated ? [] : nextFreeSlots({ items, channelTimes, count: n, nowMs, cfg }).filter((t) => t !== null).map(toIso);
-  const shown = (i) => (i.state === 'done' ? (i.sentPublishAt ?? null) : (i.publishAt ?? null));
+  const shown = (i) => (typeof i.heldAt === 'string' ? null : i.state === 'done' ? (i.sentPublishAt ?? null) : (i.publishAt ?? null));
   return {
     error: truncated ? 'schedule-read-incomplete' : null,
     channel: channelTimes.filter((t) => t > nowMs).map(toIso),

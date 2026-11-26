@@ -48,6 +48,7 @@ export function validateRules(j0) {
   if (!isPlain(j0) || !Array.isArray(j0.rules)) throw new AutoPostError('bad-rules', 'rules file: missing rules list');
   const j = { ...j0, ...(j0.maxUploadsPerDay !== undefined ? { maxUploadsPerDay: liftCap(j0.maxUploadsPerDay) } : {}), rules: j0.rules.map((r) => (isPlain(r) ? { ...r, maxPerDay: liftCap(r.maxPerDay) } : r)) };
   if (j.autoUpload !== undefined && typeof j.autoUpload !== 'boolean') throw new AutoPostError('bad-rules', 'rules file: autoUpload must be true or false');
+  if (j.youtubeSource !== undefined && !YOUTUBE_SOURCES.includes(j.youtubeSource)) throw new AutoPostError('bad-rules', `rules file: youtubeSource must be one of ${YOUTUBE_SOURCES.join(', ')}`);
   if (j.maxUploadsPerDay !== undefined && !(Number.isInteger(j.maxUploadsPerDay) && j.maxUploadsPerDay >= 1 && j.maxUploadsPerDay <= MAX_PER_DAY)) throw new AutoPostError('bad-rules', `rules file: maxUploadsPerDay must be an integer 1..${MAX_PER_DAY}`);
   const seen = new Set();
   const rules = j.rules.map((r, i) => {
@@ -60,7 +61,19 @@ export function validateRules(j0) {
     if (r.kinds !== undefined && !(Array.isArray(r.kinds) && r.kinds.length && r.kinds.every((k) => RULE_KINDS.includes(k)))) throw new AutoPostError('bad-rules', `rule ${r.id}: kinds must be a non-empty list of ${RULE_KINDS.join(', ')}`);
     return { id: r.id, target: r.target, minScore: r.minScore, layouts: r.layouts ?? null, kinds: r.kinds ?? ['short'], maxPerDay: r.maxPerDay };
   });
-  return { autoUpload: j.autoUpload === true, rules, ...(j.maxUploadsPerDay !== undefined ? { maxUploadsPerDay: j.maxUploadsPerDay } : {}) };
+  return { autoUpload: j.autoUpload === true, rules, ...(j.maxUploadsPerDay !== undefined ? { maxUploadsPerDay: j.maxUploadsPerDay } : {}), ...(j.youtubeSource !== undefined ? { youtubeSource: j.youtubeSource } : {}) };
+}
+
+/** 2026-11-26 (user: "Hold all for Instagram test"): where automatic YouTube uploads come from. 'clips' (the default, the
+ *  old behaviour): approved clips go straight to the YouTube queue. 'instagram-winners': clips are still approved (so
+ *  Instagram gets them), but YouTube only gets what instagramWinnerCandidates returns. */
+export const YOUTUBE_SOURCES = Object.freeze(['clips', 'instagram-winners']);
+export const youtubeFromWinners = (rules) => rules?.youtubeSource === 'instagram-winners';
+
+/** The Instagram-winner promoter's hook: the post ids that won on Instagram and may go to YouTube now. The promoter is
+ *  not built yet, so there are none and nothing goes to YouTube in 'instagram-winners' mode. */
+export function instagramWinnerCandidates(/* { dataDir, store, nowMs } */) {
+  return [];
 }
 
 /** Never silent (user 2026-11-20): what the Auto-post card and the task bar say when auto-post is on but nothing can
@@ -207,7 +220,7 @@ export function oldestFirst(posts) {
  *  unscoredFloor (D375, optional; the chain passes rankerMinScore()): a short from the clips folder has no score of its
  *  own, but the clipper only publishes clips at or above that floor; such a short passes a rule whose minScore is not
  *  above the floor, and is skipped ('no-score') by a stricter rule. Without it, a short with no score is always skipped. */
-export function planAuto({ posts, rules, autoUpload, log, now, kindShares = null, maxUploadsPerDay = null, unscoredFloor = null, order = null }) {
+export function planAuto({ posts, rules, autoUpload, log, now, kindShares = null, maxUploadsPerDay = null, unscoredFloor = null, order = null, youtubeSource = null }) {
   const today = dayOf(now);
   const plan = [];
   const count = (ruleId, action) => log.filter((e) => e.ruleId === ruleId && e.action === action && String(e.at).slice(0, 10) === today).length;
@@ -230,7 +243,8 @@ export function planAuto({ posts, rules, autoUpload, log, now, kindShares = null
   const ordered = typeof order === 'function' ? order(posts) : oldestFirst(posts);
   const sorted = kindShares ? mixOrder(ordered, kindShares) : ordered;
   for (const rule of rules) {
-    const canUpload = autoUpload && UPLOAD_TARGETS.includes(rule.target);
+    // youtubeSource 'instagram-winners': approvals only; YouTube gets the Instagram winners (instagramWinnerCandidates)
+    const canUpload = autoUpload && youtubeSource !== 'instagram-winners' && UPLOAD_TARGETS.includes(rule.target);
     for (const p of sorted) {
       if (p.target !== rule.target || claimed.has(p.id)) continue;
       const kind = p.kind ?? 'short';
@@ -272,7 +286,7 @@ export async function runAuto(opts) {
   const log = createAutoLog(opts.logFile);
   const blocked = await liveBlock(opts.outputsStatus);
   if (blocked) return { refused: blocked, done: [] };
-  const plan = planAuto({ posts: opts.store.list(), rules: opts.rules.rules, autoUpload: opts.rules.autoUpload && typeof opts.upload === 'function', log: log.list(), now: nowFn(), kindShares: opts.kindShares ?? null, maxUploadsPerDay: opts.rules.maxUploadsPerDay ?? null, unscoredFloor: opts.unscoredFloor ?? null, order: opts.order ?? null });
+  const plan = planAuto({ posts: opts.store.list(), rules: opts.rules.rules, autoUpload: opts.rules.autoUpload && typeof opts.upload === 'function', log: log.list(), now: nowFn(), kindShares: opts.kindShares ?? null, maxUploadsPerDay: opts.rules.maxUploadsPerDay ?? null, unscoredFloor: opts.unscoredFloor ?? null, order: opts.order ?? null, youtubeSource: opts.rules.youtubeSource ?? null });
   const done = []; let uploadsStopped = false;
   const record = (e) => { const entry = { at: nowFn().toISOString(), ...e }; log.append(entry); done.push(entry); };
   for (const step of plan) {

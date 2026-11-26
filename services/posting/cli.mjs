@@ -17,6 +17,7 @@ import { UploadError } from './youtube.mjs';
 import { IG_FLAG, InstagramError, createInstagramAuth } from './instagram.mjs';
 import { queueInstagramNow } from './instagram-queue.mjs';
 import { REWRITE_FLAG, runRewrite, runUndo } from './rewrite.mjs';
+import { runHold } from './hold.mjs';
 import { AI_TEXT_FLAG } from './ai-text.mjs';
 import { createQuotaBudget } from './quota-budget.mjs';
 import { FLAG as LOCAL_MODEL_FLAG, createModelRunner } from '../local-model/runner.mjs';
@@ -161,7 +162,7 @@ async function autoMain(a, out, err, deps) {
       return 0;
     }
     if (a.run !== true) {
-      const plan = planAuto({ posts: store.list(), rules: rules.rules, autoUpload: rules.autoUpload, log: createAutoLog(logFile).list(), now: (deps.now ?? (() => new Date()))(), maxUploadsPerDay: rules.maxUploadsPerDay ?? null, unscoredFloor: rankerMinScore() });
+      const plan = planAuto({ posts: store.list(), rules: rules.rules, autoUpload: rules.autoUpload, log: createAutoLog(logFile).list(), now: (deps.now ?? (() => new Date()))(), maxUploadsPerDay: rules.maxUploadsPerDay ?? null, unscoredFloor: rankerMinScore(), youtubeSource: rules.youtubeSource ?? null });
       out(`auto-post (dry run): ${mode.enabled ? 'on' : 'off'} (flags posting+auto-post: ${flagOn}), ${mode.ruleCount} rule(s), autoUpload ${mode.autoUpload}, uploads scheduled`);
       out(`rules file: ${rulesFile}`);
       for (const s of plan) out(`  ${s.action} ${s.id} rule ${s.ruleId}: ${s.reason}`);
@@ -235,6 +236,19 @@ async function youtubeMain(a, out, err, deps) {
       out(`youtube: ${sub}: ${done.length} ${sub === 'rewrite' ? 'rewritten' : 'restored'}, ${r.skipped.length} skipped ${JSON.stringify(why)}${r.stopped ? `; stopped (${r.stopped}), ${r.left} left for another day` : ''}`);
       return 0;
     }
+    if (sub === 'hold') {
+      // 2026-11-26: take every private, future-scheduled video in Ujwalam's list off its schedule (stays private).
+      const only = typeof a.only === 'string' ? a.only.split(',').filter(Boolean) : null;
+      const store = createPostStore({ ledgerFile: path.join(dataDir, 'posting', LEDGER_NAME), dataDir });
+      const dryRun = a['dry-run'] === true;
+      const r = await runHold({ dataDir, store, auth: deps.auth ?? auth, budget: dryRun ? null : (deps.budget ?? createQuotaBudget({ dataDir })), fetchImpl: deps.fetchImpl, only, dryRun,
+        nowMs: deps.nowMs, outputsStatus: deps.outputsStatus ? streamOnly(deps.outputsStatus) : undefined });
+      if (r.refused) { err(`youtube: hold refused (${r.refused}); nothing was changed`); return 1; }
+      if (dryRun) { out(`youtube: hold (dry run): ${r.candidates} scheduled video(s) would be held${r.otherChannel ? ` (${r.otherChannel} on an added channel, skipped)` : ''}; nothing was sent`); return 0; }
+      const why = {}; for (const s of r.skipped) why[s.why] = (why[s.why] ?? 0) + 1;
+      out(`youtube: hold: ${r.held.length} held, ${r.skipped.length} skipped ${JSON.stringify(why)}${r.stopped ? `; stopped (${r.stopped}), ${r.left} left for another day` : ''}`);
+      return 0;
+    }
     if (sub === 'upload') {
       if (typeof a.id !== 'string') { err('usage: node services/posting/cli.mjs youtube upload --id <post id> [--data-dir DIR]'); return 2; }
       const ledgerFile = path.join(dataDir, 'posting', LEDGER_NAME);
@@ -252,7 +266,7 @@ async function youtubeMain(a, out, err, deps) {
       out(`youtube: queued ${a.id}; goes public ${r.item.publishAt}. The studio's auto-post queue uploads it as private when no stream is live (auto-post must be on).`);
       return 0;
     }
-    err('usage: node services/posting/cli.mjs youtube signin|status|signout|upload --id <post id>|rewrite [--only ids]|rewrite-undo [--only ids] [--force]');
+    err('usage: node services/posting/cli.mjs youtube signin|status|signout|upload --id <post id>|rewrite [--only ids]|rewrite-undo [--only ids] [--force]|hold [--dry-run] [--only ids]');
     return 2;
   } catch (e) {
     if (e?.code === 'oauth-no-client') { err('youtube: no OAuth client set yet (see docs/plan/2026-11-03-p16b-youtube-private-upload-plan.md: "Needs from the user")'); return 1; }

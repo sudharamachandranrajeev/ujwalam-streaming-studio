@@ -322,6 +322,7 @@ export const isRetry = (i, nowMs, cfg) => isPlain(i) && i.state === 'queued' && 
 /** Every time a queue item already holds (planned, sent to Google, or its open session's), in ms. */
 export function itemTimes(i) {
   const out = [];
+  if (typeof i?.heldAt === 'string') return out; // held (hold.mjs): off its YouTube schedule, its old time is free
   for (const k of ['publishAt', 'sentPublishAt', 'sessionPublishAt']) { const v = ms(i?.[k]); if (v !== null && !out.includes(v)) out.push(v); }
   return out;
 }
