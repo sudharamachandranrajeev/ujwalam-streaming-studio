@@ -1,0 +1,8 @@
+{
+  "$comment": "Several YouTube channels for auto-posting (YM1-YM5, docs/plan/2026-11-25-youtube-multi-account.md). Read by services/posting/accounts.mjs; never hardcoded. newChannel: what a channel added with Add channel starts with. postsPerDayMin/Max: each UTC day the channel gets a whole number of uploads in this range (picked per channel and day, the same all day); the user's answer 2026-11-25: new channels post 3 to 6 a day. shortsOnly: new channels take Shorts only (the long highlights video stays on the main channel; user's answer). postsPerDayLimit: the highest number the Settings card accepts for a channel. maxChannels: how many channels the list holds, the main one included. The channel list itself (labels, ids, on/off, the range per channel) lives in <data dir>/posting/accounts.json; tokens only in Windows Credential Manager (Ujwalam/posting/youtube-refresh/<channel id> for added channels). YouTube's own per-channel upload limit for new channels is UNVERIFIED (checked 2026-11-26): the app reads YouTube's uploadLimitExceeded answer and pauses only that channel until the next Pacific midnight.",
+  "newChannel": { "postsPerDayMin": 3, "postsPerDayMax": 6, "shortsOnly": true },
+  "postsPerDayLimit": 20,
+  "maxChannels": 6,
+  "source": "user answers 2026-11-25 (docs/plan/2026-11-25-youtube-multi-account.md)",
+  "checked": "2026-11-26"
+}

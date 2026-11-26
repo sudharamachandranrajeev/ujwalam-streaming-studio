@@ -230,6 +230,7 @@ export function createLedger(file) {
       for (const [k, v] of Object.entries(fields)) {
         if (k === 'videoId' && typeof v === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(v)) e[k] = v;
         if (k === 'publishAt' && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(v)) e[k] = v;
+        if (k === 'account' && typeof v === 'string' && /^ch-[a-z0-9]{6,12}$/.test(v)) e[k] = v; // YM4: the added channel it went to
       }
       writeJsonAtomic(file, j);
     },

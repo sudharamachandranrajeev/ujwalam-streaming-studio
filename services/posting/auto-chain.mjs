@@ -63,7 +63,7 @@ import { LEDGER_NAME, POSTING_FLAG, createPostStore, loadTemplates, packageRun, 
 import { createTextHistory } from './post-text.mjs';
 import { AI_TEXT_FLAG, withAiText } from './ai-text.mjs';
 import { FLAG as LOCAL_MODEL_FLAG, createModelRunner } from '../local-model/runner.mjs';
-import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
+import { AUTO_FLAG, AUTO_LOG_NAME, MAX_PER_DAY, NOTICE_TASK, NOTICE_TEXT, UPLOAD_TARGET, UPLOAD_TARGETS, createAutoLog, createRulesSource, liveBlock, oldestFirst, rankerMinScore, runAuto } from './auto-post.mjs';
 import { scanClipsFolder } from './clips-source.mjs';
 import { outputsOnAir } from '../studio-ui/record-clips.mjs';
 import { DELETED_LOG_NAME, DELETE_FLAG, FINAL_KEEP, deleteUploadedFile } from './delete-uploaded.mjs';
@@ -75,12 +75,14 @@ import { DEFAULT_SCHEDULE, SCHEDULE_FLAG, ScheduleError, chunkDeadlineMs, fallba
 import { readChannelSchedule } from './schedule-read.mjs';
 import { ensureScheduleSeed } from './schedule-seed.mjs';
 import { backlogOrder, clipFacts } from './backlog-order.mjs';
-import { createQuotaBudget, exhaustedUntil, loadQuota, quotaFallback, recordQuotaExceeded } from './quota-budget.mjs';
+import { createQuotaBudget, exhaustedUntil, loadQuota, nextPacificMidnight, quotaFallback, recordQuotaExceeded } from './quota-budget.mjs';
 import { MIX_FLAG, appliedKindShares } from '../learning/mix.mjs';
 import { userKindShares } from './post-prefs.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
 import { createInstagramAuth } from './instagram.mjs';
 import { createInstagramPoster } from './instagram-queue.mjs';
+import { MAIN, accountOf, dayCap, dealPool, doneToday, nextUtcMidnight, pausedNow, readAccounts, readChannelState, refreshTargetFor, utcDay, waitingOf, writeChannelState } from './accounts.mjs';
+import { createCredentialStore } from '../event-core/streamerbot/credential.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const QUEUE_NAME = 'upload-queue.json';
@@ -352,10 +354,14 @@ export async function sendCaptions({ store, id, videoId, auth, budget, fetchImpl
  * -> { blocked: why } (nothing sent) | { result } ; a quota answer rethrows with e.exhaustedUntil (ms | null).
  * send() must pass a publishAt to uploadPost (uploadPost refuses one without).
  */
-export async function sendGated({ dataDir, budget, capOf = null, nowMs = Date.now, send }) {
+// YM5: channelLimit true (an added channel): YouTube's uploadLimitExceeded answer is that channel's own daily limit, not
+// the project's quota: it rethrows as 'upload-limit-exceeded' and records nothing, so the other channels keep posting.
+// Main keeps the PT2 handling (any quota answer records the project-wide wait).
+export async function sendGated({ dataDir, budget, capOf = null, nowMs = Date.now, send, channelLimit = false }) {
   const why = budget.reserveUpload(capOf);
   if (why) return { blocked: why };
   try { return { result: await send() }; } catch (e) {
+    if (e?.code === 'quota-exceeded' && channelLimit && e.youtubeReason === 'uploadLimitExceeded') { e.code = 'upload-limit-exceeded'; throw e; }
     if (e?.code === 'quota-exceeded') {
       let until = null;
       try { until = Date.parse(recordQuotaExceeded(dataDir, nowMs()).exhaustedUntil); } catch { /* the budget still blocks on the next quota answer */ }
@@ -415,12 +421,16 @@ export function createUploadQueue(file, now = () => Date.now()) {
     /** Last channel schedule read (post-schedule): { channelLast, count, scanned, truncated, readAt }. Used by the preview. */
     schedule: () => read().schedule ?? null,
     setSchedule(s) { const j = read(); j.schedule = s; write(j); },
-    /** Adds a queued item unless the id is already known (in any state). */
+    /** YM1: the last channel read of an added channel (main keeps `schedule` above). */
+    scheduleOf: (acct) => (acct === MAIN ? read().schedule ?? null : read().schedules?.[acct] ?? null),
+    setScheduleOf(acct, s) { if (acct === MAIN) { this.setSchedule(s); return; } const j = read(); j.schedules = { ...(isPlain(j.schedules) ? j.schedules : {}), [acct]: s }; write(j); },
+    /** Adds a queued item unless the id is already known (in any state). YM1: a new item starts in the pool (account
+     *  null); the chain deals it to a channel (accounts.mjs dealPool). */
     add(id) {
       const j = read();
       if (Object.hasOwn(j.items, id)) return false;
       const at = new Date(now()).toISOString();
-      j.items[id] = { id, state: 'queued', attempts: 0, nextAt: null, reason: null, videoId: null, session: null, enqueuedAt: at, updatedAt: at };
+      j.items[id] = { id, state: 'queued', attempts: 0, nextAt: null, reason: null, videoId: null, session: null, account: null, enqueuedAt: at, updatedAt: at };
       write(j); return true;
     },
     patch(id, fields) {
@@ -480,6 +490,9 @@ const REASON_TEXT = {
   'schedule-clash': 'Getting a new public time: a post was scheduled on the channel within an hour of the planned one',
   'schedule-busy': 'Waiting: another post is being scheduled or sent right now; tried again in a few minutes',
   'request-timeout': 'Waiting: YouTube did not answer in time; tried again in a few minutes',
+  'channel-day-full': "Waiting: this channel's uploads for today are used up (Settings > Posting & growth > YouTube channels); continues tomorrow (UTC)",
+  'channel-upload-limit': 'YouTube said this channel reached its own upload limit for today; the clip goes to another channel',
+  'channel-off': 'Waiting: this channel is switched off, signed out or paused; the clip goes to another channel',
   'sender-elsewhere': 'Not sending: another copy of Ujwalam is uploading, or left its posting lock behind. Close the other copy; tried again in a few minutes',
 };
 
@@ -529,7 +542,7 @@ export function readQueueSummary(dataDir, flags = null, nowMs = Date.now()) {
 // ---------------------------------------------------------------- uploads.json (the finished-video list)
 
 /** Fills `posted` on the uploads.json row(s) whose file is the uploaded video. Matches by run + content hash. */
-export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, at, privacy = 'private', target = UPLOAD_TARGET, publishAt = null }) {
+export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, at, privacy = 'private', target = UPLOAD_TARGET, publishAt = null, account = MAIN }) {
   const file = path.join(dataDir, 'clips', 'uploads.json');
   const first = readJson(file);
   if (!isPlain(first) || !Array.isArray(first.files)) return 0;
@@ -547,14 +560,14 @@ export async function markPosted({ dataDir, run, sha256, postIdValue, videoId, a
   // limit, so a lock left by a writer that died is always taken over; any other failure writes nothing
   const end = Date.now() + UPLOADS_LOCK_STALE_MS + 15_000;
   for (;;) {
-    try { return withUploadsLock(file, () => markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt }), 0); } catch (e) {
+    try { return withUploadsLock(file, () => markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt, account }), 0); } catch (e) {
       if (e?.code !== 'uploads-busy' || Date.now() > end) return 0;
       await sleep(100);
     }
   }
 }
 
-function markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt }) {
+function markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, publishAt, account = MAIN }) {
   const doc = readJson(file);
   if (!isPlain(doc) || !Array.isArray(doc.files)) return 0;
   let n = 0;
@@ -562,7 +575,7 @@ function markRows(file, hits, run, { target, postIdValue, videoId, at, privacy, 
     if (!isPlain(row) || row.run !== run || !hits.has(row.file)) continue;
     if (!Array.isArray(row.posted)) row.posted = [];
     if (row.posted.some((p) => p?.platform === 'youtube' && p?.videoId === videoId)) continue;
-    row.posted.push({ platform: 'youtube', target, id: postIdValue, videoId, url: `https://youtu.be/${videoId}`, at, privacy, ...(publishAt ? { publishAt } : {}) });
+    row.posted.push({ platform: 'youtube', target, id: postIdValue, videoId, url: `https://youtu.be/${videoId}`, at, privacy, ...(publishAt ? { publishAt } : {}), ...(account && account !== MAIN ? { account } : {}) });
     n++;
   }
   if (n) writeJsonAtomic(file, doc);
@@ -663,6 +676,14 @@ export function createPostChain(opts) {
     ...(opts.instagram === true ? {} : { fetchImpl: opts.instagram.fetchImpl, endpoints: opts.instagram.endpoints, cfg: opts.instagram.cfg, sleep: opts.instagram.sleep }),
   });
   const getAuth = () => opts.auth ?? createYoutubeAuth({ browserOpen: async () => { throw new Error('sign-in is never started from the background'); } });
+  // YM2: each channel's own sign-in (its own refresh token in Credential Manager; the OAuth client is shared).
+  // opts.authFor(acct) is the test seam; main keeps getAuth (opts.auth) so every single-channel caller is unchanged.
+  const authFor = (acct) => {
+    if (typeof opts.authFor === 'function') { const a = opts.authFor(acct); if (a) return a; }
+    if (acct === MAIN) return getAuth();
+    return createYoutubeAuth({ refreshStore: createCredentialStore(refreshTargetFor(acct)), browserOpen: async () => { throw new Error('sign-in is never started from the background'); } });
+  };
+  const allQueue = queue;
 
   const sessions = {
     get: (sha) => queue.items().find((i) => i.sha === sha)?.session ?? null,
@@ -674,6 +695,32 @@ export function createPostChain(opts) {
   // D403: the random-daily plan's seed is made once and saved in the user's schedule.json before the first plan.
   const scheduleCfg = () => { try { if (opts.ensureSeed !== false) ensureScheduleSeed(dataDir); return loadScheduleConfig(opts.scheduleFile ?? DEFAULT_SCHEDULE, { userFile: userScheduleFile(dataDir) }); } catch { return null; } };
 
+  /** D403: the backlog order for this pass (random-daily placement), or null (oldest first). The first clip differs in
+   *  kind from the clip queued last. */
+  function backlogOrderFn(store) {
+    const cfg = scheduleCfg();
+    if (!cfg || (cfg.placement !== 'random-daily' && cfg.placement !== 'custom')) return null; // custom times post the backlog in the same mixed order
+    const items = queue.items();
+    const lastId = items.length ? items[items.length - 1].id : null;
+    const lastPost = lastId ? store.list().find((p) => p.id === lastId) ?? null : null;
+    const prevKind = lastPost ? clipFacts(lastPost).kind : null;
+    return (posts) => backlogOrder(posts, { seed: cfg.seed, prevKind });
+  }
+
+  /** YM1-YM5: one channel's view of the upload queue: its own items, its own saved channel read. Everything below (slots,
+   *  the re-checks, the upload pass) runs per channel, unchanged, on this view; the budget (one shared quota) and the
+   *  sender lock stay shared. */
+  function channelView(acct) {
+    const mine = (i) => i !== null && accountOf(i) === acct;
+    return { ...allQueue, items: () => allQueue.items().filter(mine), get: (id) => { const i = allQueue.get(id); return mine(i) ? i : null; },
+      schedule: () => allQueue.scheduleOf(acct), setSchedule: (s) => allQueue.setScheduleOf(acct, s) };
+  }
+  const channels = new Map();
+  const channelOf = (acct) => { if (!channels.has(acct)) channels.set(acct, makeChannel(acct)); return channels.get(acct); };
+
+  function makeChannel(acct) {
+  const queue = channelView(acct);
+  const getAuth = () => authFor(acct);
   /** post-schedule: every queued item without a usable slot gets the next slot, in queue order. The channel is read once,
    *  and only when some item needs a slot or a due item's slot must be re-checked before its upload starts (dueIds).
    *  On any doubt (scope, read, settings) the items wait without a slot; a due item to re-check waits with its slot. */
@@ -726,7 +773,11 @@ export function createPostChain(opts) {
       const scopes = typeof auth.grantedScopes === 'function' ? await auth.grantedScopes() : null;
       if (!Array.isArray(scopes) || !scopes.includes(READONLY_SCOPE)) { wait('schedule-scope-missing', SIGNIN_WAIT_MS); return cfg; }
       accessToken = await auth.accessToken();
-    } catch (e) { wait(e?.code === 'oauth-no-client' ? 'no-oauth-client' : 'not-signed-in', SIGNIN_WAIT_MS); return cfg; }
+    } catch (e) {
+      // YM2: an added channel whose token fails pauses; its clips go back to the pool on the next pass.
+      if (acct !== MAIN) pauseChannel(acct, t + SIGNIN_WAIT_MS, 'not-signed-in');
+      wait(e?.code === 'oauth-no-client' ? 'no-oauth-client' : 'not-signed-in', SIGNIN_WAIT_MS); return cfg;
+    }
     let read;
     // The whole read's units are reserved before the first request (locked check + charge); unused ones are given back.
     let scan;
@@ -773,19 +824,9 @@ export function createPostChain(opts) {
     return cfg;
   }
 
-  /** D403: the backlog order for this pass (random-daily placement), or null (oldest first). The first clip differs in
-   *  kind from the clip queued last. */
-  function backlogOrderFn(store) {
-    const cfg = scheduleCfg();
-    if (!cfg || (cfg.placement !== 'random-daily' && cfg.placement !== 'custom')) return null; // custom times post the backlog in the same mixed order
-    const items = queue.items();
-    const lastId = items.length ? items[items.length - 1].id : null;
-    const lastPost = lastId ? store.list().find((p) => p.id === lastId) ?? null : null;
-    const prevKind = lastPost ? clipFacts(lastPost).kind : null;
-    return (posts) => backlogOrder(posts, { seed: cfg.seed, prevKind });
-  }
-
-  async function processQueue(store, rules) {
+  /** limit: at most this many uploads in this pass (0 = no limit; several channels: 1 each, taking turns). cap: the
+   *  channel's own uploads for today (null = none, main). channelLimit: an added channel (sendGated). */
+  async function processQueue(store, rules, { limit = 0, cap = null, channelLimit = false } = {}) {
     const due = queue.items().filter((i) => i.state === 'queued' && (!i.nextAt || Date.parse(i.nextAt) <= nowMs()));
     if (!due.length) return;
     // D375: an automatic upload always has a publish time. Without scheduled posting nothing uploads: the items wait.
@@ -807,6 +848,8 @@ export function createPostChain(opts) {
     try { st = await auth.status(); } catch { st = null; }
     const stateReason = !st ? 'credentials-unreadable' : !st.hasClient ? 'no-oauth-client' : !st.signedIn ? 'not-signed-in' : null;
     if (stateReason) {
+      // YM2: an added channel that is not signed in pauses; its clips go back to the pool on the next pass (never blocks).
+      if (acct !== MAIN) pauseChannel(acct, nowMs() + SIGNIN_WAIT_MS, stateReason);
       for (const i of due) queue.patch(i.id, { reason: stateReason, nextAt: new Date(nowMs() + SIGNIN_WAIT_MS).toISOString() });
       log(`posting: ${REASON_TEXT[stateReason]}; ${due.length} clip(s) stay queued`);
       return;
@@ -821,10 +864,17 @@ export function createPostChain(opts) {
     };
     const firstWhy = budget.uploadBlock(capOf);
     if (firstWhy) { overBudget(due, firstWhy); return; }
+    // YM3: an added channel's own count for today (3-6 by default); the rest waits for the next UTC day.
+    if (cap !== null && doneToday(allQueue.items(), acct, nowMs()) >= cap) {
+      const until = new Date(nextUtcMidnight(nowMs())).toISOString();
+      for (const i of due) queue.patch(i.id, { reason: 'channel-day-full', nextAt: until });
+      log(`posting: ${REASON_TEXT['channel-day-full']}; ${due.length} clip(s) wait`);
+      return;
+    }
     const busyWait = (items) => { for (const i of items) queue.patch(i.id, { reason: 'schedule-busy', nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() }); };
     // D409 (second Codex review): the whole pass (reads, checks, budget charge, every session start) runs in ONE hold of
     // the schedule lock, so no channel read is reused after the lock was let go.
-    try { await withScheduleLock(dataDir, (hold) => uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold }), opts.lockOpts); } catch (e) {
+    try { await withScheduleLock(dataDir, (hold) => uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold, limit, cap, channelLimit }), opts.lockOpts); } catch (e) {
       if (e?.code === 'schedule-hold-cap') {
         // Third Codex review (D409): the pass held the lock past its cap (a request hung). The lock is released, the hold's
         // requests are aborted and nothing more is sent in it; the item in flight waits (no attempt used) for the next pass.
@@ -849,7 +899,8 @@ export function createPostChain(opts) {
   /** Read failures that keep an item waiting (no attempt used) when they stop a session start. */
   const READ_WAITS = new Set(['schedule-read-failed', 'schedule-read-incomplete', 'schedule-scope-missing', 'schedule-config-bad', 'quota-day-used', 'quota-unreadable', 'quota-busy', 'not-signed-in', 'no-oauth-client', 'schedule-busy', 'request-timeout']);
 
-  async function uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold }) {
+  async function uploadPass({ store, auth, due, capOf, overBudget, busyWait, hold, limit = 0, cap = null, channelLimit = false }) {
+    let started = 0;
     holdTimes = null; freshUnused = false; readFail = null; curHold = hold; // a new hold: nothing read in it yet
     const cfg = await ensureSlots(auth, new Set(due.map((i) => i.id)));
     if (!cfg) return; // no valid settings: nothing can be re-checked, so nothing uploads
@@ -861,6 +912,8 @@ export function createPostChain(opts) {
     };
     for (const [n, item] of due.entries()) {
       if (halted) return;
+      if (limit && started >= limit) return; // several channels: one upload each, then the next channel's turn
+      if (cap !== null && doneToday(allQueue.items(), acct, nowMs()) >= cap) return;
       if (await liveBlock(outputsStatus)) { queue.setNote({ blocked: 'stream-live' }); return; }
       // The item as it is now: the card may have moved or removed it since this pass began (D375).
       const cur = queue.get(item.id);
@@ -913,6 +966,7 @@ export function createPostChain(opts) {
       // taken long enough for a takeover).
       if (!hold.held()) { busyWait(due.slice(n).filter((i) => queue.get(i.id)?.state === 'queued')); return; }
       queue.patch(item.id, { state: 'uploading', reason: null, nextAt: null });
+      started++;
       /** Runs in uploadVideo right before any new resumable session. The time checked above serves it once; any other new
        *  session (a restart after an expired one) gets a fresh read and the check now. Throws to stop (nothing sent). */
       const beforeNewSession = async (at) => {
@@ -938,7 +992,7 @@ export function createPostChain(opts) {
       try {
         // Every upload start or resume goes through sendGated: today's budget is checked and charged right before it,
         // and YouTube's quota answer is recorded there.
-        const g = await sendGated({ dataDir, budget, capOf, nowMs, send: () => uploadPost({
+        const g = await sendGated({ dataDir, budget, capOf, nowMs, channelLimit, send: () => uploadPost({
           id: item.id, store, auth, outputsStatus, fetchImpl: opts.fetchImpl, chunkSize: opts.chunkSize, sessions, publishAt, beforeNewSession,
           // Third Codex review (D409): every YouTube request has a deadline, and the hold's cap aborts them all.
           signal: hold.signal, ...(opts.requestMs ? { requestMs: opts.requestMs } : {}), ...(opts.chunkRequestMs ? { chunkRequestMs: opts.chunkRequestMs } : {}),
@@ -967,10 +1021,11 @@ export function createPostChain(opts) {
         const sent = r.publishAt ?? null;
         const early = sent !== null && Date.parse(sent) <= nowMs();
         taskEnd = { state: 'done', note: early ? 'Uploaded; its public time had passed, check it in YouTube Studio' : sent ? 'Uploaded (scheduled: goes public at its time)' : 'Uploaded (private)' };
-        queue.patch(item.id, { state: 'done', videoId: r.videoId, reason: early ? 'went-public-early' : null, session: null, sentPublishAt: sent });
+        queue.patch(item.id, { state: 'done', videoId: r.videoId, reason: early ? 'went-public-early' : null, session: null, sentPublishAt: sent, doneAt: new Date(nowMs()).toISOString() });
         // D375: the ledger keeps the publish time Google got next to the video id (the delete check needs both).
-        if (sent) { try { store.ledger.annotate(sha, post.target, { publishAt: sent }); } catch { /* the delete check then keeps the file */ } }
-        await markPosted({ dataDir, run, sha256: sha, postIdValue: item.id, videoId: r.videoId, at: new Date(nowMs()).toISOString(), target: post.target, publishAt: sent });
+        // YM4: an added channel's upload is recorded with its channel too (main's entries stay as before).
+        if (sent || acct !== MAIN) { try { store.ledger.annotate(sha, post.target, { ...(sent ? { publishAt: sent } : {}), ...(acct !== MAIN ? { account: acct } : {}) }); } catch { /* the delete check then keeps the file */ } }
+        await markPosted({ dataDir, run, sha256: sha, postIdValue: item.id, videoId: r.videoId, at: new Date(nowMs()).toISOString(), target: post.target, publishAt: sent, account: acct });
         log(`posting: uploaded ${item.id} (private${sent ? `, goes public ${sent}` : ''}${early ? '; its time had passed, check it in YouTube Studio' : ''})`);
         // C1: the long video's caption track (one try; the video stays uploaded whatever this answers)
         const cap = await sendCaptions({ store, id: item.id, videoId: r.videoId, auth, budget, fetchImpl: opts.fetchImpl, signal: hold.signal });
@@ -1006,6 +1061,14 @@ export function createPostChain(opts) {
           queue.patch(item.id, { state: 'queued', reason: 'stream-live' });
           queue.setNote({ blocked: 'stream-live' });
           return;
+        } else if (code === 'upload-limit-exceeded') {
+          // YM5: an added channel reached YouTube's own upload limit for it: only this channel pauses until the next
+          // Pacific midnight; the clip (no session was made) goes back to the pool and the other channels keep posting.
+          taskEnd = { state: 'waiting', note: 'Waiting: this channel reached its upload limit for today' };
+          pauseChannel(acct, nextPacificMidnight(nowMs()), 'upload-limit');
+          queue.patch(item.id, { state: 'queued', reason: 'channel-upload-limit', nextAt: null });
+          log(`posting: ${item.id}: ${REASON_TEXT['channel-upload-limit']}`);
+          return;
         } else if (code === 'quota-exceeded') {
           // PT2 (D408): YouTube's own quota answer. The bucket model falls back to the unit sum for today and tomorrow
           // (quota-budget.mjs), the user is told in plain words, and the item waits (no attempt used; its slot is kept
@@ -1029,6 +1092,7 @@ export function createPostChain(opts) {
           queue.patch(item.id, { state: 'queued', reason: code, nextAt: new Date(nowMs() + BASE_DELAY_MS).toISOString() });
           log(`posting: ${item.id}: ${REASON_TEXT[code] ?? code}`);
         } else if (code === 'oauth-no-client' || code === 'oauth-reauth-needed') {
+          if (acct !== MAIN) pauseChannel(acct, nowMs() + SIGNIN_WAIT_MS, 'not-signed-in'); // YM2: its token failed; the others go on
           queue.patch(item.id, { state: 'queued', reason: code === 'oauth-no-client' ? 'no-oauth-client' : 'not-signed-in', nextAt: new Date(nowMs() + SIGNIN_WAIT_MS).toISOString() });
           return;
         } else if (PERMANENT.has(code)) {
@@ -1044,6 +1108,77 @@ export function createPostChain(opts) {
         // start, or with its new public time) and the control page's upload queue shows it.
         if (taskEnd.state === 'waiting') removeTaskFile(dataDir, task.id); else taskSay(taskEnd);
       }
+    }
+  }
+
+  return { processQueue };
+  }
+
+  /** YM2/YM5: an added channel stops taking clips until untilMs (its token failed, or YouTube's upload limit for it). */
+  function pauseChannel(acct, untilMs, reason) {
+    try { const st = readChannelState(dataDir); st.paused[acct] = { until: new Date(untilMs).toISOString(), reason }; writeChannelState(dataDir, st); } catch { /* the next failure pauses it again */ }
+    log(`posting: channel ${acct} takes no clips until ${new Date(untilMs).toISOString()} (${reason})`);
+  }
+
+  /** YM1-YM5: which channels may take clips now. main: while switched on (its own pass says why it waits, as before).
+   *  An added channel: switched on, not paused, signed in. -> Map id -> true|false */
+  async function readiness(accounts, state, t) {
+    const ready = new Map();
+    for (const a of accounts) {
+      if (a.id === MAIN) { ready.set(MAIN, a.enabled !== false); continue; }
+      let ok = a.enabled !== false && !pausedNow(state, a.id, t);
+      if (ok) { try { const st = await authFor(a.id).status(); ok = st?.signedIn === true && st?.hasClient === true; } catch { ok = false; } }
+      ready.set(a.id, ok);
+    }
+    return ready;
+  }
+
+  /**
+   * YM1-YM5, every pass with auto-upload on:
+   *  1. clips of a removed channel, and clips not started yet (no session) of an added channel that cannot take clips now,
+   *     go back to the pool (publish time dropped: the next channel plans its own). Uploaded clips never move (YM4).
+   *  2. the pool is dealt in turn (accounts.mjs dealPool). One channel only (main): every clip goes to main, as before.
+   *     Several: each channel takes clips up to its count for today (main: the rules' uploads per day).
+   *  3. each channel's own pass (slots, checks, upload) in turn; with several channels one upload each per pass, and the
+   *     first channel changes every pass. One shared quota budget and sender lock for all.
+   */
+  let passTurn = 0;
+  async function runChannels(store, rules) {
+    const t = nowMs();
+    let accounts; let state;
+    try { accounts = readAccounts(dataDir).accounts; } catch { accounts = [{ id: MAIN, enabled: true }]; }
+    try { state = readChannelState(dataDir); } catch { state = { version: 1, turn: null, paused: {} }; }
+    const known = new Set(accounts.map((a) => a.id));
+    const ready = await readiness(accounts, state, t);
+    for (const i of allQueue.items()) {
+      const acc = accountOf(i);
+      if (acc === null || acc === MAIN || (i.state !== 'queued' && i.state !== 'failed')) continue;
+      const gone = !known.has(acc);
+      if (!gone && (ready.get(acc) || i.session || i.state !== 'queued')) continue;
+      allQueue.patch(i.id, { account: null, publishAt: null, slotAt: null, reslot: null, session: null, sessionPublishAt: null,
+        ...(i.state === 'queued' ? { reason: gone ? null : 'channel-off', nextAt: null } : {}) });
+    }
+    const multi = accounts.some((a) => a.id !== MAIN && ready.get(a.id));
+    const items = allQueue.items();
+    const pool = items.filter((i) => accountOf(i) === null && i.state === 'queued');
+    if (pool.length) {
+      const mainCap = Number.isInteger(rules?.maxUploadsPerDay) ? rules.maxUploadsPerDay : MAX_PER_DAY;
+      const chans = accounts.filter((a) => ready.get(a.id)).map((a) => {
+        const cap = a.id === MAIN ? mainCap : dayCap(a, utcDay(t)) ?? mainCap;
+        return { id: a.id, shortsOnly: a.shortsOnly === true, room: multi ? cap - doneToday(items, a.id, t) - waitingOf(items, a.id) : Infinity };
+      });
+      const { assign, turn } = dealPool({ pool: pool.map((i) => ({ id: i.id, target: store.get(i.id)?.target ?? null })), channels: chans, turn: state.turn });
+      for (const [id, acc] of assign) allQueue.patch(id, { account: acc, ...(allQueue.get(id)?.reason === 'channel-off' ? { reason: null } : {}) });
+      if (assign.length && turn !== state.turn) { try { writeChannelState(dataDir, { ...readChannelState(dataDir), turn }); } catch { /* the turn starts from main again */ } }
+      if (assign.length && multi) log(`posting: dealt ${assign.length} clip(s) to ${new Set(assign.map((x) => x[1])).size} channel(s) in turn`);
+    }
+    const order = accounts.filter((a) => ready.get(a.id));
+    if (!order.length) return;
+    const first = multi ? passTurn++ % order.length : 0;
+    for (let k = 0; k < order.length; k++) {
+      if (halted) return;
+      const a = order[(first + k) % order.length];
+      await channelOf(a.id).processQueue(store, rules, a.id === MAIN ? (multi ? { limit: 1 } : {}) : { limit: 1, cap: dayCap(a, utcDay(nowMs())), channelLimit: true });
     }
   }
 
@@ -1074,15 +1209,20 @@ export function createPostChain(opts) {
     if (!due.length) return 0;
     if (await liveBlock(outputsStatus)) return 0;
     if (budget.readBlock(due.length)) return 0; // today's quota: checked again on a later pass
-    const auth = getAuth();
-    let accessToken;
-    try { accessToken = await auth.accessToken(); } catch { return 0; } // not signed in: checked again on a later pass
+    // YM7: each uploaded clip is checked with the sign-in of the channel it went to (main for items made before YM1).
+    const tokens = new Map();
+    const tokenOf = async (acct) => {
+      if (!tokens.has(acct)) { let tok = null; try { tok = await authFor(acct).accessToken(); } catch { tok = null; } tokens.set(acct, tok); }
+      return tokens.get(acct);
+    };
     const folder = opts.clipsFolder ?? clipsFolder(dataDir);
     const names = [];
     for (const item of due) {
       const later = new Date(t + STATUS_EVERY_MS).toISOString();
       // D444 data-loss rule: Instagram still wants this clip (not posted, failed, or its state unreadable): keep the file.
       if (ig && await ig.holdsFile(item.id, { target: store.get(item.id)?.target ?? null, ytState: item.state })) { queue.patch(item.id, { deleteReason: 'instagram-pending', deleteCheckAt: later }); continue; }
+      const accessToken = accountOf(item) ? await tokenOf(accountOf(item)) : null;
+      if (!accessToken) continue; // not signed in (or a removed channel): checked again on a later pass
       let status;
       try { status = await checkUploadStatus({ videoId: item.videoId, accessToken, fetchImpl: apiFetch }); } catch {
         queue.patch(item.id, { deleteReason: 'status-unreadable', deleteCheckAt: later }); continue;
@@ -1163,7 +1303,7 @@ export function createPostChain(opts) {
       const autoApproved = new Set(createAutoLog(autoLogFile).list().filter((e) => e.action === 'approve').map((e) => e.id));
       // Oldest clip first (D375), or the backlog order (D403): the queue's order is the order slots are given out in.
       for (const p of (order ?? oldestFirst)(store.list())) if (p.status === 'approved' && UPLOAD_TARGETS.includes(p.target) && autoApproved.has(p.id)) queue.add(p.id);
-      await processQueue(store, rules);
+      await runChannels(store, rules);
     }
     if (ig) {
       ig.resetPass();

@@ -101,9 +101,14 @@ export function uploadMetadata(post, { publishAt = null } = {}) {
 
 /** PT2: true when an error answer names a quota reason (errors[].reason quotaExceeded | uploadLimitExceeded | dailyLimitExceeded). */
 export async function quotaReason(res) {
+  return (await quotaReasonName(res)) !== null;
+}
+/** YM5: which quota reason the answer names (quotaExceeded | uploadLimitExceeded | dailyLimitExceeded), or null.
+ *  uploadLimitExceeded is the channel's own upload limit; the others are the project's quota. */
+export async function quotaReasonName(res) {
   let text = '';
   try { text = typeof res.text === 'function' ? await res.text() : ''; } catch { text = ''; }
-  return /"reason"\s*:\s*"(quotaExceeded|uploadLimitExceeded|dailyLimitExceeded)"/.test(String(text));
+  return /"reason"\s*:\s*"(quotaExceeded|uploadLimitExceeded|dailyLimitExceeded)"/.exec(String(text))?.[1] ?? null;
 }
 
 /** Starts a resumable session; returns the session URL from the Location header. */
@@ -113,11 +118,12 @@ async function initiateSession(fetchImpl, accessToken, metadata, bytes, net = {}
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'video/mp4', 'X-Upload-Content-Length': String(bytes) },
     body: JSON.stringify(metadata),
   }, net.requestMs ?? REQUEST_MS, { outer: net.outer,
-    read: async (r) => ({ ok: r.ok, status: r.status, location: r.ok ? r.headers.get('location') : null, quota: !r.ok && r.status === 403 ? await quotaReason(r) : false }) });
+    read: async (r) => ({ ok: r.ok, status: r.status, location: r.ok ? r.headers.get('location') : null, quota: !r.ok && r.status === 403 ? await quotaReasonName(r) : null }) });
   if (!res.ok) {
     // PT2 (D408): YouTube's quota answer (403 with reason quotaExceeded or uploadLimitExceeded) is its own code, so the
     // chain can fall back to the unit-sum quota model and wait for the next day instead of retrying.
-    if (res.quota) throw new UploadError('quota-exceeded', 'YouTube says the upload quota for today is used up');
+    // YM5: the reason rides along (e.youtubeReason), so an added channel's own upload limit pauses only that channel.
+    if (res.quota) throw Object.assign(new UploadError('quota-exceeded', 'YouTube says the upload quota for today is used up'), { youtubeReason: res.quota });
     throw new UploadError('upload-init-failed', `HTTP ${res.status} starting the resumable session`);
   }
   const loc = res.location;
