@@ -362,3 +362,34 @@ test('layers.addFromProject: browserUrls / relayScope validated like project.loa
   await c.call('layers.remove', { scene: 'main', layer: 'gg2' });
   await loadIntoHost(c, PROJECT);
 });
+// Review round 2 (2026-11-27): the relay is never rebuilt on air (a display page added under an effects relay gets a
+// note), and with the overlay server down the sent call uses ports 0, never the last load's saved ports.
+test('layers.addFromProject r2: relay kept + note for a display page; overlay server down -> -32004 (no stale ports)', { skip: !haveRoot && 'no overlay root' }, async () => {
+  await loadIntoHost(c, PROJECT);
+  assert.equal((await c.call('project.get')).relay, 'effects');
+  const gg = PROJECT.scenes[0].layers[1];
+  const doc = { ...PROJECT, overlays: [...PROJECT.overlays, { id: 'ov-chat', name: 'Chat list', file: { base: 'overlays', rel: 'chat-list/index.html' } }],
+    scenes: [{ ...PROJECT.scenes[0], layers: [...PROJECT.scenes[0].layers, { ...gg, id: 'chat', name: 'Chat', source: { ...gg.source, overlay: 'ov-chat' } }] }] };
+  const extra = await overlayParams(c, doc);
+  assert.equal(extra.relayScope, 'display');
+  const r = await c.call('layers.addFromProject', { project: doc, scene: 'main', layer: 'chat', ...extra });
+  assert.equal(r.layer, 'chat');
+  assert.equal(r.note, 'This overlay shows fully after the next start.');
+  assert.equal((await c.call('project.get')).relay, 'effects', 'the relay on air is not rebuilt');
+  await c.call('layers.remove', { scene: 'main', layer: 'chat' });
+  // an effects page under the effects relay: no note
+  const doc2 = { ...PROJECT, scenes: [{ ...PROJECT.scenes[0], layers: [...PROJECT.scenes[0].layers, { ...gg, id: 'gg3' }] }] };
+  const r2 = await c.call('layers.addFromProject', { project: doc2, scene: 'main', layer: 'gg3', ...(await overlayParams(c, doc2)) });
+  assert.equal(r2.note, undefined);
+  await c.call('layers.remove', { scene: 'main', layer: 'gg3' });
+  // overlay server down: last_opts_ still holds the old ports, the call must not use them
+  const st0 = await c.call('overlay.status');
+  const sent = await overlayParams(c, doc2);
+  const k = spawnSync('taskkill', ['/PID', String(st0.pid), '/F'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(k.status, 0, k.stderr);
+  await waitFor(async () => (await c.call('overlay.status')).state !== 'running', 5000, 'overlay child down');
+  const e = await rpcErr('layers.addFromProject', { project: doc2, scene: 'main', layer: 'gg3', ...sent });
+  assert.equal(e.code, -32004, 'unavailable while the overlay server is down');
+  await waitFor(async () => { const s = await c.call('overlay.status'); return s.state === 'running' && s.pid !== st0.pid; }, 20000, 'child back');
+  await loadIntoHost(c, PROJECT);
+});

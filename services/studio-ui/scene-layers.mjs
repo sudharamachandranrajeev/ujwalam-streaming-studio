@@ -22,10 +22,19 @@ const isUnavailable = (e) => isHostError(e, HOST_UNAVAILABLE);
  *  overlay.status. When the overlay server is not running (or the call fails) the params go as they are: the host then
  *  lists an overlay layer as unavailable (-32004) and it shows after the next start. */
 export async function addLayerParams(host, p) {
-  try { return { ...p, ...(await overlayParams(host, p.project)) }; } catch { return p; }
+  return { ...p, ...(await overlayExtra(host, p.project)) };
 }
 
-/** createSceneInHost(host, { project, scene, canvases }) -> { later: [layerId] }; throws the host's error after undoing. */
+/** overlayExtra(host, project) -> { browserUrls?, relayScope? } once per operation; {} (logged) when overlay.status fails.
+ *  Loops that add several layers of one document call this once and spread it into every layers.addFromProject. */
+export async function overlayExtra(host, project) {
+  try { return await overlayParams(host, project); } catch (e) {
+    console.log(`[studio] overlay URLs not sent with the layer add (shows after the next start): ${e?.message ?? e}`);
+    return {};
+  }
+}
+
+/** createSceneInHost(host, { project, scene, canvases }) -> { later: [layerId], notes: [string] }; throws the host's error after undoing. */
 export async function createSceneInHost(host, { project, scene, canvases }) {
   let created = false;
   try {
@@ -34,15 +43,18 @@ export async function createSceneInHost(host, { project, scene, canvases }) {
       created = true;
     }
     const later = [];
+    const notes = [];
+    const extra = await overlayExtra(host, project); // one overlay.status per scene
     for (const l of scene.layers) { // bottom first
       try {
-        await host.call('layers.addFromProject', await addLayerParams(host, { project, scene: scene.id, layer: l.id }));
+        const a = await host.call('layers.addFromProject', { project, scene: scene.id, layer: l.id, ...extra });
+        if (typeof a?.note === 'string' && !notes.includes(a.note)) notes.push(a.note.slice(0, 200));
       } catch (e) {
         if (!isUnavailable(e)) throw e;
         later.push(l.id);
       }
     }
-    return { later };
+    return { later, notes };
   } catch (e) {
     if (created) { try { await host.call('scenes.remove', { scene: scene.id }); } catch { /* the error below is what the user sees */ } }
     throw e;

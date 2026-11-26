@@ -359,18 +359,19 @@ test('server: scene.realism and scene.duplicate send overlay URLs, so an overlay
   assert.ok(validateProject(doc).ok, JSON.stringify(validateProject(doc).errors));
   saveProject(file, doc);
   const sid = doc.scenes[0].id;
-  const state = { overlay: true };
+  const state = { overlay: true, statusCalls: 0 };
   const sent = [];
   // like the real host: an overlay layer without its URL is unavailable (-32004, as the studio client reports it)
   const host = { describe: () => ({ kind: 'host', available: true }), call: async (m, p) => {
     if (m === 'host.status') return { live: false };
     if (m === 'outputs.status') return {};
-    if (m === 'overlay.status') { if (!state.overlay) throw Object.assign(new Error('overlay server not running'), { code: 'RPC_-32004' }); return { state: 'running', staticPort: 41001, feedPort: 41002 }; }
+    if (m === 'overlay.status') { state.statusCalls++; if (!state.overlay) throw Object.assign(new Error('overlay server not running'), { code: 'RPC_-32004' }); return { state: 'running', staticPort: 41001, feedPort: 41002 }; }
     if (m === 'layers.addFromProject') {
       const l = p.project.scenes.find((s) => s.id === p.scene).layers.find((x) => x.id === p.layer);
       if (l.type === 'browser') {
         sent.push(p);
         if (typeof p.browserUrls?.[p.layer] !== 'string') throw Object.assign(new Error('no overlay URL for this layer'), { code: 'RPC_-32004' });
+        return { note: 'This overlay shows fully after the next start.' };
       }
     }
     return {};
@@ -386,6 +387,7 @@ test('server: scene.realism and scene.duplicate send overlay URLs, so an overlay
     const post = (body) => raw(port, { method: 'POST', url: '/ui/api/project/structure', body: JSON.stringify(body), headers: hdr });
     for (const op of ['scene.realism', 'scene.duplicate']) {
       sent.length = 0;
+      state.statusCalls = 0;
       const r = await post({ op, scene: sid });
       assert.equal(r.status, 200, JSON.stringify(r.body));
       assert.equal(r.body.saved, true);
@@ -395,6 +397,8 @@ test('server: scene.realism and scene.duplicate send overlay URLs, so an overlay
       assert.ok(sent[0].browserUrls[sent[0].layer].startsWith('http://127.0.0.1:41001/overlays/gg-burst/index.html?'), 'URL on the host overlay server port');
       assert.ok(url && /[?&]sbPort=41002(&|$)/.test(url), 'feed port from overlay.status');
       assert.ok(['effects', 'display'].includes(sent[0].relayScope));
+      assert.equal(state.statusCalls, 1, `: one overlay.status for the whole multi-layer scene`);
+      assert.equal(r.body.note, 'This overlay shows fully after the next start.', 'the host note reaches the studio');
     }
     // fallback: overlay server not running -> no URLs sent, the copy is skipped into later and still saved
     state.overlay = false;
