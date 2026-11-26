@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ujwalam/look.schema.json",
+  "title": "Realism look (D445, RL1)",
+  "description": "One realism look (data/looks/<id>.json): a name, what it looks like in plain words, the colour grade its LUT is generated from (tools/make-look-luts.mjs; Filmic keeps tools/make-realism-lut.mjs), and the layer effects a realism scene puts on each game layer, in order, the LUT first (services/project/looks.mjs and tests/realism-looks.test.mjs check that). Effects are project layer effects (data/schemas/project.schema.json $defs/effect; the project validator checks them). backdrop: the effect types that also go on the blurred backdrop copies of the game (the others only add GPU cost under a blur). swatch: SWATCH_REFS of the generator through the look, for the studio menu.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "name", "summary", "status", "effects", "backdrop", "swatch"],
+  "oneOf": [{ "properties": { "grade": true }, "required": ["grade"] }, { "properties": { "generator": true }, "required": ["generator"] }],
+  "properties": {
+    "$comment": { "type": "string" },
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 24 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "status": { "enum": ["unverified", "verified"] },
+    "generator": { "const": "tools/make-realism-lut.mjs" },
+    "grade": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gain": { "$ref": "#/$defs/rgbGain" },
+        "saturation": { "type": "number", "minimum": 0, "maximum": 2 },
+        "tame": { "type": "number", "minimum": 0, "maximum": 1 },
+        "vibrance": { "type": "number", "minimum": 0, "maximum": 1 },
+        "hueSat": {
+          "type": "array", "maxItems": 4,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["hue", "width", "sat"],
+            "properties": {
+              "hue": { "type": "number", "minimum": 0, "maximum": 360 },
+              "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 180 },
+              "sat": { "type": "number", "minimum": 0, "maximum": 2 },
+              "lum": { "type": "number", "minimum": 0.5, "maximum": 1.5 }
+            }
+          }
+        },
+        "crush": { "type": "number", "minimum": 0, "maximum": 0.2 },
+        "contrast": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mids": { "type": "number", "minimum": -0.5, "maximum": 1 },
+        "lift": { "type": "number", "minimum": 0, "maximum": 0.2 },
+        "knee": { "type": "number", "minimum": 0.5, "maximum": 1 },
+        "white": { "type": "number", "minimum": 0.8, "maximum": 1 },
+        "split": {
+          "type": "object", "additionalProperties": false,
+          "properties": { "shadows": { "$ref": "#/$defs/rgbOffset" }, "highlights": { "$ref": "#/$defs/rgbOffset" } }
+        }
+      }
+    },
+    "effects": {
+      "type": "array", "minItems": 1, "maxItems": 5,
+      "items": { "type": "object", "required": ["type"], "properties": { "type": { "type": "string" } } }
+    },
+    "backdrop": {
+      "type": "array", "uniqueItems": true, "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "swatch": {
+      "type": "array", "minItems": 5, "maxItems": 5,
+      "items": { "type": "string", "pattern": "^#[0-9a-f]{6}$" }
+    }
+  },
+  "$defs": {
+    "rgbGain": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": 0.5, "maximum": 1.5 } },
+    "rgbOffset": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": -0.1, "maximum": 0.1 } }
+  }
+}

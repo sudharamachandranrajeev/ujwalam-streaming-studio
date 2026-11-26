@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "id": "dark-cinematic",
+  "name": "Dark cinematic",
+  "summary": "Deep blacks, orange-red lights against blue-teal shadows, strong local contrast, glossy glow on lights and a dark vignette.",
+  "status": "unverified",
+  "grade": {
+    "saturation": 1.05,
+    "tame": 0.12,
+    "hueSat": [
+      {
+        "hue": 15,
+        "width": 40,
+        "sat": 1.25
+      }
+    ],
+    "crush": 0.05,
+    "contrast": 0.45,
+    "mids": -0.12,
+    "knee": 0.8,
+    "white": 0.98,
+    "split": {
+      "shadows": [
+        -0.05,
+        0.01,
+        0.06
+      ],
+      "highlights": [
+        0.07,
+        0.02,
+        -0.05
+      ]
+    }
+  },
+  "effects": [
+    {
+      "type": "lut",
+      "file": {
+        "base": "luts",
+        "rel": "look-dark-cinematic.cube"
+      },
+      "amount": 0.9
+    },
+    {
+      "type": "clarity",
+      "amount": 0.35,
+      "size": 2
+    },
+    {
+      "type": "bloom",
+      "amount": 0.25,
+      "threshold": 0.7,
+      "size": 4
+    },
+    {
+      "type": "sharpen",
+      "amount": 0.2
+    },
+    {
+      "type": "vignette",
+      "amount": 0.4,
+      "size": 0.45,
+      "softness": 0.7,
+      "color": "#000000"
+    }
+  ],
+  "backdrop": [
+    "lut"
+  ],
+  "swatch": [
+    "#08141e",
+    "#f0a168",
+    "#3a6a24",
+    "#629ade",
+    "#df0a0d"
+  ]
+}

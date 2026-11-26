@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "id": "gritty-war",
+  "name": "Gritty war",
+  "summary": "War-film grit: low colour, muted dark greens, hard contrast, film grain and a vignette.",
+  "status": "unverified",
+  "grade": {
+    "saturation": 0.62,
+    "tame": 0.1,
+    "hueSat": [
+      {
+        "hue": 110,
+        "width": 50,
+        "sat": 0.6,
+        "lum": 0.88
+      }
+    ],
+    "crush": 0.03,
+    "contrast": 0.4,
+    "mids": -0.05,
+    "knee": 0.75,
+    "white": 0.95,
+    "split": {
+      "shadows": [
+        0,
+        0.006,
+        0.012
+      ],
+      "highlights": [
+        0.025,
+        0.012,
+        -0.02
+      ]
+    }
+  },
+  "effects": [
+    {
+      "type": "lut",
+      "file": {
+        "base": "luts",
+        "rel": "look-gritty-war.cube"
+      },
+      "amount": 0.9
+    },
+    {
+      "type": "clarity",
+      "amount": 0.3,
+      "size": 2
+    },
+    {
+      "type": "grain",
+      "amount": 0.18,
+      "size": 2
+    },
+    {
+      "type": "sharpen",
+      "amount": 0.3
+    },
+    {
+      "type": "vignette",
+      "amount": 0.35,
+      "size": 0.5,
+      "softness": 0.75,
+      "color": "#000000"
+    }
+  ],
+  "backdrop": [
+    "lut"
+  ],
+  "swatch": [
+    "#18191a",
+    "#d5ac8f",
+    "#476035",
+    "#7b9cc6",
+    "#961e1c"
+  ]
+}

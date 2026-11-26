@@ -114,10 +114,11 @@ export const REPO_FILES = Object.freeze([
   'tools/live-check.mjs', 'data/ai/local-model.json',
 ]);
 // data/luts: the app's own .cube LUTs, base "luts" of the alpha load (D381; services/studio-ui/alpha.mjs LUTS_DIR)
+// data/looks: the realism looks (D445; services/project/looks.mjs), read by the UI server for Make realism scene
 // Single-file setup (2026-11-19): the clip maker and face worker ship with the bundled Python, so their data ships too:
 // every data/clip/*.json, the committed game packs (data/games/<id>/*.json and the pack schemas; never local/), the
 // face-model list and the download manager's list (data/downloads).
-export const REPO_GLOB_DIRS = Object.freeze([['data/platforms', /\.json$/], ['data/outputs/presets', /\.json$/], ['data/luts', /\.cube$/], ['data/transitions', /\.(json|webm)$/],
+export const REPO_GLOB_DIRS = Object.freeze([['data/platforms', /\.json$/], ['data/outputs/presets', /\.json$/], ['data/luts', /\.cube$/], ['data/looks', /^[a-z0-9-]+\.json$/], ['data/transitions', /\.(json|webm)$/],
   ['data/clip', /^[a-z0-9-]+\.json$/], ['data/games', /^([a-z0-9-]+\/)?[a-z0-9-]+(\.schema)?\.json$/], ['data/models', /^[a-z0-9-]+\.json$/], ['data/downloads', /^[a-z0-9-]+\.json$/]]);
 // Python sources of the clip maker and the face worker (run by runtime/python): .py only, no tests.
 export const PY_DIRS = Object.freeze(['services/clip', 'services/face']);

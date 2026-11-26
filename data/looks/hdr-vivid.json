@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "hdr-vivid",
+  "name": "HDR vivid",
+  "summary": "Rich colour and crisp detail: livelier muted colours, kept highlights and strong local contrast.",
+  "status": "unverified",
+  "grade": {
+    "saturation": 1.08,
+    "vibrance": 0.25,
+    "contrast": 0.2,
+    "mids": 0.08,
+    "knee": 0.82,
+    "white": 0.99
+  },
+  "effects": [
+    {
+      "type": "lut",
+      "file": {
+        "base": "luts",
+        "rel": "look-hdr-vivid.cube"
+      },
+      "amount": 0.8
+    },
+    {
+      "type": "clarity",
+      "amount": 0.45,
+      "size": 2.5
+    },
+    {
+      "type": "sharpen",
+      "amount": 0.3
+    }
+  ],
+  "backdrop": [
+    "lut"
+  ],
+  "swatch": [
+    "#242424",
+    "#e8ab82",
+    "#4f7e2c",
+    "#71a5e4",
+    "#da1b15"
+  ]
+}

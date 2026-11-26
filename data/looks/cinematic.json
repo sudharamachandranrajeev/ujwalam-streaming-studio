@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "cinematic",
+  "name": "Cinematic",
+  "summary": "Movie colour: teal shadows, warm skin and lights, soft contrast, a faint glow on lights, fine grain and a vignette.",
+  "status": "unverified",
+  "grade": {
+    "saturation": 0.92,
+    "tame": 0.1,
+    "contrast": 0.25,
+    "lift": 0.015,
+    "knee": 0.78,
+    "white": 0.97,
+    "split": {
+      "shadows": [
+        -0.015,
+        0.006,
+        0.03
+      ],
+      "highlights": [
+        0.03,
+        0.012,
+        -0.02
+      ]
+    }
+  },
+  "effects": [
+    {
+      "type": "lut",
+      "file": {
+        "base": "luts",
+        "rel": "look-cinematic.cube"
+      },
+      "amount": 0.85
+    },
+    {
+      "type": "bloom",
+      "amount": 0.15,
+      "threshold": 0.8,
+      "size": 3
+    },
+    {
+      "type": "grain",
+      "amount": 0.06,
+      "size": 2
+    },
+    {
+      "type": "vignette",
+      "amount": 0.3,
+      "size": 0.5,
+      "softness": 0.75,
+      "color": "#000000"
+    }
+  ],
+  "backdrop": [
+    "lut"
+  ],
+  "swatch": [
+    "#222529",
+    "#e1ad88",
+    "#54793a",
+    "#78a3d8",
+    "#c12220"
+  ]
+}

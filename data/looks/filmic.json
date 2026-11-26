@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "filmic",
+  "name": "Filmic",
+  "summary": "Gentle film colour: tamed over-bright colours, soft contrast, slightly cool shadows and warm lights, a light sharpen and a soft vignette.",
+  "status": "unverified",
+  "generator": "tools/make-realism-lut.mjs",
+  "effects": [
+    {
+      "type": "lut",
+      "file": {
+        "base": "luts",
+        "rel": "realism-filmic.cube"
+      },
+      "amount": 0.85
+    },
+    {
+      "type": "sharpen",
+      "amount": 0.3
+    },
+    {
+      "type": "vignette",
+      "amount": 0.25,
+      "size": 0.55,
+      "softness": 0.8,
+      "color": "#000000"
+    }
+  ],
+  "backdrop": [
+    "lut",
+    "sharpen",
+    "vignette"
+  ],
+  "swatch": [
+    "#222325",
+    "#e2aa85",
+    "#517835",
+    "#73a2db",
+    "#c51f1c"
+  ]
+}

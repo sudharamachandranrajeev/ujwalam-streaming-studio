@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "night-neon",
+  "name": "Night neon",
+  "summary": "Night city: deep blacks, blue-magenta shadows, rich colour, a strong glow on lights and a slight lens fringe.",
+  "status": "unverified",
+  "grade": {
+    "saturation": 1.12,
+    "vibrance": 0.15,
+    "crush": 0.06,
+    "contrast": 0.35,
+    "mids": -0.06,
+    "knee": 0.8,
+    "white": 0.99,
+    "split": {
+      "shadows": [
+        0.01,
+        -0.01,
+        0.045
+      ],
+      "highlights": [
+        0.02,
+        -0.005,
+        0.02
+      ]
+    }
+  },
+  "effects": [
+    {
+      "type": "lut",
+      "file": {
+        "base": "luts",
+        "rel": "look-night-neon.cube"
+      },
+      "amount": 0.85
+    },
+    {
+      "type": "bloom",
+      "amount": 0.45,
+      "threshold": 0.6,
+      "size": 5
+    },
+    {
+      "type": "chromatic",
+      "amount": 0.3
+    },
+    {
+      "type": "vignette",
+      "amount": 0.35,
+      "size": 0.5,
+      "softness": 0.8,
+      "color": "#000000"
+    }
+  ],
+  "backdrop": [
+    "lut"
+  ],
+  "swatch": [
+    "#16121d",
+    "#eaa075",
+    "#3e6d20",
+    "#6099e8",
+    "#df0a0d"
+  ]
+}
