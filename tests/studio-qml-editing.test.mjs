@@ -21,6 +21,7 @@ import { createFlags } from '../services/flags/index.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 import { createProjectSync } from '../services/studio-ui/project-sync.mjs';
 import { createProject, saveProject, validateProject } from '../services/project/index.mjs';
+import { loadLooks } from '../services/project/looks.mjs';
 import { EXE, qtDir } from '../app/studio/tools/build.mjs';
 
 const UI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
@@ -70,6 +71,7 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-qmled-')); dirs.push(dataDir);
     const flags = createFlags({ dataDir });
     for (const id of opts.flags ?? []) flags.set(id, true);
+    for (const id of opts.flagsOff ?? []) flags.set(id, false);
     const fake = createFakeHost({ outputsReady: true });
     if (opts.live) await fake.call('stream.start', {});
     if (opts.seed) await opts.seed(fake);
@@ -573,7 +575,7 @@ describe('QML studio editing (headless probe)', { skip }, () => {
 
   test('scene menu: items for a scene, Delete greyed without the flag and for the active scene; with the flag it removes another scene', async () => {
     const off = await probe(['select-scene:scene-2', 'scene-menu:show']);
-    assert.deepEqual(off.s.scenePanel.menu.items.map((i) => [i.text, i.enabled]), [['Add scene…', true], ['Add layer…', true], ['Music…', true], ['Rename…', true], ['Duplicate scene', true], ['Delete…', false]]);
+    assert.deepEqual(off.s.scenePanel.menu.items.map((i) => [i.text, i.enabled]), [['Add scene…', true], ['Add layer…', true], ['Music…', true], ['Rename…', true], ['Duplicate scene', true], ['Make realism scene', true], ['Delete…', false]]);
     assert.equal(off.s.scenePanel.menu.items.find((i) => i.id === 'delete').tip, 'Turn on scene editing in Settings > Editing');
     assert.equal(off.s.scenePanel.menu.items.find((i) => i.id === 'rename').keys, 'F2');
     const on = await probe(['select-scene:scene-1', 'scene-menu:delete', 'select-scene:scene-2', 'scene-menu:delete'], { flags: ['scene-edit'] });
@@ -584,27 +586,40 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     assert.equal(by(act.s.scenePanel.menu.items).delete.tip, 'Switch to another scene first');
   });
 
-  test('scene menu: Make realism scene shows only with flag realism-look, and makes one copy on the click', async () => {
-    const off = await probe(['select-scene:scene-1', 'scene-menu:show']);
+  test('scene menu: Make realism scene is a submenu of looks (flag realism-look, on by default); one click makes "<scene> <look>"', async () => {
+    const off = await probe(['select-scene:scene-1', 'scene-menu:show'], { flagsOff: ['realism-look'] });
     assert.ok(!off.s.scenePanel.menu.items.some((i) => i.id === 'realism'));
-    const on = await probe(['select-scene:scene-1', 'scene-menu:show'], { flags: ['realism-look'] });
+    const on = await probe(['select-scene:scene-1', 'scene-menu:show']);
     assert.deepEqual(on.s.scenePanel.menu.items.map((i) => i.id), ['addscene', 'add', 'music', 'rename', 'duplicate', 'realism', 'delete']);
+    const row = by(on.s.scenePanel.menu.items).realism;
+    assert.deepEqual([row.text, row.keys, row.enabled], ['Make realism scene', '›', true], 'a submenu row');
+    const looks = on.s.scenePanel.menu.looks;
+    assert.deepEqual(looks.map((i) => i.id), loadLooks().map((l) => l.id), 'one row per look, Filmic first');
+    assert.deepEqual(looks.map((i) => i.text), loadLooks().map((l) => l.name));
+    assert.ok(looks.every((i) => i.enabled && i.tip.length > 10), 'each row says what the look does');
     // a scene with no game capture: the click reaches the route and the refusal is said in plain words
-    const none = await probe(['select-scene:scene-1', 'scene-menu:realism'], { flags: ['realism-look'] });
+    const none = await probe(['select-scene:scene-1', 'scene-menu:realism:cinematic']);
     assert.deepEqual(none.done, [true, true]);
     assert.equal(none.s.note, 'Not done: This scene shows no game capture, so there is nothing to grade.');
     assert.equal(none.s.scenes.length, 3);
-    // a project whose scene shows the game capture card: one click makes the graded copy, the original stays
+    // a project whose scene shows the game capture card: one click on a look makes the graded copy, the original stays
     const withCard = (doc) => {
       doc.devices.push({ id: 'card', kind: 'capture-card', name: 'Card', match: { name: 'Card' } });
       const pl = { h: { visible: true, x: 0, y: 0, width: 1920, height: 1080 }, v: { visible: true, x: 0, y: 0, width: 1080, height: 608 } };
       doc.scenes[0].layers.push({ id: 'gamecard', type: 'capture', name: 'Game card', source: { device: 'card' }, placements: pl });
     };
-    const run = await probe(['select-scene:scene-1', 'scene-menu:realism'], { flags: ['realism-look'], editProject: withCard });
+    const run = await probe(['select-scene:scene-1', 'scene-menu:realism:dark-cinematic'], { editProject: withCard });
     assert.deepEqual(run.done, [true, true]);
-    assert.match(run.s.note, /^Realism scene made: .+ \(1 game layer\(s\) graded\)/);
+    assert.match(run.s.note, /^Realism scene made: .+ Dark cinematic \(1 game layer\(s\) graded\)/);
     assert.equal(run.s.scenes.length, 4, 'a new scene next to the original');
-    assert.equal(run.doc().scenes.length, 3);
+    const saved = run.doc();
+    assert.equal(saved.scenes.length, 3);
+    assert.equal(saved.scenes[0].layers.find((l) => l.id === 'gamecard').effects, undefined, 'the original is unchanged');
+    assert.ok(saved.scenes[1].layers.some((l) => (l.effects ?? []).some((e) => e.type === 'lut' && e.file.rel === 'look-dark-cinematic.cube')));
+    // while live the rows are greyed and a click does nothing
+    const live = await probe(['select-scene:scene-1', 'scene-menu:show', 'scene-menu:realism:cinematic'], { live: true, editProject: withCard });
+    assert.equal(by(live.s.scenePanel.menu.items).realism.enabled, false);
+    assert.deepEqual(live.done, [true, true, false]);
   });
 
   test('scene menu on empty space offers only Add scene; Add layer acts on the scene the menu was opened on', async () => {

@@ -45,6 +45,7 @@ QtObject {
     readonly property bool routing: flags["mixer-routing"] === true && tracks.length > 0
     readonly property bool sceneEdit: flags["scene-edit"] === true // deleting scenes needs it (D240); adding does not
     readonly property bool realism: flags["realism-look"] === true // "Make realism scene" in the scene menu (D381)
+    property var looks: []           // D445: the realism looks (ui/api/looks: id, name, summary, swatch), read once the flag is on
     property EditOps edit: EditOps { store: store } // undo, nudge, layer and scene menu operations (plan Q4, EditOps.qml)
     property var structure: ({})     // ui/api/project/structure: what a new layer can be made from (devices, overlays, assets)
     property bool addOpen: false     // an add window is open: a device plugged in or out refreshes its lists (D329)
@@ -207,7 +208,8 @@ QtObject {
             "host-unavailable": "The studio host is not reachable.",
             "realism-look-off": "Turn on Realism scene in Settings > Editing first.",
             "no-game-capture": "This scene shows no game capture, so there is nothing to grade.",
-            "too-many-effects": "A game layer already has too many effects for the realism grade (6 at most)."
+            "too-many-effects": "A game layer already has too many effects for this look (6 at most).",
+            "unknown-look": "That look is not installed any more."
         };
         return words[code] || code;
     }
@@ -762,6 +764,9 @@ QtObject {
             Api.get("ui/api/learning/review", (ok2, r) => { reviewCount = ok2 && typeof r.total === "number" ? r.total : 0 });
         });
     }
+    function loadLooks() {
+        Api.get("ui/api/looks", (ok, b) => { if (ok && Array.isArray(b.looks)) looks = b.looks });
+    }
     function takeFlags(list) {
         const f = {};
         for (const x of list) f[x.id] = x.on === true;
@@ -774,6 +779,7 @@ QtObject {
             Theme.rareui = look;
             Theme.setComponentsOn(look && f["theme-components"] === true);
             flags = f;
+            if (f["realism-look"] === true && looks.length === 0) loadLooks();
         }
         // GUI load (2026-11-25): compared field by field in one pass, not by two JSON texts of the whole list on every poll
         // (7 ms a poll, up to 36 ms, in the realistic probe).

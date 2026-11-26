@@ -3214,3 +3214,19 @@ with Facebook Login and a resumable upload from this PC (no public video URL). I
 Ujwalam publishes at the time itself. Tokens and the app secret in Windows Credential Manager only. A clip file is
 deleted (post-delete-uploaded) only after every target that wants it has posted it. Flag `instagram-autopost` ON by default
 (user-requested); it does nothing until connected. The first real post waits for the user's yes.
+
+## D445 — Realism looks: a look library, light effects in the host, a looks submenu (2026-11-26, plan approved)
+
+Plan: [2026-11-25-realism-looks](2026-11-25-realism-looks.md), RL1-RL3; extends D381. Looks are data:
+`data/looks/<id>.json` (schema `data/schemas/look.schema.json`) names a grade, the layer effects (LUT first) and the effect
+types kept on blurred backdrops. Seven looks: Filmic (the D381 grade), Cinematic, Dark cinematic (reference A), Cold
+high-key (reference C, reds kept strong), Gritty war, HDR vivid, Night neon. Each LUT is our own, written
+deterministically by `tools/make-look-luts.mjs` and checked byte for byte by a test; no reference frame or file is in the
+repo. All values are proposals, status unverified, until the user has seen them on stream. New host layer effects
+`bloom`, `clarity` and `chromatic` (single GPU shaders, registry functions layer-bloom, layer-clarity, layer-chromatic);
+film grain is the existing D291 effect. Measured cost (6 full-canvas 1080p layers, render-thread frame time): about
+0.02 ms per layer each, a whole look on the alpha game + backdrop scene 0.03-0.10 ms per frame; grain and the new effects
+add no flash (0 flashes/s). Make realism scene becomes a submenu with one row per look; the copy is "<scene> <look
+name>", id "<scene id>-<look id>"; the original is never changed; refused while live. A look made from a look scene
+replaces the look (effects of any look are taken off first), so two never stack. Flag `realism-look` ON by default.
+Changing the look of an existing scene in place is open (not built): make a new look scene from it instead.

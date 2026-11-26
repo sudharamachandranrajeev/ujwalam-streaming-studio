@@ -222,10 +222,11 @@ QtObject {
         if (store.live) return store.say("Not while live.");
         store.structureEdit({ op: "scene.duplicate", scene: id });
     }
-    // D381: one click, no question (D332). The server copies the scene and grades its game layers; the original stays.
-    function realismScene(id) {
+    // D381, D445: one click on a look, no question (D332). The server copies the scene as "<scene> <look name>" and grades
+    // its game layers with that look; the original stays.
+    function realismScene(id, look) {
         if (store.live) return store.say("Not while live.");
-        store.structureEdit({ op: "scene.realism", scene: id });
+        store.structureEdit(look ? { op: "scene.realism", scene: id, look: look } : { op: "scene.realism", scene: id });
     }
 
     function probe() {

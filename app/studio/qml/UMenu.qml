@@ -18,6 +18,18 @@ Menu {
         // A window popup is as big as its box, so a shadow past the edge would be cut off: only the in-window kind gets one.
         ShadowLayers { level: menu.popupType === Popup.Window ? 0 : 3; strength: 0; radius: Theme.radiusMedium }
     }
+    // A UMenu inside a UMenu is a submenu: its row is drawn by this delegate, takes the submenu's objectName (so items()
+    // and trigger() find it), its tip, and hides with shown: false.
+    property string tip: ""
+    property bool shown: true
+    delegate: UMenuItem {
+        objectName: subMenu ? subMenu.objectName : ""
+        visible: !subMenu || subMenu.shown
+        height: visible ? implicitHeight : 0
+        enabled: !subMenu || subMenu.enabled
+        tip: subMenu ? subMenu.tip : ""
+        keys: subMenu ? "›" : ""
+    }
     // id, text, keys, enabled, tip of every row that is shown (separators have no id)
     function items() {
         const out = [];

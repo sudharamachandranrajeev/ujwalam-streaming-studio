@@ -29,6 +29,7 @@
 
 import { newId, relPathProblem, validateProject } from './index.mjs';
 import { DISPLAY_ID_RE, WINDOW_SPEC_RE } from './validate.mjs';
+import { DEFAULT_LOOK, loadLooks } from './looks.mjs';
 
 const COLOR = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
 const KINDS = ['copy', 'color', 'text', 'capture', 'overlay', 'image', 'media', 'screen', 'window'];
@@ -276,17 +277,21 @@ export function duplicateScene(doc, { scene } = {}) {
   return checked(project, { scene: copy, layers: copy.layers });
 }
 
-// ---- Realism scene (D381, flag realism-look). A per-pixel grade, not a neural filter: a neural "photoreal" pass does
-// not fit live on a 6 GB laptop GPU next to three NVENC encodes.
+// ---- Realism scene (D381, flag realism-look; looks D445). A per-pixel grade, not a neural filter: a neural "photoreal"
+// pass does not fit live on a 6 GB laptop GPU next to three NVENC encodes.
 //
-//   realismScene(doc, { scene }) -> { project, scene, layers, graded }
-//     duplicateScene, named "<name> Realism" (then "<name> Realism 2", ...), id "<id>-realism"; on every layer of the
-//     copy that shows the game capture (the capture layer itself, now a duplicate of it, and every duplicate of it, such
-//     as the blurred backdrop) REALISM_EFFECTS go after the layer's own effects. graded: the ids of those layers.
-//     The source scene is never changed. Refused: no-game-capture (the scene shows no game capture), too-many-effects
-//     (a game layer would pass the 6-effect limit). The game device: the one bound to the game-capture role (origin
-//     role/game-capture), else the project's only capture card.
-// REALISM_EFFECTS[0] equals preset fx-realism-grade (registry/presets/fx-realism-grade.json; a test checks it).
+//   realismScene(doc, { scene, look }, looks?) -> { project, scene, layers, graded, look }
+//     look: a look id from the library (data/looks, services/project/looks.mjs; default "filmic"). duplicateScene, named
+//     "<name> <look name>" (then "<name> <look name> 2", ...), id "<id>-<look id>"; on every layer of the copy that
+//     shows the game capture (the capture layer itself, now a duplicate of it, and every duplicate of it, such as the
+//     blurred backdrop) the look's effects go after the layer's own effects. A layer that already has a blur (the
+//     backdrop copies) gets only the look's `backdrop` types (the detail effects would only cost GPU under a blur).
+//     Effects of any look already on a layer are taken off first, so a realism copy of a realism scene changes the look
+//     instead of stacking two. graded: the ids of those layers. The source scene is never changed.
+//     Refused: unknown-look, no-game-capture (the scene shows no game capture), too-many-effects (a game layer would pass
+//     the 6-effect limit). The game device: the one bound to the game-capture role (origin role/game-capture), else the
+//     project's only capture card.
+// REALISM_EFFECTS: the Filmic look (data/looks/filmic.json; a test checks both); [0] equals preset fx-realism-grade.
 export const REALISM_EFFECTS = Object.freeze([
   Object.freeze({ type: 'lut', file: Object.freeze({ base: 'luts', rel: 'realism-filmic.cube' }), amount: 0.85 }),
   Object.freeze({ type: 'sharpen', amount: 0.3 }),
@@ -302,26 +307,29 @@ function gameDevices(doc) {
   return new Set(cards.length === 1 ? [cards[0].id] : []);
 }
 
-function freeLabel(root, names, max = 120) {
+const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function freeLabel(root, label, names, max = 120) {
   for (let n = 1; n < 10000; n++) {
-    const suffix = n === 1 ? ' Realism' : ` Realism ${n}`;
+    const suffix = n === 1 ? ` ${label}` : ` ${label} ${n}`;
     const out = root.slice(0, max - suffix.length) + suffix;
     if (!names.has(out)) return out;
   }
   return null;
 }
 
-function freeRealismId(base, taken) {
-  const root = base.replace(/-copy(-\d+)?$/, '').replace(/-realism(-\d+)?$/, '');
+function freeRealismId(root, lookId, taken) {
   for (let n = 1; n < 10000; n++) {
-    const suffix = n === 1 ? '-realism' : `-realism-${n}`;
+    const suffix = n === 1 ? `-${lookId}` : `-${lookId}-${n}`;
     const id = root.slice(0, 64 - suffix.length) + suffix;
     if (!taken.has(id)) return id;
   }
   return null;
 }
 
-export function realismScene(doc, { scene } = {}) {
+export function realismScene(doc, { scene, look = DEFAULT_LOOK } = {}, looks = loadLooks()) {
+  const lk = looks.find((x) => x.id === look);
+  if (!lk) return { error: 'unknown-look' };
   const s = doc.scenes.find((x) => x.id === scene);
   if (!s) return { error: 'unknown-scene' };
   const games = gameDevices(doc);
@@ -333,17 +341,26 @@ export function realismScene(doc, { scene } = {}) {
   const graded = s.layers.filter(showsGame);
   if (!graded.length) return { error: 'no-game-capture' };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  const extra = REALISM_EFFECTS.map((e) => structuredClone(e));
+  const anyLook = [REALISM_EFFECTS, ...looks.map((x) => x.effects)].flat();
+  const own = (l) => (l.effects ?? []).filter((e) => !anyLook.some((x) => same(x, e)));
+  const extraFor = (l) => {
+    const backdrop = own(l).some((e) => e.type === 'blur');
+    return lk.effects.filter((e) => !backdrop || lk.backdrop.includes(e.type)).map((e) => structuredClone(e));
+  };
   for (const l of graded) {
-    const own = (l.effects ?? []).filter((e) => !extra.some((x) => same(x, e)));
-    if (own.length + extra.length > MAX_EFFECTS) return { error: 'too-many-effects', layer: l.id };
+    if (own(l).length + extraFor(l).length > MAX_EFFECTS) return { error: 'too-many-effects', layer: l.id };
   }
   const d = duplicateScene(doc, { scene });
   if (d.error) return d;
   const project = d.project;
   const copy = project.scenes.find((x) => x.id === d.scene.id);
-  const id = freeRealismId(s.id, new Set(doc.scenes.map((x) => x.id)));
-  const name = freeLabel(s.name.replace(/\s+Realism(\s+\d+)?$/, ''), new Set(doc.scenes.map((x) => x.name)));
+  // the root name and id: the source's without a copy, realism or look suffix
+  const names = ['Realism', ...looks.map((x) => x.name)].map(escRe).join('|');
+  const ids = ['copy', 'realism', ...looks.map((x) => x.id)].map(escRe).join('|');
+  const rootName = s.name.replace(new RegExp(`\\s+(?:${names})(?:\\s+\\d+)?$`), '');
+  const rootId = s.id.replace(new RegExp(`-(?:${ids})(?:-\\d+)?$`), '');
+  const id = freeRealismId(rootId, lk.id, new Set(doc.scenes.map((x) => x.id)));
+  const name = freeLabel(rootName, lk.name, new Set(doc.scenes.map((x) => x.name)));
   if (!id || !name) return { error: 'too-many-scenes' };
   copy.id = id;
   copy.name = name;
@@ -351,8 +368,8 @@ export function realismScene(doc, { scene } = {}) {
   s.layers.forEach((src, i) => {
     if (!graded.includes(src)) return;
     const l = copy.layers[i]; // duplicateScene keeps the order
-    l.effects = [...(l.effects ?? []).filter((e) => !extra.some((x) => same(x, e))), ...structuredClone(extra)];
+    l.effects = [...own(l), ...extraFor(l)];
     gradedIds.push(l.id);
   });
-  return checked(project, { scene: copy, layers: copy.layers, graded: gradedIds });
+  return checked(project, { scene: copy, layers: copy.layers, graded: gradedIds, look: lk.id });
 }

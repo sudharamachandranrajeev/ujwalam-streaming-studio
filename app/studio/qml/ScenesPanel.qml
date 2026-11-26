@@ -27,7 +27,8 @@ UPanel {
         menu.sceneId = blank ? "" : id;
         menu.popup(list, x, y);
     }
-    // Probe (tests): select-scene:<id> (the current scene only, no switch), scene-menu:show | blank | <item id>, scene-key:<keys>.
+    // Probe (tests): select-scene:<id> (the current scene only, no switch), scene-menu:show | blank | <item id> |
+    // realism:<look id> (a row of the Make realism scene submenu), scene-key:<keys>.
     function probeAction(a) {
         if (a.startsWith("select-scene:")) {
             const id = a.slice(13);
@@ -36,6 +37,11 @@ UPanel {
             return true;
         }
         if (a === "scene-menu:show" || a === "scene-menu:blank") { openMenu(a === "scene-menu:blank", current, 20, 20); return true }
+        if (a.startsWith("scene-menu:realism:")) {
+            menu.close();
+            openMenu(false, current, 20, 20);
+            return menu.makeLook(a.slice(19));
+        }
         if (a.startsWith("scene-menu:")) {
             menu.close(); // each action opens the menu afresh for the scene selected now, as the widget builds it
             openMenu(false, current, 20, 20);
@@ -45,7 +51,7 @@ UPanel {
         return false;
     }
     function probe() {
-        return { menu: { open: menu.opened, blank: menu.blank, scene: menu.sceneId, items: menu.items() }, keys: keyNames, current: current };
+        return { menu: { open: menu.opened, blank: menu.blank, scene: menu.sceneId, items: menu.items(), looks: menu.lookItems() }, keys: keyNames, current: current };
     }
     SceneMenu { id: menu; store: panel.store }
 

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { planInHost } from '../app/host/lib/project.mjs';
 import { createFlags } from '../services/flags/index.mjs';
 import { createProject, saveProject, validateProject } from '../services/project/index.mjs';
+import { loadLooks } from '../services/project/looks.mjs';
 import { REALISM_EFFECTS, duplicateScene, realismScene } from '../services/project/structure.mjs';
 import { createProjectSync } from '../services/studio-ui/project-sync.mjs';
 import { REALISM_FLAG, createStudioServer } from '../services/studio-ui/server.mjs';
@@ -88,7 +89,7 @@ test('preset fx-realism-grade: the LUT effect the realism scene uses, on a shipp
   assert.equal(p.params.effect.file.base, 'luts');
   assert.equal(path.join(REPO, 'data', 'luts', p.params.effect.file.rel), LUT_FILE);
   const flag = JSON.parse(readFileSync(path.join(REPO, 'data', 'flags.json'), 'utf8')).flags.find((f) => f.id === REALISM_FLAG);
-  assert.deepEqual([flag.default, flag.page], [false, 'editing'], 'ships off, on the page with the other layer-effect flags');
+  assert.deepEqual([flag.default, flag.onBy, flag.page], [true, 'D445', 'editing'], 'on by default since D445, on the page with the other layer-effect flags');
 });
 
 // ---- realismScene (pure)
@@ -120,8 +121,9 @@ test('realismScene: a named copy; every game layer of the copy gets the grade af
   const r = realismScene(doc, { scene: s.id });
   assert.ok(!r.error, JSON.stringify(r));
   assert.equal(JSON.stringify(doc), before, 'input unchanged');
-  assert.equal(r.scene.name, `${s.name} Realism`);
-  assert.equal(r.scene.id, `${s.id}-realism`);
+  assert.equal(r.scene.name, `${s.name} Filmic`, 'no look given: Filmic, the D381 grade');
+  assert.equal(r.scene.id, `${s.id}-filmic`);
+  assert.equal(r.look, 'filmic');
   assert.equal(r.project.scenes[1].id, r.scene.id, 'right after the source');
   assert.equal(JSON.stringify(r.project.scenes[0]), JSON.stringify(s), 'the source scene in the result is unchanged');
   assert.equal(r.project.activeScene, doc.activeScene, 'the start scene stays');
@@ -136,13 +138,13 @@ test('realismScene: a named copy; every game layer of the copy gets the grade af
   assert.equal(byName.Game.source.layer, 'game');
   assert.deepEqual(r.graded.sort(), [byName.Backdrop.id, byName.Game.id, byName['Game V'].id].sort());
   assert.ok(validateProject(r.project).ok);
-  // again: "Realism 2"; a realism copy of the realism scene does not stack the grade twice
+  // again: "Filmic 2"; a realism copy of the realism scene does not stack the grade twice
   const r2 = realismScene(r.project, { scene: s.id });
-  assert.equal(r2.scene.name, `${s.name} Realism 2`);
-  assert.equal(r2.scene.id, `${s.id}-realism-2`);
+  assert.equal(r2.scene.name, `${s.name} Filmic 2`);
+  assert.equal(r2.scene.id, `${s.id}-filmic-2`);
   const r3 = realismScene(r2.project, { scene: r.scene.id });
   assert.ok(!r3.error, JSON.stringify(r3));
-  assert.equal(r3.scene.name, `${s.name} Realism 3`);
+  assert.equal(r3.scene.name, `${s.name} Filmic 3`);
   for (const l of r3.layers.filter((x) => r3.graded.includes(x.id))) assert.equal(l.effects.filter((e) => e.type === 'lut').length, 1, l.name);
   // effects are deep copies, not shared with the module constant
   r.layers.find((l) => l.name === 'Game').effects.at(-1).amount = 0.9;
@@ -166,6 +168,46 @@ test('realismScene: no game capture, the effect limit and unknown scenes are ref
   assert.equal(realismScene(noRole, { scene: s }).graded.length, 3);
   // plain duplicate stays as it was
   assert.equal(duplicateScene(doc, { scene: s }).layers.find((l) => l.name === 'Game').effects.length, 1);
+  assert.equal(realismScene(doc, { scene: s, look: 'nope' }).error, 'unknown-look');
+});
+
+test('realismScene (D445): each look of the library applies to the game layers; backdrops get only its backdrop types; original unchanged', () => {
+  const looks = loadLooks();
+  assert.ok(looks.length >= 7);
+  const doc = alphaLike();
+  const before = JSON.stringify(doc);
+  const s = doc.scenes[0];
+  for (const look of looks) {
+    const r = realismScene(doc, { scene: s.id, look: look.id });
+    assert.ok(!r.error, `${look.id}: ${JSON.stringify(r)}`);
+    assert.equal(JSON.stringify(doc), before, `${look.id}: input unchanged`);
+    assert.equal(JSON.stringify(r.project.scenes[0]), JSON.stringify(s), `${look.id}: the source scene is unchanged`);
+    assert.equal(r.scene.name, `${s.name} ${look.name}`);
+    assert.equal(r.scene.id, `${s.id}-${look.id}`);
+    assert.equal(r.look, look.id);
+    const byName = Object.fromEntries(r.layers.map((l) => [l.name, l]));
+    const all = JSON.parse(JSON.stringify(look.effects));
+    assert.deepEqual(byName.Game.effects, [{ type: 'rounded', radius: 64 }, ...all], look.id);
+    assert.deepEqual(byName['Game V'].effects, all, look.id);
+    assert.deepEqual(byName.Backdrop.effects, [{ type: 'blur', strength: 71 }, ...all.filter((e) => look.backdrop.includes(e.type))], `${look.id}: backdrop`);
+    assert.equal(byName.Cam.effects, undefined);
+    assert.equal(r.graded.length, 3);
+    assert.deepEqual(validateProject(r.project).errors, [], look.id);
+  }
+  // a look scene made from a look scene changes the look, never stacks two; the name keeps the source's root
+  const dark = realismScene(doc, { scene: s.id, look: 'dark-cinematic' });
+  const neon = realismScene(dark.project, { scene: dark.scene.id, look: 'night-neon' });
+  assert.ok(!neon.error, JSON.stringify(neon));
+  assert.equal(neon.scene.name, `${s.name} Night neon`);
+  assert.equal(neon.scene.id, `${s.id}-night-neon`);
+  const game = neon.layers.find((l) => l.name === 'Game');
+  const nn = looks.find((l) => l.id === 'night-neon');
+  assert.deepEqual(game.effects, [{ type: 'rounded', radius: 64 }, ...JSON.parse(JSON.stringify(nn.effects))]);
+  // an old D381 "<name> Realism" scene is a root too: its copy is "<name> Cinematic", not "<name> Realism Cinematic"
+  const old = realismScene(doc, { scene: s.id });
+  Object.assign(old.project.scenes.find((x) => x.id === old.scene.id), { id: `${s.id}-realism`, name: `${s.name} Realism` });
+  const c = realismScene(old.project, { scene: `${s.id}-realism`, look: 'cinematic' });
+  assert.deepEqual([c.scene.name, c.scene.id], [`${s.name} Cinematic`, `${s.id}-cinematic`]);
 });
 
 // ---- the UI server route
@@ -209,11 +251,17 @@ test('server: scene.realism needs flag realism-look (not scene-edit), refused wh
     const hdr = { cookie, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf };
     const post = (body) => raw(port, { method: 'POST', url: '/ui/api/project/structure', body: JSON.stringify(body), headers: hdr });
     const disk = () => JSON.parse(readFileSync(file, 'utf8'));
-    assert.equal(flags.isOn(REALISM_FLAG), false, 'off by default');
+    assert.equal(flags.isOn(REALISM_FLAG), true, 'on by default (D445)');
+    flags.set(REALISM_FLAG, false);
     let r = await post({ op: 'scene.realism', scene: sid });
     assert.deepEqual([r.status, r.body.error], [404, 'realism-look-off']);
     assert.equal(calls.length, 0);
     flags.set(REALISM_FLAG, true);
+    // the look list for the menu: read-only, Filmic first, each with a name, words and a swatch
+    const looks = (await raw(port, { url: '/ui/api/looks', headers: { cookie } })).body.looks;
+    assert.equal(looks[0].id, 'filmic');
+    assert.ok(looks.length >= 7 && looks.every((l) => l.name && l.summary && l.swatch.length === 5), JSON.stringify(looks));
+    assert.equal((await post({ op: 'scene.realism', scene: sid, look: 'nope' })).body.error, 'unknown-look');
     assert.equal((await post({ op: 'scene.realism', scene: sid, name: 'x' })).status, 400, 'unknown key');
     state.live = true;
     assert.equal((await post({ op: 'scene.realism', scene: sid })).body.error, 'live-locked');
@@ -222,16 +270,17 @@ test('server: scene.realism needs flag realism-look (not scene-edit), refused wh
     assert.equal((await post({ op: 'scene.realism', scene: sid })).status, 502, 'a host refusal saves nothing');
     assert.equal(disk().scenes.length, 1);
     state.fail = false;
-    r = await post({ op: 'scene.realism', scene: sid });
+    r = await post({ op: 'scene.realism', scene: sid, look: 'dark-cinematic' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.deepEqual(r.body.scene, { id: `${sid}-realism`, name: `${doc.scenes[0].name} Realism` });
+    assert.deepEqual(r.body.scene, { id: `${sid}-dark-cinematic`, name: `${doc.scenes[0].name} Dark cinematic` });
+    assert.equal(r.body.look, 'dark-cinematic');
     assert.equal(r.body.graded, 3);
     assert.deepEqual(calls.map((c) => c[0]), ['scenes.create', 'scenes.create', ...doc.scenes[0].layers.map(() => 'layers.addFromProject')], 'H and V scene, then the layers bottom first');
     assert.deepEqual(calls.slice(0, 2).map((c) => c[3]), ['H', 'V']);
     const saved = disk();
     assert.equal(saved.scenes.length, 2);
     assert.deepEqual(saved.scenes[0], JSON.parse(JSON.stringify(doc.scenes[0])), 'the original scene on disk is unchanged');
-    assert.equal(saved.scenes[1].layers.filter((l) => (l.effects ?? []).some((e) => e.type === 'lut' && e.file.base === 'luts')).length, 3);
+    assert.equal(saved.scenes[1].layers.filter((l) => (l.effects ?? []).some((e) => e.type === 'lut' && e.file.base === 'luts' && e.file.rel === 'look-dark-cinematic.cube')).length, 3);
     assert.equal(validateProject(saved).ok, true);
     // a scene without a game capture: refused with a code the studio puts in words
     r = await post({ op: 'scene.add', name: 'Empty' });

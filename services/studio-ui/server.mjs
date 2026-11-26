@@ -55,6 +55,7 @@ import { createLearningStore } from '../learning/store.mjs';
 import { createReview } from '../learning/review.mjs';
 import { UNDOABLE, afterOf, beforeOf, createEditHistory, paramsOf } from './edit-history.mjs';
 import { addLayer, addScene, duplicateLayer, duplicateScene, moveLayer, realismScene, removeLayer, removeScene, renameLayer, renameScene } from '../project/structure.mjs';
+import { loadLooks, lookSummary } from '../project/looks.mjs';
 import { listAssets } from './assets.mjs';
 import { loadProject, saveProject } from '../project/store.mjs';
 import { TRANSITION_RANGES, TRANSITION_TYPES, ownFields, validateProject } from '../project/validate.mjs';
@@ -252,7 +253,7 @@ const STRUCTURE_OPS = ['scene.add', 'scene.remove', 'layer.add', 'layer.remove',
 /** Host calls that start a stream or a recording: refused while Ujwalam is closing (closing lock, D311 proposed). */
 const START_METHODS = new Set(['stream.start', 'record.start']);
 const STRUCTURE_KEYS = { 'scene.add': ['name'], 'scene.remove': ['scene'], 'layer.add': ['scene', 'kind', 'of', 'color', 'text', 'device', 'overlay', 'file', 'display', 'window', 'match'], 'layer.remove': ['scene', 'layer'], 'layer.move': ['scene', 'layer', 'canvas', 'direction', 'target', 'place'],
-  'layer.duplicate': ['scene', 'layer'], 'layer.rename': ['scene', 'layer', 'name'], 'scene.duplicate': ['scene'], 'scene.rename': ['scene', 'name'], 'scene.realism': ['scene'] };
+  'layer.duplicate': ['scene', 'layer'], 'layer.rename': ['scene', 'layer', 'name'], 'scene.duplicate': ['scene'], 'scene.rename': ['scene', 'name'], 'scene.realism': ['scene', 'look'] };
 const BOT_SCHEMA = { bot: { type: 'enum', values: BOTS, required: true } };
 const POST_ERR = { 'unknown-post': 404, 'over-limit': 409, 'unresolved-placeholders': 409, 'empty-title': 409, 'video-changed': 409, 'already-uploaded': 409 };
 const YT_ERR = { 'unknown-post': 404, 'not-approved': 409, 'video-changed': 409, 'over-limit': 409, 'unresolved-placeholders': 409, 'already-uploaded': 409, 'stream-active': 409, 'not-uploaded': 409, 'video-missing': 409, 'status-not-permitted': 403 };
@@ -1343,7 +1344,7 @@ export function createStudioServer(opts) {
     if (typeof file !== 'string') return json(res, 409, { error: 'no-project-file' });
     if (!isPlain(body) || !STRUCTURE_OPS.includes(body.op) || Object.keys(body).some((k) => k !== 'op' && !STRUCTURE_KEYS[body.op].includes(k))) return json(res, 400, { error: 'bad-params' });
     const maxLen = { text: 2000, file: 260, display: 127, window: 1024 }; // display, window: D390 (display ids: OBS takes at most 127 bytes)
-    for (const k of ['name', 'scene', 'kind', 'of', 'color', 'text', 'device', 'overlay', 'layer', 'file', 'canvas', 'direction', 'target', 'place', 'display', 'window', 'match']) {
+    for (const k of ['name', 'scene', 'kind', 'of', 'color', 'text', 'device', 'overlay', 'layer', 'file', 'canvas', 'direction', 'target', 'place', 'display', 'window', 'match', 'look']) {
       if (body[k] !== undefined && (typeof body[k] !== 'string' || body[k].length > (maxLen[k] ?? 120))) return json(res, 400, { error: 'bad-params' });
     }
     // An asset layer may only name a file the assets listing offers right now (never a path the page made up).
@@ -1394,7 +1395,7 @@ export function createStudioServer(opts) {
     history.clear();
     broadcast('edits', history.state());
     broadcast('layers', { source: 'structure', edit: { op, scene: r.scene?.id ?? body.scene, layer: r.layer?.id ?? body.layer ?? null } });
-    return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(r.graded ? { graded: r.graded.length } : {}), saved });
+    return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(r.graded ? { graded: r.graded.length } : {}), ...(r.look ? { look: r.look } : {}), saved });
   }
   // B7 (2026-11-18): a capture layer's own sound whose card's audio input is in the mix already carries sameAs (the name
   // of that sound), so the studio shows it once instead of offering it twice. The project file is read only for this.
@@ -1600,6 +1601,8 @@ export function createStudioServer(opts) {
     if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir), montageMusic: montageMusicInfo(opts.dataDir) } : { settings: null });
     if (req.method === 'GET' && route === '/ui/api/edits') return json(res, 200, history.state());
     if (req.method === 'GET' && route === '/ui/api/project/structure') return structureChoices(res);
+    // D445: the realism looks for the scene menu's Make realism scene (data/looks; read only, also while live)
+    if (req.method === 'GET' && route === '/ui/api/looks') return json(res, 200, { looks: loadLooks().map(lookSummary) });
     if (req.method === 'GET' && route === '/ui/api/project/transitions') return transitionChoices(res);
     if (req.method === 'GET' && route === '/ui/api/feedback') return json(res, 200, { moments: feedback.list() });
     if (route === '/ui/api/report-url') {

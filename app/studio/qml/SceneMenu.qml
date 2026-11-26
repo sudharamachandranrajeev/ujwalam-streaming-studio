@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The scene menu (right-click on a scene; the widget's buildSceneMenu). Blank = right-click on empty space: only
-// "Add scene". Rename and Duplicate need no flag; Make realism scene shows only while flag realism-look is on; Delete
-// needs scene editing and is never offered for the active scene.
+// "Add scene". Rename and Duplicate need no flag; Make realism scene (a submenu: one row per look, D445) shows only while
+// flag realism-look is on; Delete needs scene editing and is never offered for the active scene.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -31,9 +31,49 @@ UMenu {
                 enabled: menu.editable; tip: menu.lockTip; onTriggered: menu.store.edit.renameSceneWanted(menu.sceneId) }
     UMenuItem { objectName: "sceneMenu:duplicate"; visible: !menu.blank; height: visible ? implicitHeight : 0; text: "Duplicate scene"
                 enabled: menu.editable; tip: menu.lockTip; onTriggered: menu.store.edit.duplicateScene(menu.sceneId) }
-    UMenuItem { objectName: "sceneMenu:realism"; visible: !menu.blank && menu.store.realism; height: visible ? implicitHeight : 0; text: "Make realism scene"
-                enabled: menu.editable; tip: menu.lockTip; onTriggered: menu.store.edit.realismScene(menu.sceneId) }
+    // D445: one row per look of the library; a click makes "<scene> <look name>" with that look (the original stays).
+    UMenu {
+        id: looksMenu
+        objectName: "sceneMenu:realism"
+        title: "Make realism scene"
+        shown: !menu.blank && menu.store.realism
+        enabled: menu.editable
+        tip: menu.lockTip
+        function make(look) { menu.store.edit.realismScene(menu.sceneId, look) }
+        Instantiator {
+            model: menu.store.looks
+            delegate: UMenuItem {
+                required property var modelData
+                objectName: "lookMenu:" + modelData.id
+                text: modelData.name
+                tip: modelData.summary
+                // not "menu" here: inside a MenuItem that name is the item's own menu (this submenu)
+                onTriggered: looksMenu.make(modelData.id)
+            }
+            onObjectAdded: (index, object) => looksMenu.insertItem(index, object)
+            onObjectRemoved: (index, object) => looksMenu.removeItem(object)
+        }
+    }
     MenuSeparator { visible: !menu.blank; height: visible ? implicitHeight : 0 }
+    // the look rows for the tests' probe (read while the submenu is closed, so not by items(), which needs them shown);
+    // makeLook(id) clicks one as a click on that row does
+    function lookItems() {
+        const out = [];
+        for (let i = 0; i < looksMenu.count; i++) {
+            const m = looksMenu.itemAt(i);
+            if (m && m.objectName.startsWith("lookMenu:"))
+                out.push({ id: m.objectName.slice(9), text: m.text, enabled: m.enabled && looksMenu.enabled, tip: m.tip });
+        }
+        return out;
+    }
+    function makeLook(id) {
+        if (!looksMenu.shown || !looksMenu.enabled) return false;
+        for (let i = 0; i < looksMenu.count; i++) {
+            const m = looksMenu.itemAt(i);
+            if (m && m.objectName === "lookMenu:" + id) { menu.close(); m.triggered(); return true; }
+        }
+        return false;
+    }
     UMenuItem { objectName: "sceneMenu:delete"; visible: !menu.blank; height: visible ? implicitHeight : 0; text: "Delete…"; keys: "Del"
                 enabled: menu.editable && menu.store.sceneEdit && !menu.active; tip: menu.delTip; onTriggered: menu.store.deleteScene(menu.sceneId) }
 }
