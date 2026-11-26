@@ -2,6 +2,11 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.46 — 2026-11-26
+
+- Realism looks on reels: Settings > Clips > Clip look > Realism look. Per reel type: Off (the default), one look, or Random from the looks you tick (a re-made reel keeps its look). A realism look replaces the reel style's colour, never both. Reels take about 6 to 11 times longer to make with a look (bloom and clarity cost the most); nothing changes on the live stream. Not yet tried on real stream reels.
+- Your own look from a reference: right-click a scene > Make realism scene > New look from a reference…, or the same in Settings > Clips > Realism look. Pick a screenshot or short video; its colours are measured and saved as your own look (glow, grain and vignette come from the closest built-in look). Only the measured numbers are kept, never the picture or its name. Rename or delete your own looks there.
+
 ## 0.1.0-alpha.45 — 2026-11-26
 
 - Scheduling manager: the long list of next posting times left Settings (Settings opens and scrolls fast again; Instagram Reels is easy to find). More > Scheduled posts… (or Settings > Open scheduling manager) opens a list like the task manager, in its own window or docked: posts by day, search, filter by place and state, Move, Remove, Upload now / Post now, Retry, Move this day with Undo, Remove all failed.
