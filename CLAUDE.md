@@ -22,3 +22,5 @@ effort on one model):
 
 - Skills in `.claude/skills/` are pointers to `docs/procedures/`; the procedure files are the source.
 - Claude Code on the web (cloud sessions) suits repo work that needs no devices; device, GPU and live tests run on the laptop only.
+
+README follows the global 'README for every repo' rule: install-first, plain language, Setu layout.
