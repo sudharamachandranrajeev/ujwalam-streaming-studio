@@ -188,7 +188,7 @@ class ClipperStyleTests(unittest.TestCase):
                                     "pulses and slow motion need the canvas layout)")
         import inspect  # noqa: PLC0415
         src = inspect.getsource(self.cl)
-        self.assertIn("frame, encoder, wd, lut=lut)", src)
+        self.assertIn("frame, encoder, wd, lut=lut,\n                                              realism=rl)", src)  # RL4
         self.assertIn('**({"styleNotApplied": style_skips} if style_skips else {})', src)
 
     @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg missing")

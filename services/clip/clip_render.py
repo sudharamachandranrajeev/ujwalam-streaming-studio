@@ -99,12 +99,17 @@ def layout_chain(layout, iw, ih, ow, oh, src, dst, tag):
     return re.sub(r"\[([A-Za-z0-9:_]+)\]", label, layout_graph(layout, iw, ih, ow, oh))
 
 
-def render_argv(ffmpeg, src, start, dur, graph, encoder, out_name, has_audio, captions=None, lut=None):
+def render_argv(ffmpeg, src, start, dur, graph, encoder, out_name, has_audio, captions=None, lut=None, realism=None):
     """argv for one variant. captions: a bare ASS file name in the working folder, or None. Every audio track of the
-    source is kept as its own track in source order (`-map 0:a`, track 1 = the studio mix); none is dropped."""
+    source is kept as its own track in source order (`-map 0:a`, track 1 = the studio mix); none is dropped.
+    realism (RL4, D445): a clip_realism.filter_graph fragment ([rin] -> [rout]); it replaces lut (never both)."""
     tail = ",subtitles=" + captions if captions else ""
-    colour = f"lut3d=file={lut}," if lut else ""  # RS4: the reel style's colour (a bare file name in the working folder)
-    graph = graph.replace("[vout]", "[vpre]", 1) + f";[vpre]{colour}format=yuv420p{tail}[vout]"
+    if realism:  # RL4: the realism look on the framed picture, then the captions over it
+        graph = (graph.replace("[vout]", "[vpre]", 1) + ";" + realism.replace("[rin]", "[vpre]").replace("[rout]", "[vrl]")
+                 + f";[vrl]format=yuv420p{tail}[vout]")
+    else:
+        colour = f"lut3d=file={lut}," if lut else ""  # RS4: the reel style's colour (a bare file name in the working folder)
+        graph = graph.replace("[vout]", "[vpre]", 1) + f";[vpre]{colour}format=yuv420p{tail}[vout]"
     argv = [ffmpeg, "-v", "error", "-nostdin", "-y", "-threads", str(FFMPEG_THREADS), "-filter_threads", "2",
             "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", src]
     if not has_audio:
@@ -115,14 +120,16 @@ def render_argv(ffmpeg, src, start, dur, graph, encoder, out_name, has_audio, ca
     return argv
 
 
-def render_variant(ffmpeg, src, info, cand, layout, frame, encoder, workdir, captions=None, timeout=1800, lut=None):
+def render_variant(ffmpeg, src, info, cand, layout, frame, encoder, workdir, captions=None, timeout=1800, lut=None,
+                   realism=None):
     """Renders one variant into workdir/<layout id>.mp4 (written as .part, renamed on success)."""
     ow, oh = int(frame["width"]), int(frame["height"])
     graph = layout_graph(layout, info["width"], info["height"], ow, oh)
     name = f"{layout['id']}.mp4"
     part = name + ".part"
     dur = float(cand["end"]) - float(cand["start"])
-    argv = render_argv(ffmpeg, src, float(cand["start"]), dur, graph, encoder, part, info["has_audio"], captions, lut=lut)
+    argv = render_argv(ffmpeg, src, float(cand["start"]), dur, graph, encoder, part, info["has_audio"], captions, lut=lut,
+                       realism=realism)
     r = run_tool(argv, cwd=workdir, timeout=timeout)
     if r.returncode != 0:
         try:

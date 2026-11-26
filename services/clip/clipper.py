@@ -90,6 +90,7 @@ import reel_title as rti  # noqa: E402
 import reel_music as rmu  # noqa: E402
 import reel_sfx as rsfx  # noqa: E402
 import reel_style as rstyle  # noqa: E402
+import clip_realism as rreal  # noqa: E402
 import reel_transition as rt  # noqa: E402
 import clip_signals as sig  # noqa: E402
 import excitement as exc  # noqa: E402
@@ -734,7 +735,8 @@ def cmd_live_review(a):
         # Codex round 2: keyed on the stable inputs of this clip's render plan: the settings without the look history
         # (rendering updates it), the reel style this clip gets with its tuning and files, the speech model's files
         rkey = _row_key(c, [by_id[x] for x in wanted], encoder, frame, lay_doc.get("version"),
-                        [_stable_extras(ex), lim_live, fade_ms, _style_identity(ex, c), _caption_assets(ex.get("opts"), a)],
+                        [_stable_extras(ex), lim_live, fade_ms, _style_identity(ex, c), _caption_assets(ex.get("opts"), a),
+                         _realism_identity(ex, c)],
                         None, {"save": _file_identity(c["file"])})
         kept = _done_row(wd, rkey)
         if kept is not None:
@@ -774,6 +776,8 @@ def cmd_live_review(a):
         else:
             tr, xd, mplan = None, 0.0, None
         m, zoom, lut, strec = _style_render_plan(sty, m, xd, c["file"], wd, captions=tdoc is not None)
+        rl, rlrec = _realism_plan(ex, "live-clip", wd, frame, c["id"], os.path.basename(c["file"]))
+        lut = None if rl else lut  # RL4: the realism look replaces the style's colour, never both
         ass, fdir, cinfo = _caption_ass(tdoc, cinfo, src_pieces, m["pieces"], xd, frame, wd, ex)
         thumb, trec = _thumbnail(ffmpeg, c["file"], m, "live-clip", frame, wd, ex) if pieces_path else (None, None)
         ttl, tirec = _title(wd, m["pieces"], xd, frame, ex, pk) if pieces_path else (None, None)
@@ -789,10 +793,11 @@ def cmd_live_review(a):
                 if pieces_path and by_id[lid].get("kind") == "canvas":
                     name = _render_pieces(ffmpeg, c["file"], m["pieces"], frame, encoder, wd, lid, sinfo, fade_ms,
                                           lim_live["maxSec"], ass, fdir, tr, thumb, ttl, mus, zoom=zoom, lut=lut,
-                                          loud=ex.get("loud"), loud_out=lo)
+                                          loud=ex.get("loud"), loud_out=lo, realism=rl)
                     out_sec = _pieces_out_sec(m, xd, thumb, lim_live["maxSec"])
                 else:
-                    name = rnd.render_variant(ffmpeg, c["file"], sinfo, c, by_id[lid], frame, encoder, wd, lut=lut)
+                    name = rnd.render_variant(ffmpeg, c["file"], sinfo, c, by_id[lid], frame, encoder, wd, lut=lut,
+                                              realism=rl)
                     if sty:  # RS4 (Codex RS verify): this layout cuts one piece of the save: only the colour fits
                         style_skips.append(_style_skip_note(by_id[lid]))
                 files.append({"layout": lid, "file": name, "geometry": by_id[lid].get("geometry", "unverified"),
@@ -815,12 +820,13 @@ def cmd_live_review(a):
         rmu.cleanup(wd)
         rsfx.cleanup(wd)
         _style_cleanup(wd)
+        rreal.cleanup(wd)
         out_rows.append({"id": c["id"], "start": c["start"], "end": c["end"], "wallStart": c["wallStart"],
                          "source": os.path.basename(c["file"]), "sourcePath": c["file"],
                          "score": c["score"], "labels": c["labels"], "reasons": c["reasons"],
                          **({"pieces": m["pieces"]} if pieces_path else {}), "retimed": bool(c.get("retimed")),
                          "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec,
-                         "title": tirec, "music": murec, "look": pk, "sfx": sfxrec, "style": strec,
+                         "title": tirec, "music": murec, "look": pk, "sfx": sfxrec, "style": strec, "realism": rlrec,
                          **({"styleNotApplied": style_skips} if style_skips else {}), "captions": cinfo, "hook": hook, "files": files,
                          "errors": errors})
         _look_remember(ex, pk if files else None, track=(mplan or {}).get("track", {}).get("id"))
@@ -1149,7 +1155,8 @@ def _loud_check(ffmpeg, path, rec, what):
 
 
 def _render_pieces(ffmpeg, src, pieces, frame, encoder, wd, lid, sinfo, fade_ms, max_sec, ass=None, fdir=None,
-                   transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None, loud=None, loud_out=None):
+                   transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None, loud=None, loud_out=None,
+                   realism=None):
     """A canvas layout rendered from pieces (teaser + clip) with optional captions, the RP1 transition, the RP6
     start frame and the RP4 title card -> '<layout>.mp4'."""
     import clip_montage as mont  # noqa: PLC0415
@@ -1158,7 +1165,7 @@ def _render_pieces(ffmpeg, src, pieces, frame, encoder, wd, lid, sinfo, fade_ms,
         return mont.render_argv(ffmpeg, src, pieces, frame, rnd.ENCODERS[enc], rnd.AUDIO, fade_ms, name + ".part",
                                 audio_tracks=max(1, int(sinfo.get("audio_tracks") or 1)) if sinfo.get("has_audio") else 0,
                                 max_sec=max_sec, captions=ass, fontsdir=fdir, transition=transition, thumbnail=thumbnail,
-                                title=title, music=music, zoom=zoom, lut=lut, gain_db=gain)
+                                title=title, music=music, zoom=zoom, lut=lut, gain_db=gain, realism=realism)
     gain, lrec = _loud_plan(wd, lambda g: mk(encoder, g), loud) if sinfo.get("has_audio") else (None, None)  # D440
     r, _ = _render_job(lambda enc: mk(enc, gain), encoder, wd, name + ".part", f"render {lid}")
     if r.returncode != 0:
@@ -1428,6 +1435,7 @@ def _reel_extras(a, data_dir):
                       "gates": {"music": mu_on, "transitions": flag_on(data_dir, rt.FLAG), "name": True}} if lcfg else None),
             "transition": rt.active(data_dir),  # RP1: None = hard cut (flag off, or the user chose Cut)
             "reelStyles": data_dir if rstyle.on(data_dir) else None,  # RS4 (D412): styles picked per reel (flag reel-styles)
+            "realism": data_dir,  # RL4 (D445): Settings > Clips > Clip look > Realism look, per reel type (off by default)
             "thumb": rth.load_config() if th_on else None,  # RP6: the start frame (flag reel-thumbnail)
             "brand": rth.brand() if th_on else None,
             "title": rti.load_config() if ti_on else None,  # FX2: the name display (flag clip-look, or the retired reel-title)
@@ -1519,6 +1527,39 @@ def _style_skip_note(layout):
     return {"layout": layout["id"], "kind": layout.get("kind"),
             "note": f"style not applied: {layout['id']} ({layout.get('kind')} layout gets the colour only; "
                     f"{STYLE_CANVAS_ONLY} need the canvas layout)"}
+
+
+def _realism_plan(ex, typ, wd, frame, *seed_parts):
+    """RL4 (D445): this reel's realism look (Settings > Clips > Clip look > Realism look for its reel type; random =
+    a seeded pick from the ticks, so a re-render draws the same look) -> (filter fragment or None, record or None).
+    The LUT is written to wd (clip_realism.cleanup removes it). A look that cannot be read leaves the reel as before."""
+    dd = ex.get("realism")
+    if not dd:
+        return None, None
+    try:
+        lk, rec = rreal.pick(dd, STYLE_TYPE.get(typ), seed_parts)
+        if not lk:
+            return None, rec
+        frag, prec = rreal.plan(lk, wd, frame, seed_parts)
+        return frag, dict(rec, **prec)
+    except (OSError, ValueError, KeyError, TypeError, ClipError) as e:
+        eprint(f"realism look: not applied ({type(e).__name__}: {str(e)[-120:]}); the reel is made without it")
+        return None, {"error": type(e).__name__}
+
+
+def _realism_identity(ex, c):
+    """The realism look this live clip gets (the same pick _realism_plan makes) with its values and LUT file, for the
+    D442 resume key: a changed look or setting renders the clip again."""
+    dd = ex.get("realism")
+    if not dd:
+        return None
+    try:
+        lk, rec = rreal.pick(dd, STYLE_TYPE.get("live-clip"), (c["id"], os.path.basename(c["file"])))
+        if not lk:
+            return {"realism": None, "rec": rec}
+        return {"look": lk, "lut": _file_identity(os.path.join(rreal.LUTS_DIR, lk["effects"][0]["file"]["rel"]))}
+    except (OSError, KeyError, ValueError, TypeError, ClipError) as e:
+        return {"error": type(e).__name__}
 
 
 def _style_cleanup(wd):
@@ -2011,18 +2052,20 @@ def cmd_montage(a):
         m, tr, xd, mplan = _reel_timeline(exr, pk, m, typ, exr["transition"], bool(vinfo.get("has_audio", True)),
                                           cid, os.path.basename(vrec), style=sty)
         m, zoom, lut, strec = _style_render_plan(sty, m, xd, vrec, wd, captions=tdoc is not None)
+        rl, rlrec = _realism_plan(ex, typ, wd, frame, cid, os.path.basename(vrec))  # RL4: this reel's realism look
+        lut = None if rl else lut  # the realism look replaces the style's colour, never both
         ass, fdir, cinfo = _caption_ass(tdoc, cinfo, src_pieces, m["pieces"], xd, frame, wd, ex)
         thumb, trec = _thumbnail(ffmpeg, vrec, m, typ, frame, wd, ex, matches)  # RP6
         ttl, tirec = _title(wd, m["pieces"], xd, frame, exr, pk)  # FX2
         mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec), pk=pk, mplan=mplan,
                             ffmpeg=ffmpeg, src=vrec)  # RP3/FX4, D437
         mus, sfxrec = _with_sfx(wd, exr, tr, m["pieces"], xd, pk, mus)  # FX3
-        def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ, gain=None):
+        def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ, gain=None, lut=lut, rl=rl):
             return mont.render_argv(ffmpeg, vrec, m["pieces"], frame, rnd.ENCODERS[enc], rnd.AUDIO,
                                     int(cfg["audioFadeMs"]), "montage-v.mp4.part",
                                     audio_tracks=max(1, vinfo["audio_tracks"]), max_sec=lim[typ]["maxSec"], captions=ass,
                                     fontsdir=fdir, transition=tr, thumbnail=thumb, title=ttl, music=mus, zoom=zoom, lut=lut,
-                                    gain_db=gain)
+                                    gain_db=gain, realism=rl)
         if os.path.isfile(done):
             # Codex verify (D411): a finished file with no stored row (the run stopped between the file and its row)
             # is never kept with guessed decisions: it is rendered again with this run's decisions
@@ -2040,6 +2083,7 @@ def cmd_montage(a):
         rmu.cleanup(wd)
         rsfx.cleanup(wd)
         _style_cleanup(wd)
+        rreal.cleanup(wd)
         files, errors = [], []
         hook = m.get("hook") or {"on": False}
         if r.returncode == 0:
@@ -2072,7 +2116,7 @@ def cmd_montage(a):
         out_sec = _pieces_out_sec(m, xd, thumb, lim[typ]["maxSec"])
         rows.append({"id": cid, "start": 0.0, "end": out_sec, "score": m["score"], "labels": m["labels"],
                      "transition": dict(tr, joinSec=xd) if xd else None, "thumbnail": trec, "title": tirec, "music": murec,
-                     "look": pk, "sfx": sfxrec, "style": strec, "loudness": lrec,
+                     "look": pk, "sfx": sfxrec, "style": strec, "realism": rlrec, "loudness": lrec,
                      "pieces": m["pieces"], "part": m.get("part"), "parts": m.get("parts"),
                      # the overlaps of a cross fade can take a reel planned at its shortest length below it
                      "trimmed": m.get("trimmed"), "belowMin": m.get("belowMin") or (out_sec < lim[typ]["minSec"]) or None, "kills": m.get("kills"), "streakKills": m.get("streakKills"),

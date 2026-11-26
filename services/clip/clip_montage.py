@@ -492,7 +492,7 @@ def zoom_expr(z):
 
 def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, out_name, threads=4, audio_tracks=1, max_sec=None,
                 captions=None, fontsdir=None, transition=None, thumbnail=None, title=None, music=None, zoom=None, lut=None,
-                fx=None, layout=None, gain_db=None, grade=None, container="mp4"):
+                fx=None, layout=None, gain_db=None, grade=None, container="mp4", realism=None):
     """One ffmpeg run: each piece is its own input (-ss/-t, exact because it is re-encoded), scaled into the frame,
     audio faded in and out by fade_ms (no pop at a hard cut), then concatenated. Every audio track of the source
     (audio_tracks) is kept as its own track, in source order (track 1 = the studio mix); none is dropped or remixed.
@@ -523,7 +523,10 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     None = as before.
     gain_db (D440, clip_loudness.py): one fixed gain on audio track 1 (the studio mix, with its music and join sounds)
     ahead of the true-peak limiter, which a track without music then gets too; None = as before. Still one audio
-    encode."""
+    encode.
+    realism (RL4, D445): a clip_realism.filter_graph fragment ([rin] -> [rout]) run once on the joined picture after the
+    zoom and before the BeatDrop effects; the caller leaves lut out when it is set (the look replaces the style colour).
+    Picture only: the sound is untouched."""
     ow, oh = int(frame["width"]), int(frame["height"])
     vol = f"volume={float(gain_db):.2f}dB," if gain_db is not None else ""
     # Astra review: latency=1 removes the 20 ms look-ahead delay. Without it the sound lands 20 ms late and loses its
@@ -576,7 +579,7 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
     if post:  # Astra review: lut3d and colorbalance work in RGB; the encoder must still get 4:2:0 (players, concat)
         post.append("format=yuv420p")
     vgraded = vlast
-    if post or fx:
+    if post or fx or realism:
         vlast = "[vgr]"
     alast = "ab" if thumbnail else "aout"  # RP6: the sound is delayed by the thumbnail frame
     # Codex BD7a: a BeatDrop bed (duck None: it is the montage's own sound) over a source without sound (a silent V
@@ -604,10 +607,18 @@ def render_argv(ffmpeg, src, pieces, frame, encoder_args, audio_args, fade_ms, o
         ins = "".join(f"[v{i}]" + "".join(f"[a{i}_{k}]" for k in range(audio_tracks)) for i in range(len(pieces)))
         outs = vlast + "".join(aj(k) for k in range(audio_tracks))
         parts.append(ins + f"concat=n={len(pieces)}:v=1:a={audio_tracks}{outs}")
+    stages = []  # on the joined picture, in this order: zoom/LUT/grade chain, RL4 realism look, BD4 effects
     if post:
-        parts.append(f"[vgr]{','.join(post)}{'[vpost]' if fx else vgraded}")
+        stages.append(lambda i, o: f"{i}{','.join(post)}{o}")
+    if realism:  # RL4 (D445): clip_realism.filter_graph fragment, [rin] -> [rout]
+        stages.append(lambda i, o: realism.replace("[rin]", i).replace("[rout]", o))
     if fx:  # BD4 (D415): the BeatDrop effects, once, on the graded picture
-        parts.append(fx.replace("[fxin]", "[vpost]" if post else "[vgr]").replace("[fxout]", vgraded))
+        stages.append(lambda i, o: fx.replace("[fxin]", i).replace("[fxout]", o))
+    cur = "[vgr]"
+    for k, st in enumerate(stages):
+        nxt = vgraded if k == len(stages) - 1 else ("[vpost]" if k == 0 else f"[vst{k}]")
+        parts.append(st(cur, nxt))
+        cur = nxt
     if title:  # FX2 (D411): the name display, an ASS file burned by libass over the joined picture (never blurred)
         parts.append(f"[vjoin]subtitles={title['ass']}:fontsdir={title['fontsdir']}{vfinal}")
     if captions:
