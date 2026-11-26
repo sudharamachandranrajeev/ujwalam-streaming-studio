@@ -75,6 +75,7 @@ ApplicationWindow {
         s.addAudio = addAudioDlg.probe();
         s.audioTools = audioToolsDlg.probe();
         s.sceneMusic = sceneMusicDlg.probe();
+        s.lookRef = lookRefDlg.made ? lookRefDlg.probe() : { open: false }; // RL5 (made on first use only)
         // The frame (alpha.33 layout): each panel's x, y, width, height in window pixels.
         const at = (it) => { const p = it.mapToItem(win.contentItem, 0, 0); return [Math.round(p.x), Math.round(p.y), Math.round(it.width), Math.round(it.height)] };
         s.frame = { scenes: at(scenes), layers: at(layers), side: at(side), stats: at(stats), previews: at(previews), mixer: at(mixer) };
@@ -101,6 +102,7 @@ ApplicationWindow {
         if (action === "add-audio-open") { studioStore.openAddAudio(); return true }
         if (String(action).startsWith("add-audio-")) return addAudioDlg.probeAction(String(action));
         if (String(action).startsWith("tools-")) return audioToolsDlg.probeAction(String(action));
+        if (action === "lookref-open") { studioStore.newLookFromReference(); return true } // RL5, as the menu entries do
         if (String(action).startsWith("scene-music-open:")) { studioStore.openSceneMusic(String(action).slice(17)); return true }
         if (String(action).startsWith("music-")) return sceneMusicDlg.probeAction(String(action));
         if (String(action).startsWith("inspector-")) return inspector.probeAction(String(action));
@@ -155,6 +157,7 @@ ApplicationWindow {
         onYoutubeEventsWanted: ytWin.show("presets")
         onGoLiveWanted: (options) => goLiveDlg.ask(options)
         onConnectionsWanted: (output) => settingsDlg.openConnections(output)
+        onLookFromReferenceWanted: lookRefDlg.show()
     }
     Connections {
         target: studioStore.edit
@@ -389,12 +392,13 @@ ApplicationWindow {
     LazyDialog { id: goLiveDlg; sourceComponent: Component { GoLiveDialog { store: studioStore } } }
     LazyDialog { id: postsDlg; sourceComponent: Component { PostsWindow { store: studioStore } } }
     LazyDialog { id: clipsAskDlg; sourceComponent: Component { ClipsAsk { store: studioStore } } }
+    LazyDialog { id: lookRefDlg; sourceComponent: Component { LookReferenceDialog { store: studioStore } } } // RL5
     // Probe (tests): which of them were made before the probe was read (the probe itself makes them all).
     function lazyMade() {
         const all = { addLayer: addLayerDlg, addScene: addSceneDlg, scenario: scenarioDlg, addAudio: addAudioDlg, audioTools: audioToolsDlg,
                       sceneMusic: sceneMusicDlg, rename: renameDlg, settings: settingsDlg, palette: cmdPalette, growth: growthDlg, review: reviewDlg, beatdrop: beatdropDlg,
                       feedback: feedbackDlg, report: reportDlg, importer: importDlg, sceneBuilder: sceneBuilderDlg, youtube: ytWin, goLive: goLiveDlg,
-                      posts: postsDlg, clipsAsk: clipsAskDlg };
+                      posts: postsDlg, clipsAsk: clipsAskDlg, lookRef: lookRefDlg };
         return Object.keys(all).filter(k => all[k].made);
     }
     Connections {

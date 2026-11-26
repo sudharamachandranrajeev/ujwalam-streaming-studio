@@ -90,6 +90,8 @@ qt_add_qml_module(ujwalam-studio
 		qml/SettingsPage.qml
 		qml/SettingsClips.qml
 		qml/AiFolderPicker.qml
+		qml/LookFilePicker.qml
+		qml/LookReferenceDialog.qml
 		qml/folderUrl.js
 		qml/SettingsAppearance.qml
 		qml/SettingsStream.qml

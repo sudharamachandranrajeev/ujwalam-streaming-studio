@@ -599,7 +599,7 @@ Column {
                 id: rl
                 required property var modelData
                 readonly property var v: ((cp.d.realismLooks || {}).byType || {})[modelData.t] || { mode: "off", look: null, ticks: [] }
-                readonly property var looks: ((cp.box.info.realismLooks || {}).looks) || []
+                readonly property var looks: cp.box.realismLooks
                 width: parent.width
                 spacing: Theme.sp.xs
                 Row {
@@ -634,6 +634,53 @@ Column {
                 Quiet {
                     visible: rl.v.mode === "random" && rl.v.ticks.length === 0
                     text: "Tick at least one look, or these reels are made without a realism look."
+                }
+            }
+        }
+        // RL5 (D445): looks of the user's own, made from a screenshot or short video; rename and delete here (one click each)
+        Words { text: "Your own looks"; font.weight: Font.DemiBold }
+        Quiet {
+            objectName: "ownLooksHint"
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "Make a look from a screenshot or short video you like: its colour is measured, and glow, grain, vignette and detail start from the nearest built-in look. Nothing from the file is kept. Your looks show in Make realism scene and in the lists above."
+        }
+        UButton {
+            objectName: "realismNewLook"
+            text: "New look from a reference…"
+            onClicked: cp.box.store.newLookFromReference()
+        }
+        Quiet {
+            objectName: "ownLooksNone"
+            visible: !cp.box.realismLooks.some(l => l.own === true)
+            text: "No looks of your own yet."
+        }
+        Repeater {
+            model: cp.box.realismLooks.filter(l => l.own === true)
+            delegate: Row {
+                id: ol
+                required property var modelData
+                spacing: Theme.sp.s
+                UField {
+                    id: olName
+                    objectName: "ownLookName_" + ol.modelData.id
+                    width: 220
+                    label: "Name of " + ol.modelData.name
+                    text: ol.modelData.name
+                    maximumLength: 24
+                    onAccepted: if (text.trim() !== "" && text.trim() !== ol.modelData.name) cp.box.store.renameLook(ol.modelData.id, text.trim())
+                }
+                UButton {
+                    objectName: "ownLookRename_" + ol.modelData.id
+                    text: "Rename"
+                    enabled: olName.text.trim() !== "" && olName.text.trim() !== ol.modelData.name
+                    onClicked: cp.box.store.renameLook(ol.modelData.id, olName.text.trim())
+                }
+                UButton {
+                    objectName: "ownLookDelete_" + ol.modelData.id
+                    text: "Delete"
+                    tip: "Removes this look. Reels set to it are made without a realism look; scenes made with it lose its colour."
+                    onClicked: cp.box.store.deleteLook(ol.modelData.id)
                 }
             }
         }

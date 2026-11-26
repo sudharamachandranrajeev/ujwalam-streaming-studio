@@ -5,7 +5,7 @@
 // real UI server and the fake host; the settings land in the test's own data folder. Skipped when the shell is not built.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,6 +17,7 @@ import { createStudioServer } from '../services/studio-ui/server.mjs';
 import { EXE, qtDir } from '../app/studio/tools/build.mjs';
 
 const UI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGED = process.env.UJWALAM_STUDIO_TEST_EXE ? path.resolve(process.env.UJWALAM_STUDIO_TEST_EXE) : null;
 const SHELL_EXE = PACKAGED ?? EXE;
 const QT = PACKAGED ? null : qtDir();
@@ -271,6 +272,36 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     const r = await probe(['settings-open', 'settings-page:Clips', 'settings-realism:reel:off', 'settings-save'], 9000, {}, (d) => writeFileSync(
       path.join(d, 'settings.json'), JSON.stringify({ clips: { realismLooks: { byType: { reel: { mode: 'one', look: 'filmic', ticks: [] } } } } })));
     assert.equal(r.saved.clips.realismLooks.byType.reel.mode, 'off');
+  });
+
+  test('Settings > Clips > Your own looks: New look from a reference… opens the box; an own look is listed, renamed and deleted with one click each (RL5)', async () => {
+    const q = await probe(['settings-open', 'settings-page:Clips']);
+    assert.equal(node(q.p, 'realismNewLook')?.text, 'New look from a reference…');
+    assert.match(node(q.p, 'ownLooksHint').text, /nearest built-in look/);
+    assert.equal(node(q.p, 'ownLooksNone')?.visible, true);
+    assert.deepEqual(q.s.settings.realismLooks.own, []);
+    const opened = await probe(['settings-open', 'settings-page:Clips', 'click:realismNewLook']);
+    assert.equal(opened.s.lookRef.open, true);
+    const seed = (d) => {
+      const c = JSON.parse(readFileSync(path.join(REPO, 'data', 'looks', 'cinematic.json'), 'utf8'));
+      mkdirSync(path.join(d, 'looks'));
+      const own = { ...c, id: 'user-mine', name: 'Mine', summary: 'Your look from a reference: cool.', measured: { colour: { L: 50, a: 0, b: -6, contrast: 20 }, shift: { L: 0, a: 0, b: -6, contrast: 1 }, basedOn: 'cinematic' },
+        effects: [{ type: 'lut', file: { base: 'userluts', rel: 'user-mine.cube' }, amount: 1 }, ...c.effects.slice(1)] };
+      delete own.grade;
+      writeFileSync(path.join(d, 'looks', 'user-mine.json'), JSON.stringify(own));
+      writeFileSync(path.join(d, 'looks', 'user-mine.cube'), 'LUT_3D_SIZE 2\n');
+    };
+    const l = await probe(['settings-open', 'settings-page:Clips'], 6000, {}, seed);
+    assert.deepEqual(l.s.settings.realismLooks.own, [{ id: 'user-mine', name: 'Mine' }]);
+    assert.equal(l.s.settings.realismLooks.looks.at(-1), 'user-mine', 'also a choice for each reel type');
+    assert.equal(node(l.p, 'ownLookName_user-mine')?.text, 'Mine');
+    assert.equal(node(l.p, 'ownLooksNone')?.visible, false);
+    const rn = await probe(['settings-open', 'settings-page:Clips', 'type:ownLookName_user-mine=Cold one', 'click:ownLookRename_user-mine'], 9000, {}, seed);
+    assert.equal(JSON.parse(readFileSync(path.join(rn.dataDir, 'looks', 'user-mine.json'), 'utf8')).name, 'Cold one');
+    assert.equal(rn.saved, null, 'rename is not a settings change');
+    const del = await probe(['settings-open', 'settings-page:Clips', 'click:ownLookDelete_user-mine'], 9000, {}, seed);
+    assert.deepEqual(readdirSync(path.join(del.dataDir, 'looks')), [], 'both files gone after one click');
+    assert.deepEqual(del.s.settings.realismLooks.own, []);
   });
 
   test('Settings > Clips: Montage music is on by default with a random song; only the changed parts are saved at Save (D414)', async () => {

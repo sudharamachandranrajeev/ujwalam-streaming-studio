@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The scene menu (right-click on a scene; the widget's buildSceneMenu). Blank = right-click on empty space: only
-// "Add scene". Rename and Duplicate need no flag; Make realism scene (a submenu: one row per look, D445) shows only while
-// flag realism-look is on; Delete needs scene editing and is never offered for the active scene.
+// "Add scene". Rename and Duplicate need no flag; Make realism scene (a submenu: one row per look, D445, the user's own
+// looks last, then "New look from a reference…", RL5) shows only while flag realism-look is on; Delete needs scene
+// editing and is never offered for the active scene.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -53,6 +54,15 @@ UMenu {
             onObjectAdded: (index, object) => looksMenu.insertItem(index, object)
             onObjectRemoved: (index, object) => looksMenu.removeItem(object)
         }
+        // RL5: a look of the user's own from a screenshot or short video (the rows above, own looks last)
+        MenuSeparator {}
+        UMenuItem {
+            id: newLook
+            objectName: "sceneMenu:newLook"
+            text: "New look from a reference…"
+            tip: "Measure the colour of a screenshot or short video you like and save it as a look of your own"
+            onTriggered: menu.store.newLookFromReference()
+        }
     }
     MenuSeparator { visible: !menu.blank; height: visible ? implicitHeight : 0 }
     // the look rows for the tests' probe (read while the submenu is closed, so not by items(), which needs them shown);
@@ -65,6 +75,13 @@ UMenu {
                 out.push({ id: m.objectName.slice(9), text: m.text, enabled: m.enabled && looksMenu.enabled, tip: m.tip });
         }
         return out;
+    }
+    function newLookRow() { return { text: newLook.text, enabled: newLook.enabled && looksMenu.enabled, shown: looksMenu.shown, tip: newLook.tip } }
+    function newLookClick() {
+        if (!looksMenu.shown || !looksMenu.enabled) return false;
+        menu.close();
+        newLook.triggered();
+        return true;
     }
     function makeLook(id) {
         if (!looksMenu.shown || !looksMenu.enabled) return false;

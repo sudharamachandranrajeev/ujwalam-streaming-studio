@@ -11,7 +11,7 @@
 // Skipped when the shell is not built (npm run build:studio).
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -619,6 +619,33 @@ describe('QML studio editing (headless probe)', { skip }, () => {
     // while live the rows are greyed and a click does nothing
     const live = await probe(['select-scene:scene-1', 'scene-menu:show', 'scene-menu:realism:cinematic'], { live: true, editProject: withCard });
     assert.equal(by(live.s.scenePanel.menu.items).realism.enabled, false);
+    assert.deepEqual(live.done, [true, true, false]);
+  });
+
+  test('scene menu: Make realism scene ends with New look from a reference…; one click opens the box, Make look saves an own look that joins the menu (RL5)', async () => {
+    const on = await probe(['select-scene:scene-1', 'scene-menu:show']);
+    assert.deepEqual(on.s.scenePanel.menu.newLook, { text: 'New look from a reference…', enabled: true, shown: true, tip: on.s.scenePanel.menu.newLook.tip });
+    assert.match(on.s.scenePanel.menu.newLook.tip, /screenshot or short video/);
+    assert.equal(on.s.lookRef.open, false, 'not made before it is asked for');
+    // a synthetic picture with a blue-teal cast (24-bit BMP written here; nothing from a real file)
+    const refDir = mkdtempSync(path.join(os.tmpdir(), 'ujw-rl5-qml-')); dirs.push(refDir);
+    const pic = path.join(refDir, 'ref.bmp');
+    const w = 64, h = 36, row = w * 3, buf = Buffer.alloc(54 + row * h);
+    buf.write('BM', 0); buf.writeUInt32LE(buf.length, 2); buf.writeUInt32LE(54, 10); buf.writeUInt32LE(40, 14); buf.writeInt32LE(w, 18); buf.writeInt32LE(h, 22);
+    buf.writeUInt16LE(1, 26); buf.writeUInt16LE(24, 28); buf.writeUInt32LE(row * h, 34);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const v = 40 + Math.round((175 * x) / (w - 1)), o = 54 + y * row + x * 3; buf[o] = v + 18; buf[o + 1] = v + 6; buf[o + 2] = v - 14; }
+    writeFileSync(pic, buf);
+    const r = await probe(['select-scene:scene-1', 'scene-menu:newlook', `type:lookRefFile=${pic}`, 'type:lookRefName=Snow test', 'click:lookRefMake'], { ms: 14000 });
+    assert.deepEqual(r.done, [true, true, true, true, true], JSON.stringify(r.p.actions));
+    assert.equal(r.s.lookRef.open, true);
+    assert.match(r.s.lookRef.result, /^Saved as “Snow test”\. Its colour comes from your file; glow, grain, vignette and detail start from [A-Z]/, r.s.lookRef.result);
+    assert.match(node(r.p, 'lookRefHint').text, /built-in look whose colour is nearest/);
+    assert.match(node(r.p, 'lookRefHint').text, /Nothing from your file is copied, kept or posted/);
+    const looks = r.s.scenePanel.menu.looks;
+    assert.deepEqual(looks.map((l) => l.id), [...loadLooks().map((l) => l.id), 'user-snow-test'], 'the own look is the last row');
+    // while live the submenu (and so the entry) is greyed
+    const live = await probe(['select-scene:scene-1', 'scene-menu:show', 'scene-menu:newlook'], { live: true });
+    assert.equal(live.s.scenePanel.menu.newLook.enabled, false);
     assert.deepEqual(live.done, [true, true, false]);
   });
 

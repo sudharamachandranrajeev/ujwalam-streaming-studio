@@ -75,6 +75,7 @@ QtObject {
     signal connectionsWanted(string output) // open Settings > Connections with only this output (the chooser's "Add the key")
     signal youtubeEventsWanted()       // open the YouTube window on its Presets tab (a Go live was refused for a missing event, D386, D388)
     signal clipsAsk(var ask)           // "Make clips?" after a recording or stream (setting: Ask me each time)
+    signal lookFromReferenceWanted()   // RL5: open "New look from a reference" (scene menu, Settings > Clips)
     signal flagsRead()                 // after each flag read (every status poll)
     signal statusRead(var s)           // each status that came back (the guide's hints follow what changed)
 
@@ -766,6 +767,26 @@ QtObject {
     }
     function loadLooks() {
         Api.get("ui/api/looks", (ok, b) => { if (ok && Array.isArray(b.looks)) looks = b.looks });
+    }
+    // RL5 (D445): the user's own looks. done(ok, body, err) gets the route's answer; the look list is read again after.
+    function newLookFromReference() { lookFromReferenceWanted() }
+    function makeLookFromReference(path, name, done) {
+        Api.post("ui/api/looks", { op: "from-reference", path: path, name: name }, (ok, b, err) => {
+            if (ok) { loadLooks(); say("Look saved: " + b.look.name + " (glow, grain and vignette from " + ((b.basedOn || {}).name || "the nearest look") + ")") }
+            if (done) done(ok, b, err);
+        });
+    }
+    function renameLook(id, name, done) {
+        Api.post("ui/api/looks", { op: "rename", id: id, name: name }, (ok, b, err) => {
+            if (ok) loadLooks(); else say("Not renamed: " + ((b && b.detail) || err));
+            if (done) done(ok, b, err);
+        });
+    }
+    function deleteLook(id, done) {
+        Api.post("ui/api/looks", { op: "delete", id: id }, (ok, b, err) => {
+            if (ok) { loadLooks(); say("Look deleted. Scenes made with it keep their layers but lose its colour.") } else say("Not deleted: " + ((b && b.detail) || err));
+            if (done) done(ok, b, err);
+        });
     }
     function takeFlags(list) {
         const f = {};

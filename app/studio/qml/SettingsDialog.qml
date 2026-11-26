@@ -240,6 +240,9 @@ Dialog {
 
     // ---- realism looks (RL4, D445): per reel type off, one look, or random from the ticked looks, in the draft ----
     function realismTypes() { return ((info.realismLooks || {}).types) || ["reel", "impact", "montage"] }
+    // RL5: the studio's look list (read again after a look of the user's own is made, renamed or deleted), else the
+    // one Settings read when it opened
+    readonly property var realismLooks: (store.looks && store.looks.length) ? store.looks : (((info.realismLooks || {}).looks) || [])
     function realismStart(v) {
         const by = (v && v.byType) || {}, out = { byType: {} };
         for (const t of realismTypes()) {
@@ -257,7 +260,7 @@ Dialog {
     }
     function tickRealism(t, id, on) { // keeps the library order
         const d = Object.assign({}, draft), r = JSON.parse(JSON.stringify(d.realismLooks || realismStart(null)));
-        const x = r.byType[t] || { mode: "random", look: null, ticks: [] }, ids = (((info.realismLooks || {}).looks) || []).map(l => l.id);
+        const x = r.byType[t] || { mode: "random", look: null, ticks: [] }, ids = realismLooks.map(l => l.id);
         x.ticks = ids.filter(i => i === id ? on : x.ticks.includes(i));
         r.byType[t] = x; d.realismLooks = r; draft = d;
     }
@@ -924,7 +927,7 @@ Dialog {
             flagRows: rows, reelLengths: { rows: reelRows, error: reelError }, reelHooks: hooks,
             look: draft.look, // FX (D411)
             montageMusic: draft.montageMusic, // D414
-            realismLooks: { value: draft.realismLooks, looks: (((info.realismLooks || {}).looks) || []).map(l => l.id) }, // RL4
+            realismLooks: { value: draft.realismLooks, looks: realismLooks.map(l => l.id), own: realismLooks.filter(l => l.own === true).map(l => ({ id: l.id, name: l.name })) }, // RL4, RL5 own
             reelTransition: k ? { kind: k.id, label: k.label, ms: transMsNow(draft), msEnabled: !!r, min: r ? r.min : 0, max: r ? r.max : 0 } : null,
             recordLive: { on: draft.recordLive, text: "Record while live", visible: page === "Clips",
                 hint: "Records the stream (H and V) to your recordings folder so reels can be made after it ends. Uses about 10 GB per hour." },
