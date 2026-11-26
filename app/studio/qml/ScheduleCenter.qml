@@ -7,7 +7,8 @@
 // schedule is read only while the manager is open: one read on opening, one after each action, and one every 30 s.
 // Actions reuse the posting routes, one click each, no typed confirmation (D332): Move and Remove (auto/queue/move|remove),
 // Upload now / Retry (posts/queue/retry), Instagram Post now / Retry (posts/schedule/instagram-now). Bulk: move a day's
-// posts (with Undo) and remove every failed one. Every row carries `channel` (empty until several channels exist, SM5).
+// posts (with Undo) and remove every failed one. Every row carries `channel` and `channelText` (SM5, YM6):
+// with more than one YouTube channel the list shows each row's channel and filters by it (sched:channel:<id|all>).
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -39,6 +40,10 @@ Item {
     property string search: ""
     property string fTarget: "all"
     property string fState: "all"
+    property string fChannel: "all"
+    property var channels: []          // [{ id, label }] from the server; the filter shows with more than one
+    readonly property bool multiChannel: channels.length > 1
+    readonly property var channelModel: [{ value: "all", text: "All channels" }].concat(channels.map(c => ({ value: c.id, text: c.label })))
     property string sortDir: "asc"
     property string message: ""
     property var moving: ({ mode: "", key: "", day: "" })
@@ -65,7 +70,7 @@ Item {
     readonly property var mon: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     readonly property string summaryText: !loaded ? "Loading..." : counts.total === 0 ? "No scheduled posts."
         : counts.total + (counts.total === 1 ? " scheduled post" : " scheduled posts") + (counts.failed > 0 ? ", " + counts.failed + " failed" : "")
-    readonly property bool filtered: search.trim() !== "" || fTarget !== "all" || fState !== "all"
+    readonly property bool filtered: search.trim() !== "" || fTarget !== "all" || fState !== "all" || fChannel !== "all"
     readonly property int failedRemovable: all.filter(r => r.state === "failed" && r.removable).length
 
     function two(n) { return (n < 10 ? "0" : "") + n }
@@ -88,7 +93,7 @@ Item {
         const o = Object.assign({}, r, { sig: sig, head: false, ms: d ? t : Infinity, day: d ? dayOf(d) : "none", hhmm: d ? clockOf(d) : "no time",
             whenText: d ? whenOf(d) : "time not set yet", targetText: tt || String(r.target), stateKey: r.state === "posting" ? "uploading" : r.state,
             btn: { move: r.movable === true, remove: r.removable === true, now: r.postable === true, retry: r.retryable === true } });
-        o.hay = (o.title + " " + o.targetText + " " + o.stateText + " " + o.reasonText + " " + o.whenText + " " + (o.kind || "")).toLowerCase();
+        o.hay = (o.title + " " + o.targetText + " " + o.stateText + " " + o.reasonText + " " + o.whenText + " " + (o.kind || "") + " " + (o.channelText || "")).toLowerCase();
         return o;
     }
 
@@ -116,6 +121,9 @@ Item {
         byKey = next;
         all = list;
         counts = b.counts || counts;
+        const chs = Array.isArray(b.channels) ? b.channels : [];
+        if (JSON.stringify(chs) !== JSON.stringify(channels)) channels = chs;
+        if (fChannel !== "all" && !chs.some(c => c.id === fChannel)) fChannel = "all"; // a removed channel's filter ends
         info = b.error === "schedule-read-incomplete" ? "The last channel read did not reach back far enough to see every post already scheduled on your channel."
             : b.error ? "The schedule settings are not valid, so some times may be missing."
             : b.source === "none" ? "Your channel has not been read yet, so posts already scheduled there are not listed." : "";
@@ -126,7 +134,7 @@ Item {
     // Filter, sort, group by day; then the ListModel gets only the removes, inserts and moves that really changed.
     function refilter() {
         const q = search.trim().toLowerCase();
-        const rows = all.filter(r => (fTarget === "all" || r.target === fTarget) && (fState === "all" || r.stateKey === fState) && (q === "" || r.hay.indexOf(q) >= 0));
+        const rows = all.filter(r => (fTarget === "all" || r.target === fTarget) && (fState === "all" || r.stateKey === fState) && (fChannel === "all" || r.channel === fChannel) && (q === "" || r.hay.indexOf(q) >= 0));
         const dir = sortDir === "desc" ? -1 : 1;
         const keyed = rows.map((r, i) => ({ r: r, i: i }));
         keyed.sort((a, b) => {
@@ -176,6 +184,7 @@ Item {
     onSearchChanged: refilter()
     onFTargetChanged: refilter()
     onFStateChanged: refilter()
+    onFChannelChanged: refilter()
     onSortDirChanged: refilter()
     onWatchingChanged: if (watching) load()
     Timer { interval: 30000; repeat: true; running: sc.watching; onTriggered: sc.load() }
@@ -355,6 +364,7 @@ Item {
         if (a.startsWith("sched:search:")) { search = decodeURIComponent(a.slice(13)); return true }
         if (a.startsWith("sched:target:")) { fTarget = a.slice(13); return true }
         if (a.startsWith("sched:state:")) { fState = a.slice(12); return true }
+        if (a.startsWith("sched:channel:")) { const c = a.slice(14); if (c !== "all" && !channels.some(x => x.id === c)) return false; fChannel = c; return true }
         if (a.startsWith("sched:sort:")) { sortDir = a.slice(11); return true }
         const f = a.split(":"); // keys are "yt:<id>" / "ig:<id>"
         if (a.startsWith("sched:move:") && f.length >= 5) return moveRow(f[2] + ":" + f[3], f.slice(4).join(":"));
@@ -373,11 +383,11 @@ Item {
         return {
             available: available, open: open, windowOpen: windowOpen, windowMade: windowMade, watching: watching, loaded: loaded, reads: reads, applyMs: applyMs,
             rowsMade: rowsMade, total: all.length, shownRows: shownRows, shownKeys: shownKeys, groups: groups, counts: counts, info: info, summary: summaryText,
-            search: search, fTarget: fTarget, fState: fState, sortDir: sortDir, message: message, sent: sent, lastPost: lastPost, undoCount: undoList.length,
+            search: search, fTarget: fTarget, fState: fState, fChannel: fChannel, channels: channels, multiChannel: multiChannel, sortDir: sortDir, message: message, sent: sent, lastPost: lastPost, undoCount: undoList.length,
             moving: moving, moveText: moveText, bulkBusy: bulkBusy, failedRemovable: failedRemovable, modelCount: rowIds.count,
             window: winLoader.item ? { visible: winLoader.item.visible } : null,
             rows: shownKeys.slice(0, 40).map(k => { const r = byKey[k]; return { key: k, id: r.id, target: r.target, targetText: r.targetText, title: r.title, state: r.state, stateText: r.stateText,
-                                                reasonText: r.reasonText, hhmm: r.hhmm, day: r.day, channel: r.channel, buttons: Object.keys(r.btn).filter(x => r.btn[x]), busy: busy[k] === true } })
+                                                reasonText: r.reasonText, hhmm: r.hhmm, day: r.day, channel: r.channel, channelText: r.channelText || "", buttons: Object.keys(r.btn).filter(x => r.btn[x]), busy: busy[k] === true } })
         };
     }
 

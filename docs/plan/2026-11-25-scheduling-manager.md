@@ -1,6 +1,6 @@
 # Scheduling manager window, 2026-11-25
 
-Status: **approved**; SM1-SM4 built 2026-11-26 (evidence: docs/evidence/2026-11-26-scheduling-manager.md); SM5 later.
+Status: **approved**; SM1-SM4 built 2026-11-26 (evidence: docs/evidence/2026-11-26-scheduling-manager.md); SM5 built 2026-11-26 (evidence: docs/evidence/2026-11-26-youtube-multi-channel.md).
 
 ## Request
 

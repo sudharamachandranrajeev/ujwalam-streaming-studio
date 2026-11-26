@@ -9,6 +9,8 @@
 // D444 INSTAGRAM REELS card: ui/api/posts/instagram (state, never a secret or token), .../app (App ID + App Secret to the
 // Credential Manager), .../connect (Facebook Login in the browser), .../disconnect, and the flag instagram-autopost
 // (ui/api/flags/set). Each acts on its own click (D332), outside Save / Discard.
+// YM6 YOUTUBE CHANNELS card: ui/api/posts/channels (list, never a token), .../add (Google sign-in in the browser),
+// .../set (posting on/off, posts a day, name) and .../remove. Each acts on its own click (D332), outside Save / Discard.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -120,6 +122,39 @@ Column {
         return true;
     }
     Timer { interval: 2000; repeat: true; running: ap.ig.connecting && ap.visible; onTriggered: ap.loadIg() }
+    // ---- YM6 YouTube channels ----
+    property var chans: ({ channels: [], pool: 0, adding: false, lastError: null, limits: null })
+    property bool chLoaded: false
+    property string chLabel: ""            // the name typed for the next added channel
+    property string chMsg: ""
+    readonly property int chLimit: chans.limits ? chans.limits.postsPerDayLimit : 20
+    readonly property bool chFull: !!chans.limits && chans.channels.length >= chans.limits.maxChannels
+    function renderCh(b) { chans = b; chLoaded = true }
+    function loadCh() {
+        Api.get("ui/api/posts/channels", (ok, b, err) => { if (ok) renderCh(b); else chMsg = "The channel list is not available: " + err });
+    }
+    function chPost(route, body, done) {
+        Api.post("ui/api/posts/channels/" + route, body, (ok, b, err) => {
+            if (ok) { renderCh(b); chMsg = done } else chMsg = "Not changed: " + ((b && b.text) ? b.text : err);
+        });
+        return true;
+    }
+    function addCh() { chMsg = ""; const r = chPost("add", { label: chLabel.trim() }, "Google opened in your browser. Sign in and pick the channel, then come back here."); chLabel = ""; return r }
+    function setChOn(id, on) { return chPost("set", { id: id, enabled: on }, on ? "Posting on." : "Posting off. Its waiting clips go to the other channels.") }
+    function setChRange(id, min, max) {
+        if (!(min >= 1 && max <= chLimit && min <= max)) { chMsg = "Posts a day: from 1 to " + chLimit + ", the first not above the second."; return false }
+        return chPost("set", { id: id, min: min, max: max }, "Saved.");
+    }
+    function removeCh(id) { return chPost("remove", { id: id }, "Removed. Its videos stay on YouTube; its waiting clips go to the other channels.") }
+    function chRow(c) {
+        const parts = [c.statusText];
+        if (!c.main && c.postsPerDay) parts.push(c.postsPerDay.min + " to " + c.postsPerDay.max + " a day" + (c.todayCap !== null ? " (" + c.doneToday + " of " + c.todayCap + " today)" : ""));
+        if (c.main) parts.push("Follows Uploads per day above");
+        if (c.waiting) parts.push(c.waiting + " waiting" + (c.nextAt ? ", next " + localTime(c.nextAt) : ""));
+        if (c.shortsOnly) parts.push("Shorts only");
+        return parts.join(". ") + ".";
+    }
+    Timer { interval: 2000; repeat: true; running: ap.chans.adding && ap.visible; onTriggered: ap.loadCh() }
     readonly property bool cardDirty: loaded && JSON.stringify(card) !== orig
     readonly property bool rulesDirty: loaded && rulesOwn && JSON.stringify(rulesEdit) !== rulesOrig
     readonly property bool prefsDirty: prefsLoaded && JSON.stringify(prefs) !== prefsOrig
@@ -258,6 +293,7 @@ Column {
             loadRules(b.custom === true);
         });
         loadIg();
+        loadCh();
         Api.get("ui/api/posts/prefs", (ok, b, err) => {
             if (g !== gen) return;
             if (!ok) { prefsError = "Post text settings are not available: " + err; return }
@@ -1201,6 +1237,87 @@ Column {
     }
 
     UCard {
+        title: "YOUTUBE CHANNELS"
+        objectName: "chCard"
+        Quiet { text: "Post clips to more than one of your YouTube channels. Each clip goes to one channel only, in turn: main, then the next, and so on. A channel that reached its posts for the day, is off or cannot sign in is skipped, and the others carry on. Added channels post Shorts only. All channels share one daily YouTube quota." }
+        Repeater {
+            model: ap.chans.channels
+            delegate: Column {
+                id: cr
+                required property var modelData
+                width: parent ? parent.width : 0
+                spacing: Theme.sp.s
+                Words { objectName: "chName_" + cr.modelData.id; width: parent.width; wrapMode: Text.Wrap; font.bold: true; text: cr.modelData.label + (cr.modelData.title && cr.modelData.title !== cr.modelData.label ? " (" + cr.modelData.title + ")" : "") }
+                Quiet { objectName: "chStatus_" + cr.modelData.id; text: ap.chRow(cr.modelData) }
+                Flow {
+                    width: parent.width
+                    spacing: Theme.sp.m
+                    USwitch {
+                        id: chSw
+                        objectName: "chOn_" + cr.modelData.id
+                        text: cr.modelData.enabled ? "Posting on" : "Posting off"
+                        checked: cr.modelData.enabled
+                        onToggled: ap.setChOn(cr.modelData.id, checked)
+                        Binding { target: chSw; property: "checked"; value: cr.modelData.enabled }
+                    }
+                    SpinBox2 {
+                        objectName: "chMin_" + cr.modelData.id
+                        visible: !cr.modelData.main
+                        label: "Posts a day, at least"
+                        suffix: " at least"
+                        from: 1; to: ap.chLimit
+                        want: cr.modelData.postsPerDay ? cr.modelData.postsPerDay.min : 1
+                        onValueModified: ap.setChRange(cr.modelData.id, Math.round(value), cr.modelData.postsPerDay.max)
+                    }
+                    SpinBox2 {
+                        objectName: "chMax_" + cr.modelData.id
+                        visible: !cr.modelData.main
+                        label: "Posts a day, at most"
+                        suffix: " at most"
+                        from: 1; to: ap.chLimit
+                        want: cr.modelData.postsPerDay ? cr.modelData.postsPerDay.max : 1
+                        onValueModified: ap.setChRange(cr.modelData.id, cr.modelData.postsPerDay.min, Math.round(value))
+                    }
+                    UButton {
+                        objectName: "chRemove_" + cr.modelData.id
+                        visible: !cr.modelData.main
+                        text: "Remove"
+                        tip: "Signs this channel out and takes it off the list. Its videos stay on YouTube; its waiting clips go to the other channels."
+                        onClicked: ap.removeCh(cr.modelData.id)
+                    }
+                }
+            }
+        }
+        Quiet { objectName: "chPool"; visible: ap.chans.pool > 0; text: ap.chans.pool + " clip(s) not given to a channel yet (every channel is full for today, off or signed out)." }
+        Quiet { objectName: "chError"; visible: !!ap.chans.lastError; color: Theme.c.danger; text: ap.chans.lastError || "" }
+        Flow {
+            width: parent.width
+            spacing: Theme.sp.m
+            Field {
+                label: "Name for the new channel"
+                UField {
+                    objectName: "chLabel"
+                    width: parent.width
+                    label: "Name for the new channel"
+                    text: ap.chLabel
+                    onTextEdited: ap.chLabel = text
+                    placeholderText: "Optional; the channel's own name otherwise"
+                }
+            }
+            UButton {
+                objectName: "chAdd"
+                text: ap.chans.adding ? "Waiting for Google..." : "Add channel"
+                kind: "primary"
+                enabled: !ap.chans.adding && !ap.chFull
+                tip: "Opens Google in your browser. Sign in and pick the channel (for a Brand Account, pick it in Google's channel list), then come back here."
+                onClicked: ap.addCh()
+            }
+        }
+        Quiet { visible: ap.chFull; text: "The list is full. Remove a channel to add another." }
+        Quiet { objectName: "chMsg"; visible: text !== ""; text: ap.chMsg }
+    }
+
+    UCard {
         title: "INSTAGRAM REELS"
         objectName: "igCard"
         Quiet { text: "Posts each clip that goes to YouTube Shorts as an Instagram Reel too, as many a day as Instagram allows, at least the auto-post gap apart and never while you are live. Instagram has no scheduled posts, so a Reel goes up while the studio is open; a missed time posts at the next start. Needs an Instagram professional account linked to a Facebook Page, and your own Meta app." }
@@ -1281,7 +1398,9 @@ Column {
             prefsLoaded: prefsLoaded, prefs: JSON.parse(JSON.stringify(prefs)), prefsDirty: prefsDirty, prefsError: prefsError, shareSum: shareSum, quotaModel: quotaModel,
             previewInfo: previewInfo, preview: previewItems.map(i => String(i.title)), gridProblem: gridProblem, offsetsText: offsetsText,
             ig: { loaded: igLoaded, hasApp: ig.hasApp === true, connected: ig.connected === true, username: ig.username || "", flagOn: ig.flagOn === true, connecting: ig.connecting === true,
-                status: igStatus, queue: igQueueText, redirectUri: ig.redirectUri || "", msg: igMsg, appIdTyped: igAppId, secretTyped: igSecret.length > 0 } };
+                status: igStatus, queue: igQueueText, redirectUri: ig.redirectUri || "", msg: igMsg, appIdTyped: igAppId, secretTyped: igSecret.length > 0 },
+            channels: { loaded: chLoaded, adding: chans.adding === true, error: chans.lastError || "", msg: chMsg, pool: chans.pool, full: chFull, labelTyped: chLabel,
+                list: chans.channels.map(c => ({ id: c.id, label: c.label, main: c.main, enabled: c.enabled, signedIn: c.signedIn, postsPerDay: c.postsPerDay, todayCap: c.todayCap, row: chRow(c) })) } };
     }
 
     // ap-upload:<on|off> | ap-kind:<id>:<on|off> | ap-score:<n> | ap-perday:<n> | ap-gap:<h> | ap-days:<n> | ap-placement:<id>
@@ -1299,6 +1418,13 @@ Column {
         if (a === "ap-ig-drop") return dropIg();
         if (a === "ap-ig-flag") return setIgFlag(on(arg));
         if (a === "ap-ig-refresh") { loadIg(); return true }
+        // YM6: ap-ch-label:<URI-encoded name> | ap-ch-add | ap-ch-on:<id>:<on|off> | ap-ch-range:<id>:<min>:<max> | ap-ch-remove:<id> | ap-ch-refresh
+        if (a === "ap-ch-label") { chLabel = decodeURIComponent(p.slice(1).join(":")); return true }
+        if (a === "ap-ch-add") return addCh();
+        if (a === "ap-ch-on" && p.length === 3) return setChOn(arg, on(p[2]));
+        if (a === "ap-ch-range" && p.length === 4) return setChRange(arg, parseInt(p[2], 10), parseInt(p[3], 10));
+        if (a === "ap-ch-remove") return removeCh(arg);
+        if (a === "ap-ch-refresh") { loadCh(); return true }
         if (a === "ap-upload") return set("autoUpload", on(arg));
         if (a === "ap-clearlock") { if (stuckLockId === "") return false; clearLock(); return true }
         if (a === "ap-kind" && p.length === 3) return setKind(arg, on(p[2]));

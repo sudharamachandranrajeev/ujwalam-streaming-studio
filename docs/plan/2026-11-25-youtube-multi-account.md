@@ -1,6 +1,6 @@
 # Several YouTube channels for auto-posting, 2026-11-25
 
-Status: **approved** (user request and answers 2026-11-25). Building starts after alpha.44.
+Status: **approved** (user request and answers 2026-11-25). YM1-YM6 built 2026-11-26 (evidence: docs/evidence/2026-11-26-youtube-multi-channel.md); YM3 window/gap per channel and YM7 partial; YM8 needs the user.
 The user creates the new channels and says when they exist.
 
 ## Request

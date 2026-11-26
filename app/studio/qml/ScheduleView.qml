@@ -109,6 +109,18 @@ Item {
                 Component.onCompleted: pick(view.center.fState)
             }
             UCombo {
+                id: channelBox
+                objectName: "schedChannel"
+                visible: view.center.multiChannel
+                label: "Show posts for channel"
+                width: 170
+                model: view.center.channelModel
+                onChose: (v) => view.center.fChannel = v
+                onModelChanged: pick(view.center.fChannel)
+                Component.onCompleted: pick(view.center.fChannel)
+                Connections { target: view.center; function onFChannelChanged() { channelBox.pick(view.center.fChannel) } }
+            }
+            UCombo {
                 id: sortBox
                 objectName: "schedSort"
                 label: "Sort by time"
@@ -266,6 +278,7 @@ Item {
                         spacing: Theme.sp.m
                         Text { text: cell.r.hhmm; color: Theme.c.text; font.family: Theme.family; font.pixelSize: Theme.ty.body; font.weight: Font.DemiBold }
                         Text { text: cell.r.targetText; color: Theme.c.accentHi; font.family: Theme.family; font.pixelSize: Theme.ty.small; }
+                        Text { visible: view.center.multiChannel && (cell.r.channelText || "") !== ""; text: cell.r.channelText || ""; color: Theme.c.muted; font.family: Theme.family; font.pixelSize: Theme.ty.small }
                         Text {
                             text: cell.r.stateText
                             color: cell.r.state === "failed" ? Theme.c.danger : cell.r.state === "scheduled" ? Theme.c.ok : Theme.c.muted
