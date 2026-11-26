@@ -137,3 +137,39 @@ test('D445 bloom and chromatic add no flash: a full-canvas still with bloom, cla
   console.log(`realism effects flash check: peak ${res.peakFlashesPerSecond} flashes/s over ${res.frames} frames`);
   await c.call('outputs.clear');
 });
+
+test('D445 every look of data/looks: its full effect list loads; its LUT grades the swatch colours as the generator says', async () => {
+  const { loadLooks } = await import('../../../services/project/looks.mjs');
+  const { SWATCH_REFS } = await import('../../../tools/make-look-luts.mjs');
+  const looks = loadLooks(LOOKS);
+  assert.ok(looks.length >= 7, `${looks.length} looks`);
+  assert.ok(readdirSync(LUTS).length >= looks.length);
+  const hex = (c) => '#' + c.map((v) => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+  const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const CELL = 80;
+  // one row per look: the five reference colours with the look's LUT only (flat cells, so no other effect matters),
+  // then one cell with the look's full effect list
+  const layers = [];
+  looks.forEach((look, row) => {
+    SWATCH_REFS.forEach((c, i) => layers.push(L(`${look.id}-${i}`, { color: hex(c) }, at(20 + i * (CELL + 10), 20 + row * (CELL + 10), CELL, CELL),
+      [structuredClone(look.effects[0])], 'color')));
+    layers.push(L(`${look.id}-all`, { color: '#808080' }, at(20 + 5 * (CELL + 10), 20 + row * (CELL + 10), CELL, CELL), structuredClone(look.effects), 'color'));
+  });
+  const d = doc('realism-looks', layers);
+  const r = await loadIntoHost(c, d, { bases: { media, luts: LUTS } });
+  assert.deepEqual(r.unavailable, []);
+  const by = Object.fromEntries((await c.call('layers.list', { scene: 'main', canvas: 'H' })).layers.map((l) => [l.id, l]));
+  for (const look of looks) assert.deepEqual(by[`${look.id}-all`].effects, look.effects, `layers.list round-trip: ${look.id}`);
+  const px = frameRgb(await recordFrame('realism-looks-h.mkv'), 1280, 720);
+  let worst = 0;
+  looks.forEach((look, row) => {
+    SWATCH_REFS.forEach((_, i) => {
+      const got = px(20 + i * (CELL + 10) + CELL / 2, 20 + row * (CELL + 10) + CELL / 2), want = rgb(look.swatch[i]);
+      const err = Math.max(...got.map((v, k) => Math.abs(v - want[k])));
+      worst = Math.max(worst, err);
+      assert.ok(err <= 12, `${look.id} swatch ${i}: rendered ${got} want ${want} (${look.swatch[i]})`);
+    });
+  });
+  console.log(`realism looks: ${looks.length} looks, worst swatch error ${worst}/255 after NVENC`);
+  await c.call('outputs.clear');
+});
