@@ -776,8 +776,8 @@ def cmd_live_review(a):
         else:
             tr, xd, mplan = None, 0.0, None
         m, zoom, lut, strec = _style_render_plan(sty, m, xd, c["file"], wd, captions=tdoc is not None)
-        rl, rlrec = _realism_plan(ex, "live-clip", wd, frame, c["id"], os.path.basename(c["file"]))
-        lut = None if rl else lut  # RL4: the realism look replaces the style's colour, never both
+        realism, rlrec = _realism_plan(ex, "live-clip", wd, frame, c["id"], os.path.basename(c["file"]))
+        lut = None if realism else lut  # RL4: the realism look replaces the style's colour, never both
         ass, fdir, cinfo = _caption_ass(tdoc, cinfo, src_pieces, m["pieces"], xd, frame, wd, ex)
         thumb, trec = _thumbnail(ffmpeg, c["file"], m, "live-clip", frame, wd, ex) if pieces_path else (None, None)
         ttl, tirec = _title(wd, m["pieces"], xd, frame, ex, pk) if pieces_path else (None, None)
@@ -793,11 +793,11 @@ def cmd_live_review(a):
                 if pieces_path and by_id[lid].get("kind") == "canvas":
                     name = _render_pieces(ffmpeg, c["file"], m["pieces"], frame, encoder, wd, lid, sinfo, fade_ms,
                                           lim_live["maxSec"], ass, fdir, tr, thumb, ttl, mus, zoom=zoom, lut=lut,
-                                          loud=ex.get("loud"), loud_out=lo, realism=rl)
+                                          loud=ex.get("loud"), loud_out=lo, realism=realism)
                     out_sec = _pieces_out_sec(m, xd, thumb, lim_live["maxSec"])
                 else:
                     name = rnd.render_variant(ffmpeg, c["file"], sinfo, c, by_id[lid], frame, encoder, wd, lut=lut,
-                                              realism=rl)
+                                              realism=realism)
                     if sty:  # RS4 (Codex RS verify): this layout cuts one piece of the save: only the colour fits
                         style_skips.append(_style_skip_note(by_id[lid]))
                 files.append({"layout": lid, "file": name, "geometry": by_id[lid].get("geometry", "unverified"),
@@ -2052,20 +2052,20 @@ def cmd_montage(a):
         m, tr, xd, mplan = _reel_timeline(exr, pk, m, typ, exr["transition"], bool(vinfo.get("has_audio", True)),
                                           cid, os.path.basename(vrec), style=sty)
         m, zoom, lut, strec = _style_render_plan(sty, m, xd, vrec, wd, captions=tdoc is not None)
-        rl, rlrec = _realism_plan(ex, typ, wd, frame, cid, os.path.basename(vrec))  # RL4: this reel's realism look
-        lut = None if rl else lut  # the realism look replaces the style's colour, never both
+        realism, rlrec = _realism_plan(ex, typ, wd, frame, cid, os.path.basename(vrec))  # RL4: this reel's realism look
+        lut = None if realism else lut  # the realism look replaces the style's colour, never both
         ass, fdir, cinfo = _caption_ass(tdoc, cinfo, src_pieces, m["pieces"], xd, frame, wd, ex)
         thumb, trec = _thumbnail(ffmpeg, vrec, m, typ, frame, wd, ex, matches)  # RP6
         ttl, tirec = _title(wd, m["pieces"], xd, frame, exr, pk)  # FX2
         mus, murec = _music(wd, m["pieces"], xd, tirec, exr, cid, os.path.basename(vrec), pk=pk, mplan=mplan,
                             ffmpeg=ffmpeg, src=vrec)  # RP3/FX4, D437
         mus, sfxrec = _with_sfx(wd, exr, tr, m["pieces"], xd, pk, mus)  # FX3
-        def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ, gain=None, lut=lut, rl=rl):
+        def mk(enc, m=m, ass=ass, fdir=fdir, tr=tr, thumb=thumb, ttl=ttl, mus=mus, typ=typ, gain=None, lut=lut, realism=realism):
             return mont.render_argv(ffmpeg, vrec, m["pieces"], frame, rnd.ENCODERS[enc], rnd.AUDIO,
                                     int(cfg["audioFadeMs"]), "montage-v.mp4.part",
                                     audio_tracks=max(1, vinfo["audio_tracks"]), max_sec=lim[typ]["maxSec"], captions=ass,
                                     fontsdir=fdir, transition=tr, thumbnail=thumb, title=ttl, music=mus, zoom=zoom, lut=lut,
-                                    gain_db=gain, realism=rl)
+                                    gain_db=gain, realism=realism)
         if os.path.isfile(done):
             # Codex verify (D411): a finished file with no stored row (the run stopped between the file and its row)
             # is never kept with guessed decisions: it is rendered again with this run's decisions
