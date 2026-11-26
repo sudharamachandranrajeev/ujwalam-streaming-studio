@@ -8,11 +8,21 @@
 //   next start, when the launcher loads the whole project with every overlay URL;
 // - any other refusal removes the half-built scene from the host again, so nothing shows that is not saved.
 
+import { overlayParams } from '../../app/host/lib/project.mjs';
+
 export const HOST_UNAVAILABLE = -32004;
 // The studio's host client (backends.mjs rpc) reports a host error code as the string `RPC_<code>`; app/host/lib/client.mjs
 // keeps the number. Both mean the same refusal (bug 2026-11-26: only the number was checked, so alpha.48 still undid
 // every realism scene that copies an overlay).
 const isUnavailable = (e) => e?.code === HOST_UNAVAILABLE || e?.code === `RPC_${HOST_UNAVAILABLE}`;
+
+/** addLayerParams(host, { project, scene, layer }) -> the layers.addFromProject params plus browserUrls / relayScope, so a
+ *  layer added live (an overlay copy) gets its page URL now, not after the next start. The ports come from the host's own
+ *  overlay.status. When the overlay server is not running (or the call fails) the params go as they are: the host then
+ *  lists an overlay layer as unavailable (-32004) and it shows after the next start. */
+export async function addLayerParams(host, p) {
+  try { return { ...p, ...(await overlayParams(host, p.project)) }; } catch { return p; }
+}
 
 /** createSceneInHost(host, { project, scene, canvases }) -> { later: [layerId] }; throws the host's error after undoing. */
 export async function createSceneInHost(host, { project, scene, canvases }) {
@@ -25,7 +35,7 @@ export async function createSceneInHost(host, { project, scene, canvases }) {
     const later = [];
     for (const l of scene.layers) { // bottom first
       try {
-        await host.call('layers.addFromProject', { project, scene: scene.id, layer: l.id });
+        await host.call('layers.addFromProject', await addLayerParams(host, { project, scene: scene.id, layer: l.id }));
       } catch (e) {
         if (!isUnavailable(e)) throw e;
         later.push(l.id);

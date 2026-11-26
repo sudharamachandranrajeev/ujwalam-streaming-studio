@@ -347,3 +347,61 @@ test('server: scene.realism saves the scene when the host cannot show one layer 
     assert.equal(disk().scenes.length, 3);
   } finally { await srv.close(); }
 });
+
+// Fix 2026-11-27 (overlay copy URLs): the route sends each copied layer's overlay page URL with layers.addFromProject,
+// built from the host's own overlay.status ports, so an overlay copy shows now and nothing waits for the next start.
+test('server: scene.realism and scene.duplicate send overlay URLs, so an overlay copy is added now (no later)', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ujw-realism-urls-'));
+  const file = path.join(dir, 'p.project.json');
+  const doc = alphaLike();
+  doc.overlays = [{ id: 'ov-gg', name: 'GG', file: { base: 'overlays', rel: 'gg-burst/index.html' } }];
+  doc.scenes[0].layers.push({ id: 'gg', type: 'browser', name: 'GG', source: { overlay: 'ov-gg', width: 1920, height: 1080 }, placements: { h: PL(1920, 1080), v: PL(1080, 1920) } });
+  assert.ok(validateProject(doc).ok, JSON.stringify(validateProject(doc).errors));
+  saveProject(file, doc);
+  const sid = doc.scenes[0].id;
+  const state = { overlay: true };
+  const sent = [];
+  // like the real host: an overlay layer without its URL is unavailable (-32004, as the studio client reports it)
+  const host = { describe: () => ({ kind: 'host', available: true }), call: async (m, p) => {
+    if (m === 'host.status') return { live: false };
+    if (m === 'outputs.status') return {};
+    if (m === 'overlay.status') { if (!state.overlay) throw Object.assign(new Error('overlay server not running'), { code: 'RPC_-32004' }); return { state: 'running', staticPort: 41001, feedPort: 41002 }; }
+    if (m === 'layers.addFromProject') {
+      const l = p.project.scenes.find((s) => s.id === p.scene).layers.find((x) => x.id === p.layer);
+      if (l.type === 'browser') {
+        sent.push(p);
+        if (typeof p.browserUrls?.[p.layer] !== 'string') throw Object.assign(new Error('no overlay URL for this layer'), { code: 'RPC_-32004' });
+      }
+    }
+    return {};
+  } };
+  const flags = createFlags({ dataDir: dir });
+  const core = { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } };
+  const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, flags, projectSync: createProjectSync({ file }), limits: { statusPollMs: 50 } });
+  const { port } = await srv.listen();
+  try {
+    const cookie = await new Promise((resolve) => http.get({ host: '127.0.0.1', port, path: `/login?k=${KEY}` }, (res) => { res.resume(); resolve(res.headers['set-cookie'][0].split(';')[0]); }));
+    const csrf = (await raw(port, { url: '/ui/api/session', headers: { cookie } })).body.csrf;
+    const hdr = { cookie, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf };
+    const post = (body) => raw(port, { method: 'POST', url: '/ui/api/project/structure', body: JSON.stringify(body), headers: hdr });
+    for (const op of ['scene.realism', 'scene.duplicate']) {
+      sent.length = 0;
+      const r = await post({ op, scene: sid });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(r.body.saved, true);
+      assert.equal(r.body.later, undefined, `: no layer waits for the next start`);
+      assert.equal(sent.length, 1, `: the overlay copy was sent once`);
+      const url = Object.values(sent[0].browserUrls).find((u) => u.includes('/overlays/gg-burst/index.html'));
+      assert.ok(sent[0].browserUrls[sent[0].layer].startsWith('http://127.0.0.1:41001/overlays/gg-burst/index.html?'), 'URL on the host overlay server port');
+      assert.ok(url && /[?&]sbPort=41002(&|$)/.test(url), 'feed port from overlay.status');
+      assert.ok(['effects', 'display'].includes(sent[0].relayScope));
+    }
+    // fallback: overlay server not running -> no URLs sent, the copy is skipped into later and still saved
+    state.overlay = false;
+    sent.length = 0;
+    const r = await post({ op: 'scene.duplicate', scene: sid });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.later, 1);
+    assert.equal(sent[0].browserUrls, undefined);
+  } finally { await srv.close(); }
+});
