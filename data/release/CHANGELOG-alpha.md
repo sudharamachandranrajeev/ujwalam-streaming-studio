@@ -2,6 +2,11 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.47 — 2026-11-26
+
+- Several YouTube channels: Settings > Posting & growth > YOUTUBE CHANNELS > Add channel, sign in to Google and pick the channel. Each clip goes to one channel only; channels take turns; a new channel posts 3 to 6 Shorts a day (Shorts only). Your main channel keeps its own Uploads per day. A channel that fails or hits YouTube's limit pauses alone; the others go on. The scheduling manager shows and filters by channel. Not yet tried with a real second channel.
+- Instagram Connect: a Facebook Page owned by a business (Meta Business Suite) is now found (new Business management permission). Facebook asks again for a Page or permission left out before. A failed Connect says what Facebook shared (how many Pages, which permission was not allowed).
+
 ## 0.1.0-alpha.46 — 2026-11-26
 
 - Realism looks on reels: Settings > Clips > Clip look > Realism look. Per reel type: Off (the default), one look, or Random from the looks you tick (a re-made reel keeps its look). A realism look replaces the reel style's colour, never both. Reels take about 6 to 11 times longer to make with a look (bloom and clarity cost the most); nothing changes on the live stream. Not yet tried on real stream reels.
