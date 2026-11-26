@@ -24,9 +24,11 @@ export const HOLD_MARGIN_MS = 2 * 60 * 1000;
 export const HELD_REASON = 'held-instagram-test';
 const apiWhy = (e) => (e?.code === 'quota-exceeded' ? 'quota-exceeded' : String(e?.code ?? 'error').slice(0, 40));
 
-/** The ledger's still-scheduled, not yet held videos (the main channel's only). */
+/** The ledger's still-scheduled, not yet held videos (the main channel's only), soonest publish time first: the
+ *  quota runs out after about 190 videos a day, so the ones about to go public are held first. */
 export function holdCandidates({ store, nowMs, only = null }) {
-  return scheduledCandidates({ store, nowMs, only, marginMs: HOLD_MARGIN_MS });
+  return scheduledCandidates({ store, nowMs, only, marginMs: HOLD_MARGIN_MS })
+    .sort((a, b) => Date.parse(a.entry.publishAt) - Date.parse(b.entry.publishAt));
 }
 
 export async function runHold(o) {

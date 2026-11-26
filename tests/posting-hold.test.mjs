@@ -100,6 +100,12 @@ describe('youtube hold', () => {
     assert.equal(r.held.length, 1); assert.equal(r.stopped, 'quota-day-used'); assert.equal(r.left, 2);
   });
 
+  test('soonest publish time first: a quota stop leaves the latest ones', async () => {
+    const e = setup([{ publishAt: '2026-12-03T12:00:00Z' }, { publishAt: '2026-11-26T22:00:00Z' }, { publishAt: '2026-11-28T12:00:00Z' }]);
+    const r = await runHold(base(e, { budget: budgetFor(e.dataDir, { quotaUnitsPerDay: 160 }) }));
+    assert.deepEqual(r.held, [e.ids[1]]); assert.equal(r.left, 2);
+  });
+
   test('YouTube quotaExceeded stops the run; nothing is marked', async () => {
     const e = setup([{ publishAt: FUTURE }, { publishAt: FUTURE }]);
     e.yt.quotaOnUpdate = true;
