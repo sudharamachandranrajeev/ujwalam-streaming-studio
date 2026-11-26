@@ -45,7 +45,8 @@ import { analyseTiming, applySuggestion, dismissSuggestion, loadTimingConfig, re
 import { SCHEDULE_FLAG, userScheduleFile } from '../posting/schedule.mjs';
 import { UploadError, checkPostStatus } from '../posting/youtube.mjs';
 import { createInstagramRoutes } from './instagram-routes.mjs';
-import { igReasonText, readInstagramStates } from '../posting/instagram-queue.mjs';
+import { igReasonText, queueInstagramNow, readInstagramStates, createInstagramQueue, IG_QUEUE_NAME } from '../posting/instagram-queue.mjs';
+import { scheduleManagerView } from '../posting/schedule-manager.mjs';
 import { GROWTH_FLAG, DB_NAME as GROWTH_DB, collect as growthCollect, openStore as openGrowthStore, view as growthView } from '../analytics/index.mjs';
 import { MIX_FLAG, step as mixStep, undo as mixUndo, view as mixView, weeklyReport as mixReport } from '../learning/mix.mjs';
 import { AnalyticsError } from '../analytics/youtube.mjs';
@@ -1742,7 +1743,22 @@ export function createStudioServer(opts) {
       const count = Number(url.searchParams.get('count') ?? 10);
       // Fifth Codex review (D409): a stuck posting lock (crash-left claim, both owners dead) is shown with its one-click clear.
       let stuck = null; try { const s = stuckLock(opts.dataDir, opts.procStart ? { procStart: opts.procStart } : {}); stuck = s ? { id: s.id } : null; } catch { stuck = null; }
-      try { return json(res, 200, { ...schedulePreview(opts.dataDir, { nowMs: t, count: Number.isFinite(count) ? count : 10, channel }), liveError, stuckLock: stuck }); } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
+      try {
+        const pv = schedulePreview(opts.dataDir, { nowMs: t, count: Number.isFinite(count) ? count : 10, channel });
+        // brief=1 (the Settings line, SM1): counts and the next time instead of every row; the list lives in the scheduling manager.
+        if (url.searchParams.get('brief') === '1') {
+          const times = [...pv.queue.map((q) => Date.parse(q.publishAt)), ...pv.channel.map((c) => Date.parse(c))].filter(Number.isFinite).sort((x, y) => x - y);
+          const { queue, channel: ch, next, ...rest } = pv;
+          return json(res, 200, { ...rest, queueCount: queue.length, channelCount: ch.length, nextAt: times.length ? new Date(times[0]).toISOString() : null, liveError, stuckLock: stuck });
+        }
+        return json(res, 200, { ...pv, liveError, stuckLock: stuck });
+      } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
+    }
+    if (req.method === 'GET' && route === '/ui/api/posts/schedule/list') {
+      // SM1-SM4 scheduling manager: every scheduled post as one flat list (YouTube queue, Instagram queue, the channel's own
+      // scheduled times). brief=1 sends only the counts and the next time (the Settings line). Read only; no network.
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      try { return json(res, 200, scheduleManagerView(opts.dataDir, { posts: url.searchParams.get('brief') === '1' || !posting ? [] : posting.list(), nowMs: now(), brief: url.searchParams.get('brief') === '1' })); } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
     }
     if (req.method === 'GET' && route === '/ui/api/posts/auto') {
       // Read-only: the auto-post mode and what a run would do now. Enabling stays a flag; nothing is changed here.
@@ -2121,6 +2137,18 @@ export function createStudioServer(opts) {
       if (blocked) return json(res, 409, { error: blocked === 'output-live' ? 'stream-live' : blocked });
       const it = q.retryNow(body.id);
       return it ? json(res, 200, { ok: true, state: it.state, queue: readQueueSummary(opts.dataDir, flags) }) : json(res, 409, { error: 'not-retryable' });
+    }
+    if (route === '/ui/api/posts/schedule/instagram-now') {
+      // Scheduling manager: "Post now" / "Retry" for a clip already waiting in the Instagram queue (the same call as the posting
+      // CLI's instagram post). One click (D332); refused while a stream is live or when that cannot be read (fail closed).
+      if (typeof body.id !== 'string' || body.id.length > 64 || Object.keys(body).some((k) => k !== 'id') || typeof opts.dataDir !== 'string') return json(res, 400, { error: 'bad-params' });
+      const cur = createInstagramQueue(path.join(opts.dataDir, 'posting', IG_QUEUE_NAME)).get(body.id);
+      if (!cur) return json(res, 404, { error: 'unknown-queue-item' });
+      if (cur.state !== 'waiting' && cur.state !== 'failed') return json(res, 409, { error: 'not-retryable', state: cur.state });
+      const blocked = await liveBlock(streamOnly(ytOutputsStatus));
+      if (blocked) return json(res, 409, { error: blocked === 'output-live' ? 'stream-live' : blocked });
+      const it = queueInstagramNow(opts.dataDir, body.id, now());
+      return json(res, 200, { ok: true, state: it.state });
     }
     if (route === '/ui/api/posts/edit' || route === '/ui/api/posts/status' || route === '/ui/api/posts/open') {
       // Local files only: post.json and the ledger. Nothing is uploaded; approving only marks the package.
