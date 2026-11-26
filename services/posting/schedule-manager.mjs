@@ -10,7 +10,11 @@
 //   SM5 (YM6): `channel` is the local id of the YouTube channel the row goes to ('main', 'ch-...'; '' = not given to a
 //   channel yet, and every Instagram row); channelText is its label. `channels` lists the channels ([{ id, label }]);
 //   opts.channel ('' = all) keeps only that channel's rows (counts and nextAt follow the filter).
+//   Instagram winners: every row has igScore (the clip's 48 h Instagram score or null); nextWeekToYoutube lists the
+//   Reels a weekly run would send to YouTube now ([{ id, title, score, rank }], a preview; nothing is recorded).
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { IG_DB_NAME, igScores, openIgStore, weeklyWinners } from '../analytics/instagram.mjs';
 import { QUEUE_NAME, createUploadQueue, reasonText, shownPublishAt } from './auto-chain.mjs';
 import { schedulePreview } from './auto-settings.mjs';
 import { createInstagramQueue, IG_QUEUE_NAME, igReasonText } from './instagram-queue.mjs';
@@ -25,7 +29,7 @@ const YT_TEXT = Object.freeze({ waiting: 'Waiting to upload', uploading: 'Upload
 const IG_STATE = Object.freeze({ waiting: 'waiting', posting: 'posting', failed: 'failed' });
 const IG_TEXT = Object.freeze({ waiting: 'Waiting to post', posting: 'Posting now', failed: 'Failed' });
 
-export function scheduleManagerView(dataDir, { posts = [], nowMs = Date.now(), brief = false, channel = '' } = {}) {
+export function scheduleManagerView(dataDir, { posts = [], nowMs = Date.now(), brief = false, channel = '', winnersPerWeek } = {}) {
   const pv = schedulePreview(dataDir, { nowMs, count: 0 });
   let accounts; try { accounts = readAccounts(dataDir).accounts; } catch { accounts = [{ id: MAIN, label: 'Main channel' }]; }
   const chText = (id) => (id === '' ? '' : channelLabel(accounts, id));
@@ -66,6 +70,20 @@ export function scheduleManagerView(dataDir, { posts = [], nowMs = Date.now(), b
     rows.push({ key: `ch:${c}`, id: '', channel: MAIN, channelText: chText(MAIN), platform: 'youtube', target: 'youtube-video', kind: '', title: 'Already scheduled on your channel', state: 'channel',
       stateText: 'On the channel', reasonText: '', at: c, movable: false, removable: false, retryable: false, postable: false, postText: '' });
   }
+  // Instagram winners (2026-11-26): the 48 h Instagram score of each row's clip, and the Reels the next weekly run would
+  // send to YouTube (a preview, nothing recorded). Read only; no store yet = no scores.
+  let nextWeek = [];
+  if (existsSync(path.join(dataDir, IG_DB_NAME))) {
+    let s = null;
+    try {
+      s = openIgStore(path.join(dataDir, IG_DB_NAME));
+      const scores = igScores(s);
+      for (const r of rows) r.igScore = Object.hasOwn(scores, r.id) ? scores[r.id] : null;
+      nextWeek = weeklyWinners({ dataDir, posts, nowMs, perWeek: winnersPerWeek, dryRun: true, store: s }).winners
+        .map((w) => ({ id: w.postId, title: clean(w.title) || clean(w.clipId) || 'Clip', score: w.score, rank: w.rank }));
+    } catch { nextWeek = []; } finally { s?.close(); }
+  }
+  for (const r of rows) if (!Object.hasOwn(r, 'igScore')) r.igScore = null;
   if (typeof channel === 'string' && channel) { const keep = rows.filter((r) => r.channel === channel); rows.length = 0; rows.push(...keep); }
   const times = rows.filter((r) => r.state !== 'failed').map((r) => ms(r.at)).filter((t) => t !== null && t > nowMs).sort((a, b) => a - b);
   const count = (s) => rows.filter((r) => r.state === s).length;
@@ -74,6 +92,7 @@ export function scheduleManagerView(dataDir, { posts = [], nowMs = Date.now(), b
     counts: { total: rows.length, waiting: count('waiting'), uploading: count('uploading'), scheduled: count('scheduled'), failed: count('failed'), channel: count('channel'), posting: count('posting'), held: count('held') },
     nextAt: times.length ? new Date(times[0]).toISOString() : null,
     channels: accounts.map((a) => ({ id: a.id, label: a.label })),
+    nextWeekToYoutube: nextWeek,
   };
   if (!brief) out.rows = rows;
   return out;

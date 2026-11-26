@@ -220,7 +220,9 @@ export function createInstagramPoster(opts) {
       lastPostedAt: queue.lastPostedAt(), reason, reasonText: igReasonText(reason) };
   }
 
-  return { queue, wants, sync, holdsFile, dropQueue, pass, summary, resetPass: () => { wantCache = null; } };
+  // auth/net: the same sign-in and test seams for the insights reader (Instagram winners, 2026-11-26)
+  return { queue, wants, sync, holdsFile, dropQueue, pass, summary, resetPass: () => { wantCache = null; },
+    auth: opts.auth, net: { fetchImpl: opts.fetchImpl, endpoints: opts.endpoints, cfg: opts.cfg } };
 }
 
 /** Per-clip Instagram state for the posts list and the Settings section: { [postId]: { state, dueAt, postedAt, reason } }. */

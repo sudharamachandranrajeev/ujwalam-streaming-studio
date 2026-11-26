@@ -81,6 +81,7 @@ import { userKindShares } from './post-prefs.mjs';
 import { removeTaskFile, writeTaskFile } from '../studio-ui/tasks.mjs';
 import { createInstagramAuth } from './instagram.mjs';
 import { createInstagramPoster } from './instagram-queue.mjs';
+import { collectInstagram } from '../analytics/instagram.mjs';
 import { MAIN, accountOf, dayCap, dealPool, doneToday, nextUtcMidnight, pausedNow, readAccounts, readChannelState, refreshTargetFor, utcDay, waitingOf, writeChannelState } from './accounts.mjs';
 import { createCredentialStore } from '../event-core/streamerbot/credential.mjs';
 
@@ -1327,7 +1328,14 @@ export function createPostChain(opts) {
       // Instagram-winner promoter returns is queued; with none, nothing in the YouTube queue is sent (a clip queued
       // before the switch waits too). Instagram is still fed the auto-approved Shorts, as the YouTube queue fed it before.
       const autoApproved = new Set(createAutoLog(autoLogFile).list().filter((e) => e.action === 'approve').map((e) => e.id));
-      const winners = instagramWinnerCandidates({ dataDir, store, nowMs: nowMs() });
+      // The posted Reels' insights first (at most once an hour, reads only; never while a stream is live or starting).
+      if (ig && (await ig.wants()) === 'yes' && !(await liveBlock(outputsStatus))) {
+        try {
+          const got = await collectInstagram({ dataDir, auth: ig.auth, posts: store.list(), now: nowMs, ...(ig.net.fetchImpl ? { fetchImpl: ig.net.fetchImpl } : {}), endpoints: ig.net.endpoints, cfg: ig.net.cfg });
+          if (!got.skipped && got.snapshots) log(`posting: read the Instagram numbers of ${got.snapshots} Reel(s)`);
+        } catch (e) { log(`posting: could not read Instagram numbers (${String(e?.code ?? 'error').slice(0, 40)})`); }
+      }
+      const winners = instagramWinnerCandidates({ dataDir, store, nowMs: nowMs(), perWeek: rules.youtubeWinnersPerWeek });
       for (const id of winners) { const p = store.get(id); if (p && p.status === 'approved' && UPLOAD_TARGETS.includes(p.target)) queue.add(id); }
       if (winners.length) await runChannels(store, rules);
       const inQueue = new Set(queue.items().map((i) => i.id));

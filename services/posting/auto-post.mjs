@@ -12,6 +12,7 @@ import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, renameSyn
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDataSource, parseJsonText } from '../common/data-reload.mjs';
+import { weeklyWinners } from '../analytics/instagram.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const AUTO_FLAG = 'auto-post';
@@ -50,6 +51,7 @@ export function validateRules(j0) {
   if (j.autoUpload !== undefined && typeof j.autoUpload !== 'boolean') throw new AutoPostError('bad-rules', 'rules file: autoUpload must be true or false');
   if (j.youtubeSource !== undefined && !YOUTUBE_SOURCES.includes(j.youtubeSource)) throw new AutoPostError('bad-rules', `rules file: youtubeSource must be one of ${YOUTUBE_SOURCES.join(', ')}`);
   if (j.maxUploadsPerDay !== undefined && !(Number.isInteger(j.maxUploadsPerDay) && j.maxUploadsPerDay >= 1 && j.maxUploadsPerDay <= MAX_PER_DAY)) throw new AutoPostError('bad-rules', `rules file: maxUploadsPerDay must be an integer 1..${MAX_PER_DAY}`);
+  if (j.youtubeWinnersPerWeek !== undefined && !(Number.isInteger(j.youtubeWinnersPerWeek) && j.youtubeWinnersPerWeek >= 1 && j.youtubeWinnersPerWeek <= 7 * MAX_PER_DAY)) throw new AutoPostError('bad-rules', `rules file: youtubeWinnersPerWeek must be an integer 1..${7 * MAX_PER_DAY}`);
   const seen = new Set();
   const rules = j.rules.map((r, i) => {
     if (!isPlain(r) || !ID.test(String(r.id)) || seen.has(r.id)) throw new AutoPostError('bad-rules', `rule ${i}: bad or duplicate id`);
@@ -61,7 +63,7 @@ export function validateRules(j0) {
     if (r.kinds !== undefined && !(Array.isArray(r.kinds) && r.kinds.length && r.kinds.every((k) => RULE_KINDS.includes(k)))) throw new AutoPostError('bad-rules', `rule ${r.id}: kinds must be a non-empty list of ${RULE_KINDS.join(', ')}`);
     return { id: r.id, target: r.target, minScore: r.minScore, layouts: r.layouts ?? null, kinds: r.kinds ?? ['short'], maxPerDay: r.maxPerDay };
   });
-  return { autoUpload: j.autoUpload === true, rules, ...(j.maxUploadsPerDay !== undefined ? { maxUploadsPerDay: j.maxUploadsPerDay } : {}), ...(j.youtubeSource !== undefined ? { youtubeSource: j.youtubeSource } : {}) };
+  return { autoUpload: j.autoUpload === true, rules, ...(j.maxUploadsPerDay !== undefined ? { maxUploadsPerDay: j.maxUploadsPerDay } : {}), ...(j.youtubeSource !== undefined ? { youtubeSource: j.youtubeSource } : {}), ...(j.youtubeWinnersPerWeek !== undefined ? { youtubeWinnersPerWeek: j.youtubeWinnersPerWeek } : {}) };
 }
 
 /** 2026-11-26 (user: "Hold all for Instagram test"): where automatic YouTube uploads come from. 'clips' (the default, the
@@ -70,10 +72,14 @@ export function validateRules(j0) {
 export const YOUTUBE_SOURCES = Object.freeze(['clips', 'instagram-winners']);
 export const youtubeFromWinners = (rules) => rules?.youtubeSource === 'instagram-winners';
 
-/** The Instagram-winner promoter's hook: the post ids that won on Instagram and may go to YouTube now. The promoter is
- *  not built yet, so there are none and nothing goes to YouTube in 'instagram-winners' mode. */
-export function instagramWinnerCandidates(/* { dataDir, store, nowMs } */) {
-  return [];
+/** The Instagram-winner promoter's hook (services/analytics/instagram.mjs weeklyWinners): this week's winners, the post
+ *  ids that may go to YouTube now. The first call of a week ranks and records them (never twice); later calls return
+ *  the same list, and the YouTube queue ignores an id it already knows. Without a data folder, or on any error: none. */
+export function instagramWinnerCandidates({ dataDir, store, nowMs = Date.now(), perWeek } = {}) {
+  if (typeof dataDir !== 'string' || !dataDir || !store) return [];
+  try {
+    return weeklyWinners({ dataDir, posts: store.list(), nowMs, perWeek }).winners.map((w) => w.postId);
+  } catch { return []; }
 }
 
 /** Never silent (user 2026-11-20): what the Auto-post card and the task bar say when auto-post is on but nothing can

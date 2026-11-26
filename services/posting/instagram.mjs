@@ -40,6 +40,8 @@ export const TOKEN_TARGET = 'Ujwalam/posting/instagram-token';
 export const DEFAULT_IG_CONFIG = path.join(REPO, 'data', 'posting', 'instagram.json');
 export const DEFAULT_ENDPOINTS = Object.freeze({ graph: 'https://graph.facebook.com', dialog: 'https://www.facebook.com', rupload: 'https://rupload.facebook.com' });
 export const REQUEST_MS = 60 * 1000;
+/** Reading Reel insights (views, reach, watch time) needs this Facebook Login permission (2026-11-26, Instagram winners). */
+export const INSIGHTS_SCOPE = 'instagram_manage_insights';
 const UPLOAD_MS = 30 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -97,6 +99,10 @@ async function graph(fetchImpl, method, url, { params = null, headers = {}, body
   throw new InstagramError('graph-error', `Instagram answered HTTP ${res.status}${Number.isFinite(code) ? ` (code ${code}${Number.isFinite(sub) ? `/${sub}` : ''})` : ''}`,
     { status: res.status, metaCode: Number.isFinite(code) ? code : null });
 }
+
+/** For the insights reader (services/analytics/instagram.mjs): the same checked request and URL base. */
+export const graphRequest = graph;
+export const graphBase = (endpoints, cfg) => base({ ...DEFAULT_ENDPOINTS, ...(endpoints ?? {}) }, cfg, 'graph');
 
 /** The redirect URI the user adds to the Meta app (Valid OAuth Redirect URIs). Pure. The listener binds 127.0.0.1 and ::1;
  *  `localhost` is the host Meta allows over plain http for apps in development (UNVERIFIED, data/posting/instagram.json). */
@@ -190,11 +196,13 @@ export function createInstagramAuth(opts = {}) {
       bizPages = all.length;
       acct = pickAccount({ data: all });
     }
+    // What Facebook granted (permission names only). Saved with the token so status() can say when a permission asked
+    // for later (instagram_manage_insights, 2026-11-26) is not in this sign-in yet.
+    const perms = await graph(fetchImpl, 'GET', `${g}/me/permissions`, { params: { access_token: ll.token } }).catch(() => null);
+    const granted = new Set((Array.isArray(perms?.data) ? perms.data : []).filter((p) => p?.status === 'granted' && typeof p.permission === 'string').map((p) => p.permission));
     if (!acct) {
       // what Facebook shared, as counts and permission names only (no Page or account names), so the message says which
       // link is missing
-      const perms = await graph(fetchImpl, 'GET', `${g}/me/permissions`, { params: { access_token: ll.token } }).catch(() => null);
-      const granted = new Set((Array.isArray(perms?.data) ? perms.data : []).filter((p) => p?.status === 'granted').map((p) => p.permission));
       const missing = perms ? cfg.scopes.filter((s) => !granted.has(s)) : [];
       const nPages = (Array.isArray(pages?.data) ? pages.data.length : 0) + bizPages;
       const seen = `Facebook shared ${nPages} Page(s)${missing.length ? `; not allowed: ${missing.join(', ')}` : ''}`;
@@ -204,7 +212,7 @@ export function createInstagramAuth(opts = {}) {
       if (!nPages) throw new InstagramError('no-fb-page', seen);
       throw new InstagramError('no-ig-account', seen);
     }
-    await writeToken({ ...ll, ...acct, renewedAt: now() });
+    await writeToken({ ...ll, ...acct, renewedAt: now(), ...(perms ? { scopes: [...granted].filter((s) => /^[a-z_]+$/.test(s)).slice(0, 50) } : {}) });
     return { username: acct.username, expiresAt: ll.expiresAt };
   }
 
@@ -231,7 +239,10 @@ export function createInstagramAuth(opts = {}) {
   async function status() {
     const [id, secret, t] = await Promise.all([appIdStore.get(), appSecretStore.get(), readToken()]);
     const connected = !!t && t.expiresAt > now();
-    return { hasApp: !!(id && secret), connected, username: connected ? (t.username ?? null) : null, expiresAt: connected ? new Date(t.expiresAt).toISOString() : null };
+    // insightsAllowed: true/false from the permissions saved at Connect; null = not known (a sign-in from before 2026-11-26)
+    const scopes = connected && Array.isArray(t.scopes) ? t.scopes : null;
+    return { hasApp: !!(id && secret), connected, username: connected ? (t.username ?? null) : null, expiresAt: connected ? new Date(t.expiresAt).toISOString() : null,
+      insightsAllowed: scopes ? scopes.includes(INSIGHTS_SCOPE) : null };
   }
 
   async function signOut() { await tokenStore.delete(); }

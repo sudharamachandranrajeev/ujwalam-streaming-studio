@@ -182,7 +182,8 @@ describe('instagram sign-in', () => {
       assert.equal(opened.searchParams.get('scope'), cfg.scopes.join(','));
       const saved = JSON.parse(tokenStore.peek());
       assert.equal(saved.igUserId, '1784000000'); assert.match(saved.token, /^LL-/);
-      assert.deepEqual(await auth.status(), { hasApp: true, connected: true, username: 'placeholder_account', expiresAt: new Date(saved.expiresAt).toISOString() });
+      assert.deepEqual(await auth.status(), { hasApp: true, connected: true, username: 'placeholder_account', expiresAt: new Date(saved.expiresAt).toISOString(), insightsAllowed: true });
+      assert.ok(saved.scopes.includes('instagram_manage_insights'));
       await auth.signOut();
       assert.equal((await auth.status()).connected, false);
     } finally { await meta.close(); }
