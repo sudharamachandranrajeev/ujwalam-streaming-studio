@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "api_client.h"
+#include "click_diag.h"
 
 #include <QJsonDocument>
 #include <QNetworkReply>
@@ -140,7 +141,21 @@ void ApiClient::post(const QString &route, const QJsonObject &body, Done done)
 	req.setRawHeader("Origin", origin_.toUtf8());
 	req.setRawHeader("Sec-Fetch-Site", "same-origin");
 	req.setRawHeader(CSRF_HEADER, csrf_);
-	finish(nam_.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact)), done);
+	// Click diagnostics (click_diag.h): every POST is a user action or a setting; its route (and a host method name),
+	// never its body, goes to the studio log when sent and when answered, with the time it took.
+	QString what = QStringLiteral("POST ") + route;
+	if (route == QLatin1String("ui/api/host"))
+		what += QStringLiteral(" ") + body.value(QStringLiteral("method")).toString().left(64);
+	clickdiag::line(clickdiag::Api, QStringLiteral("api: %1 sent").arg(what));
+	const qint64 t0 = clickdiag::now();
+	finish(nam_.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact)), [done, what, t0](bool ok, const QJsonObject &b, const QString &e) {
+		const qint64 ms = clickdiag::now() - t0;
+		if (ok)
+			clickdiag::line(clickdiag::Api, QStringLiteral("api: %1 answered in %2 ms").arg(what).arg(ms));
+		else
+			qInfo("api: %s failed in %lld ms: %s", qUtf8Printable(what), ms, qUtf8Printable(e.left(120))); // failures always
+		done(ok, b, e);
+	});
 }
 
 void ApiClient::host(const QString &method, const QJsonObject &params, Done done)

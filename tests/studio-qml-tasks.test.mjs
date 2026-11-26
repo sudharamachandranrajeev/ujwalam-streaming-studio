@@ -90,7 +90,8 @@ describe('QML studio: task chip, task panel and notifications (headless probe)',
     } });
     assert.deepEqual(done(p), [['tasks:open', true]]);
     assert.equal(t.chipHidden, false);
-    assert.equal(t.chipText, '1 task running');
+    assert.equal(t.chipText, '1 task running, 1 waiting', 'the same words as the status bar (Store.taskWords)');
+    assert.match(node(p, 'health').text ?? '', /1 task running, 1 waiting/, 'the status bar says the same as the chip');
     const chip = node(p, 'taskChip'), bar = node(p, 'onAirBar');
     assert.equal(chip.visible, true);
     assert.ok(chip.rect[1] >= bar.rect[1] && chip.rect[1] + chip.rect[3] <= bar.rect[1] + bar.rect[3], 'the chip sits in the on-air bar');
@@ -180,7 +181,7 @@ describe('QML studio: task chip, task panel and notifications (headless probe)',
       task(d, { id: 'clip-b', title: 'Clips from practice-3', state: 'waiting', note: 'Waiting for its turn' });
     }, onStatus: (n, d) => { if (n > 1) moving(d, n); } });
     assert.deepEqual([t.chipHidden, t.panelOpen, t.running, t.waiting, t.stalled], [false, true, 2, 1, 1]);
-    assert.equal(t.chipText, '2 tasks running - 1 may be stuck');
+    assert.equal(t.chipText, '2 tasks running, 1 waiting - 1 may be stuck'); // waiting ones are named, not counted as running (2026-11-27)
     assert.equal(t.panel.right, 14, 'anchored at the right edge');
     assert.ok(t.panel.y >= t.topY && t.panel.y < 140, `under the on-air bar: ${JSON.stringify(t.panel)} topY ${t.topY}`);
     assert.ok(t.panel.width >= 400, 'wide enough that lines are read in full');

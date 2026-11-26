@@ -26,6 +26,7 @@
 #include "qml_studio.h"
 #include "startup_clock.h"
 #include "lag_monitor.h"
+#include "click_diag.h"
 #include "studio_log.h"
 #include "taskbar_id.h"
 #include "theme.h"
@@ -239,6 +240,7 @@ static int runQml(QApplication &app, ApiClient &api, const QString &key, bool he
 	} else
 		loginThen(app, api, key, code, afterLogin);
 	lagmon::start(); // D432: GUI-thread gaps go to the log and the probe line
+	clickdiag::start(); // 2026-11-26: where a click dies (click_diag.h)
 	const int r = app.exec();
 	qInfo("studio exiting with code %d", code ? code : r);
 	return code ? code : r;

@@ -109,6 +109,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/AlertStrip.qml
 		qml/TaskCenter.qml
 		qml/TaskWindow.qml
+		qml/FloatSurface.qml
 		qml/TaskChip.qml
 		qml/ScheduleCenter.qml
 		qml/ScheduleView.qml

@@ -348,7 +348,7 @@ ApplicationWindow {
             text: !studioStore.uiUp ? "UI server: not reachable (the host and your outputs may still be running)" :
                   (studioStore.fake ? "Host: test stand-in" : studioStore.hostUp ? "Host: running" : "Host: not running") +
                   "   ·   " + (studioStore.coreUp ? "Event core: running" : "Event core: not running") +
-                  (studioStore.activeTasks > 0 ? "   ·   " + studioStore.activeTasks + (studioStore.activeTasks === 1 ? " task running" : " tasks running") : "")
+                  (studioStore.taskWords !== "" ? "   ·   " + studioStore.taskWords : "")
             color: studioStore.uiUp && studioStore.hostUp ? Theme.c.muted : Theme.c.danger
             font.family: Theme.family
             font.pixelSize: Theme.ty.small
@@ -489,7 +489,7 @@ ApplicationWindow {
             anchors.centerIn: parent
             width: Math.min(parent.width - 2 * Theme.sp.l, 460)
             height: closingCol.implicitHeight + 2 * Theme.sp.l
-            radius: Theme.radius
+            radius: Theme.radiusLarge
             color: Theme.c.panel
             border.color: Theme.c.border
             Column {

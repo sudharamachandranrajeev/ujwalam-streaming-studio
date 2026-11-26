@@ -399,28 +399,28 @@ Item {
     }
 
     // ---- the panel ----
-    Popup {
+    // A tool window, not a Popup.Window (FloatSurface.qml, 2026-11-27): a popup window opened after it (a notification,
+    // a menu) took its clicks, and closing that popup could take this panel away with it.
+    FloatSurface {
         id: panel
         objectName: "schedulePanel"
-        popupType: studioUnseen ? Popup.Item : Popup.Window
-        visible: sc.open && sc.available
-        modal: false
-        focus: false
-        closePolicy: Popup.NoAutoClose
-        width: Math.min(720, sc.width - 2 * sc.gap)
-        x: sc.width - width - sc.gap
-        y: sc.topY
-        height: Math.max(240, Math.min(620, sc.windowHeight - sc.topY - 40))
-        padding: Theme.sp.m
-        onClosed: sc.open = false
-        background: Rectangle {
+        anchors.fill: parent
+        shown: sc.open && sc.available
+        takesFocus: true // the search box
+        pw: Math.min(720, sc.width - 2 * sc.gap)
+        px: sc.width - pw - sc.gap
+        py: sc.topY
+        ph: Math.max(240, Math.min(620, sc.windowHeight - sc.topY - 40))
+        Rectangle {
+            anchors.fill: parent
             color: Theme.c.panel
             radius: Theme.radiusLarge
             border.width: 1
             border.color: Theme.c.border
         }
-        contentItem: Loader {
-            active: panel.visible
+        Loader {
+            anchors { fill: parent; margins: Theme.sp.m }
+            active: panel.shown
             sourceComponent: ScheduleView { center: sc; inWindow: false }
         }
     }
