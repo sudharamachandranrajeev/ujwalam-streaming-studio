@@ -18,6 +18,7 @@ import { READONLY_SCOPE } from './oauth.mjs';
 import { readChannelSchedule } from './schedule-read.mjs';
 import { ensureScheduleSeed } from './schedule-seed.mjs';
 import { DEFAULT_QUOTA, createQuotaBudget, loadQuota } from './quota-budget.mjs';
+import { MAIN, accountOf } from './accounts.mjs';
 
 export { DEFAULT_QUOTA, loadQuota };
 
@@ -289,8 +290,12 @@ export function moveQueueItem(dataDir, id, at, { nowMs = Date.now() } = {}) {
   if (alignUp(t, cfg) !== t) return no('off-grid', `pick a time on the ${cfg.alignMinutes}-minute grid`);
   if (t < floorFrom(nowMs, cfg)) return no('too-soon', 'that time is too soon for the upload to finish first');
   if (t > maxAheadMs(nowMs, cfg)) return no('too-far', `that time is more than ${cfg.maxAheadDays} days ahead`);
-  const doc = { schedule: q.schedule() };
-  const others = q.items().filter((i) => i.id !== id).flatMap(itemTimes);
+  // YM1: the gap holds inside one channel: only the same channel's queue and its own last read count. A clip not given
+  // to a channel yet (the pool) is checked as the main channel's, where it goes when only main is set up.
+  const chOf = (i) => accountOf(i) ?? MAIN;
+  const acct = chOf(it);
+  const doc = { schedule: q.scheduleOf(acct) };
+  const others = q.items().filter((i) => i.id !== id && chOf(i) === acct).flatMap(itemTimes);
   const gap = cfg.intervalHours * HOUR_MS;
   if ([...savedChannelTimes(doc, nowMs), ...others].some((x) => Math.abs(x - t) < gap)) return no('taken', `another post is less than ${Math.round(cfg.intervalHours * 60)} min from that time`);
   const item = q.patch(id, { publishAt: toIso(t), slotAt: toIso(nowMs), reslot: null, movedByUser: true,

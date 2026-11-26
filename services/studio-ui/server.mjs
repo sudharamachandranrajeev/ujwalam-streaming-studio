@@ -45,6 +45,7 @@ import { analyseTiming, applySuggestion, dismissSuggestion, loadTimingConfig, re
 import { SCHEDULE_FLAG, userScheduleFile } from '../posting/schedule.mjs';
 import { UploadError, checkPostStatus } from '../posting/youtube.mjs';
 import { createInstagramRoutes } from './instagram-routes.mjs';
+import { createChannelRoutes } from './channels-routes.mjs';
 import { igReasonText, queueInstagramNow, readInstagramStates, createInstagramQueue, IG_QUEUE_NAME } from '../posting/instagram-queue.mjs';
 import { scheduleManagerView } from '../posting/schedule-manager.mjs';
 import { GROWTH_FLAG, DB_NAME as GROWTH_DB, collect as growthCollect, openStore as openGrowthStore, view as growthView } from '../analytics/index.mjs';
@@ -446,6 +447,11 @@ export function createStudioServer(opts) {
   // D444 Instagram section (Settings > Posting & growth): Connect opens Facebook Login in the browser; the secret and the
   // token stay in the Credential Manager. opts.instagram = { auth, browserOpen } are test seams.
   const igRoutes = createInstagramRoutes({ dataDir: opts.dataDir, flags, auth: opts.instagram?.auth, browserOpen: opts.instagram?.browserOpen });
+  // YM6 YouTube channels (Settings > Posting & growth): Add channel opens Google sign-in in the browser; each channel's token
+  // stays in the Credential Manager. opts.channels = { authFor, browserOpen, fetchImpl, newId } are test seams; main's
+  // status comes from opts.youtube.auth when a test gives one.
+  const chRoutes = createChannelRoutes({ dataDir: opts.dataDir, flags, nowMs: now, browserOpen: opts.channels?.browserOpen, fetchImpl: opts.channels?.fetchImpl, newId: opts.channels?.newId,
+    authFor: (id) => opts.channels?.authFor?.(id) ?? (id === 'main' && opts.youtube?.auth ? opts.youtube.auth : null) });
   // D375 Auto-post card: a fresh channel read for "Next posting times" at most every 10 minutes (quota), else the saved one.
   const CHANNEL_READ_EVERY_MS = 10 * 60 * 1000;
   // { at, promise } -> { channel } | { error }. The promise is stored before it is awaited, so requests that arrive while a
@@ -1769,7 +1775,7 @@ export function createStudioServer(opts) {
       // SM1-SM4 scheduling manager: every scheduled post as one flat list (YouTube queue, Instagram queue, the channel's own
       // scheduled times). brief=1 sends only the counts and the next time (the Settings line). Read only; no network.
       if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
-      try { return json(res, 200, scheduleManagerView(opts.dataDir, { posts: url.searchParams.get('brief') === '1' || !posting ? [] : posting.list(), nowMs: now(), brief: url.searchParams.get('brief') === '1' })); } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
+      try { return json(res, 200, scheduleManagerView(opts.dataDir, { posts: url.searchParams.get('brief') === '1' || !posting ? [] : posting.list(), nowMs: now(), brief: url.searchParams.get('brief') === '1', channel: /^(main|ch-[a-z0-9]{6,12})$/.test(url.searchParams.get('channel') ?? '') ? url.searchParams.get('channel') : '' })); } catch { return json(res, 500, { error: 'schedule-unavailable' }); }
     }
     if (req.method === 'GET' && route === '/ui/api/posts/auto') {
       // Read-only: the auto-post mode and what a run would do now. Enabling stays a flag; nothing is changed here.
@@ -1795,6 +1801,7 @@ export function createStudioServer(opts) {
     }
     if (req.method === 'GET' && route === '/ui/api/posts/media') return postMedia(req, res, url);
     if (req.method === 'GET' && await igRoutes.handle('GET', route, null, res, json)) return undefined; // D444
+    if (req.method === 'GET' && await chRoutes.handle('GET', route, null, res, json)) return undefined; // YM6
     if (req.method === 'GET' && route === '/ui/api/posts/youtube/status') {
       try { const st = await youtubeAuth().status(); return json(res, 200, { signedIn: st.signedIn === true, hasClient: st.hasClient === true }); } catch { return json(res, 502, { error: 'youtube-status-failed' }); }
     }
@@ -1963,6 +1970,7 @@ export function createStudioServer(opts) {
       return json(res, 200, { verdict: 'allow', flags: applyFlag(body.id, true) }); // ON: the click is the decision (D332)
     }
     if (await igRoutes.handle('POST', route, body, res, json)) return undefined; // D444 Instagram (Origin + CSRF checked above)
+    if (await chRoutes.handle('POST', route, body, res, json)) return undefined; // YM6 YouTube channels (Origin + CSRF checked above)
     if (route.startsWith('/ui/api/connect/')) return connectRoute(res, route, body);
     if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set' || route === '/ui/api/youtube/event/auto') return ytEventsRoute(req, res, route, body); // D386, D388
     if (await setupUpdate.handle('POST', route, res, null)) return undefined; // Update available (2026-11-18)
