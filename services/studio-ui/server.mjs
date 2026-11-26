@@ -55,7 +55,7 @@ import { createLearningStore } from '../learning/store.mjs';
 import { createReview } from '../learning/review.mjs';
 import { UNDOABLE, afterOf, beforeOf, createEditHistory, paramsOf } from './edit-history.mjs';
 import { addLayer, addScene, duplicateLayer, duplicateScene, moveLayer, realismScene, removeLayer, removeScene, renameLayer, renameScene } from '../project/structure.mjs';
-import { loadLooks, lookSummary } from '../project/looks.mjs';
+import { LOOKS_DIR, loadLooks, lookSummary, userLooksDir } from '../project/looks.mjs';
 import { listAssets } from './assets.mjs';
 import { loadProject, saveProject } from '../project/store.mjs';
 import { TRANSITION_RANGES, TRANSITION_TYPES, ownFields, validateProject } from '../project/validate.mjs';
@@ -64,6 +64,7 @@ import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
 import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
 import { createReelStyles } from './reel-styles.mjs';
+import { createUserLooks } from './user-looks.mjs';
 import { createMontageMusic } from './montage-music.mjs';
 import { createBeatdropReview } from './beatdrop-review.mjs';
 import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, montageMusicInfo, readSettings, REEL_STYLE_TYPES, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
@@ -249,7 +250,9 @@ export const SCENE_EDIT_FLAG = 'scene-edit';
 // realism-look instead.
 export const REALISM_FLAG = 'realism-look';
 /** RL4 (D445): what Settings > Clips > Clip look > Realism look offers: the looks (data/looks) and the reel types. */
-export const realismLookInfo = () => ({ looks: loadLooks().map(lookSummary), types: [...REEL_STYLE_TYPES] });
+// RL5: with a data folder the user's own looks (<data>/looks) come after the built-in ones
+export const allLooks = (dataDir) => loadLooks(LOOKS_DIR, typeof dataDir === 'string' ? userLooksDir(dataDir) : null);
+export const realismLookInfo = (dataDir) => ({ looks: allLooks(dataDir).map(lookSummary), types: [...REEL_STYLE_TYPES] });
 const FREE_STRUCTURE_OPS = ['scene.add', 'layer.add', 'layer.duplicate', 'layer.rename', 'scene.duplicate', 'scene.rename', 'layer.remove', 'layer.move', 'scene.realism'];
 const STRUCTURE_OPS = ['scene.add', 'scene.remove', 'layer.add', 'layer.remove', 'layer.move', ...FREE_STRUCTURE_OPS];
 /** Host calls that start a stream or a recording: refused while Ujwalam is closing (closing lock, D311 proposed). */
@@ -761,6 +764,9 @@ export function createStudioServer(opts) {
   // D414 Settings > Clips > Montage music: the NCS library's tracks and their credits (montage_music.py, hidden)
   const montageMusic = typeof opts.dataDir === 'string' ? createMontageMusic({ dataDir: opts.dataDir, clipRoot: opts.clipRoot ?? (process.env.UJWALAM_CLIP_ROOT || REPO_ROOT) }) : null;
   // BD7b (D420, flag beatdrop): the BeatDrop review card (summary, song strip, one-click retakes)
+  // RL5: New look from a reference (measured in Python), rename and delete of the user's own looks
+  const userLooks = typeof opts.dataDir === 'string' ? createUserLooks({ dataDir: opts.dataDir, clipRoot: opts.clipRoot ?? (process.env.UJWALAM_CLIP_ROOT || REPO_ROOT),
+    flagOn: () => !!flags && flags.isOn(REALISM_FLAG) }) : null;
   const beatdropReview = typeof opts.dataDir === 'string' ? createBeatdropReview({ dataDir: opts.dataDir, flagOn: () => !!flags && flags.isOn('beatdrop'), openFile: (p) => openFolder(p) }) : null;
   const renamed = new Map(); // 'layer:<id>' | 'scene:<id>' -> new name, until the host reloads the project (D292)
   let lastImport = null; // { file, project, bases }: server side only, never sent to the page
@@ -1365,7 +1371,7 @@ export function createStudioServer(opts) {
       : op === 'layer.add' ? addLayer(doc, body) : op === 'layer.move' ? moveLayer(doc, body)
       : op === 'layer.duplicate' ? duplicateLayer(doc, body) : op === 'layer.rename' ? renameLayer(doc, body)
       : op === 'scene.duplicate' ? duplicateScene(doc, body) : op === 'scene.rename' ? renameScene(doc, body)
-      : op === 'scene.realism' ? realismScene(doc, body) : removeLayer(doc, body);
+      : op === 'scene.realism' ? realismScene(doc, body, allLooks(opts.dataDir)) : removeLayer(doc, body);
     if (r.error) return json(res, 409, { error: r.error, ...(r.errors ? { detail: r.errors.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300) } : {}) });
     const canvases = doc.canvases.map((c) => c.id.toUpperCase());
     let waiting = null; // a capture layer added while its device is not connected: the host's plain sentence (D329)
@@ -1600,11 +1606,11 @@ export function createStudioServer(opts) {
     if (req.method === 'GET' && route === '/ui/api/montage-music') return montageMusic ? json(res, 200, await montageMusic.info()) : json(res, 404, { error: 'no-data-dir' }); // D414
     if (req.method === 'GET' && route === '/ui/api/beatdrop') { if (!beatdropReview) return json(res, 404, { error: 'no-data-dir' }); const r = beatdropReview.info(url.searchParams.get('run') ?? ''); return json(res, r.status, r.body); } // BD7b
     if (req.method === 'GET' && route === '/ui/api/reel-styles') return reelStyles ? json(res, 200, await reelStyles.info()) : json(res, 404, { error: 'no-data-dir' }); // RS3
-    if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir), montageMusic: montageMusicInfo(opts.dataDir), realismLooks: realismLookInfo() } : { settings: null });
+    if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir), montageMusic: montageMusicInfo(opts.dataDir), realismLooks: realismLookInfo(opts.dataDir) } : { settings: null });
     if (req.method === 'GET' && route === '/ui/api/edits') return json(res, 200, history.state());
     if (req.method === 'GET' && route === '/ui/api/project/structure') return structureChoices(res);
     // D445: the realism looks for the scene menu's Make realism scene (data/looks; read only, also while live)
-    if (req.method === 'GET' && route === '/ui/api/looks') return json(res, 200, { looks: loadLooks().map(lookSummary) });
+    if (req.method === 'GET' && route === '/ui/api/looks') return json(res, 200, { looks: allLooks(opts.dataDir).map(lookSummary) });
     if (req.method === 'GET' && route === '/ui/api/project/transitions') return transitionChoices(res);
     if (req.method === 'GET' && route === '/ui/api/feedback') return json(res, 200, { moments: feedback.list() });
     if (route === '/ui/api/report-url') {
@@ -1832,6 +1838,7 @@ export function createStudioServer(opts) {
     }
     if (route === '/ui/api/settings') return settingsRoute(res, body);
     if (route === '/ui/api/montage-music') { if (!montageMusic) return json(res, 404, { error: 'no-data-dir' }); const r = await montageMusic.run(body); return json(res, r.status, r.body); } // D414
+    if (route === '/ui/api/looks') { if (!userLooks) return json(res, 404, { error: 'no-data-dir' }); const r = await userLooks.run(body); return json(res, r.status, r.body); } // RL5
     if (route === '/ui/api/reel-styles') { if (!reelStyles) return json(res, 404, { error: 'no-data-dir' }); const r = await reelStyles.run(body); return json(res, r.status, r.body); } // RS3
     if (route === '/ui/api/clips/answer') return clipAnswer(res, body);
     if (route === '/ui/api/beatdrop/retake' || route === '/ui/api/beatdrop/play') { if (!beatdropReview) return json(res, 404, { error: 'no-data-dir' }); const r = route.endsWith('retake') ? beatdropReview.retake(body) : beatdropReview.play(body); return json(res, r.status, r.body); } // BD7b

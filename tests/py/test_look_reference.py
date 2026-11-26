@@ -121,6 +121,22 @@ class FromReferenceTests(unittest.TestCase):
         self.assertEqual(r2["look"]["id"], "user-warm-one-2")
         self.assertEqual(cr.load_looks(), [x for x in cr.load_looks() if not x["id"].startswith("user-")])
 
+    def test_reels_pick_and_render_plan_use_the_own_look(self):
+        r = lr.make_look(self.data, self._ref("r.png", _gradient(3.0, -4.0)), "Reel one")
+        with open(os.path.join(self.data, "settings.json"), "w", encoding="utf-8") as f:
+            json.dump({"clips": {"realismLooks": {"byType": {"reel": {"mode": "one", "look": "user-reel-one", "ticks": []}}}}}, f)
+        lk, rec = cr.pick(self.data, "reel")
+        self.assertEqual((lk["id"], rec), ("user-reel-one", {"mode": "one"}))
+        wd = os.path.join(self.tmp, "wd")
+        os.makedirs(wd)
+        frag, prec = cr.plan(lk, wd, {"width": 1080, "height": 1920}, ("x",), data_dir=self.data)
+        self.assertEqual(prec["lutAmount"], 1.0)
+        self.assertTrue(os.path.isfile(os.path.join(wd, cr.LUT_FILE)))
+        self.assertIn("lut3d", frag)
+        self.assertEqual(r["look"]["effects"][1:], lk["effects"][1:])
+        with self.assertRaises(cr.ClipError):
+            cr.lut_path(lk)  # an own look needs the data folder
+
     def test_nearest_builtin_by_colour_distance(self):
         looks = cr.load_looks()
         for lk in looks:

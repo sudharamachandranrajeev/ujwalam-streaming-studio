@@ -31,7 +31,7 @@ export const WINDOW_SPEC_RE = /^[^:\u0000-\u001f\u007f]*:[^:\u0000-\u001f\u007f]
 const MONITORING = ['off', 'monitor-only', 'monitor-and-output'];
 // AU1: a program file name (no folder), as Windows shows it for a running app; never a window title.
 export const EXE_RE = /^[^\\/:*?"<>|#\u0000-\u001f]{1,120}\.exe$/i; // no "#": OBS window specs encode it (#22, #3A)
-const PATH_BASES = ['data', 'luts', 'media', 'overlays', 'profile']; // luts: the app's shipped LUTs (D381)
+const PATH_BASES = ['data', 'luts', 'media', 'overlays', 'profile', 'userluts']; // luts: the app's shipped LUTs (D381); userluts: the user's own looks, <data>/looks (RL5)
 // D291 layer effects: key -> [min, max] or [min, max, 'int'], 'color' (#RRGGBB), 'file' (pathRef), 'bool', or
 // [[allowed values]]. All keys are required. Same ranges as app/host/src/model.cpp and data/schemas/project.schema.json.
 const BLEND = ['blendAdd', 'blendSubtract', 'blendMultiply', 'blendScreen', 'blendLighten', 'blendDarken'];

@@ -44,7 +44,7 @@ export const LUTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 // data (D391): the app's own data folder, read only (the built-in cyberpunk stingers, data/transitions/stingers/). Only given
 // by the studio start (appDataDir); the host refuses a stinger that is not a video file and any path leaving the base.
 export const APP_DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data');
-export function alphaBases({ profile = {}, overlayRoot, assetsDefault, lutsDir = LUTS_DIR, appDataDir = null, musicDir = null } = {}) {
+export function alphaBases({ profile = {}, overlayRoot, assetsDefault, lutsDir = LUTS_DIR, appDataDir = null, musicDir = null, userLutsDir = null } = {}) {
   const pa = profile?.paths?.profile_assets;
   const dir = typeof pa === 'string' && path.isAbsolute(pa) ? pa : overlayRoot;
   const out = dir && path.isAbsolute(dir) && existsSync(dir) ? { profile: path.resolve(dir) } : {};
@@ -54,6 +54,8 @@ export function alphaBases({ profile = {}, overlayRoot, assetsDefault, lutsDir =
   // music (MU2): the scene music library <dataDir>/music, given even before it is made (the host says why nothing plays)
   if (musicDir && path.isAbsolute(musicDir)) out.music = path.resolve(musicDir);
   try { if (lutsDir && path.isAbsolute(lutsDir) && statSync(lutsDir).isDirectory()) out.luts = path.resolve(lutsDir); } catch { /* no LUT folder: lut effects on base luts are listed unavailable */ }
+  // userluts (RL5): the user's own looks, <dataDir>/looks, given even before the first one is made (as music)
+  if (userLutsDir && path.isAbsolute(userLutsDir)) out.userluts = path.resolve(userLutsDir);
   return out;
 }
 

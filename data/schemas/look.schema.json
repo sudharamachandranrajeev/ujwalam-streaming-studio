@@ -2,11 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ujwalam/look.schema.json",
   "title": "Realism look (D445, RL1)",
-  "description": "One realism look (data/looks/<id>.json): a name, what it looks like in plain words, the colour grade its LUT is generated from (tools/make-look-luts.mjs; Filmic keeps tools/make-realism-lut.mjs), and the layer effects a realism scene puts on each game layer, in order, the LUT first (services/project/looks.mjs and tests/realism-looks.test.mjs check that). Effects are project layer effects (data/schemas/project.schema.json $defs/effect; the project validator checks them). backdrop: the effect types that also go on the blurred backdrop copies of the game (the others only add GPU cost under a blur). swatch: SWATCH_REFS of the generator through the look, for the studio menu.",
+  "description": "One realism look (data/looks/<id>.json, or the user's own in <data>/looks/user-<name>.json, RL5): a name, what it looks like in plain words, the colour grade its LUT is generated from (tools/make-look-luts.mjs; Filmic keeps tools/make-realism-lut.mjs), and the layer effects a realism scene puts on each game layer, in order, the LUT first (services/project/looks.mjs and tests/realism-looks.test.mjs check that). Effects are project layer effects (data/schemas/project.schema.json $defs/effect; the project validator checks them). backdrop: the effect types that also go on the blurred backdrop copies of the game (the others only add GPU cost under a blur). swatch: SWATCH_REFS of the generator through the look, for the studio menu.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "id", "name", "summary", "status", "effects", "backdrop", "swatch"],
-  "oneOf": [{ "properties": { "grade": true }, "required": ["grade"] }, { "properties": { "generator": true }, "required": ["generator"] }],
+  "oneOf": [{ "properties": { "grade": true }, "required": ["grade"] }, { "properties": { "generator": true }, "required": ["generator"] }, { "properties": { "measured": true }, "required": ["measured"] }],
   "properties": {
     "$comment": { "type": "string" },
     "version": { "const": 1 },
@@ -15,6 +15,15 @@
     "summary": { "type": "string", "minLength": 1, "maxLength": 200 },
     "status": { "enum": ["unverified", "verified"] },
     "generator": { "const": "tools/make-realism-lut.mjs" },
+    "measured": {
+      "$comment": "RL5: a user look made from a reference (services/clip/look_reference.py), saved in <data>/looks with id user-... and its LUT on base userluts; only measured numbers, nothing of the reference file",
+      "type": "object", "additionalProperties": false, "required": ["colour", "shift", "basedOn"],
+      "properties": {
+        "colour": { "$ref": "#/$defs/labStats" },
+        "shift": { "$ref": "#/$defs/labStats" },
+        "basedOn": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" }
+      }
+    },
     "grade": {
       "type": "object",
       "additionalProperties": false,
@@ -61,6 +70,10 @@
     }
   },
   "$defs": {
+    "labStats": {
+      "type": "object", "additionalProperties": false, "required": ["L", "a", "b", "contrast"],
+      "properties": { "L": { "type": "number" }, "a": { "type": "number" }, "b": { "type": "number" }, "contrast": { "type": "number" } }
+    },
     "rgbGain": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": 0.5, "maximum": 1.5 } },
     "rgbOffset": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": -0.1, "maximum": 0.1 } }
   }

@@ -78,7 +78,7 @@ test('base luts: the project validator and the host lib take it; other names sta
   assert.deepEqual(Object.keys(sent[0][1].bases), ['luts']);
   await assert.rejects(planInHost(client, doc, { bases: { nope: REPO } }), /unknown pathRef base/);
   // the host's own allowlists (C++) name luts too
-  assert.match(readFileSync(path.join(REPO, 'app', 'host', 'src', 'model.cpp'), 'utf8'), /bases = \{"data", "luts", "media", "overlays", "profile"\}/);
+  assert.match(readFileSync(path.join(REPO, 'app', 'host', 'src', 'model.cpp'), 'utf8'), /bases = \{"data", "luts", "media", "overlays", "profile", "userluts"\}/);
   assert.match(readFileSync(path.join(REPO, 'app', 'host', 'src', 'methods.cpp'), 'utf8'), /m\.first != "luts"/);
 });
 

@@ -84,8 +84,8 @@ Studio::LoadOptions load_options(App &a, const Params &q)
 	if (const json::Value *b = q.obj_opt("bases")) {
 		for (auto &m : b->members()) {
 			if (m.first != "data" && m.first != "luts" && m.first != "media" && m.first != "music" && m.first != "overlays" &&
-			    m.first != "profile") // music (MU2): the scene music library, never a project pathRef base
-				throw Error(rpc::INVALID_PARAMS, "bases: keys are data, luts, media, music, overlays, profile");
+			    m.first != "profile" && m.first != "userluts") // music (MU2): the scene music library, never a project pathRef base
+				throw Error(rpc::INVALID_PARAMS, "bases: keys are data, luts, media, music, overlays, profile, userluts");
 			if (!m.second.is_string() || m.second.as_string().empty() || m.second.as_string().size() > 1024 ||
 			    !std::filesystem::u8path(m.second.as_string()).is_absolute())
 				throw Error(rpc::INVALID_PARAMS, "bases: values are absolute directory paths");
