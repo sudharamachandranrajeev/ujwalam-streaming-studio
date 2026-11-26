@@ -66,7 +66,7 @@ import { tokensCssFor, WEB_THEME_FLAG } from './web-theme.mjs';
 import { createReelStyles } from './reel-styles.mjs';
 import { createMontageMusic } from './montage-music.mjs';
 import { createBeatdropReview } from './beatdrop-review.mjs';
-import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, montageMusicInfo, readSettings, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
+import { clipsFolder, guideOnly, lookInfo, lookOverrideProblems, montageMusicInfo, readSettings, REEL_STYLE_TYPES, reelHookInfo, reelLengthInfo, reelTransitionInfo, SETTINGS_FILE, settingsProblems, writeSettings } from './user-settings.mjs';
 import { NEXT_START, TASKS_CONFIG, TASK_CONTROLS, createTasks, currentClipTaskIds, loadTaskConfig, parseTaskConfig, readTaskFiles, writeTaskControl, writeTaskFile } from './tasks.mjs';
 import { createDataNotifier, createDataSource, parseJsonText } from '../common/data-reload.mjs';
 import { READINESS_FLAG, createReadiness, diskFreeBytes, lastCiPass, listProcessNames, loadReadinessConfig, logOverride, planTargets, readinessSummary } from './readiness.mjs';
@@ -248,6 +248,8 @@ export const SCENE_EDIT_FLAG = 'scene-edit';
 // D381: scene.realism (a copy of a scene with the realism grade on its game layers) loses nothing either; it needs flag
 // realism-look instead.
 export const REALISM_FLAG = 'realism-look';
+/** RL4 (D445): what Settings > Clips > Clip look > Realism look offers: the looks (data/looks) and the reel types. */
+export const realismLookInfo = () => ({ looks: loadLooks().map(lookSummary), types: [...REEL_STYLE_TYPES] });
 const FREE_STRUCTURE_OPS = ['scene.add', 'layer.add', 'layer.duplicate', 'layer.rename', 'scene.duplicate', 'scene.rename', 'layer.remove', 'layer.move', 'scene.realism'];
 const STRUCTURE_OPS = ['scene.add', 'scene.remove', 'layer.add', 'layer.remove', 'layer.move', ...FREE_STRUCTURE_OPS];
 /** Host calls that start a stream or a recording: refused while Ujwalam is closing (closing lock, D311 proposed). */
@@ -1598,7 +1600,7 @@ export function createStudioServer(opts) {
     if (req.method === 'GET' && route === '/ui/api/montage-music') return montageMusic ? json(res, 200, await montageMusic.info()) : json(res, 404, { error: 'no-data-dir' }); // D414
     if (req.method === 'GET' && route === '/ui/api/beatdrop') { if (!beatdropReview) return json(res, 404, { error: 'no-data-dir' }); const r = beatdropReview.info(url.searchParams.get('run') ?? ''); return json(res, r.status, r.body); } // BD7b
     if (req.method === 'GET' && route === '/ui/api/reel-styles') return reelStyles ? json(res, 200, await reelStyles.info()) : json(res, 404, { error: 'no-data-dir' }); // RS3
-    if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir), montageMusic: montageMusicInfo(opts.dataDir) } : { settings: null });
+    if (req.method === 'GET' && route === '/ui/api/settings') return json(res, 200, typeof opts.dataDir === 'string' ? { settings: readSettings(opts.dataDir), clips: clipStatus(), reelLengths: reelLengthInfo(opts.dataDir), reelHooks: reelHookInfo(opts.dataDir), reelTransition: reelTransitionInfo(opts.dataDir), look: lookInfo(opts.dataDir), montageMusic: montageMusicInfo(opts.dataDir), realismLooks: realismLookInfo() } : { settings: null });
     if (req.method === 'GET' && route === '/ui/api/edits') return json(res, 200, history.state());
     if (req.method === 'GET' && route === '/ui/api/project/structure') return structureChoices(res);
     // D445: the realism looks for the scene menu's Make realism scene (data/looks; read only, also while live)

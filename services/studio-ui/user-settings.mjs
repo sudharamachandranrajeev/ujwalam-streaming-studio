@@ -19,6 +19,7 @@
 //                         data/clip/transitions.json, read by services/clip/reel_transition.py): { kind, ms }.
 //                         Absent = the default kind. Used while the reel-transitions flag is on.
 //   clips.look: the clip look (FX1-FX4, D411): ticks per style group, randomise, locks and tunables (data/clip/look.json).
+//   clips.realismLooks: the realism look per reel type (RL4, D445): off, one look, or random from ticked looks.
 //   clips.montageMusic: the NCS library for BeatDrop montages (D413/D414): { on, folder, mode, fixedTrack, avoidLast }.
 //   folders.recordings: where recordings are saved (used from the next start); null = <host data>/recordings
 //   folders.clips: where finished clips are saved; null = <dataDir>/clips
@@ -366,6 +367,44 @@ function mergeReelStyles(cur, patch) {
   return Object.keys(out).length ? out : null;
 }
 // ---- reel styles end
+// ---- realism looks (RL4, D445) begin: clips.realismLooks checks and read; also marked "realism looks" in readSettings,
+// settingsProblems and writeSettings. { byType?: { reel|impact|montage: { mode: off|one|random, look: id|null,
+// ticks: [id] } } }: Settings > Clips > Clip look > Realism look per reel type. Same rules as
+// services/clip/clip_realism.py problems(); a look id that is later removed from data/looks is skipped by the clipper.
+export const REALISM_MODES = Object.freeze(['off', 'one', 'random']);
+const LOOK_ID = /^[a-z][a-z0-9-]{1,31}$/;
+const MAX_REALISM_TICKS = 32;
+/** Problems with a clips.realismLooks value; [] when fine. */
+export function realismLooksProblems(v) {
+  if (!plainObj(v)) return ['clips.realismLooks must be an object'];
+  const out = [];
+  for (const k of Object.keys(v)) if (k !== 'byType') out.push(`unknown clips.realismLooks setting ${k}`);
+  if (!('byType' in v)) return out;
+  if (!plainObj(v.byType)) return [...out, 'clips.realismLooks.byType must be an object'];
+  for (const [t, x] of Object.entries(v.byType)) {
+    const w = `clips.realismLooks.byType.${t}`;
+    if (!REEL_STYLE_TYPES.includes(t)) { out.push(`clips.realismLooks.byType: unknown reel type ${t}`); continue; }
+    if (!plainObj(x)) { out.push(`${w} must be an object`); continue; }
+    for (const k of Object.keys(x)) if (!['mode', 'look', 'ticks'].includes(k)) out.push(`unknown ${w} setting ${k}`);
+    if (!REALISM_MODES.includes(x.mode)) out.push(`${w}.mode must be one of ${REALISM_MODES.join(', ')}`);
+    if (x.look !== undefined && x.look !== null && !(typeof x.look === 'string' && LOOK_ID.test(x.look))) out.push(`${w}.look must be empty or a look id`);
+    const tk = x.ticks ?? [];
+    if (!Array.isArray(tk) || tk.length > MAX_REALISM_TICKS || tk.some((i) => typeof i !== 'string' || !LOOK_ID.test(i)) || new Set(tk).size !== tk.length) {
+      out.push(`${w}.ticks must be up to ${MAX_REALISM_TICKS} different look ids`);
+    }
+    if (x.mode === 'one' && !x.look) out.push(`${w}: one look needs the look`);
+  }
+  return out;
+}
+const readRealismLooks = (v) => (v !== undefined && realismLooksProblems(v).length === 0 ? structuredClone(v) : null);
+/** The stored value after a patch: byType merges type by type (each type replaced whole). */
+function mergeRealismLooks(cur, patch) {
+  if (patch === undefined) return cur ?? null;
+  const out = structuredClone(cur ?? {});
+  if (patch.byType) out.byType = { ...(out.byType ?? {}), ...structuredClone(patch.byType) };
+  return Object.keys(out).length ? out : null;
+}
+// ---- realism looks end
 // ---- montage music (D413 item 2, D414) begin: clips.montageMusic checks and read; also marked "montage music" in
 // readSettings, settingsProblems and writeSettings. { on, folder, mode: random|fixed, fixedTrack: track id|null,
 // avoidLast }: the user's NCS library for BeatDrop montages (data/clip/montage-music.json; the folder's drive rule and
@@ -538,6 +577,7 @@ export function readSettings(dataDir) {
       ...(readReelTransition(c.reelTransition) ? { reelTransition: readReelTransition(c.reelTransition) } : {}), // reel transition
       ...(readLook(c.look) ? { look: readLook(c.look) } : {}), // clip look
       ...(readReelStyles(c.reelStyles) ? { reelStyles: readReelStyles(c.reelStyles) } : {}), // reel styles
+      ...(readRealismLooks(c.realismLooks) ? { realismLooks: readRealismLooks(c.realismLooks) } : {}), // realism looks
       ...(readMontageMusic(c.montageMusic) ? { montageMusic: readMontageMusic(c.montageMusic) } : {}) }, // montage music
     folders: { recordings: dir(f.recordings), clips: dir(f.clips) },
     ...uiRead(j), // D290
@@ -558,6 +598,7 @@ export function settingsProblems(patch, { forbidden = [] } = {}) {
     else if (k === 'reelTransition') out.push(...reelTransitionProblems(v)); // reel transition
     else if (k === 'look') out.push(...lookProblems(v)); // clip look
     else if (k === 'reelStyles') out.push(...reelStylesProblems(v)); // reel styles
+    else if (k === 'realismLooks') out.push(...realismLooksProblems(v)); // realism looks
     else if (k === 'montageMusic') out.push(...montageMusicProblems(v)); // montage music
     else if (k === 'recordLive') { if (typeof v !== 'boolean') out.push('clips.recordLive must be true or false'); } // LC2
     else if (!['recording', 'live'].includes(k)) out.push(`unknown clip setting ${k}`);
@@ -589,6 +630,8 @@ export function writeSettings(dataDir, patch) {
   if (lk) next.clips.look = lk; else delete next.clips.look;
   const rst = mergeReelStyles(cur.clips.reelStyles, patch.clips?.reelStyles); // reel styles: type by type
   if (rst) next.clips.reelStyles = rst; else delete next.clips.reelStyles;
+  const rlk = mergeRealismLooks(cur.clips.realismLooks, patch.clips?.realismLooks); // realism looks: type by type
+  if (rlk) next.clips.realismLooks = rlk; else delete next.clips.realismLooks;
   // montage music: part by part (a saved value that no longer passes is dropped, not merged)
   if (patch.clips?.montageMusic) next.clips.montageMusic = { ...(cur.clips.montageMusic ?? {}), ...structuredClone(patch.clips.montageMusic) };
   if (next.clips.montageMusic && montageMusicProblems(next.clips.montageMusic).length) delete next.clips.montageMusic;
