@@ -323,14 +323,14 @@ test('server: scene.realism saves the scene when the host cannot show one layer 
     const want = realismScene(doc, { scene: sid });
     const copyLast = want.layers.at(-1).id;
     // a non-"unavailable" refusal mid-way: the half-built scene is removed from the host, nothing saved
-    state.refuse = { layer: copyLast, code: -32000 };
+    state.refuse = { layer: copyLast, code: 'RPC_-32000' }; // the studio host client sends RPC_<code> (backends.mjs rpc)
     let r = await post({ op: 'scene.realism', scene: sid });
     assert.equal(r.status, 502, JSON.stringify(r.body));
     assert.deepEqual(calls.at(-1), ['scenes.remove', want.scene.id, undefined], 'the half-built scene is undone in the host');
     assert.equal(disk().scenes.length, 1);
     // the user's case: one layer unavailable until the next full load -> the scene is saved and survives a restart
     calls.length = 0;
-    state.refuse = { layer: copyLast, code: -32004 };
+    state.refuse = { layer: copyLast, code: 'RPC_-32004' }; // bug 2026-11-26: alpha.48 checked only the number
     r = await post({ op: 'scene.realism', scene: sid });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.saved, true);
