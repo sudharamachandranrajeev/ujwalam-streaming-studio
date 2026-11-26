@@ -1540,7 +1540,7 @@ def _realism_plan(ex, typ, wd, frame, *seed_parts):
         lk, rec = rreal.pick(dd, STYLE_TYPE.get(typ), seed_parts)
         if not lk:
             return None, rec
-        frag, prec = rreal.plan(lk, wd, frame, seed_parts)
+        frag, prec = rreal.plan(lk, wd, frame, seed_parts, data_dir=dd)
         return frag, dict(rec, **prec)
     except (OSError, ValueError, KeyError, TypeError, ClipError) as e:
         eprint(f"realism look: not applied ({type(e).__name__}: {str(e)[-120:]}); the reel is made without it")
@@ -1557,7 +1557,7 @@ def _realism_identity(ex, c):
         lk, rec = rreal.pick(dd, STYLE_TYPE.get("live-clip"), (c["id"], os.path.basename(c["file"])))
         if not lk:
             return {"realism": None, "rec": rec}
-        return {"look": lk, "lut": _file_identity(os.path.join(rreal.LUTS_DIR, lk["effects"][0]["file"]["rel"]))}
+        return {"look": lk, "lut": _file_identity(rreal.lut_path(lk, dd))}
     except (OSError, KeyError, ValueError, TypeError, ClipError) as e:
         return {"error": type(e).__name__}
 

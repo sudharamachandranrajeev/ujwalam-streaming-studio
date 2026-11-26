@@ -31,8 +31,9 @@ One source of truth: the look JSON. Its amounts are mapped to ffmpeg filters her
               fixed seed from the reel; last, so no other step sharpens or blooms it
   Colour and glow work in RGB (gbrp), detail, vignette and grain in YUV 4:4:4; the chain ends in yuv420p.
 
-  load_looks(dir) / look_by_id / problems(v, ids) / effective(data_dir) / pick(data_dir, type, seed_parts)
-  write_lut(path, look) / filter_graph(look, w, h, seed, lut_name, src, dst) / plan(look, wd, frame, seed_parts) / cleanup
+  load_looks(dir, user_dir) / look_by_id / problems(v, ids) / effective(data_dir) / pick(data_dir, type, seed_parts)
+  RL5: the user's own looks in <data>/looks (ids "user-...", LUT base "userluts") are merged in by pick and lut_path.
+  write_lut(path, look, luts_dir, data_dir) / filter_graph(look, w, h, seed, lut_name, src, dst) / plan(look, wd, frame, seed_parts) / cleanup
 """
 
 from __future__ import annotations
@@ -52,6 +53,8 @@ MODES = ("off", "one", "random")
 SETTINGS_KEY = "realismLooks"
 LUT_FILE = "realism.cube"
 _ID = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
+USER_PREFIX = "user-"   # RL5: the user's own looks (services/clip/look_reference.py)
+USER_SUBDIR = "looks"
 _REL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.cube$")
 MAX_TICKS = 32
 
@@ -63,8 +66,9 @@ CHROMATIC_PCT = 0.005   # host chromatic: amount 1 = 0.5 % of the shorter side a
 
 # ---------------------------------------------------------------- the look library
 
-def _usable(look, file):
-    """Same rule as services/project/looks.mjs usable(): a file that is not a look is skipped."""
+def _usable(look, file, base="luts"):
+    """Same rule as services/project/looks.mjs usable(): a file that is not a look is skipped. base: "luts" for the
+    built-in looks (data/looks), "userluts" for the user's own (RL5, <data>/looks, ids "user-...")."""
     if not isinstance(look, dict) or look.get("version") != 1 or not _ID.match(str(look.get("id") or "")):
         return False
     if f"{look['id']}.json" != file:
@@ -77,13 +81,12 @@ def _usable(look, file):
         return False
     lut = fx[0]
     return (isinstance(lut, dict) and lut.get("type") == "lut" and isinstance(lut.get("file"), dict)
-            and lut["file"].get("base") == "luts" and isinstance(lut["file"].get("rel"), str)
+            and lut["file"].get("base") == base and isinstance(lut["file"].get("rel"), str)
+            and (base == "luts") != look["id"].startswith(USER_PREFIX)
             and bool(_REL.match(lut["file"]["rel"])))
 
 
-def load_looks(looks_dir=None):
-    """[look] sorted as the studio menu (Filmic first, then by name); broken files skipped."""
-    d = looks_dir or LOOKS_DIR
+def _read_dir(d, base):
     try:
         files = sorted(f for f in os.listdir(d) if f.endswith(".json"))
     except OSError:
@@ -95,9 +98,33 @@ def load_looks(looks_dir=None):
                 lk = json.load(fh)
         except (OSError, ValueError):
             continue
-        if _usable(lk, f):
+        if _usable(lk, f, base):
             out.append(lk)
-    return sorted(out, key=lambda x: (x["id"] != "filmic", x["name"].lower()))
+    return out
+
+
+def user_looks_dir(data_dir):
+    """RL5: the user's own looks (JSON + LUT), <data>/looks; None without a data folder."""
+    return os.path.join(data_dir, USER_SUBDIR) if data_dir else None
+
+
+def load_looks(looks_dir=None, user_dir=None):
+    """[look] sorted as the studio menu (Filmic first, then the built-in looks by name, then the user's own looks by
+    name); broken files skipped. user_dir: <data>/looks (RL5) merged in; an id that is not "user-..." there is skipped."""
+    out = sorted(_read_dir(looks_dir or LOOKS_DIR, "luts"), key=lambda x: (x["id"] != "filmic", x["name"].lower()))
+    if user_dir:
+        out += sorted(_read_dir(user_dir, "userluts"), key=lambda x: x["name"].lower())
+    return out
+
+
+def lut_path(look, data_dir=None, luts_dir=None):
+    """The look's .cube on disk: base luts = data/luts (or luts_dir), base userluts = <data>/looks."""
+    f = look["effects"][0]["file"]
+    if f["base"] == "userluts":
+        if not data_dir:
+            raise ClipError(f"{look['id']}: your own look needs the data folder")
+        return os.path.join(user_looks_dir(data_dir), f["rel"])
+    return os.path.join(luts_dir or LUTS_DIR, f["rel"])
 
 
 def look_by_id(look_id, looks=None):
@@ -179,7 +206,7 @@ def pick(data_dir, reel_type, seed_parts=(), looks=None):
     s = effective(data_dir)[reel_type]
     if s["mode"] == "off":
         return None, None
-    looks = load_looks() if looks is None else looks
+    looks = load_looks(user_dir=user_looks_dir(data_dir)) if looks is None else looks
     by_id = {x["id"]: x for x in looks}
     if s["mode"] == "one":
         lk = by_id.get(s["look"])
@@ -218,11 +245,11 @@ def lut_effect(look):
     return look["effects"][0]
 
 
-def write_lut(path, look, luts_dir=None):
+def write_lut(path, look, luts_dir=None, data_dir=None):
     """The look's LUT mixed with the identity by its amount (the host's clut amount), as a .cube at path."""
     e = lut_effect(look)
     amt = max(0.0, min(1.0, float(e.get("amount", 1.0))))
-    n, rows = read_cube(os.path.join(luts_dir or LUTS_DIR, e["file"]["rel"]))
+    n, rows = read_cube(lut_path(look, data_dir, luts_dir))
     k = n - 1
     with open(path, "w", encoding="ascii", newline="\n") as fh:
         fh.write(f"TITLE \"Ujwalam realism look {look['id']}\"\nLUT_3D_SIZE {n}\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n")
@@ -313,10 +340,10 @@ def filter_graph(look, w, h, seed, lut_name=LUT_FILE, src="[rin]", dst="[rout]")
     return ";".join(chains), steps
 
 
-def plan(look, wd, frame, seed_parts=(), luts_dir=None):
+def plan(look, wd, frame, seed_parts=(), luts_dir=None, data_dir=None):
     """Writes the mixed LUT into wd (a bare name, cwd = wd for ffmpeg) -> (fragment from [rin] to [rout], record)."""
     seed = seed_of("realism", *seed_parts)
-    amt = write_lut(os.path.join(wd, LUT_FILE), look, luts_dir)
+    amt = write_lut(os.path.join(wd, LUT_FILE), look, luts_dir, data_dir)
     frag, steps = filter_graph(look, int(frame["width"]), int(frame["height"]), seed)
     return frag, {"id": look["id"], "name": look["name"], "lutAmount": amt, "steps": steps, "seed": seed,
                   "replacesStyleColour": True}
