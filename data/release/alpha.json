@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 47,
+  "current": 48,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -58,6 +58,7 @@
     { "n": 44, "date": "2026-11-25", "title": "Studio window crash fix, real recording time, new post style, your own tags" },
     { "n": 45, "date": "2026-11-26", "title": "Scheduling manager window, realism looks, smoother studio" },
     { "n": 46, "date": "2026-11-26", "title": "Realism looks on reels, your own look from a picture or video" },
-    { "n": 47, "date": "2026-11-26", "title": "Several YouTube channels, Instagram connect for business Pages" }
+    { "n": 47, "date": "2026-11-26", "title": "Several YouTube channels, Instagram connect for business Pages" },
+    { "n": 48, "date": "2026-11-26", "title": "Clicks no longer freeze, task panel fixes, scenes kept, Instagram winners to YouTube" }
   ]
 }

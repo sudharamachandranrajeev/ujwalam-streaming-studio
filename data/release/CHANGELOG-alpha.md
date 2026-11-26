@@ -2,6 +2,13 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.48 — 2026-11-26
+
+- Clicks and freezes: the studio no longer stops answering clicks while the previews draw. The preview windows used to wait on the same lock as the studio, so one slow update froze buttons, menus, Settings, close and maximise together. Clip jobs after a stream now run in Windows background mode, so your clicks come first. Not yet tried in a long real session.
+- Task manager: the header text no longer runs over the top-left corner. Clear finished removes finished tasks. A paused or held clip job shows Start or Resume, not a Stop button. Its status says paused, not running. Open in a window brings the task window to the front.
+- Realism scenes no longer vanish after a restart. A new scene that the studio could only half build is now saved, or removed again, never left in the studio only. An overlay copied into the new scene shows after Ujwalam restarts.
+- YouTube from Instagram winners: new clips go to Instagram first. Each week, the best Reels from the week before go to YouTube (up to 21 a week), scored on views, likes, comments, shares and saves after 48 hours. Clips already scheduled on YouTube keep their times. Not yet tried against real Instagram numbers.
+
 ## 0.1.0-alpha.47 — 2026-11-26
 
 - Several YouTube channels: Settings > Posting & growth > YOUTUBE CHANNELS > Add channel, sign in to Google and pick the channel. Each clip goes to one channel only; channels take turns; a new channel posts 3 to 6 Shorts a day (Shorts only). Your main channel keeps its own Uploads per day. A channel that fails or hits YouTube's limit pauses alone; the others go on. The scheduling manager shows and filters by channel. Not yet tried with a real second channel.
