@@ -88,7 +88,7 @@ import { loadFileIntoHost } from '../../app/host/lib/project.mjs';
 import { SYSTEM_FILE, writeSecretFileAtomic } from '../event-core/api/discovery.mjs';
 import { createBots, loadBotConfig } from '../bots/index.mjs';
 import { resolveDataDir } from '../event-core/config.mjs';
-import { createFlags } from '../flags/index.mjs';
+import { createFlags, migrateFeatureSettings } from '../flags/index.mjs';
 import { loadDevicePresets, matchRoles, overrideProblems } from '../project/device-roles.mjs';
 import { hudCoverage, loadHudZones } from '../project/hud-zones.mjs';
 import { loadProject } from '../project/store.mjs';
@@ -1644,6 +1644,9 @@ export async function main(argv = process.argv.slice(2)) {
       if (!workersDue && (Date.now() >= workersFrom || (status && (isLive(status) || isRecording(status))))) workersDue = true;
       if (workersDue) syncWorkers();
     };
+    // Feature settings (2026-11-26): finished features (BeatDrop, the long video, ...) are Settings toggles stored in
+    // settings.json features; a value the user set with the old flag switch is copied there once (services/flags).
+    try { const moved = migrateFeatureSettings({ dataDir }); if (moved.length) console.log(`[studio] feature switches moved to Settings: ${moved.join(', ')}`); } catch (e) { console.log(`[studio] feature switches not moved: ${e.message}`); }
     // One flags instance for the 5 s loops: isOn re-reads flags.local.json only when it changed (services/flags).
     let workerFlags = null;
     const flagIsOn = (id) => { try { workerFlags ??= createFlags({ dataDir }); return workerFlags.isOn(id); } catch { return false; } };
@@ -1664,6 +1667,8 @@ export async function main(argv = process.argv.slice(2)) {
         // D403 (flag delete-processed-recordings): processed recordings are deleted from the recordings folder in use
         // (Settings, else <host data>/recordings), never from anywhere else.
         recordingsFolder: () => hostCfg?.recordings ?? null,
+        // Settings > Clips toggles (settings.json features; flagIsOn reads them first, services/flags):
+        // Delete clipped recordings, Long highlights video, BeatDrop montage after each stream.
         cleanupFlag: () => flagIsOn('delete-processed-recordings'), longFlag: () => flagIsOn('long-highlights-video'), beatdropFlag: () => flagIsOn('beatdrop'),
         // Codex round 2 (main session): a fresh outputs.status right before each spawn (the same call as the tick's);
         // the clip queue starts the job only when it answers within 1 s that the outputs allow it.

@@ -581,8 +581,21 @@ export function readSettings(dataDir) {
       ...(readMontageMusic(c.montageMusic) ? { montageMusic: readMontageMusic(c.montageMusic) } : {}) }, // montage music
     folders: { recordings: dir(f.recordings), clips: dir(f.clips) },
     ...uiRead(j), // D290
+    ...featuresRead(j), // feature settings (2026-11-26)
   };
 }
+
+// ---- feature settings (2026-11-26) begin: features = { <flag id>: true|false } for the finished features whose switch
+// is a Settings toggle (data/flags.json "setting": true). Written only by services/flags set() (ui/api/flags/set, which
+// also works while live); kept as it is on every other save. Not accepted in a settings patch.
+const featuresRead = (j) => {
+  const f = j?.features;
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(f)) if (typeof v === 'boolean' && /^[a-z][a-z0-9-]{0,47}$/.test(k)) out[k] = v;
+  return Object.keys(out).length ? { features: out } : {};
+};
+// ---- feature settings end
 
 /** Problems with a settings change { clips?: {recording?, live?, recordLive?, matchGate?: {top3?, minKills?}},
  *  folders?: {recordings?, clips?} }; [] when fine. */
@@ -620,6 +633,7 @@ export function writeSettings(dataDir, patch) {
     clips: { ...cur.clips, ...(patch.clips ?? {}), matchGate: { ...cur.clips.matchGate, ...(patch.clips?.matchGate ?? {}) } },
     folders: { ...cur.folders, ...(patch.folders ?? {}) },
     ...(cur.ui || patch.ui ? { ui: mergeUi(cur.ui, patch.ui) } : {}), // D290, guide
+    ...(cur.features ? { features: cur.features } : {}), // feature settings: kept (written by services/flags only)
   };
   // reel length: per type merge, so changing one type keeps the others; a value equal to its default is not stored
   const rls = mergeReelLengths(cur.clips.reelLengths, patch.clips?.reelLengths);

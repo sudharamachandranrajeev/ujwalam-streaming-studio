@@ -87,6 +87,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/UCombo.qml
 		qml/UCard.qml
 		qml/FeaturesCard.qml
+		qml/FeatureSwitch.qml
 		qml/SettingsPage.qml
 		qml/SettingsClips.qml
 		qml/AiFolderPicker.qml

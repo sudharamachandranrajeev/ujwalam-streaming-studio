@@ -394,6 +394,28 @@ const JOB_KEYS = ['type', 'kind', 'h', 'v', 'since', 'until', 'name', 'minutes',
 const newJobId = () => randomBytes(4).toString('hex');
 const pickJob = (j) => Object.fromEntries(JOB_KEYS.filter((k) => j[k] !== undefined).map((k) => [k, j[k]]));
 
+/**
+ * The honest state of the clip queue for status.json (2026-11-26: it said "running" while the job was paused for the
+ * stream or waited for the user): { state, stateText }.
+ *   running: a job is working now | paused: the job is stopped while the stream or recording runs and carries on after
+ *   waiting: every queued job waits for the user (paused by them, or unfinished from last time) | queued | idle
+ */
+export function clipsState({ current = null, halted = false, queue = [], liveNow = false, recNow = false } = {}) {
+  if (current && !halted) {
+    if (current.pausedForLive === true) return { state: 'paused', stateText: liveNow ? 'Paused while the stream runs' : 'Paused while recording' };
+    return { state: 'running', stateText: 'Making clips' };
+  }
+  if (queue.length) {
+    const held = queue.filter((q) => q.paused === true || q.awaitStart === true).length;
+    if (held === queue.length) return { state: 'waiting', stateText: held === 1 ? 'A clip job waits for you: press Start or Resume' : `${held} clip jobs wait for you: press Start or Resume` };
+    // nothing may start while live (and work that needs idle outputs waits for the recording): paused, not queued
+    if (liveNow) return { state: 'paused', stateText: 'Waits until the stream ends' };
+    if (recNow && queue.every((q) => q.paused === true || q.awaitStart === true || needsIdle(q))) return { state: 'paused', stateText: 'Waits until the recording ends' };
+    return { state: 'queued', stateText: 'Waiting for its turn' };
+  }
+  return { state: 'idle', stateText: null };
+}
+
 /** The queue and the child. feed(status) is called with each outputs.status. */
 // The speech model for reel captions, checked before the first clip job of each app run (Codex review round 2): an
 // installed build (UJWALAM_MODELS_DIR set) hashes it once (downloads.mjs modelUsable); a checkout keeps its own models.
@@ -471,7 +493,9 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   const ctl = (j) => {
     const pi = pauseInfo(j);
     const held = j.paused === true || j.awaitStart === true;
-    return { category: jobCategory(j), controls: ['stop', ...(pi.pausable && !held ? ['pause'] : []), ...(held || j.pauseAt ? ['resume'] : []), 'next'],
+    // 2026-11-26: a job stopped for the stream or recording carries on by itself afterwards: Stop only (no Pause, no Resume)
+    const onAir = j === current && j.pausedForLive === true && !held;
+    return { category: jobCategory(j), controls: ['stop', ...(pi.pausable && !held && !onAir ? ['pause'] : []), ...((held || j.pauseAt) && !onAir ? ['resume'] : []), 'next'], heldOnAir: onAir,
       pausable: pi.pausable, pauseReason: pi.reason, paused: j.paused === true, pausing: j.pauseAt === true && !j.paused,
       nextStart: NEXT_START.includes(j.nextStart) ? j.nextStart : DEFAULT_NEXT_START,
       question: j.awaitStart === true && !j.paused && j.nextStart === 'ask' ? ASK_TEXT : null, logEvents: j.logEvents ?? [] };
@@ -516,7 +540,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     const t = clipTools({ clipRoot });
     const lc = lcState();
     const liveClipperOut = lc ? { ...lc, watching, since: watchSince === null ? null : iso(watchSince), saves: savesNow } : null;
-    const out = { liveClipper: liveClipperOut, at: iso(now()), state: current && !halted ? 'running' : queue.length ? 'queued' : 'idle', available: !!t.py, reason: t.reason, fix: t.fix, missing: t.missing,
+    const out = { liveClipper: liveClipperOut, at: iso(now()), ...clipsState({ current, halted, queue, liveNow, recNow }), available: !!t.py, reason: t.reason, fix: t.fix, missing: t.missing,
       settings: s.clips, folder: clipsFolder(dataDir, s),
       running: current ? pickJob(current) : null, queued: queue.filter((q) => q !== current).map(pickJob), asks, last,
       // D442: unfinished jobs that wait for the user (the studio's notice at start)

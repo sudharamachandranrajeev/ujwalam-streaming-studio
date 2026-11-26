@@ -97,6 +97,25 @@ describe('QML studio: clips chip, question and My clips (headless probe)', { ski
     }
   });
 
+  test('2026-11-26: a job paused for the stream or waiting for the user is not "Making clips..."; the tip says why', async () => {
+    const base = { available: true, asks: [], queued: [], last: null };
+    let r = await probe({ status: { ...base, state: 'paused', stateText: 'Paused while the stream runs', running: { name: 'rec-1', kind: 'recording' } } });
+    assert.equal(r.c.text, 'Clips paused');
+    assert.match(r.c.tip, /\nPaused while the stream runs/);
+    r = await probe({ status: { ...base, state: 'waiting', stateText: 'A clip job waits for you: press Start or Resume', queued: ['a'] } });
+    assert.equal(r.c.text, 'Clips wait for you');
+    assert.match(r.c.tip, /press Start or Resume \(Tasks\)/);
+  });
+
+  test('2026-11-26: Settings > Clips has its own BeatDrop toggle (on by default), saved to settings.json features, not as a flag', async () => {
+    const r = await probe({ settings: { clips: { recording: 'after', live: 'off' } }, actions: ['settings-open:Clips', 'settings-flag:beatdrop:off', 'settings-save'], ms: 9000 });
+    assert.deepEqual(done(r.p), [true, true, true]);
+    const s = JSON.parse(readFileSync(path.join(r.dataDir, 'settings.json'), 'utf8'));
+    assert.equal(s.features.beatdrop, false);
+    const local = path.join(r.dataDir, 'flags.local.json');
+    assert.ok(!existsSync(local) || JSON.parse(readFileSync(local, 'utf8')).flags.beatdrop === undefined, 'not written as a flag');
+  });
+
   test('the last clips\' reel style and what it could not change show in the tip, in plain words (RS4, Codex RS verify)', async () => {
     const note = 'style not applied: v-crop (crop layout gets the colour only; pace, joins, zoom pulses and slow motion need the canvas layout)';
     const { c } = await probe({ status: { state: 'idle', available: true, asks: [], queued: [], last: { name: 'x', kind: 'live', result: 'done', clips: 2, styles: { names: ['Warm'], notApplied: [note] } } } });

@@ -1191,6 +1191,12 @@ Column {
             }
         }
         Quiet { objectName: "autopostShareSum"; text: "Together: " + ap.shareSum + " %" + (ap.shareSum === 100 ? "." : " (must be 100 %).") }
+        // finished feature with its own toggle (2026-11-26; stored in settings.json, applied on Save)
+        FeatureSwitch {
+            box: ap.box; fid: "growth"
+            text: "Read my YouTube growth numbers"
+            hint: "Reads your own YouTube view and subscriber numbers into a file on this PC (More > Growth numbers). Read only: nothing is posted or changed on YouTube."
+        }
         USwitch {
             id: growSw
             objectName: "autopostGrowth"

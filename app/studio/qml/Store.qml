@@ -699,6 +699,9 @@ QtObject {
     function clipsWords(cl) {
         if (!cl || Object.keys(cl).length === 0) return "Clips: -";
         const set = cl.settings || {}, last = cl.last || {};
+        // 2026-11-26: the queue's honest state (record-clips.mjs clipsState): a paused or waiting job is not "Making clips"
+        if (cl.state === "paused") return "Clips paused";
+        if (cl.state === "waiting") return "Clips wait for you";
         if (cl.running) return "Making clips...";
         if ((cl.asks || []).length) return "Make clips? (" + cl.asks.length + ")";
         const q = Array.isArray(cl.queued) ? cl.queued.length : (cl.queued || 0); // a count from the server, a list from the job's file
@@ -713,6 +716,7 @@ QtObject {
         if (!cl || Object.keys(cl).length === 0) return "";
         const set = cl.settings || {}, last = cl.last || {};
         let tip = "Recording: " + modeWords(set.recording, false) + "\nLive: " + modeWords(set.live, true) + "\nClips folder: " + (cl.folder || "");
+        if (cl.stateText) tip += "\n" + cl.stateText + (cl.state === "waiting" ? " (Tasks)" : "");
         if (cl.reason) tip += "\n" + cl.reason;
         if (cl.fix) tip += "\n" + cl.fix;
         if (last.reason) tip += "\nLast time: " + last.reason;

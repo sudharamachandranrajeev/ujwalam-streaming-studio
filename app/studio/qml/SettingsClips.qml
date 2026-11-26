@@ -78,6 +78,32 @@ Column {
             checked: cp.d.recordLive === true
             onToggled: cp.box.set("recordLive", checked)
         }
+        // Finished features with their own toggle (2026-11-26; stored in settings.json, switchable while live)
+        FeatureSwitch {
+            box: cp.box; fid: "live-clips"
+            text: "Save kill streaks while I stream"
+            hint: "Watches the game while you are live or recording and saves each kill streak from the replay buffer, so it can become a clip after the stream. Uses some GPU while live."
+        }
+    }
+
+    UCard {
+        title: "AFTER EACH STREAM OR RECORDING"
+        objectName: "settingsAfterEach"
+        FeatureSwitch {
+            box: cp.box; fid: "beatdrop"
+            text: "BeatDrop montage after each stream"
+            hint: "After the clips of each stream or recording are made, a montage cut to the music's beat is made too: kills on the beats, the best kill on the drop. Review it in More > BeatDrop montage. Runs only when nothing is live or recording."
+        }
+        FeatureSwitch {
+            box: cp.box; fid: "long-highlights-video"
+            text: "Long highlights video after each recording"
+            hint: "Makes one 8-20 minute video of the best moments from each recorded session, after its clips. Runs only when nothing is live or recording."
+        }
+        FeatureSwitch {
+            box: cp.box; fid: "delete-processed-recordings"
+            text: "Delete a recording once all its clips are made"
+            hint: "Permanently deletes a full recording from your recordings folder once every clip and video from it is made and reviewed. Frees disk space; the recording cannot be brought back."
+        }
     }
 
     UCard {
