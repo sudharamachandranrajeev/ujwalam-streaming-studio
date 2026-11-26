@@ -1056,6 +1056,28 @@ test('D381 realism LUT: the shipped .cube on base luts loads in the clut filter 
   await c.call('outputs.clear');
 });
 
+test('RL5 own looks: a lut on base userluts (<data>/looks) is buildable when that folder is given, a warning (layer without its colour) when not, and never leaves it', async () => {
+  const own = mkdtempSync(path.join(OUT, 'userluts-'));
+  writeFileSync(path.join(own, 'user-x.cube'), readFileSync(path.join(REPO_ROOT, 'data', 'luts', 'realism-filmic.cube')));
+  const doc = (rel) => ({
+    version: 1, id: 'userluts-check', name: 'Own look check', activeScene: 'main',
+    canvases: [{ id: 'h', width: 1280, height: 720, fps: 60 }],
+    devices: [], overlays: [], outputs: [],
+    scenes: [{ id: 'main', name: 'Main', layers: [L('own', 0, 'color', { color: '#ff0000' }, [{ type: 'lut', file: { base: 'userluts', rel }, amount: 1 }])] }],
+    audio: { tracks: [{ id: 't1', name: 'Track 1' }], sources: [] }
+  });
+  // a missing effect file is a warning (the layer shows without the effect), never a refusal of the layer
+  const warn = (p) => (p.warnings ?? []).map((w) => w.reason).join(' | ');
+  const ok = await planInHost(c, doc('user-x.cube'), { bases: { userluts: own } });
+  assert.deepEqual([ok.unavailable, warn(ok)], [[], '']);
+  const none = await planInHost(c, doc('user-x.cube'), { bases: { luts: path.join(REPO_ROOT, 'data', 'luts') } });
+  assert.match(warn(none), /lut file no directory given for base userluts/);
+  const gone = await planInHost(c, doc('user-gone.cube'), { bases: { userluts: own } });
+  assert.match(warn(gone), /lut file file not found/, 'a deleted look: the layer shows without its colour');
+  const out = await planInHost(c, doc('../user-x.cube'), { bases: { userluts: own } }).catch((e) => e);
+  assert.ok(out instanceof Error || /outside|rel/.test(warn(out)), 'never a file outside the folder');
+});
+
 test('D291 grain is temporal noise, never a flash: full canvas grain at amount 1 stays at or under 3 flashes/s', async () => {
   const doc = {
     version: 1, id: 'grain-flash', name: 'Grain flash', activeScene: 'main',
