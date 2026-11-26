@@ -96,6 +96,34 @@ test('rename and delete: only the user looks, both files go, built-in looks neve
   } finally { rmSync(data, { recursive: true, force: true }); }
 });
 
+test('a Python run that never returns is stopped after 2 minutes and the next look can start', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { EventEmitter } = await import('node:events');
+  let killed = 0;
+  const hang = () => {
+    const c = new EventEmitter();
+    c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
+    c.kill = () => { killed++; queueMicrotask(() => c.emit('close', null)); };
+    return c;
+  };
+  const data = mkdtempSync(path.join(os.tmpdir(), 'ujw-rl5-hang-'));
+  try {
+    const pic = path.join(data, 'a.png');
+    writeFileSync(pic, 'x');
+    const ul = createUserLooks({ dataDir: data, clipRoot: REPO, spawnFn: hang, python: 'python' });
+    const first = ul.run({ op: 'from-reference', path: pic });
+    await new Promise((r) => setImmediate(r));
+    t.mock.timers.tick(120000);
+    const r = await first;
+    assert.equal(killed, 1);
+    assert.notEqual(r.status, 409);
+    const second = ul.run({ op: 'from-reference', path: pic });
+    await new Promise((r2) => setImmediate(r2));
+    t.mock.timers.tick(120000);
+    assert.notEqual((await second).status, 409, 'busy was cleared');
+  } finally { rmSync(data, { recursive: true, force: true }); }
+});
+
 test('request shapes', () => {
   assert.deepEqual(userLookOpProblems({ op: 'from-reference', path: 'C:\\x\\a.png' }), []);
   assert.deepEqual(userLookOpProblems({ op: 'from-reference', path: 'C:\\x\\a.mp4', name: 'Snow' }), []);
@@ -216,6 +244,9 @@ test('server: POST /ui/api/looks makes, renames and deletes own looks; GET lists
     r = await post('/ui/api/looks', { op: 'delete', id: 'user-cold' });
     assert.equal(r.status, 200);
     assert.deepEqual((await list()).map((l) => l.id), builtIn.map((l) => l.id));
+    // the deleted own look's LUT still counts as a look effect: a new look replaces it, never stacks (review 2026-11-26)
+    const after = realismScene(saved, { scene: saved.scenes[1].id, look: 'cinematic' }, loadLooks(LOOKS_DIR, userLooksDir(dir)));
+    assert.equal(after.layers.find((l) => l.name === 'Game').effects.filter((e) => e.type === 'lut').length, 1);
     flags.set(REALISM_FLAG, false);
     r = await post('/ui/api/looks', { op: 'from-reference', path: pic });
     assert.deepEqual([r.status, r.body.error], [404, 'realism-look-off']);

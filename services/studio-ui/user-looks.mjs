@@ -41,6 +41,8 @@ export function userLookOpProblems(b) {
  * opts: { dataDir, clipRoot, flagOn: () => bool, spawnFn, python (tests) }
  * -> { run(body) -> Promise<{ status, body }>, dir }
  */
+const RUN_LIMIT_MS = 120000;
+
 export function createUserLooks({ dataDir, clipRoot, flagOn = () => true, spawnFn = spawn, python = null }) {
   const dir = userLooksDir(dataDir);
   let busy = false;
@@ -55,8 +57,10 @@ export function createUserLooks({ dataDir, clipRoot, flagOn = () => true, spawnF
       try { if (c.pid) os.setPriority(c.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* it lowers its own priority too */ }
       c.stdout.on('data', (d) => { out += d; if (out.length > 100000) out = out.slice(-100000); });
       c.stderr.on('data', (d) => { err += d; if (err.length > 20000) err = err.slice(-20000); });
-      c.on('error', (e) => resolve({ code: -1, out, err: String(e.message) }));
-      c.on('close', (code) => resolve({ code, out, err }));
+      // a decoder that never returns would keep `busy` set until a restart: stop it after 120 s
+      const timer = setTimeout(() => { err += '\nit took longer than 2 minutes and was stopped'; try { c.kill(); } catch { /* already gone */ } }, RUN_LIMIT_MS);
+      c.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, out, err: String(e.message) }); });
+      c.on('close', (code) => { clearTimeout(timer); resolve({ code, out, err }); });
     });
   }
   const lastJson = (out) => { const l = out.trim().split('\n').filter((x) => x.startsWith('{')).pop(); try { return l ? JSON.parse(l) : null; } catch { return null; } };

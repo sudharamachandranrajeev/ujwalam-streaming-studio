@@ -29,7 +29,7 @@
 
 import { newId, relPathProblem, validateProject } from './index.mjs';
 import { DISPLAY_ID_RE, WINDOW_SPEC_RE } from './validate.mjs';
-import { DEFAULT_LOOK, loadLooks } from './looks.mjs';
+import { DEFAULT_LOOK, USER_BASE, loadLooks } from './looks.mjs';
 
 const COLOR = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
 const KINDS = ['copy', 'color', 'text', 'capture', 'overlay', 'image', 'media', 'screen', 'window'];
@@ -342,7 +342,9 @@ export function realismScene(doc, { scene, look = DEFAULT_LOOK } = {}, looks = l
   if (!graded.length) return { error: 'no-game-capture' };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const anyLook = [REALISM_EFFECTS, ...looks.map((x) => x.effects)].flat();
-  const own = (l) => (l.effects ?? []).filter((e) => !anyLook.some((x) => same(x, e)));
+  // a user look's LUT stays a look effect after that look is deleted, so a new look replaces it, never stacks on it
+  const userLut = (e) => e.type === 'lut' && e.file?.base === USER_BASE && /^user-[^/\\]*\.cube$/.test(e.file?.rel ?? '');
+  const own = (l) => (l.effects ?? []).filter((e) => !userLut(e) && !anyLook.some((x) => same(x, e)));
   const extraFor = (l) => {
     const backdrop = own(l).some((e) => e.type === 'blur');
     return lk.effects.filter((e) => !backdrop || lk.backdrop.includes(e.type)).map((e) => structuredClone(e));
