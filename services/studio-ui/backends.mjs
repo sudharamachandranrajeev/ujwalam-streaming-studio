@@ -42,6 +42,11 @@ export function rpc({ port, token, method, params, timeoutMs = 3000, maxBytes = 
   });
 }
 
+/** true when e is the host/core JSON-RPC error `code` (a number such as -32009). rpc() above reports it as the string
+ *  `RPC_<code>`; app/host/lib/client.mjs and test fakes keep the number. Compare host error codes only through this
+ *  (bug family 2026-11-26: a check of only the number passed the tests and failed in the real studio). */
+export const isHostError = (e, code) => e?.code === code || e?.code === `RPC_${code}`;
+
 function readJsonSafe(file) {
   try { return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null; } catch { return null; }
 }

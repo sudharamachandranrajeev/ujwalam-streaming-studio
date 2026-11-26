@@ -99,6 +99,7 @@ import { libraryDirOf } from '../project/scene-music.mjs';
 import { createDeviceRoutes } from './device-routes.mjs';
 import { connectTargets, readSetup } from './stream-setup.mjs';
 import { integrationsInEffect } from './integrations.mjs';
+import { isHostError } from './backends.mjs';
 
 // Scene transition types and easing curves (D327 TR1, data/transitions/easing.json), read once.
 let easingCache = null;
@@ -1442,7 +1443,7 @@ export function createStudioServer(opts) {
     const waits = method === 'project.load' ? limits.loadRetryMs : [];
     for (let i = 0; ; i++) {
       try { return await host.call(method, params); } catch (e) {
-        if (i >= waits.length || e?.code !== 'RPC_-32009') throw e;
+        if (i >= waits.length || !isHostError(e, -32009)) throw e;
         await new Promise((r) => setTimeout(r, waits[i]));
       }
     }

@@ -51,7 +51,7 @@ function stubHost() {
       st.calls.push([m, structuredClone(p)]);
       if (m === 'host.status') return { live: st.live, recording: false };
       if (m === 'mixer.setTracks') {
-        if (p.id !== 'scene-main/layer-game') throw Object.assign(new Error('no such layer'), { code: -32602 });
+        if (p.id !== 'scene-main/layer-game') throw Object.assign(new Error('no such layer'), { code: 'RPC_-32602' });
         st.tracks['aud-game'] = [...p.tracks];
         // aud-game has CUE on (sample: monitor-only): the host flips it with the routing.
         return { id: p.id, audioSource: 'aud-game', mixers: p.tracks.length, tracks: p.tracks, monitoring: p.tracks.length ? 'monitor-and-output' : 'monitor-only' };

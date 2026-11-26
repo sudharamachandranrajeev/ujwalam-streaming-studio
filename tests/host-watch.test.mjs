@@ -160,7 +160,7 @@ test('watch loop: the default clock is monotonic; a wall-clock jump never makes 
 });
 
 test('watch loop: an old host without host.alive (method not found) counts as answering', async () => {
-  const notFound = Object.assign(new Error('method not found'), { code: -32601 });
+  const notFound = Object.assign(new Error('method not found'), { code: 'RPC_-32601' });
   const f = fakeWatch({ flag: true, answers: () => notFound });
   for (let t = 0; t <= 120_000; t += 5000) { f.at(t); await f.w.tick(); }
   assert.equal(f.acts.length, 0);

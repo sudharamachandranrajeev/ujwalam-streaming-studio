@@ -8,11 +8,13 @@
 //   next start, when the launcher loads the whole project with every overlay URL;
 // - any other refusal removes the half-built scene from the host again, so nothing shows that is not saved.
 
+import { isHostError } from './backends.mjs';
+
 export const HOST_UNAVAILABLE = -32004;
 // The studio's host client (backends.mjs rpc) reports a host error code as the string `RPC_<code>`; app/host/lib/client.mjs
 // keeps the number. Both mean the same refusal (bug 2026-11-26: only the number was checked, so alpha.48 still undid
 // every realism scene that copies an overlay).
-const isUnavailable = (e) => e?.code === HOST_UNAVAILABLE || e?.code === `RPC_${HOST_UNAVAILABLE}`;
+const isUnavailable = (e) => isHostError(e, HOST_UNAVAILABLE);
 
 /** createSceneInHost(host, { project, scene, canvases }) -> { later: [layerId] }; throws the host's error after undoing. */
 export async function createSceneInHost(host, { project, scene, canvases }) {
