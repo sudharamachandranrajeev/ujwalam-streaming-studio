@@ -183,6 +183,7 @@ Dialog {
             transMs: typeof tr.ms === "number" ? tr.ms : 0,
             look: info.look && info.look.look ? JSON.parse(JSON.stringify(info.look.look)) : null, // FX (D411) clip look
             reelStyles: c.reelStyles ? JSON.parse(JSON.stringify(c.reelStyles)) : null, // RS3 (D412) style per reel type, mix
+            realismLooks: realismStart(c.realismLooks), // RL4 (D445) realism look per reel type
             montageMusic: info.montageMusic && info.montageMusic.value ? JSON.parse(JSON.stringify(info.montageMusic.value)) : null, // D414 NCS library
             recDir: f.recordings || "",
             clipDir: f.clips || "",
@@ -237,6 +238,30 @@ Dialog {
         d.reelStyles = r; draft = d;
     }
 
+    // ---- realism looks (RL4, D445): per reel type off, one look, or random from the ticked looks, in the draft ----
+    function realismTypes() { return ((info.realismLooks || {}).types) || ["reel", "impact", "montage"] }
+    function realismStart(v) {
+        const by = (v && v.byType) || {}, out = { byType: {} };
+        for (const t of realismTypes()) {
+            const x = by[t] || {};
+            out.byType[t] = { mode: ["off", "one", "random"].includes(x.mode) ? x.mode : "off", look: x.look || null, ticks: Array.isArray(x.ticks) ? x.ticks.slice() : [] };
+        }
+        return out;
+    }
+    function setRealism(t, mode, look) { // mode off | one (with look) | random; the ticks are kept for later
+        const d = Object.assign({}, draft), r = JSON.parse(JSON.stringify(d.realismLooks || realismStart(null)));
+        const x = r.byType[t] || { mode: "off", look: null, ticks: [] };
+        x.mode = mode;
+        if (mode === "one") x.look = look;
+        r.byType[t] = x; d.realismLooks = r; draft = d;
+    }
+    function tickRealism(t, id, on) { // keeps the library order
+        const d = Object.assign({}, draft), r = JSON.parse(JSON.stringify(d.realismLooks || realismStart(null)));
+        const x = r.byType[t] || { mode: "random", look: null, ticks: [] }, ids = (((info.realismLooks || {}).looks) || []).map(l => l.id);
+        x.ticks = ids.filter(i => i === id ? on : x.ticks.includes(i));
+        r.byType[t] = x; d.realismLooks = r; draft = d;
+    }
+
     // ---- checks, changes and the body Save sends ----
     function reelProblems() {
         let bad = "";
@@ -253,7 +278,7 @@ Dialog {
         for (const k of ["recording", "live", "recordLive", "top3", "theme", "effects", "motion", "snap", "transKind"])
             if (d[k] !== s[k]) return true;
         if ((d.killsOn ? d.kills : -1) !== s.killsN) return true;
-        if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks) || !same(d.look, s.look) || !same(d.reelStyles, s.reelStyles) || !same(d.montageMusic, s.montageMusic)) return true;
+        if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks) || !same(d.look, s.look) || !same(d.reelStyles, s.reelStyles) || !same(d.montageMusic, s.montageMusic) || !same(d.realismLooks, s.realismLooks)) return true;
         if (transMsNow(d) !== (kindRange(d.transKind) ? s.transMs : 0)) return true;
         if (d.recDir.trim() !== s.recDir.trim() || d.clipDir.trim() !== s.clipDir.trim()) return true;
         for (const id in flagDraft) if ((flagStart[id] === true) !== flagDraft[id]) return true;
@@ -278,6 +303,11 @@ Dialog {
         }
         if (d.look && !same(d.look, s.look)) clips.look = d.look; // clip look: sent whole, only when changed
         if (d.reelStyles && !same(d.reelStyles, s.reelStyles)) clips.reelStyles = d.reelStyles; // RS3: only when changed
+        if (d.realismLooks && !same(d.realismLooks, s.realismLooks)) { // RL4: only the changed reel types
+            const by = {};
+            for (const t in d.realismLooks.byType) if (!same(d.realismLooks.byType[t], s.realismLooks.byType[t])) by[t] = d.realismLooks.byType[t];
+            clips.realismLooks = { byType: by };
+        }
         if (d.montageMusic && !same(d.montageMusic, s.montageMusic)) { // D414: only the changed parts
             const mm = {};
             for (const k in d.montageMusic) if (!same(d.montageMusic[k], (s.montageMusic || {})[k])) mm[k] = d.montageMusic[k];
@@ -894,6 +924,7 @@ Dialog {
             flagRows: rows, reelLengths: { rows: reelRows, error: reelError }, reelHooks: hooks,
             look: draft.look, // FX (D411)
             montageMusic: draft.montageMusic, // D414
+            realismLooks: { value: draft.realismLooks, looks: (((info.realismLooks || {}).looks) || []).map(l => l.id) }, // RL4
             reelTransition: k ? { kind: k.id, label: k.label, ms: transMsNow(draft), msEnabled: !!r, min: r ? r.min : 0, max: r ? r.max : 0 } : null,
             recordLive: { on: draft.recordLive, text: "Record while live", visible: page === "Clips",
                 hint: "Records the stream (H and V) to your recordings folder so reels can be made after it ends. Uses about 10 GB per hour." },
@@ -985,6 +1016,15 @@ Dialog {
         case "settings-reel-style": // settings-reel-style:<reel|impact|montage>:<style id or none>
             if (!["reel", "impact", "montage"].includes(p[1]) || !p[2]) return false;
             setReelStyle(p[1], p[2] === "none" ? "" : p[2]);
+            return true;
+        case "settings-realism": // settings-realism:<reel|impact|montage>:<off|random|one>[:<look id>] (RL4)
+            if (!realismTypes().includes(p[1]) || !["off", "random", "one"].includes(p[2])) return false;
+            if (p[2] === "one" && !(((info.realismLooks || {}).looks) || []).some(l => l.id === p[3])) return false;
+            setRealism(p[1], p[2], p[2] === "one" ? p[3] : null);
+            return true;
+        case "settings-realism-tick": // settings-realism-tick:<reel|impact|montage>:<look id>:<on|off> (RL4)
+            if (!realismTypes().includes(p[1]) || !(((info.realismLooks || {}).looks) || []).some(l => l.id === p[2])) return false;
+            tickRealism(p[1], p[2], on(p[3]));
             return true;
         case "settings-reel-style-pool": // settings-reel-style-pool:<style id>:<on|off>
             if (!p[1]) return false;

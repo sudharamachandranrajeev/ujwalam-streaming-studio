@@ -252,6 +252,27 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     assert.deepEqual(p.saved.clips.reelStyles, { byType: { reel: 'fast-warm', montage: null }, pool: ['calm'] });
   });
 
+  test('Settings > Clips: Realism look is off for every reel type; one look, random ticks and off are saved at Save (RL4, D445)', async () => {
+    const q = await probe(['settings-open', 'settings-page:Clips']);
+    const off = { mode: 'off', look: null, ticks: [] };
+    assert.deepEqual(q.s.settings.realismLooks.value, { byType: { reel: off, impact: off, montage: off } });
+    assert.equal(q.s.settings.realismLooks.looks[0], 'filmic');
+    assert.equal(q.s.settings.realismLooks.looks.length, 7);
+    assert.equal(node(q.p, 'realismMode_reel')?.visible, true, 'one choice per reel type');
+    assert.equal(node(q.p, 'realismMode_montage')?.visible, true);
+    assert.match(node(q.p, 'realismHint').text, /replaces the reel style's colour/);
+    assert.equal(q.s.settings.dirty, false);
+    assert.equal(q.saved, null, 'nothing saved by looking');
+    const p = await probe(['settings-open', 'settings-page:Clips', 'settings-realism:reel:one:cinematic', 'settings-realism:impact:random',
+      'settings-realism-tick:impact:night-neon:on', 'settings-realism-tick:impact:filmic:on', 'settings-realism-tick:impact:night-neon:off',
+      'settings-realism-tick:impact:gritty-war:on', 'settings-save'], 9000);
+    assert.deepEqual(p.saved.clips.realismLooks, { byType: { reel: { mode: 'one', look: 'cinematic', ticks: [] },
+      impact: { mode: 'random', look: null, ticks: ['filmic', 'gritty-war'] } } }, 'only the changed types, ticks in library order');
+    const r = await probe(['settings-open', 'settings-page:Clips', 'settings-realism:reel:off', 'settings-save'], 9000, {}, (d) => writeFileSync(
+      path.join(d, 'settings.json'), JSON.stringify({ clips: { realismLooks: { byType: { reel: { mode: 'one', look: 'filmic', ticks: [] } } } } })));
+    assert.equal(r.saved.clips.realismLooks.byType.reel.mode, 'off');
+  });
+
   test('Settings > Clips: Montage music is on by default with a random song; only the changed parts are saved at Save (D414)', async () => {
     const q = await probe(['settings-open', 'settings-page:Clips']);
     assert.deepEqual(q.s.settings.montageMusic, { on: true, folder: '', mode: 'random', fixedTrack: null, avoidLast: 3 });

@@ -583,6 +583,60 @@ Column {
                 onValueModified: cp.box.setLook("name", "durationSec", value)
             }
         }
+        // RL4 (D445): the studio's realism looks on reels, per reel type: Off, one look, or Random from the ticked looks
+        // (a seeded pick: the same reel always draws the same look). In the dialog draft, saved with Save.
+        Words { text: "Realism look"; font.weight: Font.DemiBold }
+        Words {
+            objectName: "realismHint"
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: Theme.c.muted
+            text: "Gives reels the colour, glow, detail, grain and vignette of a realism look, the same looks as Make realism scene. A realism look replaces the reel style's colour on that reel (never both); the style's pace, joins and zooms stay. Reels are made after the stream, so this never slows your live stream."
+        }
+        Repeater {
+            model: [{ t: "reel", title: "Reels" }, { t: "impact", title: "Impact plays" }, { t: "montage", title: "Kill montages" }]
+            delegate: Column {
+                id: rl
+                required property var modelData
+                readonly property var v: ((cp.d.realismLooks || {}).byType || {})[modelData.t] || { mode: "off", look: null, ticks: [] }
+                readonly property var looks: ((cp.box.info.realismLooks || {}).looks) || []
+                width: parent.width
+                spacing: Theme.sp.xs
+                Row {
+                    spacing: Theme.sp.s
+                    Words { width: 140; text: rl.modelData.title; anchors.verticalCenter: parent.verticalCenter }
+                    UCombo {
+                        objectName: "realismMode_" + rl.modelData.t
+                        width: 300
+                        label: rl.modelData.title + " realism look"
+                        model: [{ value: "off", text: "Off" }, { value: "random", text: "Random from the looks I tick" }]
+                            .concat(rl.looks.map(l => ({ value: "one:" + l.id, text: l.name })))
+                        currentIndex: Math.max(0, model.findIndex(m => m.value === (rl.v.mode === "one" ? "one:" + rl.v.look : rl.v.mode)))
+                        onChose: (x) => x.startsWith("one:") ? cp.box.setRealism(rl.modelData.t, "one", x.slice(4)) : cp.box.setRealism(rl.modelData.t, x, null)
+                    }
+                }
+                Quiet {
+                    visible: rl.v.mode === "one"
+                    text: (rl.looks.find(l => l.id === rl.v.look) || { summary: "This look is not installed any more: the reels are made without a realism look." }).summary
+                }
+                Repeater {
+                    model: rl.v.mode === "random" ? rl.looks : []
+                    delegate: USwitch {
+                        required property var modelData
+                        objectName: "realismTick_" + rl.modelData.t + "_" + modelData.id
+                        width: parent.width
+                        text: modelData.name
+                        hint: modelData.summary
+                        checked: rl.v.ticks.includes(modelData.id)
+                        onToggled: cp.box.tickRealism(rl.modelData.t, modelData.id, checked)
+                    }
+                }
+                Quiet {
+                    visible: rl.v.mode === "random" && rl.v.ticks.length === 0
+                    text: "Tick at least one look, or these reels are made without a realism look."
+                }
+            }
+        }
         UButton {
             objectName: "lookReset"
             text: "Reset to defaults"
