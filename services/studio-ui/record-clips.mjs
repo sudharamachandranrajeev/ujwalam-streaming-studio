@@ -760,7 +760,11 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
         add({ type: 'long', kind: done.kind, h: done.h, v: done.v ?? undefined, name: done.name }, `clips from ${done.name} done; making its long highlights video next`);
       }
       // BD7b (D420): the BeatDrop montage after a full clip job, when the flag is on and the run has detector hits.
-      if (code === 0 && done.type === 'full' && typeof done.h === 'string' && done.h && existsSync(done.h) && beatdropOnSafe() && hasHits(spec.out) && !queue.some((q) => q.type === 'beatdrop' && q.name === done.name)) {
+      // 2026-11-27 (BeatDrop never ran): the trigger was 'full' only, but the default-chosen mode "while" queues 'review' jobs
+      // (live-review with --recording runs the same detect step and writes detector-hits.jsonl), so no BeatDrop was ever queued.
+      const bdKind = done.type === 'full' || (done.type === 'review' && typeof done.h === 'string' && done.h);
+      if (code === 0 && bdKind && typeof done.h === 'string' && done.h && beatdropOnSafe() && !hasHits(spec.out)) log(`clips: no BeatDrop montage for ${done.name}: the run has no detector hits`);
+      if (code === 0 && bdKind && typeof done.h === 'string' && done.h && existsSync(done.h) && beatdropOnSafe() && hasHits(spec.out) && !queue.some((q) => q.type === 'beatdrop' && q.name === done.name)) {
         add({ type: 'beatdrop', kind: done.kind, h: done.h, v: done.v ?? undefined, name: done.name }, `clips from ${done.name} done; making its BeatDrop montage next`);
       }
       // LL4 (D342): after a stream's clip job, the game pack check runs last (flag learning-train, off by default).
@@ -815,8 +819,10 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   // Codex review: the requests are applied in order, the state they ask for is committed to status.json, and only then
   // are their files removed and the running child signalled (a close in between keeps the intent: stopReq, pauseAt).
   // A request whose job has gone (or from an earlier launcher) is dropped. A resume clears a pause still in flight.
+  const seenLogs = new Set(); // a dropped request is logged once, not on every tick
+  const logOnce = (k, msg) => { if (seenLogs.has(k)) return; seenLogs.add(k); log(msg); };
   const readControls = () => {
-    const listed = listTaskControls(dataDir); const reqs = listed.reqs;
+    const listed = listTaskControls(dataDir, (nm) => logOnce(`bad:${nm}`, `clips: control file ${nm} is not a valid request; removed`)); const reqs = listed.reqs;
     // Codex rounds 3-4: a job keeps an applied request's key while its file is there (a delete that failed); it drops
     // it only once a good listing shows the file gone (a listing that failed keeps every key)
     if (listed.ok) for (const q of queue) if (Array.isArray(q.applied)) { q.applied = q.applied.filter((k) => listed.keys.has(k)); if (!q.applied.length) delete q.applied; }
@@ -829,7 +835,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       if (!j) { log(`clips: task ${r.id}: ${r.op} ignored (it is not waiting or running)`); continue; }
       // Codex round 2: a request from before this launcher counts for a job carried over (it was asked for that job and
       // the close came first); for a job of this session it is a leftover. One applied already (its key) is skipped.
-      if (!(r.atMs >= createdAt) && !j.resumed) continue;
+      if (!(r.atMs >= createdAt) && !j.resumed) { logOnce(`stale:${r.key ?? r.id}`, `clips: task ${r.id}: ${r.op} from an earlier launcher ignored`); continue; }
       if (r.key && (j.applied ?? []).includes(r.key)) continue;
       if (r.key) j.applied = [...(j.applied ?? []), r.key];
       if (halted && r.op !== 'next') continue; // Stop all: nothing more runs in this session
@@ -852,6 +858,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       for (const [j, was] of snap) { for (const k of Object.keys(j)) delete j[k]; Object.assign(j, was); }
       queue.splice(0, queue.length, ...qSnap);
       finished.length = fLen;
+      logOnce(`write:${reqs.map((q) => q.key ?? q.id).join(',')}`, `clips: ${reqs.length} task request(s) not applied: the status could not be saved; tried again next tick`);
       return;
     }
     ackTaskControls(reqs);

@@ -255,3 +255,20 @@ test('Codex BD7b: an unreadable retake request is removed and never blocks the n
     rc.stop();
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
+
+test('mode "while" (a review job with the recording) also queues the BeatDrop montage (it never ran before 2026-11-27)', async () => {
+  const s = setup();
+  try {
+    const sess = path.join(s.dataDir, 'live-clips', 's1'); mkdirSync(sess, { recursive: true }); writeFileSync(path.join(sess, 'saves.jsonl'), '');
+    const rc = make(s);
+    writeSettings(s.dataDir, { clips: { recording: 'while', live: 'while' } });
+    rc.feed(s.S('live')); rc.feed(s.S('stopped'));
+    assert.equal(s.spawned.length, 1);
+    assert.ok(s.spawned[0].argv.includes('live-review'), 'the "while" mode runs a review job');
+    mkdirSync(s.run, { recursive: true }); writeFileSync(path.join(s.run, 'detector-hits.jsonl'), '{"t":1}\n');
+    s.spawned[0].c.emit('exit', 0); await tick();
+    assert.equal(s.spawned.length, 2, 'the moment finder starts after the review job');
+    assert.ok(s.spawned[1].argv.some((a) => a.endsWith('moments.py')));
+    rc.stop();
+  } finally { rmSync(s.d, { recursive: true, force: true }); }
+});

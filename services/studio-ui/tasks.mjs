@@ -170,7 +170,7 @@ export function writeTaskControl(dataDir, id, req) {
 export function peekTaskControls(dataDir) { return listTaskControls(dataDir).reqs; }
 /** Codex round 4: the requests plus whether the folder could be listed (ok) and the keys of every request file
  *  there (keys), so a reader forgets an applied key only once a good listing shows its file gone. No folder: ok. */
-export function listTaskControls(dataDir) {
+export function listTaskControls(dataDir, onBad = null) {
   const dir = controlDir(dataDir);
   let names;
   try { names = readdirSync(dir); } catch (e) { return { ok: e?.code === 'ENOENT', keys: new Set(), reqs: [] }; }
@@ -184,7 +184,7 @@ export function listTaskControls(dataDir) {
     let c = null;
     try { c = cleanControl(JSON.parse(readFileSync(f, 'utf8'))); } catch { c = null; }
     if (c && m) out.push({ id: m[1], ...c, seq: Number(m[3]), key: nm.slice(0, -5).slice(m[1].length + 1), file: f });
-    else try { rmSync(f, { force: true }); } catch { /* next tick */ }
+    else { try { onBad?.(nm); } catch { /* a logger never stops the read */ } try { rmSync(f, { force: true }); } catch { /* next tick */ } }
   }
   return { ok: true, keys, reqs: out.sort((a, b) => a.atMs - b.atMs || a.seq - b.seq).map(({ seq: _s, ...r }) => r) };
 }
