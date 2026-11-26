@@ -288,3 +288,62 @@ test('server: scene.realism needs flag realism-look (not scene-edit), refused wh
     assert.equal((await post({ op: 'scene.realism', scene: r.body.scene.id })).body.error, 'no-game-capture');
   } finally { await srv.close(); }
 });
+
+// Bug 2026-11-26: realism scenes gone after a restart. The host made the scene, refused one overlay copy ("no overlay
+// URL for this layer", -32004), and the route returned before saving: a scene in the studio that was never in the file.
+test('server: scene.realism saves the scene when the host cannot show one layer yet; another refusal undoes the scene', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ujw-realism-lost-'));
+  const file = path.join(dir, 'p.project.json');
+  const doc = alphaLike();
+  saveProject(file, doc);
+  const sid = doc.scenes[0].id;
+  const calls = [];
+  const state = { refuse: null };
+  const host = { describe: () => ({ kind: 'host', available: true }), call: async (m, p) => {
+    if (m === 'host.status') return { live: false };
+    if (m === 'outputs.status') return {};
+    calls.push([m, p.scene?.id ?? p.scene, p.layer]);
+    if (m === 'layers.addFromProject' && state.refuse && p.layer === state.refuse.layer) {
+      throw Object.assign(new Error(`Layer ${p.layer} cannot be added: no overlay URL for this layer`), { code: state.refuse.code });
+    }
+    return {};
+  } };
+  const flags = createFlags({ dataDir: dir });
+  const core = { describe: () => ({ available: false }), call: async () => { throw new Error('x'); } };
+  const srv = createStudioServer({ uiRoot: UI, core, host, launchKey: KEY, flags, projectSync: createProjectSync({ file }), limits: { statusPollMs: 50 } });
+  const { port } = await srv.listen();
+  try {
+    const cookie = await new Promise((resolve) => http.get({ host: '127.0.0.1', port, path: `/login?k=${KEY}` }, (res) => { res.resume(); resolve(res.headers['set-cookie'][0].split(';')[0]); }));
+    const csrf = (await raw(port, { url: '/ui/api/session', headers: { cookie } })).body.csrf;
+    const hdr = { cookie, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf };
+    const post = (body) => raw(port, { method: 'POST', url: '/ui/api/project/structure', body: JSON.stringify(body), headers: hdr });
+    const disk = () => JSON.parse(readFileSync(file, 'utf8'));
+    const lastSrc = doc.scenes[0].layers.at(-1).id;
+    // the copy's layer ids: from the pure function on the same document
+    const want = realismScene(doc, { scene: sid });
+    const copyLast = want.layers.at(-1).id;
+    // a non-"unavailable" refusal mid-way: the half-built scene is removed from the host, nothing saved
+    state.refuse = { layer: copyLast, code: -32000 };
+    let r = await post({ op: 'scene.realism', scene: sid });
+    assert.equal(r.status, 502, JSON.stringify(r.body));
+    assert.deepEqual(calls.at(-1), ['scenes.remove', want.scene.id, undefined], 'the half-built scene is undone in the host');
+    assert.equal(disk().scenes.length, 1);
+    // the user's case: one layer unavailable until the next full load -> the scene is saved and survives a restart
+    calls.length = 0;
+    state.refuse = { layer: copyLast, code: -32004 };
+    r = await post({ op: 'scene.realism', scene: sid });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.saved, true);
+    assert.equal(r.body.later, 1);
+    assert.ok(!calls.some((c) => c[0] === 'scenes.remove'));
+    const saved = disk();
+    assert.deepEqual(saved.scenes.map((s) => s.id), [sid, want.scene.id]);
+    assert.ok(saved.scenes[1].layers.some((l) => l.id === copyLast), 'the layer the host skipped is in the file');
+    assert.notEqual(lastSrc, copyLast);
+    // scene.duplicate takes the same path
+    state.refuse = null;
+    r = await post({ op: 'scene.duplicate', scene: sid });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(disk().scenes.length, 3);
+  } finally { await srv.close(); }
+});

@@ -33,6 +33,7 @@
 import path from 'node:path';
 import { listAssets } from './assets.mjs';
 import { loadProject, saveProject } from '../project/store.mjs';
+import { createSceneInHost } from './scene-layers.mjs';
 import { planScenePackage } from '../project/scene-package.mjs';
 import { readReference as realRead } from '../scene-builder/read.mjs';
 import { buildPackage as realBuild } from '../scene-builder/build.mjs';
@@ -160,9 +161,10 @@ export function createSceneBuilderRoutes(opts) {
       try { plan = planScenePackage(doc, last.pkg, { flags: flagMap() }); } catch (e) { return json(res, 409, { error: 'plan-failed', detail: String(e?.message ?? 'error').slice(0, 200) }); }
       const id = plan.diff.adds.scenes[0].id;
       const scene = plan.project.scenes.find((s) => s.id === id);
+      let later = [];
       try {
-        for (const c of plan.project.canvases) await host.call('scenes.create', { scene: { id, canvas: c.id.toUpperCase(), name: scene.name } });
-        for (const l of scene.layers) await host.call('layers.addFromProject', { project: plan.project, scene: id, layer: l.id }); // bottom first
+        // a layer the host cannot show yet is saved and shows after the next start; any other refusal undoes the scene
+        later = (await createSceneInHost(host, { project: plan.project, scene, canvases: plan.project.canvases.map((c) => c.id.toUpperCase()) })).later;
       } catch (e) {
         return json(res, 502, { error: 'host-error', detail: String(e?.message ?? e?.code ?? 'error').slice(0, 160) });
       }
@@ -171,7 +173,7 @@ export function createSceneBuilderRoutes(opts) {
       opts.projectSync.reload?.();
       last = null;
       opts.afterEdit?.(id);
-      return json(res, 200, { ok: true, scene: { id, name: scene.name }, layers: scene.layers.length, saved });
+      return json(res, 200, { ok: true, scene: { id, name: scene.name }, layers: scene.layers.length, ...(later.length ? { later: later.length } : {}), saved });
     } finally { busy = false; }
   }
 

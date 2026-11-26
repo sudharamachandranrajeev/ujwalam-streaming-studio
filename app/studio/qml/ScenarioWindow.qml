@@ -136,7 +136,7 @@ Dialog {
             store.edit.loadEdits(); // a structure edit clears the undo history
             if (!ok) { if (g === gen) info = said(r, err); return; }
             const name = r.scene ? r.scene.name : built;
-            store.say("Scene added: " + name + (r.saved ? "" : ". Not saved to the project file: the change is live only."));
+            store.say("Scene added: " + name + (r.later ? ". " + r.later + " layer(s) show after Ujwalam restarts." : "") + (r.saved ? "" : ". Not saved to the project file: the change is live only."));
             if (g === gen) { built = ""; words = []; selected = ""; info = "Added \"" + name + "\" (" + (r.layers || 0) + " layers). Pick another scenario to add more."; }
         });
         return true;

@@ -92,6 +92,7 @@ import { createYoutubePresets } from './youtube-presets.mjs';
 import { createYoutubeQuality } from './youtube-quality.mjs';
 import { createGoLiveRoutes } from './golive-routes.mjs';
 import { createSceneBuilderRoutes } from './scene-builder-routes.mjs';
+import { createSceneInHost } from './scene-layers.mjs';
 import { DEFAULT_PRESETS_DIR, createAudioRoutes, sameDeviceRows } from './audio-routes.mjs';
 import { createMusicRoutes } from './music-routes.mjs';
 import { libraryDirOf } from '../project/scene-music.mjs';
@@ -1381,6 +1382,7 @@ export function createStudioServer(opts) {
     if (r.error) return json(res, 409, { error: r.error, ...(r.errors ? { detail: r.errors.map((e) => `${e.path}: ${e.message}`).join('; ').slice(0, 300) } : {}) });
     const canvases = doc.canvases.map((c) => c.id.toUpperCase());
     let waiting = null; // a capture layer added while its device is not connected: the host's plain sentence (D329)
+    let later = []; // new-scene layers the host shows only after the next start (2026-11-26 scene-loss fix)
     try {
       if (op === 'scene.add') for (const canvas of canvases) await host.call('scenes.create', { scene: { id: r.scene.id, canvas, name: r.scene.name } });
       else if (op === 'scene.remove') await host.call('scenes.remove', { scene: body.scene });
@@ -1393,8 +1395,8 @@ export function createStudioServer(opts) {
         await host.call('layers.addFromProject', { project: r.project, scene: body.scene, layer: r.layer.id });
         await host.call('layers.orderFromProject', { project: r.project, scene: body.scene }); // the copy lands just above its source
       } else if (op === 'scene.duplicate' || op === 'scene.realism') {
-        for (const canvas of canvases) await host.call('scenes.create', { scene: { id: r.scene.id, canvas, name: r.scene.name } });
-        for (const l of r.layers) await host.call('layers.addFromProject', { project: r.project, scene: r.scene.id, layer: l.id }); // bottom first
+        // a layer the host cannot show yet is saved and shows after the next start; any other refusal undoes the scene
+        later = (await createSceneInHost(host, { project: r.project, scene: { id: r.scene.id, name: r.scene.name, layers: r.layers }, canvases })).later;
       } else if (op === 'layer.rename' || op === 'scene.rename') {
         // The host has no rename call: it takes the name from the saved project at its next load. Until then the lists
         // below carry the new name (renamed), so the studio shows it at once.
@@ -1409,7 +1411,7 @@ export function createStudioServer(opts) {
     history.clear();
     broadcast('edits', history.state());
     broadcast('layers', { source: 'structure', edit: { op, scene: r.scene?.id ?? body.scene, layer: r.layer?.id ?? body.layer ?? null } });
-    return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(r.graded ? { graded: r.graded.length } : {}), ...(r.look ? { look: r.look } : {}), saved });
+    return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(r.graded ? { graded: r.graded.length } : {}), ...(r.look ? { look: r.look } : {}), ...(later.length ? { later: later.length } : {}), saved });
   }
   // B7 (2026-11-18): a capture layer's own sound whose card's audio input is in the mix already carries sameAs (the name
   // of that sound), so the studio shows it once instead of offering it twice. The project file is read only for this.

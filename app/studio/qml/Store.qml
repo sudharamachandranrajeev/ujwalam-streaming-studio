@@ -262,7 +262,7 @@ QtObject {
                 if ((b.op === "layer.add" || b.op === "layer.duplicate") && b.layer && b.layer.id) selected = b.layer.id; // the new layer
                 const waiting = b.waiting ? String(b.waiting) : ""; // a capture layer added without its device
                 const done = b.op === "scene.realism" ? "Realism scene made: " + (b.scene ? b.scene.name : "") + " (" + (b.graded || 0) + " game layer(s) graded)" : "Done: " + b.op;
-                say((waiting ? "Layer added. " + waiting : done) +
+                say((waiting ? "Layer added. " + waiting : done) + (b.later ? ". " + b.later + " layer(s) show after Ujwalam restarts" : "") +
                     (b.saved ? "" : ". Not saved to the project file: the change is live only."));
             }
             loadScenes();
