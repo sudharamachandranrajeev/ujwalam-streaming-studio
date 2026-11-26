@@ -17,14 +17,14 @@ import { UploadError } from './youtube.mjs';
 import { IG_FLAG, InstagramError, createInstagramAuth } from './instagram.mjs';
 import { queueInstagramNow } from './instagram-queue.mjs';
 import { REWRITE_FLAG, runRewrite, runUndo } from './rewrite.mjs';
-import { runHold } from './hold.mjs';
+import { runHold, runUnhold } from './hold.mjs';
 import { AI_TEXT_FLAG } from './ai-text.mjs';
 import { createQuotaBudget } from './quota-budget.mjs';
 import { FLAG as LOCAL_MODEL_FLAG, createModelRunner } from '../local-model/runner.mjs';
 import { SCHEDULE_FLAG } from './schedule.mjs';
 import { GROWTH_FLAG } from '../analytics/index.mjs';
 import { requestRunNow, streamOnly } from './auto-chain.mjs';
-import { scheduleNextFree } from './auto-settings.mjs';
+import { scheduleConfigFor, scheduleNextFree } from './auto-settings.mjs';
 import { AUTO_FLAG, AUTO_LOG_NAME, AutoPostError, createAutoLog, describeMode, initUserRules, loadRules, planAuto, rankerMinScore, rulesFileFor, runAuto } from './auto-post.mjs';
 import { formatPreview, previewRules } from './preview.mjs';
 import { HostClient } from '../../app/host/lib/client.mjs';
@@ -249,6 +249,20 @@ async function youtubeMain(a, out, err, deps) {
       out(`youtube: hold: ${r.held.length} held, ${r.skipped.length} skipped ${JSON.stringify(why)}${r.stopped ? `; stopped (${r.stopped}), ${r.left} left for another day` : ''}`);
       return 0;
     }
+    if (sub === 'unhold') {
+      // 2026-11-26: the held videos go back on their schedule; a missed time moves to the next free slot.
+      const only = typeof a.only === 'string' ? a.only.split(',').filter(Boolean) : null;
+      const store = createPostStore({ ledgerFile: path.join(dataDir, 'posting', LEDGER_NAME), dataDir });
+      const dryRun = a['dry-run'] === true;
+      const cfg = scheduleConfigFor(dataDir);
+      const r = await runUnhold({ dataDir, store, auth: deps.auth ?? auth, budget: dryRun ? null : (deps.budget ?? createQuotaBudget({ dataDir })), fetchImpl: deps.fetchImpl, only, dryRun, cfg,
+        nowMs: deps.nowMs, outputsStatus: deps.outputsStatus ? streamOnly(deps.outputsStatus) : undefined });
+      if (r.refused) { err(`youtube: unhold refused (${r.refused}); nothing was changed`); return 1; }
+      if (dryRun) { out(`youtube: unhold (dry run): ${r.candidates} held video(s) would go back on the schedule, ${r.moved} of them to a new time; nothing was sent`); return 0; }
+      const why = {}; for (const s of r.skipped) why[s.why] = (why[s.why] ?? 0) + 1;
+      out(`youtube: unhold: ${r.restored.length} back on the schedule (${r.restored.filter((x) => x.moved).length} at a new time), ${r.skipped.length} skipped ${JSON.stringify(why)}${r.stopped ? `; stopped (${r.stopped}), ${r.left} left for another day` : ''}`);
+      return 0;
+    }
     if (sub === 'upload') {
       if (typeof a.id !== 'string') { err('usage: node services/posting/cli.mjs youtube upload --id <post id> [--data-dir DIR]'); return 2; }
       const ledgerFile = path.join(dataDir, 'posting', LEDGER_NAME);
@@ -266,7 +280,7 @@ async function youtubeMain(a, out, err, deps) {
       out(`youtube: queued ${a.id}; goes public ${r.item.publishAt}. The studio's auto-post queue uploads it as private when no stream is live (auto-post must be on).`);
       return 0;
     }
-    err('usage: node services/posting/cli.mjs youtube signin|status|signout|upload --id <post id>|rewrite [--only ids]|rewrite-undo [--only ids] [--force]|hold [--dry-run] [--only ids]');
+    err('usage: node services/posting/cli.mjs youtube signin|status|signout|upload --id <post id>|rewrite [--only ids]|rewrite-undo [--only ids] [--force]|hold [--dry-run] [--only ids]|unhold [--dry-run] [--only ids]');
     return 2;
   } catch (e) {
     if (e?.code === 'oauth-no-client') { err('youtube: no OAuth client set yet (see docs/plan/2026-11-03-p16b-youtube-private-upload-plan.md: "Needs from the user")'); return 1; }

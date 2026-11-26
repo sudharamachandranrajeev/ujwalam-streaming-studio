@@ -9,7 +9,7 @@ import path from 'node:path';
 import { after, describe, test } from 'node:test';
 import { createPostChain, createUploadQueue, reasonText, shownPublishAt } from '../services/posting/auto-chain.mjs';
 import { AutoPostError, instagramWinnerCandidates, planAuto, validateRules } from '../services/posting/auto-post.mjs';
-import { runHold } from '../services/posting/hold.mjs';
+import { runHold, runUnhold, unholdPlan } from '../services/posting/hold.mjs';
 import { createPostStore, postId } from '../services/posting/index.mjs';
 import { CAPTIONS_SCOPE, READONLY_SCOPE } from '../services/posting/oauth.mjs';
 import { createQuotaBudget } from '../services/posting/quota-budget.mjs';
@@ -172,5 +172,32 @@ describe('youtubeSource instagram-winners', () => {
     assert.equal(createUploadQueue(path.join(dataDir, 'posting', 'upload-queue.json')).get(id), null);
     assert.equal(calls.length, 0);
     c.stop?.();
+  });
+});
+
+describe('youtube unhold', () => {
+  const cfg = { intervalHours: 1, minLeadHours: 1, marginMinutes: 2, alignMinutes: 1 };
+  test('plan: a time still ahead is kept; missed ones go after the latest scheduled time, in order, an interval apart', () => {
+    const c = (i, t) => ({ id: `p${i}`, entry: { publishAt: t } });
+    const plan = unholdPlan([c(0, '2026-11-26T09:00:00Z'), c(1, '2026-11-26T09:30:00Z'), c(2, '2026-11-27T12:00:00Z')], [Date.parse('2026-11-28T08:00:00Z')], NOW, cfg);
+    assert.deepEqual(plan.map((p) => [p.id, new Date(p.at).toISOString(), p.moved]), [
+      ['p2', '2026-11-27T12:00:00.000Z', false],
+      ['p0', '2026-11-28T09:00:00.000Z', true],
+      ['p1', '2026-11-28T10:00:00.000Z', true],
+    ]);
+  });
+
+  test('held videos go back on YouTube with a publishAt; heldAt cleared; a second run does nothing', async () => {
+    const e = setup([{ publishAt: FUTURE }, { publishAt: '2026-11-26T09:00:00Z' }]);
+    e.store.ledger.list().forEach((x) => e.store.ledger.annotate(x.sha256, x.target, { heldAt: '2026-11-26T08:00:00Z' }));
+    const r = await runUnhold(base(e, { cfg }));
+    assert.equal(r.restored.length, 2);
+    assert.equal(e.yt.videos.vid0.publishAt, '2026-11-30T12:00:00.000Z');
+    assert.equal(e.yt.videos.vid0.privacyStatus, 'private');
+    assert.ok(Date.parse(e.yt.videos.vid1.publishAt) > Date.parse(FUTURE), 'the missed one goes after the latest');
+    assert.ok(!heldAt(e, 0) && !heldAt(e, 1));
+    assert.equal(e.queue.get(e.ids[0]).heldAt, undefined);
+    const r2 = await runUnhold(base(e, { cfg }));
+    assert.equal(r2.candidates, 0);
   });
 });

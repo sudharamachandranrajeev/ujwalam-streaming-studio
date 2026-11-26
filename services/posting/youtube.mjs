@@ -322,8 +322,11 @@ export async function getVideoSnippet({ videoId, accessToken, fetchImpl, request
 const VIDEO_STATUS_UPDATE_URL = 'https://www.googleapis.com/youtube/v3/videos?part=status';
 export const WRITABLE_STATUS = Object.freeze(['embeddable', 'license', 'publicStatsViewable', 'selfDeclaredMadeForKids', 'containsSyntheticMedia']);
 /** Sends status { privacyStatus: 'private', carried writable fields } with no publishAt. -> { ok: true } or throws UploadError. */
-export async function clearVideoSchedule({ videoId, status, accessToken, fetchImpl, requestMs = REQUEST_MS, signal = null }) {
+export async function clearVideoSchedule({ videoId, status, accessToken, fetchImpl, requestMs = REQUEST_MS, signal = null, publishAt = null }) {
   const body = { privacyStatus: 'private' };
+  // unhold (2026-11-26): the same update with a publishAt puts the private video back on a schedule (verified live: the
+  // hold's update without publishAt left the video private with no publish time)
+  if (typeof publishAt === 'string') body.publishAt = publishAt;
   for (const k of WRITABLE_STATUS) if (status?.[k] !== undefined) body[k] = status[k];
   const text = JSON.stringify({ id: videoId, status: body });
   const r = await timedFetch(fetchImpl ?? fetch, VIDEO_STATUS_UPDATE_URL, { method: 'PUT', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' }, body: text },

@@ -16,6 +16,7 @@
 import path from 'node:path';
 import { QUEUE_NAME, createUploadQueue } from './auto-chain.mjs';
 import { gate, scheduledCandidates, takeLock } from './rewrite.mjs';
+import { createSlotter, floorFrom, minLeadMs } from './schedule.mjs';
 import { clearVideoSchedule, getVideoSnippet } from './youtube.mjs';
 
 const READ_UNITS = 1;
@@ -79,4 +80,76 @@ async function holdInner(o, cands, nowMs) {
   }
   const done = held.length + skipped.length;
   return { held, skipped, left: stopped ? cands.length - done : 0, stopped, candidates: cands.length };
+}
+
+// Unhold (2026-11-26, user changed the decision: "keep the already live went reels as per the schedule"): every held
+// video goes back on a YouTube schedule. Its old time when that is still at least the schedule's lead time away (the
+// spacing it had is kept); a missed time goes to the next free slot after the latest scheduled time, in the old order,
+// intervalHours apart (user: "next free slots"). Same quota stop, lock and resumability as hold: the ledger gets the new
+// publishAt and loses heldAt only after YouTube took the update.
+//   runUnhold({ dataDir, store, auth, budget, fetchImpl, nowMs, cfg, only?, dryRun?, queueFile?, outputsStatus? })
+//     -> { refused } | { restored: [{ id, publishAt, moved }], skipped, left, stopped, candidates }
+export function heldCandidates({ store, only = null }) {
+  const out = [];
+  for (const e of store.ledger.list()) {
+    if (!e || typeof e.heldAt !== 'string' || e.status !== 'uploaded' || typeof e.videoId !== 'string' || typeof e.account === 'string') continue;
+    const id = `${e.sha256.slice(0, 16)}.${e.target}`;
+    if (Array.isArray(only) && !only.includes(id)) continue;
+    out.push({ id, entry: e });
+  }
+  return out.sort((a, b) => Date.parse(a.entry.publishAt) - Date.parse(b.entry.publishAt));
+}
+
+/** Pure: the new time per held candidate. taken = every other future scheduled time (ms). */
+export function unholdPlan(cands, taken, nowMs, cfg) {
+  const slotter = createSlotter(taken, cfg);
+  const lead = nowMs + minLeadMs(cfg) + cfg.marginMinutes * 60 * 1000;
+  const kept = []; const missed = [];
+  for (const c of cands) (Date.parse(c.entry.publishAt) >= lead ? kept : missed).push(c);
+  const plan = [];
+  for (const c of kept) { const t = Date.parse(c.entry.publishAt); slotter.add(t); plan.push({ ...c, at: t, moved: false }); }
+  let from = Math.max(floorFrom(nowMs, cfg), (slotter.latest() ?? 0) + cfg.intervalHours * 3600 * 1000);
+  for (const c of missed) { const t = slotter.free(from); slotter.add(t); from = t; plan.push({ ...c, at: t, moved: true }); }
+  return plan;
+}
+
+export async function runUnhold(o) {
+  const nowMs = o.nowMs ?? Date.now;
+  const cands = heldCandidates({ store: o.store, only: o.only });
+  const taken = o.store.ledger.list().filter((e) => e && typeof e.heldAt !== 'string' && e.status === 'uploaded' && typeof e.publishAt === 'string' && Date.parse(e.publishAt) > nowMs())
+    .map((e) => Date.parse(e.publishAt));
+  const plan = unholdPlan(cands, taken, nowMs(), o.cfg);
+  if (o.dryRun === true) return { restored: [], skipped: [], left: 0, stopped: null, candidates: cands.length, moved: plan.filter((p) => p.moved).length, dryRun: true };
+  const bad = await gate({ flags: { isOn: () => true }, auth: o.auth, outputsStatus: o.outputsStatus });
+  if (bad) return { refused: bad };
+  const release = takeLock(o.dataDir);
+  if (!release) return { refused: 'busy' };
+  try {
+    const { store, auth, budget, fetchImpl } = o;
+    const queue = createUploadQueue(o.queueFile ?? path.join(o.dataDir, 'posting', QUEUE_NAME), nowMs);
+    const restored = []; const skipped = []; let stopped = null;
+    const need = (o.updateUnits ?? 50) + READ_UNITS;
+    for (const { id, entry, at, moved } of plan) {
+      if (budget.writeRoom && budget.writeRoom(need).why) { stopped = 'quota-day-used'; break; }
+      const readWhy = (budget.reserveWriteRead ?? budget.reserveRead)(READ_UNITS);
+      if (readWhy) { stopped = readWhy; break; }
+      let accessToken; try { accessToken = await auth.accessToken(); } catch { stopped = 'not-signed-in'; break; }
+      let remote;
+      try { remote = await getVideoSnippet({ videoId: entry.videoId, accessToken, fetchImpl }); } catch (e) { if (apiWhy(e) === 'quota-exceeded') { stopped = 'quota-exceeded'; break; } skipped.push({ id, why: `read-${apiWhy(e)}` }); continue; }
+      if (!remote.found) { skipped.push({ id, why: 'video-not-found' }); continue; }
+      if (remote.privacyStatus !== 'private') { skipped.push({ id, why: 'not-private' }); continue; }
+      const publishAt = new Date(at).toISOString();
+      const updWhy = budget.reserveUpdate();
+      if (updWhy) { stopped = updWhy; break; }
+      try { await clearVideoSchedule({ videoId: entry.videoId, status: remote.status, accessToken, fetchImpl, publishAt }); } catch (e) {
+        if (apiWhy(e) === 'quota-exceeded') { stopped = 'quota-exceeded'; break; }
+        skipped.push({ id, why: `update-${apiWhy(e)}` }); continue;
+      }
+      store.ledger.annotate(entry.sha256, entry.target, { publishAt, heldAt: null });
+      if (queue.get(id)) queue.patch(id, { sentPublishAt: publishAt, heldAt: undefined }); // undefined: dropped when saved
+      restored.push({ id, publishAt, moved });
+    }
+    const done = restored.length + skipped.length;
+    return { restored, skipped, left: stopped ? plan.length - done : 0, stopped, candidates: cands.length };
+  } finally { release(); }
 }
