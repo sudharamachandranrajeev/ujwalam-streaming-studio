@@ -489,7 +489,7 @@ ApplicationWindow {
             anchors.centerIn: parent
             width: Math.min(parent.width - 2 * Theme.sp.l, 460)
             height: closingCol.implicitHeight + 2 * Theme.sp.l
-            radius: Theme.radius
+            radius: Theme.radiusLarge
             color: Theme.c.panel
             border.color: Theme.c.border
             Column {
