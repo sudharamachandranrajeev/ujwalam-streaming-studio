@@ -5,11 +5,13 @@
 #include <windows.h>
 #include <dbghelp.h>
 
+#include <algorithm>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 namespace crash {
 namespace {
@@ -597,15 +599,37 @@ Status install(const Config &c)
 			g_dir[i] = dir[i];
 		g_dir[dir.size()] = 0;
 		g_dir_len = dir.size();
+		// Cleanup (user, 2026-11-27): reports older than kKeepDays are deleted, and the oldest go until one new report
+		// fits under kMaxReports. Before this, ten old reports silenced every later crash. A crash loop still stays
+		// bounded: each start frees at most what one crash writes. Names start with the UTC time: name order = age order.
+		struct Found { std::wstring name; ULONGLONG written; };
+		std::vector<Found> found;
 		WIN32_FIND_DATAW fd;
 		HANDLE h = FindFirstFileW((dir + widen(g_prefix) + L"*.txt").c_str(), &fd);
 		if (h != INVALID_HANDLE_VALUE) {
 			do {
 				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-					st.existing++;
+					found.push_back({fd.cFileName, (ULONGLONG(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime});
 			} while (FindNextFileW(h, &fd));
 			FindClose(h);
 		}
+		std::sort(found.begin(), found.end(), [](const Found &a, const Found &b) { return a.name < b.name; });
+		FILETIME now_ft;
+		GetSystemTimeAsFileTime(&now_ft);
+		const ULONGLONG now = (ULONGLONG(now_ft.dwHighDateTime) << 32) | now_ft.dwLowDateTime;
+		const ULONGLONG max_age = ULONGLONG(kKeepDays) * 24 * 3600 * 10000000ULL; // FILETIME ticks are 100 ns
+		size_t left = found.size();
+		for (const Found &f : found) {
+			const bool old = now > f.written && now - f.written > max_age;
+			if (!old && int(left) < kMaxReports)
+				break;
+			if (DeleteFileW((dir + f.name).c_str())) {
+				left--;
+				st.removed++;
+			} else if (!old)
+				break; // locked or read-only: keep the cap honest, write nothing rather than exceed it
+		}
+		st.existing = int(left);
 		g_writing = st.existing < kMaxReports;
 	}
 

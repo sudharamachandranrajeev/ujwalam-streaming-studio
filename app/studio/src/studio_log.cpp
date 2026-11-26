@@ -129,8 +129,9 @@ Status install(const QString &version)
 	c.log_label = "studio log";
 	const crash::Status cs = crash::install(c);
 	st.crash = cs.on;
-	qInfo("studio %s started (pid %lld); crash reporter %s%s, symbols %s, %d earlier reports", qPrintable(version), pid, cs.on ? "on" : "off",
-	      cs.writing ? "" : " but NO report file will be written (too many studio-crash-*.txt in logs/)", cs.symbols ? "on" : "off", cs.existing);
+	qInfo("studio %s started (pid %lld); crash reporter %s%s, symbols %s, %d earlier reports, %d old deleted", qPrintable(version), pid,
+	      cs.on ? "on" : "off", cs.writing ? "" : " but NO report file will be written (an old studio-crash-*.txt could not be deleted)",
+	      cs.symbols ? "on" : "off", cs.existing, cs.removed);
 #else
 	qInfo("studio %s started (pid %lld)", qPrintable(version), pid);
 #endif

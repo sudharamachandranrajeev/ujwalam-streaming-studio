@@ -3,13 +3,14 @@
 // after the reporter is installed and BEFORE libobs starts, so these tests use no GPU, no NVENC and no outputs.
 // Checks: one text report per crash in <data>/logs/crash-*.txt with code, module+offset address, thread, stack,
 // symbols, version, time and log name; the exit code is the one the process has without a reporter; no token or
-// token-shaped hex and no folder path in the report; the 10-file limit writes nothing new and deletes nothing.
+// token-shaped hex and no folder path in the report; at start, reports older than 14 days go, then the oldest until
+// one more fits under 10; when old reports cannot be deleted, the limit writes nothing new.
 //   node --test app/host/tests/host-crash-report.test.mjs   (needs the built host; the OBS runtime only for PDBs)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { resolveConfig, REPO_ROOT } from '../lib/config.mjs';
 
@@ -81,7 +82,7 @@ for (const c of CASES) {
         assert.match(line, /^ {2}#\d\d (\S+\+0x[0-9a-f]+|<withheld>.*|\S+!.+|0x[0-9a-f]{1,4} \(null page\))$/, line);
       }
       const log = readdirSync(path.join(dataDir, 'logs')).find((n) => n.startsWith('host-'));
-      assert.match(readFileSync(path.join(dataDir, 'logs', log), 'utf8'), /crash reporter: on \(text report to logs\/crash-\*\.txt, no dump; symbols on; 0 earlier reports\)/);
+      assert.match(readFileSync(path.join(dataDir, 'logs', log), 'utf8'), /crash reporter: on \(text report to logs\/crash-\*\.txt, no dump; symbols on; 0 earlier reports, 0 old deleted\)/);
       assert.match(readFileSync(path.join(dataDir, 'logs', log), 'utf8'), /taskbar id: Ujwalam\.Studio\r?\n/, 'one taskbar button with the studio (2026-11-19)');
     } finally {
       rmSync(dataDir, { recursive: true, force: true, maxRetries: 5 });
@@ -89,24 +90,51 @@ for (const c of CASES) {
   });
 }
 
-test('crash report: with 10 reports present, no new file is written and none is deleted; exit code unchanged', () => {
+// Cleanup (user, 2026-11-27): at start the reporter deletes reports older than 14 days, then the oldest until one more
+// fits under 10. Before, 10 old reports silenced every later crash. Seeded reports are recent (written now).
+const seedReports = (dataDir) => {
+  mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
+  const old = [];
+  for (let i = 0; i < 10; i++) {
+    const n = `crash-2026-01-01T00-00-0${i}-000Z-p${i}.txt`;
+    writeFileSync(path.join(dataDir, 'logs', n), `old report ${i}\n`);
+    old.push(n);
+  }
+  return old;
+};
+
+test('crash report: with 10 recent reports present, the oldest is deleted and the new report is written; exit code unchanged', () => {
   const dataDir = tmp('cap');
   try {
-    mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
-    const old = [];
-    for (let i = 0; i < 10; i++) {
-      const n = `crash-2026-01-01T00-00-0${i}-000Z-p${i}.txt`;
-      writeFileSync(path.join(dataDir, 'logs', n), `old report ${i}\n`);
-      old.push(n);
-    }
+    const old = seedReports(dataDir);
+    const r = runHost(dataDir, ['--test-hooks', '--test-crash', 'av']);
+    assert.equal(r.code, AV);
+    const now = crashFiles(dataDir);
+    assert.equal(now.length, 10, now.join(', '));
+    assert.deepEqual(now.slice(0, 9), old.slice(1), 'only the oldest report was deleted');
+    assert.doesNotMatch(now[9], /^crash-2026-01-01/, 'the new report was written');
+    const log = readdirSync(path.join(dataDir, 'logs')).find((n) => n.startsWith('host-'));
+    assert.match(readFileSync(path.join(dataDir, 'logs', log), 'utf8'), /9 earlier reports, 1 old deleted/);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('crash report: 10 reports that cannot be deleted: no new file is written and none is changed; exit code unchanged', () => {
+  const dataDir = tmp('cap-ro');
+  const old = seedReports(dataDir);
+  const files = old.map((n) => path.join(dataDir, 'logs', n));
+  try {
+    files.forEach((f) => chmodSync(f, 0o444)); // read-only: DeleteFileW fails
     const r = runHost(dataDir, ['--test-hooks', '--test-crash', 'av']);
     assert.equal(r.code, AV);
     assert.deepEqual(crashFiles(dataDir), old.sort());
-    for (let i = 0; i < 10; i++) assert.equal(readFileSync(path.join(dataDir, 'logs', old[i]), 'utf8'), `old report ${i}\n`);
+    for (let i = 0; i < 10; i++) assert.equal(readFileSync(files[i], 'utf8'), `old report ${i}\n`);
     assert.match(r.stderr, /CRASH \(unhandled exception 0xc0000005 access violation\) on thread \d+; report not written: 10 crash-\*\.txt files/);
     const log = readdirSync(path.join(dataDir, 'logs')).find((n) => n.startsWith('host-'));
-    assert.match(readFileSync(path.join(dataDir, 'logs', log), 'utf8'), /NO report file will be written: 10 crash-\*\.txt files/);
+    assert.match(readFileSync(path.join(dataDir, 'logs', log), 'utf8'), /NO report file will be written: 10 crash-\*\.txt files .*could not be deleted/);
   } finally {
+    files.forEach((f) => { try { chmodSync(f, 0o666); } catch { /* already gone */ } });
     rmSync(dataDir, { recursive: true, force: true, maxRetries: 5 });
   }
 });

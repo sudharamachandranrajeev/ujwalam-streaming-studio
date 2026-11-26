@@ -36,6 +36,7 @@
 namespace crash {
 
 constexpr int kMaxReports = 10;
+constexpr int kKeepDays = 14; // install() deletes older reports, then the oldest until one more fits (user, 2026-11-27)
 
 struct Config {
 	std::string logs_dir;    // <data dir>/logs (UTF-8; must exist)
@@ -53,7 +54,8 @@ struct Status {
 	bool on = false;      // handlers installed
 	bool writing = false; // a report file will be written (false: kMaxReports files present or bad folder)
 	bool symbols = false; // dbghelp initialised
-	int existing = 0;     // crash-*.txt files found at install
+	int existing = 0;     // crash-*.txt files left after the install cleanup
+	int removed = 0;      // old reports the install cleanup deleted
 };
 
 Status install(const Config &c);

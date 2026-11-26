@@ -6,7 +6,7 @@
 // Skipped when the shell is not built (npm run build:studio) or no Qt kit is configured.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -74,6 +74,44 @@ describe('studio crash capture', { skip }, () => {
     const bad = await run({ UJWALAM_STUDIO_LOG_DIR: dir, UJWALAM_STUDIO_TEST_CRASH: 'nope' });
     assert.equal(bad.code, 65);
     assert.equal(readdirSync(dir).filter((n) => n.startsWith('studio-crash-')).length, 0);
+  });
+
+  // Cleanup (user, 2026-11-27): ten old reports used to silence every later crash. crash::install deletes reports older
+  // than 14 days, then the oldest until one more fits under the limit of 10; other files are never touched.
+  const seed = (dir, names, ageDays) => {
+    for (const n of names) {
+      const f = path.join(dir, n);
+      writeFileSync(f, 'old report\n');
+      const t = new Date(Date.now() - ageDays * 86_400_000);
+      utimesSync(f, t, t);
+    }
+  };
+  const report = (i) => `studio-crash-2026-01-${String(i + 1).padStart(2, '0')}T00-00-00-000Z-p${i + 1}.txt`;
+
+  test('reports older than 14 days are deleted at start; recent ones and other files stay', async () => {
+    const dir = tmp();
+    seed(dir, [report(0), report(1)], 20);
+    seed(dir, [report(2), report(3), report(4)], 2);
+    seed(dir, ['notes.txt'], 30);
+    const r = await run({ UJWALAM_STUDIO_LOG_DIR: dir, UJWALAM_STUDIO_TEST_CRASH: 'av' });
+    assert.equal(r.code >>> 0, 0xc0000005, `exit ${r.code} ${r.err}`);
+    const names = readdirSync(dir);
+    assert.ok(!names.includes(report(0)) && !names.includes(report(1)), names.join(', '));
+    assert.ok([2, 3, 4].every((i) => names.includes(report(i))) && names.includes('notes.txt'), names.join(', '));
+    assert.equal(names.filter((n) => n.startsWith('studio-crash-')).length, 4, 'three kept + the new report');
+    const log = names.find((n) => /^studio-.+-p\d+\.log$/.test(n) && !n.startsWith('studio-crash-'));
+    assert.match(readFileSync(path.join(dir, log), 'utf8'), /3 earlier reports, 2 old deleted/);
+  });
+
+  test('ten recent reports: the oldest goes, so the next crash is still written', async () => {
+    const dir = tmp();
+    seed(dir, Array.from({ length: 10 }, (_, i) => report(i)), 1);
+    const r = await run({ UJWALAM_STUDIO_LOG_DIR: dir, UJWALAM_STUDIO_TEST_CRASH: 'av' });
+    assert.equal(r.code >>> 0, 0xc0000005, `exit ${r.code} ${r.err}`);
+    const reports = readdirSync(dir).filter((n) => n.startsWith('studio-crash-'));
+    assert.equal(reports.length, 10, reports.join(', '));
+    assert.ok(!reports.includes(report(0)), 'the oldest report was deleted');
+    assert.ok(reports.some((n) => !n.startsWith('studio-crash-2026-01-')), 'the new report was written');
   });
 
   test('the log keeps the newest 10 studio-*.log files', async () => {

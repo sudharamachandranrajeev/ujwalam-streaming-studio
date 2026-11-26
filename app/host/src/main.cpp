@@ -435,11 +435,11 @@ int wmain(int argc, wchar_t **wargv)
 		cc.runtime_dir = o.runtime;
 		crash::Status cs = crash::install(cc);
 		if (cs.writing)
-			hlog::info("crash reporter: on (text report to logs/crash-*.txt, no dump; symbols %s; %d earlier reports)",
-				   cs.symbols ? "on" : "off", cs.existing);
+			hlog::info("crash reporter: on (text report to logs/crash-*.txt, no dump; symbols %s; %d earlier reports, %d old deleted)",
+				   cs.symbols ? "on" : "off", cs.existing, cs.removed);
 		else
 			hlog::warn("crash reporter: on, but NO report file will be written: %d crash-*.txt files in logs/ (limit %d; "
-				   "nothing is deleted: move old reports away)",
+				   "an old report could not be deleted)",
 				   cs.existing, crash::kMaxReports);
 		hlog::info("taskbar id: %s%s", narrow(kAppUserModelId).c_str(), aumid_ok ? "" : " (NOT set)");
 		if (!test_crash.empty()) {
