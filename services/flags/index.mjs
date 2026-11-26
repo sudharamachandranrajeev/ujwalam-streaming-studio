@@ -35,9 +35,71 @@ export function parseDefinitions(j) {
     const onBy = f.onBy ?? null;
     if (onBy !== null && (typeof onBy !== 'string' || !/^D\d+$/.test(onBy))) throw new Error(`flags: bad entry ${f.id} (onBy)`);
     if (f.default !== (onBy !== null)) throw new Error(`flags: bad entry ${f.id} (${f.default ? 'on by default without onBy' : 'onBy on a flag that is off'})`);
-    return { id: f.id, description: f.description, default: f.default, since: f.since, label: f.label, page: f.page, summary: f.summary, onBy };
+    // setting (2026-11-26, user: "don't use the janky flag system"): a finished feature whose switch is a plain toggle
+    // in Settings; its value lives in <dataDir>/settings.json features.<id> (see isOn), not in flags.local.json.
+    if (f.setting !== undefined && typeof f.setting !== 'boolean') throw new Error(`flags: bad entry ${f.id} (setting)`);
+    return { id: f.id, description: f.description, default: f.default, since: f.since, label: f.label, page: f.page, summary: f.summary, onBy, setting: f.setting === true };
   });
 }
+
+// ---- feature settings (2026-11-26) begin -------------------------------------------------------------------------
+// A flag marked "setting": true is a finished feature with its own toggle in Settings. Its value is read from
+// <dataDir>/settings.json { features: { <id>: true|false } } (services/studio-ui/user-settings.mjs keeps that key on
+// every save). Order: settings.json features.<id>, else an explicit flags.local.json value (the user's old switch,
+// honoured once: migrateFeatureSettings copies it into settings.json at the studio's start), else the default.
+// set() on such a flag writes settings.json, so the control page's switch stays a mirror and a kill-switch while live.
+export const SETTINGS_NAME = 'settings.json';
+export const FEATURES_KEY = 'features';
+
+/** settings.json text -> { <id>: bool } (only boolean values; anything else in the file is not looked at). */
+export function parseFeatures(text) {
+  const j = parseJsonText(text);
+  const f = j && typeof j === 'object' && !Array.isArray(j) ? j[FEATURES_KEY] : null;
+  const out = {};
+  if (f && typeof f === 'object' && !Array.isArray(f)) for (const [k, v] of Object.entries(f)) if (typeof v === 'boolean') out[k] = v;
+  return out;
+}
+
+/** Writes features.<id> = on into settings.json, keeping every other key (atomic). */
+export function writeFeature(dataDir, id, on) {
+  const file = path.join(dataDir, SETTINGS_NAME);
+  let j = {};
+  try { j = JSON.parse(readFileSync(file, 'utf8')); } catch (e) { if (existsSync(file)) throw new Error(`settings.json could not be read (${e.message}); not changed`); }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error('settings.json is not an object; not changed');
+  const cur = j[FEATURES_KEY] && typeof j[FEATURES_KEY] === 'object' && !Array.isArray(j[FEATURES_KEY]) ? j[FEATURES_KEY] : {};
+  j[FEATURES_KEY] = { ...cur, [id]: on };
+  mkdirSync(dataDir, { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(j, null, 2), 'utf8');
+    renameSync(tmp, file);
+  } catch (e) {
+    if (existsSync(tmp)) { try { unlinkSync(tmp); } catch { /* best effort */ } }
+    throw e;
+  }
+}
+
+/**
+ * One-time move of the settings-backed features into settings.json: each one not yet in features.<id> gets its value
+ * now (the explicit flags.local.json value, else the default), so later flag file edits no longer change it. Only
+ * when settings.json exists (creating it would skip the first-run choices). Returns the ids written.
+ */
+export function migrateFeatureSettings({ dataDir, definitionsFile = DEFAULT_FLAGS_FILE } = {}) {
+  const file = path.join(dataDir, SETTINGS_NAME);
+  if (!existsSync(file)) return [];
+  let have;
+  try { have = parseFeatures(readFileSync(file, 'utf8')); } catch { return []; } // a broken file is left alone
+  let local = {};
+  try { local = parseLocal(readFileSync(path.join(dataDir, LOCAL_NAME), 'utf8')); } catch { local = {}; }
+  const out = [];
+  for (const d of loadDefinitions(definitionsFile)) {
+    if (!d.setting || Object.hasOwn(have, d.id)) continue;
+    writeFeature(dataDir, d.id, Object.hasOwn(local, d.id) ? local[d.id] : d.default);
+    out.push(d.id);
+  }
+  return out;
+}
+// ---- feature settings end
 
 /** Loads and validates the committed defaults. Throws on a malformed file. */
 export function loadDefinitions(file = DEFAULT_FLAGS_FILE) {
@@ -91,10 +153,15 @@ export function createFlags(opts) {
     return out;
   }
 
+  // feature settings: settings.json read again only when it changed; a broken file keeps the last good values
+  const featSrc = createDataSource({ kind: 'feature-settings', file: path.join(opts.dataDir, SETTINGS_NAME), parse: parseFeatures, missing: () => ({}), report: opts.report });
+  const features = () => { try { return featSrc.get(); } catch { return {}; } };
+
   const isOn = (id) => {
     defs();
     const d = byId.get(id);
     if (!d) return false; // unknown flag is off
+    if (d.setting) { const f = features(); if (Object.hasOwn(f, id)) return f[id]; }
     const v = local();
     return Object.hasOwn(v, id) ? v[id] : d.default;
   };
@@ -104,6 +171,13 @@ export function createFlags(opts) {
     defs();
     if (typeof id !== 'string' || !FLAG_ID.test(id) || !byId.has(id)) throw Object.assign(new Error('unknown flag'), { code: 'UNKNOWN_FLAG' });
     if (typeof on !== 'boolean') throw Object.assign(new Error('on must be boolean'), { code: 'BAD_VALUE' });
+    if (byId.get(id).setting) { // a Settings toggle: its value goes to settings.json (the control page mirrors it)
+      writeFeature(opts.dataDir, id, on);
+      featSrc.check({ force: true, quiet: true });
+      const out = list();
+      for (const fn of subs) { try { fn({ id, on, flags: out }); } catch { /* a bad subscriber never blocks a flag flip */ } }
+      return out;
+    }
     const values = { ...local(), [id]: on };
     mkdirSync(opts.dataDir, { recursive: true });
     const tmp = `${localFile}.${process.pid}.tmp`;

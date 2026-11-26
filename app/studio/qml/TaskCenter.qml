@@ -133,7 +133,7 @@ Item {
             // D442 (the task manager window): what the job side reports for controls and details
             category: String(t.category || "maintenance"), controls: Array.isArray(t.controls) ? t.controls.map(String) : [],
             pausable: t.pausable === true, pauseReason: t.pauseReason ? String(t.pauseReason) : "", paused: t.paused === true,
-            pausing: t.pausing === true, nextStart: typeof t.nextStart === "string" ? t.nextStart : "", question: t.question ? String(t.question) : "",
+            pausing: t.pausing === true, heldOnAir: t.heldOnAir === true, nextStart: typeof t.nextStart === "string" ? t.nextStart : "", question: t.question ? String(t.question) : "",
             parts: Array.isArray(t.parts) ? t.parts.map(String) : [], logTail: Array.isArray(t.logTail) ? t.logTail.map(String) : [],
             startedAt: typeof t.startedAt === "number" ? t.startedAt : 0, stageText: t.stageText ? String(t.stageText) : ""
         }));
@@ -201,6 +201,7 @@ Item {
         if (r.state === "done") return "Done";
         if (r.state === "failed") return "Failed";
         if (r.paused) return "Paused";
+        if (r.heldOnAir) return "Paused while on air"; // 2026-11-26: carries on by itself after; only Stop is offered
         if (held(r)) return "Waiting for you";
         if (r.pausing) return "Pausing";
         if (r.state === "waiting") return "Waiting";

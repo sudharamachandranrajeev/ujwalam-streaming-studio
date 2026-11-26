@@ -89,15 +89,21 @@ Dialog {
     function setFlagDraft(id, on) { const f = Object.assign({}, flagDraft); f[id] = on; flagDraft = f }
 
     // The flags of one page, A-Z by plain name (a flag with a page this window does not know goes to Advanced).
-    function flagRows(pageId) {
+    // A finished feature ("setting": true in data/flags.json, 2026-11-26) is not in the FEATURES card: it has its own
+    // toggle with plain words in its section (FeatureSwitch), saved to settings.json; settingRows lists them for search.
+    function flagRows(pageId) { return pageRows(pageId, false) }
+    function settingRows(pageId) { return pageRows(pageId, true) }
+    function pageRows(pageId, setting) {
         const rows = [];
         for (const f of flagList) {
+            if ((f.setting === true) !== setting) continue;
             const pg = knownPages.includes(f.page) ? f.page : "advanced";
             if (pg === pageId) rows.push({ id: f.id, label: f.label || f.id, summary: f.summary || "", page: pg });
         }
         rows.sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()));
         return rows;
     }
+    function hasFeature(id) { return flagList.some(f => f.id === id) }
     function flagLabel(id) { const f = flagList.find(x => x.id === id); return f && f.label ? f.label : id }
     function flagOn(id) { return flagStart[id] === true }
 
@@ -105,7 +111,7 @@ Dialog {
     function pageText(t) {
         let s = t + " " + (pageWords[t] || "");
         const pid = pageIds[t];
-        if (pid) for (const r of flagRows(pid)) s += " " + r.label + " " + r.summary;
+        if (pid) for (const r of flagRows(pid).concat(settingRows(pid))) s += " " + r.label + " " + r.summary;
         return s.toLowerCase();
     }
     function matches(t) {
@@ -697,6 +703,25 @@ Dialog {
                 anchors.fill: parent
                 title: "Editing"
                 pageId: "editing"
+                UCard {
+                    // finished features with their own toggle (2026-11-26; stored in settings.json)
+                    title: "SCENES AND CAMERA"
+                    FeatureSwitch {
+                        box: dlg; fid: "scene-edit"
+                        text: "Add and remove scenes and layers"
+                        hint: "Lets you add and delete scenes and layers (a copy of a layer, a colour, a text, a device or an overlay). Not while live."
+                    }
+                    FeatureSwitch {
+                        box: dlg; fid: "realism-look"
+                        text: "Make realism scene"
+                        hint: "Adds \"Make realism scene\" to the scene menu: it copies a scene with a realism look (colour grade and light effects) on the game capture. Your scene stays as it is."
+                    }
+                    FeatureSwitch {
+                        box: dlg; fid: "face-ai"
+                        text: "Face AI on the camera"
+                        hint: "Background removal, a camera that follows your face, and face stickers. Runs a face model on the GPU while it is on; off: the camera layer shows the plain camera."
+                    }
+                }
                 UCard {
                     title: "FACE AI MODELS"
                     visible: faceOffer.visible

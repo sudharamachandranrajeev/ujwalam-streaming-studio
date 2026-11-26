@@ -232,6 +232,13 @@ def flag_definitions(defs_file=FLAGS_FILE):
     return out
 
 
+def setting_flags(defs_file=FLAGS_FILE):
+    """The ids marked "setting": true in data/flags.json (finished features with a Settings toggle, 2026-11-26)."""
+    j = load_json(defs_file)
+    fl = j.get("flags") if isinstance(j, dict) else None
+    return {f["id"] for f in (fl or []) if isinstance(f, dict) and f.get("setting") is True and isinstance(f.get("id"), str)}
+
+
 SETTINGS_FILE = "settings.json"
 CLIP_MODES = ("ask", "after", "while", "off")
 WORKER_FILE = os.path.join("clips", "live-worker.json")
@@ -337,6 +344,17 @@ def flag_on(data_dir, flag_id=FLAG, defs_file=FLAGS_FILE):
     defs = flag_definitions(defs_file)
     if flag_id not in defs:
         return False
+    if data_dir and flag_id in setting_flags(defs_file):
+        # 2026-11-26: a finished feature with a Settings toggle: <data>/settings.json features.<id> first (same order as
+        # services/flags/index.mjs isOn: settings, then the old flags.local.json value, then the default)
+        try:
+            s = load_json(os.path.join(data_dir, SETTINGS_FILE))
+        except (OSError, ClipError):
+            s = None
+        f = s.get("features") if isinstance(s, dict) else None
+        v = f.get(flag_id) if isinstance(f, dict) else None
+        if isinstance(v, bool):
+            return v
     if data_dir:
         try:
             j = load_json(os.path.join(data_dir, LOCAL_FLAGS))

@@ -835,14 +835,14 @@ export function createStudioServer(opts) {
   function clipStatus() {
     if (typeof opts.dataDir !== 'string') return null;
     const st = settingsNow();
-    const base = { settings: st.clips, settingsSaved: st.exists, folder: clipsFolder(opts.dataDir, st), available: null, reason: null, fix: null, missing: null, state: 'idle', running: null, queued: 0, waitingForYou: 0, asks: [], last: null };
+    const base = { settings: st.clips, settingsSaved: st.exists, folder: clipsFolder(opts.dataDir, st), available: null, reason: null, fix: null, missing: null, state: 'idle', stateText: null, running: null, queued: 0, waitingForYou: 0, asks: [], last: null };
     try {
       const file = path.join(opts.dataDir, 'clips', 'status.json');
       const s = statCache(file, () => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } });
       if (!s || typeof s !== 'object') return base;
       const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : null);
       const l = s.last && typeof s.last === 'object' ? s.last : null;
-      return { ...base, available: s.available === true, reason: str(s.reason, 200), fix: str(s.fix, 200), missing: ['root', 'python', 'script'].includes(s.missing) ? s.missing : null, state: str(s.state, 16) ?? 'idle',
+      return { ...base, available: s.available === true, reason: str(s.reason, 200), fix: str(s.fix, 200), missing: ['root', 'python', 'script'].includes(s.missing) ? s.missing : null, state: str(s.state, 16) ?? 'idle', stateText: str(s.stateText, 160), // 2026-11-26: running | paused | waiting | queued | idle
         running: s.running ? { name: str(s.running.name, 120), kind: str(s.running.kind, 16) } : null,
         queued: Array.isArray(s.queued) ? s.queued.length : 0,
         // D442: unfinished jobs that wait for the user's choice (the studio's start notice)
