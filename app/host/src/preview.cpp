@@ -464,15 +464,42 @@ void Previews::ui_loop()
 		ready_ = true;
 	}
 	cv_.notify_all();
+	// Pump diagnostics (2026-11-26, studio click freezes): the embedded preview windows are children of the studio
+	// window, so Windows shares one input state between this thread and the studio's GUI thread. While this thread
+	// handles one message, input for the studio can wait too. A message or task that holds the thread 100 ms or more is
+	// logged (at most one line per 5 s, with the largest and the count in between).
+	using clk = std::chrono::steady_clock;
+	auto last_log = clk::now() - std::chrono::seconds(10);
+	long long worst_ms = 0;
+	UINT worst_msg = 0;
+	int slow = 0;
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+		const auto t0 = clk::now();
+		const UINT m = msg.message;
 		if (msg.hwnd == nullptr && msg.message == WM_APP_RUN) {
 			auto *fn = reinterpret_cast<std::function<void()> *>(msg.lParam);
 			(*fn)();
 			delete fn;
-			continue;
+		} else {
+			TranslateMessage(&msg);
+			DispatchMessageW(&msg);
 		}
-		TranslateMessage(&msg);
-		DispatchMessageW(&msg);
+		const auto t1 = clk::now();
+		const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+		if (ms >= 100) {
+			slow++;
+			if (ms > worst_ms) {
+				worst_ms = ms;
+				worst_msg = m;
+			}
+			if (t1 - last_log >= std::chrono::seconds(5)) {
+				hlog::warn("preview thread: a message held the window thread %lld ms (msg 0x%04x%s); %d slow since the last line",
+					   worst_ms, worst_msg, worst_msg == WM_APP_RUN ? " = an RPC task" : "", slow);
+				last_log = t1;
+				worst_ms = 0;
+				slow = 0;
+			}
+		}
 	}
 }
 
