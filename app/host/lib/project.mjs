@@ -83,15 +83,18 @@ async function params(client, project, opts = {}) {
   const bases = checkBases(opts.bases);
   if (bases) p.bases = bases;
   if (opts.skipUnavailable) p.skipUnavailable = true;
-  if (opts.overlays !== false && overlayLayers(project).length) {
-    const st = await client.call('overlay.status');
-    if (st.staticPort && st.feedPort) {
-      const { browserUrls, relayScope } = overlayUrls(project, st, opts);
-      p.browserUrls = browserUrls;
-      if (relayScope) p.relayScope = relayScope;
-    }
-  }
+  if (opts.overlays !== false) Object.assign(p, await overlayParams(client, project, opts));
   return p;
+}
+
+/** { browserUrls, relayScope } for project.load / project.plan / layers.addFromProject, built from the host's own
+ *  overlay.status ports; {} when the project has no overlay layer or the overlay server is not running. */
+export async function overlayParams(client, project, opts = {}) {
+  if (!overlayLayers(project).length) return {};
+  const st = await client.call('overlay.status');
+  if (!st?.staticPort || !st?.feedPort) return {};
+  const { browserUrls, relayScope } = overlayUrls(project, st, opts);
+  return relayScope ? { browserUrls, relayScope } : { browserUrls };
 }
 
 export async function loadIntoHost(client, project, opts = {}) {

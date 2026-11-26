@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { launchHost, stopHost } from '../lib/launch.mjs';
-import { loadIntoHost, planInHost } from '../lib/project.mjs';
+import { loadIntoHost, overlayParams, planInHost } from '../lib/project.mjs';
 import { REPO_ROOT, HOST_DIR, resolveConfig } from '../lib/config.mjs';
 
 const OUT = path.join(REPO_ROOT, 'out', 'host', 'tests');
@@ -330,4 +330,35 @@ test('preview mouse editing: a click goes through a full-canvas browser page to 
   } finally {
     await c.call('preview.setEditing', { enabled: false });
   }
+});
+
+// Fix 2026-11-27: layers.addFromProject takes browserUrls / relayScope (same checks as project.load), so an overlay layer
+// added live (a copied overlay) gets its page URL now instead of after the next full load.
+test('layers.addFromProject: browserUrls / relayScope validated like project.load; an overlay copy is built with its URL', { skip: !haveRoot && 'no overlay root' }, async () => {
+  await loadIntoHost(c, PROJECT);
+  const gg = PROJECT.scenes[0].layers[1];
+  const doc = { ...PROJECT, scenes: [{ ...PROJECT.scenes[0], layers: [...PROJECT.scenes[0].layers, { ...gg, id: 'gg2', name: 'GG copy' }] }] };
+  const base = { project: doc, scene: 'main', layer: 'gg2' };
+  // validation: the same function as project.load (load_options)
+  assert.equal((await rpcErr('layers.addFromProject', { ...base, relayScope: 'all' })).code, -32602);
+  assert.equal((await rpcErr('layers.addFromProject', { ...base, browserUrls: { gg2: 5 } })).code, -32602);
+  assert.equal((await rpcErr('layers.addFromProject', { ...base, browserUrls: { ['x'.repeat(65)]: 'http://127.0.0.1/' } })).code, -32602);
+  assert.equal((await rpcErr('layers.addFromProject', { ...base, bases: {} })).code, -32602, 'bases stay a project.load option');
+  // without a URL the copy is unavailable (the old behaviour, now the fallback when the overlay server is down)
+  assert.equal((await rpcErr('layers.addFromProject', base)).code, -32004);
+  // a URL that is not this layer's overlay page is refused, never loaded
+  const st = await c.call('overlay.status');
+  assert.equal((await rpcErr('layers.addFromProject', { ...base, browserUrls: { gg2: `http://127.0.0.1:${st.staticPort}/overlays/other/index.html` } })).code, -32004);
+  // with the URLs from the host's own overlay.status: built now
+  const extra = await overlayParams(c, doc);
+  assert.ok(extra.browserUrls.gg2.startsWith(`http://127.0.0.1:${st.staticPort}/overlays/gg-burst/index.html?`));
+  const r = await c.call('layers.addFromProject', { ...base, ...extra });
+  assert.equal(r.layer, 'gg2');
+  assert.deepEqual(r.canvases, ['H']);
+  const ls = await c.call('layers.list', { scene: 'main', canvas: 'H' });
+  assert.ok(ls.layers.some((l) => l.id === 'gg2'), 'the copy is in the scene');
+  assert.ok(ls.layers.some((l) => l.id === 'gg'), 'the layer already on air is untouched');
+  assert.equal((await c.call('project.get')).relay, 'effects', 'relay unchanged');
+  await c.call('layers.remove', { scene: 'main', layer: 'gg2' });
+  await loadIntoHost(c, PROJECT);
 });

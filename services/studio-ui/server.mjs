@@ -92,7 +92,7 @@ import { createYoutubePresets } from './youtube-presets.mjs';
 import { createYoutubeQuality } from './youtube-quality.mjs';
 import { createGoLiveRoutes } from './golive-routes.mjs';
 import { createSceneBuilderRoutes } from './scene-builder-routes.mjs';
-import { createSceneInHost } from './scene-layers.mjs';
+import { addLayerParams, createSceneInHost } from './scene-layers.mjs';
 import { DEFAULT_PRESETS_DIR, createAudioRoutes, sameDeviceRows } from './audio-routes.mjs';
 import { createMusicRoutes } from './music-routes.mjs';
 import { libraryDirOf } from '../project/scene-music.mjs';
@@ -1388,12 +1388,12 @@ export function createStudioServer(opts) {
       if (op === 'scene.add') for (const canvas of canvases) await host.call('scenes.create', { scene: { id: r.scene.id, canvas, name: r.scene.name } });
       else if (op === 'scene.remove') await host.call('scenes.remove', { scene: body.scene });
       else if (op === 'layer.add') {
-        const a = await host.call('layers.addFromProject', { project: r.project, scene: body.scene, layer: r.layer.id });
+        const a = await host.call('layers.addFromProject', await addLayerParams(host, { project: r.project, scene: body.scene, layer: r.layer.id }));
         if (typeof a?.waiting?.message === 'string') waiting = a.waiting.message.slice(0, 300);
       }
       else if (op === 'layer.move') await host.call('layers.orderFromProject', { project: r.project, scene: body.scene });
       else if (op === 'layer.duplicate') {
-        await host.call('layers.addFromProject', { project: r.project, scene: body.scene, layer: r.layer.id });
+        await host.call('layers.addFromProject', await addLayerParams(host, { project: r.project, scene: body.scene, layer: r.layer.id }));
         await host.call('layers.orderFromProject', { project: r.project, scene: body.scene }); // the copy lands just above its source
       } else if (op === 'scene.duplicate' || op === 'scene.realism') {
         // a layer the host cannot show yet is saved and shows after the next start; any other refusal undoes the scene

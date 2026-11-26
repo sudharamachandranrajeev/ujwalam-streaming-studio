@@ -699,8 +699,10 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 	});
 	// D240: add a layer the UI server has put into the project document (project v1 only).
 	add("layers.addFromProject", [&a](const json::Value &p) {
-		Params q(p, {"project", "scene", "layer"});
-		return a.studio->layer_add_model(q.obj("project"), q.str("scene", 64), q.str("layer", 64));
+		// browserUrls/relayScope (optional): the overlay page URL of a layer added live (same checks as project.load)
+		Params q(p, {"project", "scene", "layer", "browserUrls", "relayScope"});
+		Studio::LoadOptions lo = load_options(a, q);
+		return a.studio->layer_add_model(q.obj("project"), q.str("scene", 64), q.str("layer", 64), &lo);
 	});
 	add("layers.orderFromProject", [&a](const json::Value &p) {
 		Params q(p, {"project", "scene"});
