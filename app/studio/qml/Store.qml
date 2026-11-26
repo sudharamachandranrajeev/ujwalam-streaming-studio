@@ -61,6 +61,13 @@ QtObject {
     readonly property bool bothCanvases: !!activeSceneObj && activeSceneObj.canvases.length > 1
     readonly property var selectedLayer: layers.find(l => l.id === selected) || null
     readonly property int activeTasks: tasks.filter(t => t.state === "running" || t.state === "waiting").length
+    // One source for the task words (2026-11-27, user: the chip said "1 task waiting" while the status bar said
+    // "1 task running"). The on-air chip (TaskCenter.chipText) and the status bar both read taskWords.
+    readonly property int runningTasks: tasks.filter(t => t.state === "running").length
+    readonly property int waitingTasks: tasks.filter(t => t.state === "waiting").length
+    readonly property string taskWords: runningTasks > 0
+        ? (runningTasks === 1 ? "1 task running" : runningTasks + " tasks running") + (waitingTasks > 0 ? ", " + waitingTasks + " waiting" : "")
+        : waitingTasks > 0 ? (waitingTasks === 1 ? "1 task waiting" : waitingTasks + " tasks waiting") : ""
 
     signal confirmNeeded(var pending)
     signal hostRestarted()
