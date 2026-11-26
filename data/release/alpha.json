@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 44,
+  "current": 45,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -55,6 +55,7 @@
     { "n": 41, "date": "2026-11-22", "title": "Hourly slots a year ahead, 100 uploads a day, Review reads fix" },
     { "n": 42, "date": "2026-11-24", "title": "AI post text and cover, clip loudness and music, captions, task window, first start on a new PC" },
     { "n": 43, "date": "2026-11-25", "title": "Instagram Reels auto-post, game name in post text, capture card sound fix" },
-    { "n": 44, "date": "2026-11-25", "title": "Studio window crash fix, real recording time, new post style, your own tags" }
+    { "n": 44, "date": "2026-11-25", "title": "Studio window crash fix, real recording time, new post style, your own tags" },
+    { "n": 45, "date": "2026-11-26", "title": "Scheduling manager window, realism looks, smoother studio" }
   ]
 }

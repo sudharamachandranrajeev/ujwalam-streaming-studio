@@ -2,6 +2,11 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.45 — 2026-11-26
+
+- Scheduling manager: the long list of next posting times left Settings (Settings opens and scrolls fast again; Instagram Reels is easy to find). More > Scheduled posts… (or Settings > Open scheduling manager) opens a list like the task manager, in its own window or docked: posts by day, search, filter by place and state, Move, Remove, Upload now / Post now, Retry, Move this day with Undo, Remove all failed.
+- Realism looks: right-click a scene > Make realism scene now offers seven looks (Filmic, Cinematic, Dark cinematic, Cold high-key, Gritty war, HDR vivid, Night neon). It makes a copy named after the look; your scene is never changed, and nothing is made while live. New bloom, clarity and lens colour fringe effects. Not yet tried on real gameplay.
+- Studio no longer stalls: the task chip animates only while a task runs, task rows are kept between updates, and closing shows a "Closing Ujwalam…" card.
 ## 0.1.0-alpha.44 — 2026-11-25
 
 - Studio window crash fixed: the window could close by itself and reopen after 2 s (four times in one hour of recording). The cause was the app's own slowness monitor reading something that had just been deleted. Your recording was never affected.
