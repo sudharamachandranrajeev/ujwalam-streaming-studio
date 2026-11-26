@@ -6,8 +6,9 @@
 // when the last progress came, a "may be stuck" warning, Stop, Clear finished and an x for a finished row.
 // Notifications appear at the top right when a long job starts and when a task finishes, fails or may be stuck; a click
 // on one opens the panel. The lines come from the widget studio's C++ (TaskText = taskbar.h tasktime::*). Panel and
-// notifications are their own windows (Popup.Window) so the native previews never cover them; hidden test mode draws
-// them inside the window (studioUnseen).
+// notifications are their own windows so the native previews never cover them: frameless tool windows (FloatSurface.qml),
+// not Popup.Window, since 2026-11-27 (a notification popup took every click meant for the panel's Start); hidden test
+// mode draws them inside the window (studioUnseen).
 // D442 (task manager window): "Open in own window" moves the list into its own top-level window (TaskWindow.qml: sort,
 // filter, per-task Stop / Pause / Resume / Next start, a detail view); closing it or "Dock" returns to this panel. A
 // notice "N tasks are waiting for you" at the start opens that window.
@@ -49,8 +50,8 @@ Item {
 
     readonly property int listed: rows.length
     readonly property bool anyFinished: rows.some(r => r.finished)
-    readonly property string chipText: (running > 0 ? (running === 1 ? "1 task running" : running + " tasks running")
-                                        : waiting > 0 ? (waiting === 1 ? "1 task waiting" : waiting + " tasks waiting") : "Tasks") +
+    // The words come from Store.taskWords, the same text the status bar shows (2026-11-27: they disagreed).
+    readonly property string chipText: (store.taskWords !== "" ? store.taskWords : "Tasks") +
                                        (stalled > 0 ? " - " + stalled + " may be stuck" : "")
 
     function isLongJob(t) {
@@ -282,7 +283,7 @@ Item {
         for (let i = 0; i < stackCol.children.length; i++) {
             const c = stackCol.children[i];
             if (!c.isToast) continue;
-            const x = Math.round(stack.x), y = Math.round(stack.y + c.y), w = Math.round(c.width);
+            const x = Math.round(stack.px), y = Math.round(stack.py + c.y), w = Math.round(c.width);
             toastPos.push({ x: x, y: y, width: w, right: W - (x + w) });
         }
         const o = {
@@ -296,7 +297,8 @@ Item {
             detail: rows.map(r => ({ id: r.id, title: r.title, state: r.state, stage: r.l.stage, count: r.l.count, fraction: r.l.fraction,
                                      eta: r.l.eta, last: r.l.last, warn: r.l.warn, stalled: r.stalled, stop: r.stop }))
         };
-        if (open) o.panel = { x: Math.round(panel.x), y: Math.round(panel.y), width: Math.round(panel.width), right: W - Math.round(panel.x + panel.width) };
+        if (open) o.panel = { x: Math.round(panel.px), y: Math.round(panel.py), width: Math.round(panel.pw), right: W - Math.round(panel.px + panel.pw),
+                              inWindow: panel.inWindow, opened: panel.opened };
         return o;
     }
 
@@ -308,27 +310,27 @@ Item {
     }
 
     // ---- the panel ----
-    Popup {
+    // A tool window, not a Popup.Window (FloatSurface.qml: a notification popup opened after it took every click on Start).
+    FloatSurface {
         id: panel
         objectName: "taskPanel"
-        popupType: studioUnseen ? Popup.Item : Popup.Window
-        visible: center.open
-        modal: false
-        focus: false
-        closePolicy: Popup.NoAutoClose
-        width: 440 // wide enough that a task's lines are read in full (they wrap, never cut)
-        x: center.width - width - center.gap
-        y: center.topY
-        height: Math.min(implicitHeight, center.windowHeight - center.topY - 40)
-        padding: Theme.sp.m
-        onClosed: center.open = false
-        background: Rectangle {
+        anchors.fill: parent
+        shown: center.open
+        readonly property int width_: 440 // wide enough that a task's lines are read in full (they wrap, never cut)
+        pw: width_
+        px: center.width - width_ - center.gap
+        py: center.topY
+        ph: Math.min(panelCol.implicitHeight + 2 * Theme.sp.m, center.windowHeight - center.topY - 40)
+        Rectangle {
+            anchors.fill: parent
             color: Theme.c.panel
             radius: Theme.radiusLarge
             border.width: 1
             border.color: Theme.c.border
         }
-        contentItem: Column {
+        Column {
+            id: panelCol
+            anchors { fill: parent; margins: Theme.sp.m }
             spacing: Theme.sp.s
             // Header (2026-11-26): title and count on one line, the buttons on their own line below. One right-anchored
             // Row with the count and three buttons was wider than the 440 px panel: it ran out past the panel's left
@@ -586,21 +588,20 @@ Item {
     }
 
     // ---- the notifications: stacked top-down at the top right under the bar; with the panel open, to its left ----
-    Popup {
+    // A tool window, not a Popup.Window (FloatSurface.qml): it appears by itself, and as the newest popup it took every
+    // click meant for the task panel and the other popup windows (2026-11-27).
+    FloatSurface {
         id: stack
         objectName: "taskToasts"
-        popupType: studioUnseen ? Popup.Item : Popup.Window
-        visible: center.toasts.count > 0 && !center.hold // a modal chooser (Go live) is not drawn over by a notification (D389 C2)
-        modal: false
-        focus: false
-        closePolicy: Popup.NoAutoClose
-        padding: 0
-        width: 360
-        x: center.open ? Math.max(center.gap, panel.x - width - 10) : center.width - width - center.gap
-        y: center.topY
-        background: Item {}
-        contentItem: Column {
+        anchors.fill: parent
+        shown: center.toasts.count > 0 && !center.hold // a modal chooser (Go live) is not drawn over by a notification (D389 C2)
+        pw: 360
+        px: center.open ? Math.max(center.gap, panel.px - pw - 10) : center.width - pw - center.gap
+        py: center.topY
+        ph: Math.max(1, stackCol.implicitHeight)
+        Column {
             id: stackCol
+            width: parent.width
             spacing: Theme.sp.s
             Repeater {
                 model: center.toasts
