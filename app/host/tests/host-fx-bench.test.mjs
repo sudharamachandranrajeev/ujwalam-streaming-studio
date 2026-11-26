@@ -59,7 +59,13 @@ const CASES = [
   ['opacity', { type: 'opacity', opacity: 0.8 }],
   ['blendMultiply', { type: 'blendMultiply', opacity: 1 }],
   ['gradientMask', { type: 'gradientMask', angle: 90, start: 0.6, end: 1 }],
-  ['imageMask', { type: 'imageMask', file: file('mask.png'), channel: 'luma', invert: false, feather: 0 }]
+  ['imageMask', { type: 'imageMask', file: file('mask.png'), channel: 'luma', invert: false, feather: 0 }],
+  // D445 realism looks (RL2): the largest sizes the looks use and the most the schema allows
+  ['bloom size 5 (looks)', { type: 'bloom', amount: 0.45, threshold: 0.6, size: 5 }],
+  ['bloom size 20 (max)', { type: 'bloom', amount: 0.45, threshold: 0.6, size: 20 }],
+  ['clarity size 2.5 (looks)', { type: 'clarity', amount: 0.45, size: 2.5 }],
+  ['clarity size 20 (max)', { type: 'clarity', amount: 0.45, size: 20 }],
+  ['chromatic', { type: 'chromatic', amount: 0.3 }]
 ];
 
 function doc(effect) {
@@ -137,5 +143,39 @@ test('game backdrop (D331): H + V full-canvas blurred duplicates, before/after',
   console.log(`| run | frame ms | GPU % |`);
   console.log(`|---|---|---|`);
   for (const r of rows) console.log(`| ${r.name} | ${f(r.frameMs, 3)} | ${f(r.gpuPct, 0)} |`);
+  for (const r of rows) assert.ok(r.frameMs < 1000 / 60, `${r.name}: ${r.frameMs} ms fits a 60 fps frame`);
+});
+
+// D445 realism looks (RL2): every look of data/looks on the alpha scene shape above (game + H and V blurred backdrops),
+// as Make realism scene grades it: the look's effects after the game layers' own, only its backdrop types on the
+// blurred copies. Before = the same scene without a look. Two passes, so idle-clock drift shows as a spread.
+test('realism looks (D445): each look on the game + backdrop scene, against no look', { skip: !RUN && 'set UJWALAM_FX_BENCH=1' }, async () => {
+  const { loadLooks } = await import('../../../services/project/looks.mjs');
+  const looks = loadLooks();
+  const graded = (look) => {
+    const d = backdropDoc(true);
+    if (!look) return d;
+    for (const l of d.scenes[0].layers) {
+      const blurred = (l.effects ?? []).some((e) => e.type === 'blur');
+      const add = look.effects.filter((e) => !blurred || look.backdrop.includes(e.type));
+      l.effects = [...(l.effects ?? []), ...structuredClone(add)];
+    }
+    return d;
+  };
+  const rows = [];
+  for (let pass = 0; pass < 2; pass++) {
+    for (const look of [null, ...looks]) {
+      const r = await loadIntoHost(c, graded(look), { bases: { media, luts: path.join(REPO_ROOT, 'data', 'luts') } });
+      assert.deepEqual(r.unavailable, [], look?.id ?? 'none');
+      rows.push({ name: look ? look.name : 'no look', pass, ...(await measure()) });
+    }
+  }
+  const f = (v, d = 2) => (v == null ? 'n/a' : v.toFixed(d));
+  console.log(`| look | pass | frame ms | +ms vs no look | GPU % |`);
+  console.log(`|---|---|---|---|---|`);
+  for (const r of rows) {
+    const base = rows.find((x) => x.pass === r.pass && x.name === 'no look');
+    console.log(`| ${r.name} | ${r.pass + 1} | ${f(r.frameMs, 3)} | ${f(r.frameMs - base.frameMs, 3)} | ${f(r.gpuPct, 0)} |`);
+  }
   for (const r of rows) assert.ok(r.frameMs < 1000 / 60, `${r.name}: ${r.frameMs} ms fits a 60 fps frame`);
 });
