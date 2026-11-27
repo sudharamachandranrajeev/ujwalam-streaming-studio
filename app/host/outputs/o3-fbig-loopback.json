@@ -1,0 +1,32 @@
+{
+  "$comment": "D447 loopback plan (run with app/host/tools/o1-loopback.mjs --plan app/host/outputs/o3-fbig-loopback.json). config = the O0 preset data/outputs/presets/youtube-1440p60.json with addFacebook() then addInstagram() applied (services/outputs/facebook.mjs, instagram.mjs; app/host/tests/outputs-plan.test.mjs checks it stays equal). facebook binds to the shared Twitch/Kick rung reencode-tk (1920x1080@60 H.264 CBR 6000 kbps, gop 2 s): no extra encoder. instagram gets its own V rung ig-v (720x1280@30 CBR 4000 kbps) because vert (7500 kbps) is above Instagram's 6000 kbps. targets = loopback delivery per sink; the host builds every URL on 127.0.0.1. No real platform, no stream keys.",
+  "config": {
+    "canvases": [
+      { "id": "H", "w": 2560, "h": 1440, "fps": 60 },
+      { "id": "V", "w": 1080, "h": 1920, "fps": 60 }
+    ],
+    "encoders": [
+      { "id": "yt-h", "canvas": "H", "w": 2560, "h": 1440, "codec": "h264", "bitrate": 34000, "rc": "cbr", "gop_sec": 2, "encoder": "nvenc" },
+      { "id": "reencode-tk", "canvas": "H", "w": 1920, "h": 1080, "fps": 60, "codec": "h264", "bitrate": 6000, "rc": "cbr", "gop_sec": 2, "encoder": "nvenc" },
+      { "id": "vert", "canvas": "V", "w": 1080, "h": 1920, "codec": "h264", "bitrate": 7500, "rc": "cbr", "gop_sec": 2, "encoder": "nvenc" },
+      { "id": "ig-v", "canvas": "V", "w": 720, "h": 1280, "fps": 30, "codec": "h264", "bitrate": 4000, "rc": "cbr", "gop_sec": 2, "encoder": "nvenc" }
+    ],
+    "sinks": [
+      { "id": "youtube-h", "platform": "youtube", "encoder": "yt-h", "proto": "rtmps", "priority": 1 },
+      { "id": "youtube-v", "platform": "youtube", "encoder": "vert", "proto": "rtmps", "priority": 2 },
+      { "id": "twitch", "platform": "twitch", "encoder": "reencode-tk", "proto": "rtmp", "priority": 3 },
+      { "id": "kick", "platform": "kick", "encoder": "reencode-tk", "proto": "rtmps", "priority": 4 },
+      { "id": "facebook", "platform": "facebook", "proto": "rtmps", "priority": 6, "encoder": "reencode-tk" },
+      { "id": "instagram", "platform": "instagram", "proto": "rtmps", "priority": 7, "encoder": "ig-v" }
+    ]
+  },
+  "targets": {
+    "youtube-h": { "transport": "rtmp", "port": 19451, "app": "live", "stream": "youtube-h" },
+    "youtube-v": { "transport": "srt", "port": 19460, "latencyMs": 200 },
+    "twitch": { "transport": "rtmp", "port": 19452, "app": "live", "stream": "twitch" },
+    "kick": { "transport": "rtmp", "port": 19453, "app": "live", "stream": "kick" },
+    "facebook": { "transport": "rtmp", "port": 19454, "app": "live", "stream": "facebook" },
+    "instagram": { "transport": "rtmp", "port": 19455, "app": "live", "stream": "instagram" }
+  },
+  "policy": { "retryBaseMs": 1000, "retryCapMs": 8000, "retryMax": 0, "retryResetLiveMs": 10000 }
+}

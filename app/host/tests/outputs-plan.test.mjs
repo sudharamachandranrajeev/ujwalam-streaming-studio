@@ -57,6 +57,23 @@ test('o2-loopback plan: YouTube 1440p60 H direct, one Multi rung 1920x1080@60 CB
   assert.equal(params.audio.sampleRate, 48000);
 });
 
+test('o3-fbig-loopback plan (D447): facebook on the shared Twitch/Kick rung (no extra encoder), instagram on its own V rung', async () => {
+  const file = path.join(HOST_DIR, 'outputs', 'o3-fbig-loopback.json');
+  const { addFacebook } = await import('../../../services/outputs/facebook.mjs');
+  const { addInstagram } = await import('../../../services/outputs/instagram.mjs');
+  const preset = JSON.parse(readFileSync(path.join(REPO_ROOT, 'data', 'outputs', 'presets', 'youtube-1440p60.json'), 'utf8'));
+  const want = addInstagram(addFacebook(preset).config).config;
+  const got = JSON.parse(readFileSync(file, 'utf8')).config;
+  for (const k of ['canvases', 'encoders', 'sinks']) assert.deepEqual(got[k], want[k], `${k} drifted from addFacebook + addInstagram`);
+  const { params } = planFile(file);
+  assert.deepEqual(params.rungs.map((r) => `${r.id}:${r.canvas}:${r.w}x${r.h}@${r.fps}:${r.rc}:${r.bitrate}`),
+    ['yt-h:H:2560x1440@60:cbr:34000', 'reencode-tk:H:1920x1080@60:cbr:6000', 'vert:V:1080x1920@60:cbr:7500', 'ig-v:V:720x1280@30:cbr:4000']);
+  const rungOf = Object.fromEntries(params.sinks.map((s) => [s.id, s.rung]));
+  assert.equal(rungOf.facebook, 'reencode-tk');
+  assert.equal(rungOf.instagram, 'ig-v');
+  for (const s of params.sinks) assert.ok(/^(rtmp|srt)$/.test(s.target.transport) && s.target.port, `${s.id}: loopback target`);
+});
+
 // ---- A0 real targets (pure planning; no host, no keychain, no network) -------------------------------------------
 const ALPHA = path.join(REPO_ROOT, 'data', 'outputs', 'alpha-live.json');
 const alpha = () => planFile(ALPHA, { allowLive: true });
