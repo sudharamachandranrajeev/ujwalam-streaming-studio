@@ -120,6 +120,7 @@ import { ALPHA_LIVE_PLAN, LIVE_START_FILE, livePlanFile, planLive, writeLiveStar
 import { createHostWatch, driverResets, driverResetText, HOST_WATCH_FLAG, incidentTask, loadHostWatchConfig, staleText } from './host-watch.mjs';
 import { writeTaskFile } from './tasks.mjs';
 import { INSTAGRAM_FLAG, loadAddon as instagramAddon } from '../outputs/instagram.mjs';
+import { FACEBOOK_FLAG, loadFacebookAddon } from '../outputs/facebook.mjs';
 import { botUrl, integrationsInEffect } from './integrations.mjs';
 import { INTEGRATIONS_FLAG, STREAM_SETTINGS_FLAG } from './settings-routes.mjs';
 import { GUARD_ABORT_EXIT, LIVE_TEST_BUDGET, loadBudget, MAX_TEST_MINUTES, parseMinutes, parseSinkMinutes, runGuard } from './live-guard.mjs';
@@ -146,18 +147,22 @@ export { ALPHA_LIVE_PLAN, livePlanFile };
  * the live plan is tried; a live plan still refused opens the studio with recordPlan() (no stream targets). Each step
  * is logged with its reason. Not live (an explicit --outputs or the record plan): a refusal throws as before.
  */
-export async function planForStart({ live, instagramOn, planOnce, recordPlan, log }) {
+export async function planForStart({ live, instagramOn, facebookOn = false, planOnce, recordPlan, log }) {
   try {
-    return await planOnce({ instagramOn });
+    return await planOnce({ instagramOn, facebookOn });
   } catch (e) {
     if (!live) throw e;
     log(`WARNING: live plan refused: ${e.message}`);
-    if (instagramOn) {
+    // Add-ons are left out one at a time (Instagram first, then Facebook too), so one that does not fit never stops the rest.
+    const tries = [];
+    if (instagramOn) tries.push({ instagramOn: false, facebookOn, text: 'Instagram Live' });
+    if (facebookOn) tries.push({ instagramOn: false, facebookOn: false, text: instagramOn ? 'Instagram Live and Facebook Live' : 'Facebook Live' });
+    for (const t of tries) {
       try {
-        const r = await planOnce({ instagramOn: false });
-        log('WARNING: Instagram Live left out of this start (reason above); the other outputs are ready');
+        const r = await planOnce({ instagramOn: t.instagramOn, facebookOn: t.facebookOn });
+        log(`WARNING: ${t.text} left out of this start (reason above); the other outputs are ready`);
         return r;
-      } catch (e2) { log(`WARNING: live plan without Instagram refused too: ${e2.message}`); }
+      } catch (e2) { log(`WARNING: live plan without ${t.text} refused too: ${e2.message}`); }
     }
     if (!recordPlan) throw e;
     log('WARNING: the studio opens without stream outputs (recording only); fix the reason above and restart Ujwalam');
@@ -1263,6 +1268,7 @@ export async function main(argv = process.argv.slice(2)) {
   let hostDiscoveryFile = null;
   let livePlan = null; // the --live plan file, for the UI server's readiness check (D327)
   let instagramLive = false; // IG1 (D351): the configured --live plan has the instagram sink (flag latched at start)
+  let facebookLive = false; // D447: the configured --live plan has the facebook sink
   let hostParamsFile = null; // D387: the host's --outputs params file (a runtime Settings > Stream apply rewrites it)
   let liveSchemes = false; // D387: a real host with --live reads the stored server addresses' schemes when planning
   let alphaClient = null;
@@ -1487,9 +1493,9 @@ export async function main(argv = process.argv.slice(2)) {
     // ones. A stand-in (script) host reaches no platform, so nothing is read for it and "auto" stays unresolved.
     // The live plan is planned by stream-apply.mjs (D387), the same code the UI server's runtime apply uses.
     liveSchemes = args.live === true && !/\.m?js$/i.test(hostExe);
-    const planOnce = async ({ instagramOn }) => {
+    const planOnce = async ({ instagramOn, facebookOn = false }) => {
       if (args.live === true) {
-        const file = livePlanFile({ dataDir, streamSettingsOn: createFlags({ dataDir }).isOn(STREAM_SETTINGS_FLAG), instagramOn });
+        const file = livePlanFile({ dataDir, streamSettingsOn: createFlags({ dataDir }).isOn(STREAM_SETTINGS_FLAG), instagramOn, facebookOn });
         return { file, planned: await planLive(file, { select: lt.select, readSchemes: liveSchemes }) };
       }
       const file = typeof args.outputs === 'string' ? path.resolve(args.outputs) : alpha ? ALPHA_RECORD_PLAN : null;
@@ -1498,7 +1504,8 @@ export async function main(argv = process.argv.slice(2)) {
     };
     let planPath = null, planned = null;
     try {
-      ({ file: planPath, planned } = await planForStart({ live: args.live === true, instagramOn: args.live === true && createFlags({ dataDir }).isOn(INSTAGRAM_FLAG), planOnce,
+      ({ file: planPath, planned } = await planForStart({ live: args.live === true, instagramOn: args.live === true && createFlags({ dataDir }).isOn(INSTAGRAM_FLAG),
+        facebookOn: args.live === true && createFlags({ dataDir }).isOn(FACEBOOK_FLAG), planOnce,
         recordPlan: alpha ? () => ({ file: ALPHA_RECORD_PLAN, planned: planFile(ALPHA_RECORD_PLAN, { allowLive: false }) }) : null, log: (l) => console.log(`[studio] ${l}`) }));
     } catch (e) { console.log(`[studio] outputs plan refused: ${e.message}`); await stopAll(); return 1; }
     livePlan = args.live === true && planPath !== ALPHA_RECORD_PLAN ? planPath : null;
@@ -1507,6 +1514,7 @@ export async function main(argv = process.argv.slice(2)) {
       // started. Real targets only with --live (alpha-live.json; the host then runs with --allow-live).
       const { params, report } = planned;
       instagramLive = args.live === true && params.sinks.some((s) => s.id === instagramAddon().sink.id);
+      facebookLive = args.live === true && params.sinks.some((s) => s.id === loadFacebookAddon().sink.id);
       if (planned.dropped?.length) console.log(`[studio] outputs: ${planned.dropped.join(', ')} left out (optional recording; its stream is not in this start, so it would add an encoder)`);
       if (planned.unresolved?.length) console.log(`[studio] outputs: ${planned.unresolved.join(', ')} transport "auto" not chosen (stand-in host: no server address read)`);
       else if (args.live === true) for (const s of params.sinks) if (s.target?.urlRef) console.log(`[studio] sink ${s.id}: transport ${s.target.transport} (the scheme of the server address in ${s.target.urlRef})`);
@@ -1890,7 +1898,7 @@ export async function main(argv = process.argv.slice(2)) {
   // start planned from the saved setup. A --live start with a real host configured (even when its live plan was refused
   // and the record plan runs: a fixed setup then applies on Save).
   try {
-    writeLiveStart(dataDir, { live: args.live === true && hostParamsFile !== null, planFile: livePlan, paramsFile: hostParamsFile, instagram: instagramLive,
+    writeLiveStart(dataDir, { live: args.live === true && hostParamsFile !== null, planFile: livePlan, paramsFile: hostParamsFile, instagram: instagramLive, facebook: facebookLive,
       select: lt.select ?? null, bandwidthTest: lt.bandwidthTest, readSchemes: liveSchemes });
   } catch (e) {
     try { rmSync(path.join(dataDir, LIVE_START_FILE), { force: true }); } catch { /* an old file then still names an older start */ }
@@ -1905,6 +1913,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (typeof args['ui-port'] === 'string') uiArgs.push('--port', args['ui-port']);
   if (livePlan) uiArgs.push('--live-plan', livePlan);
   if (instagramLive) uiArgs.push('--instagram-live');
+  if (facebookLive) uiArgs.push('--facebook-live');
   if (args['fake-host'] === true) uiArgs.push('--fake-host');
   // P5b autosave: layer edits accepted by the host are written into the alpha project file (project-sync.mjs).
   else if (alpha) uiArgs.push('--project', alphaFile(dataDir));

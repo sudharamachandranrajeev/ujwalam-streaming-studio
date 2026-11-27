@@ -50,7 +50,7 @@ export const TITLES = Object.freeze({
 });
 const GB = 1024 ** 3;
 const ACTIVE = new Set(['starting', 'live', 'retrying']);
-const PLATFORM = { youtube: 'YouTube', twitch: 'Twitch', kick: 'Kick', instagram: 'Instagram' };
+const PLATFORM = { youtube: 'YouTube', twitch: 'Twitch', kick: 'Kick', instagram: 'Instagram', facebook: 'Facebook' };
 
 const num = (v, name, min, max) => {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) throw new Error(`readiness config: bad ${name}`);
@@ -205,7 +205,10 @@ async function checkCredentials(ctx) {
     const fix = r.status === 'fail' && r.fix ? `${ig.fix} ${r.fix}` : ig.fix;
     return item('credentials', 'fail', `${ig.message} ${r.message}`, { fix });
   };
-  const live = ctx.streamSinks.filter((s) => s.target === 'live');
+  // D447: outputs whose key comes per broadcast at Go live (Facebook: made then; Instagram: not ticked) are not checked.
+  let skip = new Set();
+  try { skip = new Set(typeof ctx.skipKeys === 'function' ? ctx.skipKeys() : []); } catch { skip = new Set(); }
+  const live = ctx.streamSinks.filter((s) => s.target === 'live' && !skip.has(s.id));
   if (live.length) {
     for (const s of live) {
       const label = sinkLabel(s);
@@ -235,12 +238,13 @@ async function checkCredentials(ctx) {
   const targets = ctx.planTargets;
   if (!targets.length) return withIg(item('credentials', 'warn', 'No live plan to check stream keys against.'));
   for (const t of targets) {
+    if (skip.has(t.id)) continue;
     const label = PLATFORM[t.id.split('-')[0]] ? `${PLATFORM[t.id.split('-')[0]]} (${t.id})` : t.id;
     try {
       if (t.keyRef) {
         const k = await credentialFacts(ctx.store(t.keyRef), { query: true });
         if (!k.present) { problems.push(`${label}: stream key not set`); continue; }
-        if (k.query && t.id !== 'instagram') warns.push(`${label}: stream key has a "?" ending (set it again without it for a public stream)`);
+        if (k.query && t.id !== 'instagram' && t.id !== 'facebook') warns.push(`${label}: stream key has a "?" ending (set it again without it for a public stream)`);
       }
       if (t.serverRef) {
         const u = await credentialFacts(ctx.store(t.serverRef), { scheme: true });

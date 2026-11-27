@@ -354,7 +354,7 @@ test('error-severity rules in the real registry are exactly the documented hard 
     for (const [k, v] of Object.entries(o)) w(v, p + '.' + k);
   };
   for (const [id, p] of Object.entries(real)) if (id !== 'local') w(p, id);
-  assert.deepEqual(errs.sort(), ['kick.maxFps', 'kick.maxHeight', 'kick.maxWidth', 'kick.rateControl', 'kick.videoBitrateKbps.max', 'kick.videoBitrateKbps.min', 'kick.videoCodecs', 'youtube.keyframeIntervalSec.max'].sort());
+  assert.deepEqual(errs.sort(), ['facebook.audioBitrateKbps.max', 'facebook.keyframeIntervalSec.max', 'kick.maxFps', 'kick.maxHeight', 'kick.maxWidth', 'kick.rateControl', 'kick.videoBitrateKbps.max', 'kick.videoBitrateKbps.min', 'kick.videoCodecs', 'youtube.keyframeIntervalSec.max'].sort());
 });
 
 test('old Meld-migrated MULTI fixture (superseded): 7500 kbps on Twitch is now a warning, 0 errors', () => {

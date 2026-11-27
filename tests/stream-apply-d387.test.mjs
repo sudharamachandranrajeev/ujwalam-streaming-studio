@@ -198,6 +198,6 @@ test('live-start facts: paths and flags only', () => {
   const d = mk();
   writeLiveStart(d, { live: true, planFile: 'a', paramsFile: 'b', instagram: true, select: null, bandwidthTest: false, readSchemes: true, key: 'x' });
   const f = readLiveStart(d);
-  assert.deepEqual(Object.keys(f).sort(), ['$comment', 'bandwidthTest', 'instagram', 'live', 'paramsFile', 'planFile', 'readSchemes', 'select']);
+  assert.deepEqual(Object.keys(f).sort(), ['$comment', 'bandwidthTest', 'facebook', 'instagram', 'live', 'paramsFile', 'planFile', 'readSchemes', 'select']);
   assert.ok(existsSync(path.join(d, LIVE_START_FILE)));
 });

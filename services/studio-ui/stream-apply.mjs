@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planFile, readServerSchemes } from '../../app/host/lib/outputs-plan.mjs';
 import { INSTAGRAM_FLAG, loadAddon as instagramAddon, writeInstagramPlan } from '../outputs/instagram.mjs';
+import { FACEBOOK_FLAG, loadFacebookAddon, writeFacebookPlan } from '../outputs/facebook.mjs';
 import { readSetup, setupProblems, writePlanFile } from './stream-setup.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -27,12 +28,18 @@ const IDLE_STATES = new Set(['idle', 'stopped', 'failed']);
 /** The --live plan file (D327 OS1/OS2). With the `stream-settings` flag on and a saved Settings > Stream setup, the plan
  *  generated from it (<dataDir>/outputs/stream-setup-plan.json, recording "alpha.mkv" on the main H rung like
  *  alpha-live.json); otherwise alpha-live.json. A setup with problems throws (the start stops; the user fixes Settings). */
-export function livePlanFile({ dataDir, streamSettingsOn, instagramOn = false, upscale = true }) {
-  const base = baseLivePlanFile({ dataDir, streamSettingsOn, upscale });
+export function livePlanFile({ dataDir, streamSettingsOn, instagramOn = false, facebookOn = false, upscale = true }) {
+  let file = baseLivePlanFile({ dataDir, streamSettingsOn, upscale });
   // IG1 (D351, flag instagram-live): the plan in effect plus the instagram sink on the V canvas, written to
   // <dataDir>/outputs/live-plan-instagram.json (target names only). A plan that cannot take it stops the start.
-  if (!instagramOn) return base;
-  try { return writeInstagramPlan(dataDir, base).file; } catch (e) { throw new Error(`Instagram Live (flag ${INSTAGRAM_FLAG}) cannot be added to the live plan: ${e.message}`); }
+  if (instagramOn) {
+    try { file = writeInstagramPlan(dataDir, file).file; } catch (e) { throw new Error(`Instagram Live (flag ${INSTAGRAM_FLAG}) cannot be added to the live plan: ${e.message}`); }
+  }
+  // D447 (flag facebook-live): then the facebook sink on the H canvas (<dataDir>/outputs/live-plan-facebook.json).
+  if (facebookOn) {
+    try { file = writeFacebookPlan(dataDir, file).file; } catch (e) { throw new Error(`Facebook Live (flag ${FACEBOOK_FLAG}) cannot be added to the live plan: ${e.message}`); }
+  }
+  return file;
 }
 
 function baseLivePlanFile({ dataDir, streamSettingsOn, upscale }) {
@@ -72,6 +79,7 @@ export function writeLiveStart(dataDir, facts) {
     planFile: typeof facts.planFile === 'string' ? facts.planFile : null,
     paramsFile: typeof facts.paramsFile === 'string' ? facts.paramsFile : null,
     instagram: facts.instagram === true,
+    facebook: facts.facebook === true,
     select: Array.isArray(facts.select) ? facts.select : null,
     bandwidthTest: facts.bandwidthTest === true,
     readSchemes: facts.readSchemes === true,
@@ -139,7 +147,7 @@ export function createStreamApply(opts) {
   }
 
   // Plan files the apply rewrites, kept so a refused apply puts them back (the UI server reads the plan file).
-  const planFiles = () => [path.join(dataDir, 'outputs', 'stream-setup-plan.json'), path.join(dataDir, 'outputs', instagramAddon().planName)];
+  const planFiles = () => [path.join(dataDir, 'outputs', 'stream-setup-plan.json'), path.join(dataDir, 'outputs', instagramAddon().planName), path.join(dataDir, 'outputs', loadFacebookAddon().planName)];
   const snapshot = () => planFiles().map((f) => [f, existsSync(f) ? readFileSync(f) : null]);
   const restore = (snap) => {
     for (const [f, body] of snap) {
@@ -158,7 +166,7 @@ export function createStreamApply(opts) {
     const snap = snapshot();
     let file, planned;
     try {
-      file = livePlanFile({ dataDir, streamSettingsOn: true, instagramOn: facts.instagram === true, upscale: true });
+      file = livePlanFile({ dataDir, streamSettingsOn: true, instagramOn: facts.instagram === true, facebookOn: facts.facebook === true, upscale: true });
       planned = await planLive(file, { readSchemes: facts.readSchemes === true, ...(opts.schemesOf ? { schemesOf: opts.schemesOf } : {}) });
     } catch (e) {
       restore(snap);
