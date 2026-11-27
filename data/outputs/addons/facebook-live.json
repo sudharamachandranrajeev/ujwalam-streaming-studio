@@ -1,0 +1,10 @@
+{
+  "$comment": "Facebook Live to a Facebook Page (flag facebook-live, requested feature, on; docs/plan/2026-11-27-facebook-live-ig-live-x-posting.md section 1). The facebook sink is added to the live plan in effect, fed from the H canvas. It binds to the shared H rung that already feeds Twitch/Kick when that rung passes every Facebook limit in data/platforms/facebook.json (the validator decides); otherwise this rung is added (GPU-scaled from the H canvas, the plan's own H encoder and options). bitrate 6000 kbps: the shared Twitch/Kick value, inside Facebook's 1080p60 range of 4,500-9,000 kbps. Audio is the plan's one shared track (encoded once). The target names Credential Manager targets only: the server address and key come from the live video Ujwalam creates at each Go live (secure_stream_url) and are deleted at stream end. priority 6: shed before the YouTube and Twitch/Kick streams, after Instagram (7).",
+  "flag": "facebook-live",
+  "sink": { "id": "facebook", "platform": "facebook", "proto": "rtmps", "priority": 6 },
+  "rung": { "id": "fb-h", "canvas": "H", "w": 1920, "h": 1080, "fps": 60, "codec": "h264", "bitrate": 6000, "rc": "cbr", "gop_sec": 2, "encoder": "nvenc" },
+  "target": { "transport": "rtmps", "serverRef": "Ujwalam/stream/facebook-server", "keyRef": "Ujwalam/stream/facebook" },
+  "preferPlatforms": ["twitch", "kick"],
+  "planName": "live-plan-facebook.json",
+  "keyStateName": "facebook-live-state.json"
+}

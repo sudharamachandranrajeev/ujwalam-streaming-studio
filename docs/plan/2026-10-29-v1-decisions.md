@@ -3230,3 +3230,21 @@ add no flash (0 flashes/s). Make realism scene becomes a submenu with one row pe
 name>", id "<scene id>-<look id>"; the original is never changed; refused while live. A look made from a look scene
 replaces the look (effects of any look are taken off first), so two never stack. Flag `realism-look` ON by default.
 Changing the look of an existing scene in place is open (not built): make a new look scene from it instead.
+
+## D447 — Facebook Live (Page, automatic key) and Instagram Live paste in Go live (2026-11-27, plan approved)
+
+User 2026-11-27 approved sections 1 and 2 of `docs/plan/2026-11-27-facebook-live-ig-live-x-posting.md`. Facebook: the
+Meta Connect of Instagram posting also asks for `pages_manage_posts` (Page live videos need a Page token with
+`pages_manage_posts` and `pages_read_engagement`, Live Video API streaming guide, checked 2026-11-27; `publish_video`
+is for user-profile live videos and is not asked). The Page and its token are kept in Credential Manager
+(`Ujwalam/posting/facebook-page`). Each Go live with Facebook ticked creates a LIVE_NOW live video; its
+secure_stream_url is split into server and key and put in `Ujwalam/stream/facebook-server` / `Ujwalam/stream/facebook`
+for that broadcast only (the host reads keys from Credential Manager by design; an in-memory hand-over would need a
+host change), deleted at stream end; live video ids (not secret) are kept so the next start ends left-overs. The
+`facebook` sink binds to the H canvas, on the shared Twitch/Kick rung when Facebook's limits allow it
+(`data/platforms/facebook.json`). Instagram: the Go live card has "Set up Instagram Live" (opens instagram.com, one
+paste box, rtmps:// only), stored for this stream only and deleted at stream end; the instagram target is now rtmps
+(was auto, which kept Instagram out of every plan made before the paste). Flags `facebook-live` and `instagram-live`
+ON by default (requested features). Renumbered from D446 (the X posting branch uses D446). Temporary per-broadcast
+keys in Credential Manager, deleted at stream end, were accepted by the coordinator on 2026-11-27 as matching AGENTS.md
+(stream keys in Credential Manager only).

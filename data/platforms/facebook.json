@@ -1,0 +1,162 @@
+{
+  "id": "facebook",
+  "name": "Facebook Live",
+  "maxWidth": {
+    "value": 1920,
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "Live Video API reference, Video Format: \"Resolution: 1920x1080\" (1080p maximum)."
+  },
+  "maxHeight": {
+    "value": 1080,
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "Same as maxWidth."
+  },
+  "portrait": {
+    "value": false,
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "\"Pixel Aspect Ratio: Aim for 16:9\". The facebook sink is fed from the H canvas (user 2026-11-27)."
+  },
+  "maxFps": {
+    "value": 60,
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "Bitrate table tops out at 1080p @ 60 FPS."
+  },
+  "videoCodecs": {
+    "value": [
+      "h264"
+    ],
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "\"H.264, Level 4.1 for up to 1080p 30 FPS\", \"H.264, Level 4.2 for 1080p 60 FPS\"."
+  },
+  "videoBitrateKbps": {
+    "min": {
+      "value": 4500,
+      "severity": "warning",
+      "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+      "checked": "2026-11-27",
+      "note": "1080p @ 60 FPS: 4,500-9,000 Kbps (lower tiers for lower sizes: 1080p30 3,000-6,000; 720p60 2,250-6,000). The minimum is for 1080p60, the size the facebook sink uses; a warning, as the page gives ranges, not a refusal."
+    },
+    "max": {
+      "value": 9000,
+      "severity": "warning",
+      "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+      "checked": "2026-11-27",
+      "note": "1080p @ 60 FPS upper bound. The shared Twitch/Kick rung (1080p60 6000 kbps CBR) is inside it, so Facebook reuses that rung."
+    }
+  },
+  "keyframeIntervalSec": {
+    "max": {
+      "value": 4,
+      "severity": "error",
+      "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+      "checked": "2026-11-27",
+      "note": "\"Recommended 2 seconds. Do not exceed 4 seconds.\" Severity error because: the page says \"Do not exceed 4 seconds.\""
+    },
+    "recommended": {
+      "value": 2,
+      "severity": "warning",
+      "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+      "checked": "2026-11-27",
+      "note": "Same sentence."
+    }
+  },
+  "protocols": {
+    "value": [
+      "rtmps"
+    ],
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "\"RTMPS Streaming\"; the live_videos answer gives secure_stream_url (rtmps), which is the only one Ujwalam uses."
+  },
+  "multitrackVideo": {
+    "value": false,
+    "severity": "warning",
+    "unverified": true,
+    "note": "Not documented for the Live Video API."
+  },
+  "audioCodecs": {
+    "value": [
+      "aac"
+    ],
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "\"AAC low complexity\"."
+  },
+  "audioBitrateKbps": {
+    "max": {
+      "value": 256,
+      "severity": "error",
+      "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+      "checked": "2026-11-27",
+      "note": "\"128 kbps (preferred) to 256 kbps (do not exceed)\". Severity error because: the page says \"256 kbps (do not exceed)\"."
+    },
+    "recommended": {
+      "value": 128,
+      "severity": "warning",
+      "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+      "checked": "2026-11-27",
+      "note": "Preferred 128 kbps. Ujwalam encodes audio once (the shared track), so a different shared bitrate is reported, not changed."
+    }
+  },
+  "audioTracksMax": {
+    "value": 1,
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "\"Channel Layout: Stereo\"; one track."
+  },
+  "audioSampleRateHz": {
+    "recommended": {
+      "value": 48000,
+      "severity": "warning",
+      "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+      "checked": "2026-11-27",
+      "note": "\"44.1kHz or 48kHz\": the shared 48 kHz track fits."
+    }
+  },
+  "rateControl": {
+    "value": [
+      "cbr"
+    ],
+    "severity": "warning",
+    "unverified": true,
+    "note": "Not stated; CBR is what Ujwalam's stream rungs use."
+  },
+  "maxDurationSec": {
+    "value": 28800,
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/reference",
+    "checked": "2026-11-27",
+    "note": "\"Not exceed 8 hours\". Not enforced by Ujwalam."
+  },
+  "replyMaxChars": {
+    "value": null,
+    "severity": "warning",
+    "unverified": true,
+    "note": "Ujwalam posts no Facebook live comments."
+  },
+  "ingest": {
+    "value": {
+      "serverFrom": "keychain",
+      "perBroadcast": true,
+      "servers": []
+    },
+    "severity": "warning",
+    "source": "https://developers.facebook.com/documentation/live-video-api/getting-started",
+    "checked": "2026-11-27",
+    "note": "POST /{page-id}/live_videos (status LIVE_NOW) returns secure_stream_url for each broadcast; Ujwalam splits it into the server address and the key and keeps both in Windows Credential Manager (Ujwalam/stream/facebook-server, Ujwalam/stream/facebook) for that broadcast only; they are deleted when the stream ends. Page needs at least 100 followers and an account at least 60 days old (Meta, from 2024-06-10; error 1363144 / 1363120)."
+  },
+  "notes": "Facebook Live to a Facebook Page (docs/plan/2026-11-27-facebook-live-ig-live-x-posting.md section 1). Page access token with pages_manage_posts and pages_read_engagement (Live Video API streaming guide, Broadcast on a Page; checked 2026-11-27)."
+}
