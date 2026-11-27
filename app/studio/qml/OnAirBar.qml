@@ -144,6 +144,9 @@ Rectangle {
                 UMenuItem { objectName: "clipsMenu:folder"; text: "Open clips folder"
                             tip: "Open the folder with your finished clips."
                             onTriggered: bar.store.openClipsFolder() }
+                UMenuItem { objectName: "clipsMenu:recording"; text: "Make clips from a recording…"
+                            tip: "Pick a recording that has no finished clips yet and make clips from it."
+                            onTriggered: if (bar.windows.fromRecording) bar.windows.fromRecording.show() }
                 UMenuItem { objectName: "clipsMenu:review"; text: "Review reads (" + bar.store.reviewCount + ")…"
                             visible: bar.reviewShown; height: visible ? implicitHeight : 0
                             tip: "Optional: confirm or correct what the clip maker was not sure of. Nothing waits for it."

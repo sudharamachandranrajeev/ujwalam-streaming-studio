@@ -237,7 +237,7 @@ ApplicationWindow {
         taskCenter: taskCenter
         scheduleCenter: scheduleCenter
         guide: guide
-        windows: ({ youtube: ytWin, growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg, beatdrop: beatdropDlg, sceneBuilder: sceneBuilderDlg })
+        windows: ({ youtube: ytWin, growth: growthDlg, feedback: feedbackDlg, report: reportDlg, importer: importDlg, posts: postsDlg, review: reviewDlg, beatdrop: beatdropDlg, sceneBuilder: sceneBuilderDlg, fromRecording: fromRecordingDlg })
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: win.pad }
         height: 56
     }
@@ -391,6 +391,7 @@ ApplicationWindow {
     LazyDialog { id: ytWin; sourceComponent: Component { YoutubeWindow { store: studioStore } } }
     LazyDialog { id: goLiveDlg; sourceComponent: Component { GoLiveDialog { store: studioStore } } }
     LazyDialog { id: postsDlg; sourceComponent: Component { PostsWindow { store: studioStore } } }
+    LazyDialog { id: fromRecordingDlg; sourceComponent: Component { ClipsFromRecording { store: studioStore } } }
     LazyDialog { id: clipsAskDlg; sourceComponent: Component { ClipsAsk { store: studioStore } } }
     LazyDialog { id: lookRefDlg; sourceComponent: Component { LookReferenceDialog { store: studioStore } } } // RL5
     // Probe (tests): which of them were made before the probe was read (the probe itself makes them all).

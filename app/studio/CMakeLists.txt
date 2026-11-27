@@ -124,6 +124,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/ScenarioWindow.qml
 		qml/PostsWindow.qml
 		qml/ClipsAsk.qml
+		qml/ClipsFromRecording.qml
 		qml/YoutubeWindow.qml
 		qml/GoLiveDialog.qml
 		qml/EditOps.qml

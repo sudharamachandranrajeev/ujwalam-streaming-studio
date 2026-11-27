@@ -111,7 +111,7 @@ Item {
     property int rowsMade: 0 // rows built by the panel and the task window (probe: a poll must not build them again)
     readonly property var emptyRow: ({ id: "", title: "", state: "", note: "", stalled: false, stop: false, finished: false,
         l: { text: "", stage: "", count: "", eta: "", last: "", warn: "", fraction: -1 }, category: "", controls: [], pausable: false,
-        pauseReason: "", paused: false, pausing: false, nextStart: "", question: "", parts: [], logTail: [], startedAt: 0, stageText: "" })
+        pauseReason: "", paused: false, pausing: false, again: false, nextStart: "", question: "", parts: [], logTail: [], startedAt: 0, stageText: "" })
     function rowOf(id) { const r = rowById[id]; return r !== undefined ? r : emptyRow }
     // Keeps a ListModel of { rid } in the order of ids: removes, inserts and moves only (shared with TaskWindow.qml).
     function syncIds(model, ids, then) {
@@ -134,7 +134,7 @@ Item {
             // D442 (the task manager window): what the job side reports for controls and details
             category: String(t.category || "maintenance"), controls: Array.isArray(t.controls) ? t.controls.map(String) : [],
             pausable: t.pausable === true, pauseReason: t.pauseReason ? String(t.pauseReason) : "", paused: t.paused === true,
-            pausing: t.pausing === true, heldOnAir: t.heldOnAir === true, nextStart: typeof t.nextStart === "string" ? t.nextStart : "", question: t.question ? String(t.question) : "",
+            pausing: t.pausing === true, again: t.again === true && t.state === "failed", heldOnAir: t.heldOnAir === true, nextStart: typeof t.nextStart === "string" ? t.nextStart : "", question: t.question ? String(t.question) : "",
             parts: Array.isArray(t.parts) ? t.parts.map(String) : [], logTail: Array.isArray(t.logTail) ? t.logTail.map(String) : [],
             startedAt: typeof t.startedAt === "number" ? t.startedAt : 0, stageText: t.stageText ? String(t.stageText) : ""
         }));
@@ -213,6 +213,13 @@ Item {
         Api.post("ui/api/tasks/control", { id: id, op: op }, (ok, b, err) => {
             if (!ok) store.say((b && b.reason) ? String(b.reason) : "Could not do that: " + err);
         });
+        return true;
+    }
+    // 2026-11-27: a stopped or failed clip task keeps "Make clips again": the same job goes into the clip queue (ui/api/clips/again)
+    function makeAgain(id) {
+        controlsSent++;
+        Api.post("ui/api/clips/again", { id: id }, (ok, b, err) => store.say(ok ? "Making clips again. It starts when nothing is recording or live."
+            : (b && b.reason) ? String(b.reason) : "Could not queue it: " + err));
         return true;
     }
     function stopRow(r) { if (r.controls.indexOf("stop") >= 0) control(r.id, "stop"); else stopTasks() }
@@ -553,10 +560,20 @@ Item {
                             font.weight: Font.DemiBold
                         }
                         Flow {
-                            visible: row.modelData.stop || row.held
+                            visible: row.modelData.stop || row.held || row.modelData.again
                             width: rowCol.width
                             layoutDirection: Qt.RightToLeft
                             spacing: Theme.sp.s
+                            UButton {
+                                objectName: "taskAgain"
+                                visible: row.modelData.again
+                                text: "Make clips again"
+                                kind: "primary"
+                                implicitHeight: 28
+                                focusPolicy: Qt.NoFocus
+                                tip: "Queue this job again. It reuses what was already found and the clips already made."
+                                onClicked: center.makeAgain(row.modelData.id)
+                            }
                             UButton {
                                 objectName: "taskStart"
                                 visible: row.held

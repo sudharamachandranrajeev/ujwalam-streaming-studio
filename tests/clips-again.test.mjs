@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import { PassThrough } from 'node:stream';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,7 @@ import { createRecordClips } from '../services/studio-ui/record-clips.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
 import { writeSettings } from '../services/studio-ui/user-settings.mjs';
+import { qtDir } from '../app/studio/tools/build.mjs';
 import { writeTaskControl, writeTaskFile } from '../services/studio-ui/tasks.mjs';
 
 const tmp = (p) => mkdtempSync(path.join(os.tmpdir(), p));
@@ -228,3 +230,15 @@ test('routes: need the session, Origin and CSRF; again only for a task that offe
     assert.equal(t.again, true);
   } finally { await srv.close(); rmSync(d, { recursive: true, force: true }); }
 });
+
+// The QML that carries the buttons compiles to bytecode (Qt tools only; skipped when Qt is not there). The window is not started.
+const QT = qtDir();
+const GEN = QT ? path.join(QT, 'bin', 'qmlcachegen.exe') : null;
+for (const f of ['ClipsFromRecording', 'TaskCenter', 'TaskWindow', 'Store', 'OnAirBar', 'Main']) {
+  test(`${f}.qml compiles (qmlcachegen, bytecode)`, { skip: GEN && existsSync(GEN) ? false : 'Qt not found' }, () => {
+    const out = path.join(tmp('ujw-again-qml-'), `${f}.qmlc`);
+    const qml = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'app', 'studio', 'qml', `${f}.qml`);
+    const r = spawnSync(GEN, ['--only-bytecode', '-o', out, qml], { windowsHide: true, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+  });
+}
