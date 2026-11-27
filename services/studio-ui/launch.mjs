@@ -1901,6 +1901,7 @@ export async function main(argv = process.argv.slice(2)) {
   clock.mark('workers');
   const uiArgs =[path.join(REPO, 'services', 'studio-ui', 'cli.mjs'), 'serve', '--data-dir', dataDir, '--feedback-dir', feedbackDir];
   uiArgs.push('--profile', typeof args.profile === 'string' ? path.resolve(args.profile) : path.join(REPO, 'data', 'profile.local.json'), '--release', path.join(REPO, 'release.json'));
+  if (hostCfg?.recordings) uiArgs.push('--recordings', hostCfg.recordings);
   if (typeof args['ui-port'] === 'string') uiArgs.push('--port', args['ui-port']);
   if (livePlan) uiArgs.push('--live-plan', livePlan);
   if (instagramLive) uiArgs.push('--instagram-live');

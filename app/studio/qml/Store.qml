@@ -762,6 +762,16 @@ QtObject {
                 : make ? "Making clips. You can keep working; the Clips label shows when they are ready." : "No clips made.");
         });
     }
+    // 2026-11-27 Make clips from a recording (ui/api/clips/recordings, ui/api/clips/make): a recording with no finished run
+    function loadClipRecordings(done) {
+        Api.get("ui/api/clips/recordings", (ok, b, err) => done(ok && b && Array.isArray(b.recordings) ? b.recordings : [], ok ? "" : String(err)));
+    }
+    function makeClipsFrom(name, done) {
+        Api.post("ui/api/clips/make", { name: name }, (ok, r, err) => {
+            say(ok ? "Making clips from " + name + ". It starts when nothing is recording or live." : "Could not queue it: " + err);
+            if (done) done(ok);
+        });
+    }
     function openClipsFolder() {
         Api.post("ui/api/clips/open", {}, (ok, r, err) => { if (!ok) say("Could not open the clips folder: " + err) });
     }

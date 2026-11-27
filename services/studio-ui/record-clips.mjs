@@ -38,6 +38,7 @@ import { clipsFolder, readSettings, writeSettings } from './user-settings.mjs';
 import { DEFAULT_NEXT_START, NEXT_START, ackTaskControls, clipJobTaskId, listTaskControls, pushLogEvent, removeTaskFile, writeTaskFile } from './tasks.mjs';
 import { RETAKE_FILE, RETAKE_OPS, knownRuns, pieceBlocks, retakeProblems, runsDir, sourceOf } from './beatdrop-review.mjs';
 import { CLEANUP_FLAG, appendJobRecord, fileIdentity, runRecordingCleanup } from './recording-cleanup.mjs';
+import { ackMakeRequest, againable, jobFromAgain, jobFromRecording, listRecordings, readAgain, removeAgain, takeMakeRequests, writeAgain, REQUEST_MAX_AGE_MS } from './clips-again.mjs';
 
 const ACTIVE = new Set(['starting', 'live', 'reconnecting', 'retrying']);
 /** The tray's "Stop all" while live or recording (D311 proposed): <dataDir>/clips/<this>, written by the UI server. */
@@ -546,7 +547,12 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
   };
   // Codex round 3: a finished row is published only after the status that no longer holds the job is committed (write)
   let finished = [];
-  const finishTask = (j, ok, note) => { finished.push(finishRow(j, ok, note)); };
+  // 2026-11-27: a clip job that ended stopped or failed keeps "Make clips again" (clips-again.mjs): its job is saved by the task id.
+  const finishTask = (j, ok, note) => {
+    const row = finishRow(j, ok, note);
+    if (!ok && againable(j) && writeAgain(dataDir, row.id, j, now())) row.again = true;
+    finished.push(row);
+  };
   const finishRow = (j, ok, note) => ({ id: taskId(j), kind: 'clips', category: jobCategory(j), logEvents: j.logEvents ?? [], title: j.type === 'beatdrop' ? (ok ? `${beatdropTitle(j)} done` : `${beatdropTitle(j)} not made`) : j.type === 'train' ? (ok ? 'Game pack check done' : 'Game pack check did not finish') : j.type === 'long' ? (ok ? `Long highlights video done for ${j.name}` : `Long highlights video from ${j.name} not made`) : ok ? `Clips ready from ${j.name}` : `Clips from ${j.name} did not finish`, state: ok ? 'done' : 'failed', note, startedAt: j.taskStart ?? now(), updatedAt: now() });
   for (const j of stoppedAtClose) finishTask(j, false, 'Stopped by you');
   const trainOn = () => { try { return trainFlag() === true; } catch { return false; } };
@@ -912,6 +918,30 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
     add({ type: 'beatdrop', step: 'retake', kind: 'recording', h: src.h, v: src.v ?? undefined, name: r.run, retake: r.op, ...(r.op === 'swap' ? { piece: r.piece } : {}) }, `BeatDrop retake (${r.op}) of ${r.run}`);
     write();
   };
+  // 2026-11-27 Make clips again: requests from the UI server (<dataDir>/clips/make/*.json): a stopped or failed task by its id,
+  // or a recording by its name. The same queue as every other job (needsIdle and outputsOnAir decide when it starts); one
+  // for the same name and type already queued or running is not added twice. The request file goes once the job is queued.
+  const readMake = () => {
+    for (const r of takeMakeRequests(dataDir)) {
+      const drop = (why) => { if (why) log(`clips: make clips again: ${why}`); ackMakeRequest(r); };
+      if (now() - r.atMs > REQUEST_MAX_AGE_MS) { drop('a request from long ago was ignored'); continue; }
+      let job = null; let problem = null;
+      if (r.op === 'again') {
+        const got = jobFromAgain(readAgain(dataDir, r.id));
+        job = got.job ?? null; problem = got.problem ?? null;
+      } else {
+        const folder = typeof recordingsFolder === 'function' ? recordingsFolder() : recordingsFolder;
+        const item = listRecordings({ folder, dataDir, limit: 200 }).find((x) => x.name === r.name);
+        job = item ? jobFromRecording(item, { nowMs: now() }) : null; problem = job ? null : 'that recording is not in the recordings folder, or it already has finished clips';
+      }
+      if (!job) { drop(problem); continue; }
+      if (queue.some((q) => q.name === job.name && q.type === job.type)) { drop(`${job.name} is already queued`); if (r.op === 'again') { removeAgain(dataDir, r.id); removeTaskFile(dataDir, r.id); } continue; }
+      add(job, `making clips again from ${job.name} (you asked)`);
+      if (r.op === 'again') { removeAgain(dataDir, r.id); removeTaskFile(dataDir, r.id); }
+      write();
+      ackMakeRequest(r);
+    }
+  };
   const readAnswer = (s) => {
     let a = null;
     try { a = JSON.parse(readFileSync(answerFile, 'utf8')); } catch { return; }
@@ -970,6 +1000,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       prev = status; lastStatus = status;
       readAnswer(s);
       readRetake();
+      readMake();
       // a stream that started stops the running job first, then the controls and the next job (dispatch)
       if (live && child && current && !current.pausedForLive) { current.pausedForLive = true; killTreeFn(child); } // the whole tree: ffmpeg must not encode while live
       // D406 (Codex P1): the long highlights video also stops (whole tree) when a recording starts; it runs again after.

@@ -80,6 +80,7 @@ Window {
     // The buttons a row offers, from its `controls` only (the one list the shown buttons and the probe both read).
     function buttonsOf(r) {
         const c = r.controls, b = [];
+        if (r.again === true) b.push("again");
         if (c.indexOf("stop") >= 0) b.push("stop");
         if (c.indexOf("pause") >= 0) b.push("pause");
         if (c.indexOf("resume") >= 0) b.push("resume");
@@ -342,6 +343,17 @@ Window {
                                     visible: row.btns.length > 0
                                     width: parent.width
                                     spacing: Theme.sp.s
+                                    UButton {
+                                        objectName: "mgrAgain"
+                                        visible: row.btns.indexOf("again") >= 0
+                                        enabled: !row.busy
+                                        text: "Make clips again"
+                                        kind: "primary"
+                                        implicitHeight: 28
+                                        focusPolicy: Qt.NoFocus
+                                        tip: "Queue this job again. It reuses what was already found and the clips already made."
+                                        onClicked: taskCenter.makeAgain(row.r.id)
+                                    }
                                     UButton {
                                         objectName: "mgrStop"
                                         visible: row.btns.indexOf("stop") >= 0

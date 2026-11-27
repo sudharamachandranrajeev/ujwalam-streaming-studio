@@ -113,6 +113,7 @@ function controlFields(t) {
     category: categoryOf(t), controls,
     pausable, pauseReason: pausable ? null : cut(t.pauseReason, 120),
     paused: t.paused === true, pausing: t.pausing === true,
+    again: t.again === true && t.state === 'failed', // 2026-11-27: stopped or failed clip task: "Make clips again" (clips-again.mjs)
     heldOnAir: t.heldOnAir === true, // 2026-11-26: stopped for the stream or recording; carries on by itself after
     nextStart: NEXT_START.includes(t.nextStart) ? t.nextStart : null,
     question: cut(t.question, 160),

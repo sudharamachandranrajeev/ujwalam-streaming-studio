@@ -38,6 +38,7 @@ import { QUEUE_NAME, clearStuckLock, createUploadQueue, requestRunNow, stuckLock
 import { AUTO_FLAG, AUTO_LOG_NAME, NOTICE_TASK, NOTICE_TEXT, createAutoLog, createRulesSource, describeMode, liveBlock, planAuto, rankerMinScore } from '../posting/auto-post.mjs';
 import { previewRules } from '../posting/preview.mjs';
 import { CLEANUP_FLAG, cleanupPlan, readKeepList, setKeep } from './recording-cleanup.mjs';
+import { listRecordings, writeMakeRequest } from './clips-again.mjs';
 import { moveQueueItem, readAutoPostSettings, readChannelForPreview, readRulesEditor, removeQueueItem, saveAutoPostSettings, saveRulesEdit, scheduleConfigFor, scheduleNextFree, schedulePreview } from '../posting/auto-settings.mjs';
 import { DELETE_FLAG } from '../posting/delete-uploaded.mjs';
 import { applyTextPrefs, readPrefs, savePrefs } from '../posting/post-prefs.mjs';
@@ -1050,6 +1051,25 @@ export function createStudioServer(opts) {
     return json(res, 202, { ok: true, id: body.id, op: body.op });
   }
 
+  // 2026-11-27 Make clips again (clips-again.mjs). The recordings folder is the one the launcher passed (--recordings), else Settings.
+  const recordingsDir = () => (typeof opts.recordingsFolder === 'function' ? opts.recordingsFolder() : opts.recordingsFolder) ?? readSettings(opts.dataDir).folders.recordings ?? null;
+  function clipsAgain(res, body) { // { id }: a stopped or failed clip task offering it
+    if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+    if (!body || typeof body !== 'object' || Object.keys(body).some((k) => k !== 'id') || typeof body.id !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(body.id)) return json(res, 400, { error: 'bad-params' });
+    const t = tasks.list().find((x) => x.id === body.id);
+    if (!t) return json(res, 404, { error: 'no-task' });
+    if (!t.again) return json(res, 409, { error: 'not-offered', reason: 'This task cannot be made again' });
+    if (!writeMakeRequest(opts.dataDir, { op: 'again', id: body.id, atMs: now() })) return json(res, 500, { error: 'not-saved' });
+    return json(res, 202, { ok: true, id: body.id });
+  }
+  function clipsMake(res, body) { // { name }: a recording listed by GET ui/api/clips/recordings
+    if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+    if (!body || typeof body !== 'object' || Object.keys(body).some((k) => k !== 'name') || typeof body.name !== 'string' || body.name.length > 120) return json(res, 400, { error: 'bad-params' });
+    if (!listRecordings({ folder: recordingsDir(), dataDir: opts.dataDir, limit: 200 }).some((r) => r.name === body.name)) return json(res, 404, { error: 'no-recording' });
+    if (!writeMakeRequest(opts.dataDir, { op: 'recording', name: body.name, atMs: now() })) return json(res, 400, { error: 'bad-params' });
+    return json(res, 202, { ok: true, name: body.name });
+  }
+
   // ---- status snapshot (text-free: counts, flags and numbers only; never chat text) ----
   // outputs: the status tick's shared outputs.status read (idle load, 2026-11-18); without it a fresh one is read.
   async function snapshot(outputs = () => host.call('outputs.status', {})) {
@@ -1686,6 +1706,10 @@ export function createStudioServer(opts) {
         return json(res, 200, await previewRules({ dataDir: opts.dataDir, rules, rulesFile, profile, log, flagOn: !!flags && flags.isOn(AUTO_FLAG), now: () => new Date(now()), outputsStatus: streamOnly(ytOutputsStatus), scheduleOn: !!flags && flags.isOn(SCHEDULE_FLAG), scheduleFile: opts.scheduleFile }));
       } catch { return json(res, 200, { error: 'preview-unavailable', queued: [], skipped: [] }); }
     }
+    if (req.method === 'GET' && route === '/ui/api/clips/recordings') { // recent recordings with no finished run (names, sizes, whether V exists; no paths)
+      if (typeof opts.dataDir !== 'string') return json(res, 404, { error: 'no-data-dir' });
+      try { return json(res, 200, { recordings: listRecordings({ folder: recordingsDir(), dataDir: opts.dataDir }).map((r) => ({ name: r.name, hasV: !!r.v, at: Math.round(r.at), sizeMb: Math.round(r.size / 1048576) })) }); } catch { return json(res, 500, { error: 'recordings-unreadable' }); }
+    }
     if (req.method === 'GET' && route === '/ui/api/recordings/keep') {
       // D403 Settings > Clips > Recordings: the recordings Ujwalam made clips from, whether each may be deleted now (or
       // why not) and whether it is on the Keep for labelling list. Read only.
@@ -1857,6 +1881,8 @@ export function createStudioServer(opts) {
     if (route === '/ui/api/reel-styles') { if (!reelStyles) return json(res, 404, { error: 'no-data-dir' }); const r = await reelStyles.run(body); return json(res, r.status, r.body); } // RS3
     if (route === '/ui/api/clips/answer') return clipAnswer(res, body);
     if (route === '/ui/api/beatdrop/retake' || route === '/ui/api/beatdrop/play') { if (!beatdropReview) return json(res, 404, { error: 'no-data-dir' }); const r = route.endsWith('retake') ? beatdropReview.retake(body) : beatdropReview.play(body); return json(res, r.status, r.body); } // BD7b
+    if (route === '/ui/api/clips/again') return clipsAgain(res, body);
+    if (route === '/ui/api/clips/make') return clipsMake(res, body);
     if (route === '/ui/api/tasks/stop') return stopTasks(res);
     if (route === '/ui/api/tasks/control') return taskControl(res, body); // D442
     if (route === '/ui/api/updates/apply') {
