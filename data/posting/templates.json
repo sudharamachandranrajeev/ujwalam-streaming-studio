@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "layoutPreference": ["full-crop", "blurred-fill", "game-facecam"],
   "$textPools": "PT1 (D408, 2026-11-21): title and lead lines per kind, picked from the clip's facts (services/posting/post-text.mjs). Facts a line may name: {medal}, {killsText} (e.g. 3 KILLS), {kills} (the number), {result}, {mode}; they come from services/clip/reel_thumbnail.py facts() and are stored in post.json source.facts. A line naming a fact the clip does not have is never used (no guessing); a title over the platform's title limit is never used; the last recentLines lines used are not used again. Lines may also use {handles.x}/{links.x}; never {n} or {date} (an older draft redrafted does not know them). Per-game lines add to these from data/games/<id>/posting.json. No line here at all for a kind: the target's title and description above are used.",
-  "recentLines": 20,
+  "recentLines": 40,
   "textPools": {
     "short": {
       "title": ["{medal} on stream", "{killsText} in seconds", "{medal}: {killsText}", "{killsText} and a {medal}", "{mode}: {killsText}", "That {medal} though"],

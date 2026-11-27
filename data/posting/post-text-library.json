@@ -1,0 +1,153 @@
+{
+  "$comment": "Reach text library (2026-11-27). Hook-first titles and captions, a CTA, live/community lines and hashtags per platform and clip kind. Used by services/posting/reach-text.mjs: the base of every post's text; the local model only adapts it lightly (ai-text.mjs) and the code falls back to it unchanged when the model is off. Slots: {game} (short name), {gameFull}, {kills} (number), {killsText}, {result}, {weapon}, {mode}, {map}, {streamer}, {channel}, {community} (the last three come from the local profile at draft time; a line whose slot has no value is not used). {gameTag} {gameTag2} are the game's first hashtags (data/games/<id>/posting.json). Placeholders only: never write names, brands, channel ids or community codes here. Research and sources: docs/evidence/2026-11-27-post-text-reach.md. Numbers marked UNVERIFIED there are guesses.",
+  "version": "0.1.0",
+  "recentTexts": 12,
+  "kindMap": { "short": "kill-streak", "montage": "montage", "won-reel": "victory", "impact-play": "clutch", "long-highlights": "long-highlights", "beatdrop": "beatdrop", "funny": "funny", "fail": "fail", "top5": "top5" },
+  "platforms": {
+    "youtube-shorts": {
+      "titleSoftMax": 60,
+      "hashtags": { "recommendedMax": 4, "core": ["#Shorts", "{gameTag}"], "pool": ["{gameTag2}", "#MobileGaming", "#MobileFPS", "#GamingShorts", "#Gaming", "#Highlights"], "pick": 2, "note": "YouTube shows the first 3 description hashtags above the title; keep 3-5 in total." },
+      "ctas": ["Subscribe for more {game} clips.", "Follow for daily {game} highlights.", "More {game} every stream. Subscribe."],
+      "live": ["Live on {channel}", "Community: {community}"],
+      "kinds": {
+        "kill-streak": {
+          "titles": ["{killsText} in {game}. Watch the last one", "{killsText} and nobody saw it coming", "{killsText} in a row. {game}", "{mode}: {killsText} in seconds", "{killsText} with the {weapon}. {game}", "Clean {killsText} on {map}"],
+          "captions": ["{killsText} back to back in {game}. Live on stream.", "{killsText} in {mode}. Watch till the end.", "A {killsText} run in {game}, straight from the stream.", "{game} {mode}: the whole lobby, {killsText}."],
+          "hashtags": { "core": [], "pool": ["#Killstreak", "#Clutch"] }
+        },
+        "montage": {
+          "titles": ["{killsText} montage. Wait for the drop", "{game} kill montage, every shot counts", "Best {game} kills of the stream", "{game} montage: {killsText} cut to the beat"],
+          "captions": ["Every kill from the stream, cut to the beat. {killsText}.", "The best {game} kills of the week in one reel.", "{killsText} cut to the beat. Which one was your favourite?"],
+          "hashtags": { "core": ["#Montage"], "pool": ["#Killstreak", "#Edit"] }
+        },
+        "beatdrop": {
+          "titles": ["Kills on the beat drop. {game}", "{game} beat drop montage", "This {game} clip hits on the drop"],
+          "captions": ["Kills synced to the beat drop. Watch it twice.", "{game} gameplay cut to the music, {killsText}."],
+          "hashtags": { "core": ["#BeatDrop"], "pool": ["#Montage", "#Edit"] }
+        },
+        "clutch": {
+          "titles": ["1 vs many. {game} clutch", "The clutch that won it. {game}", "{killsText} to save the round", "Down to the wire in {game}"],
+          "captions": ["One play turned the match. {killsText} when it counted.", "{game} {mode}: the clutch of the stream."],
+          "hashtags": { "core": ["#Clutch"], "pool": ["#Killstreak"] }
+        },
+        "victory": {
+          "titles": ["{result} in {game}. How it ended", "{game} {mode}: {result}", "{result} with {killsText}", "{game} win. Watch the finish"],
+          "captions": ["{result} in {mode}, {killsText} on the way. Watch the finish.", "How the {game} match ended: {result}.", "A win in {game}, live on stream."],
+          "hashtags": { "core": ["#Victory"], "pool": ["#Win", "#Clutch"] }
+        },
+        "funny": {
+          "titles": ["This {game} moment was not planned", "{game} chaos on stream", "Nobody expected this in {game}"],
+          "captions": ["Funniest {game} moment of the stream.", "Wait for it. {game} live."],
+          "hashtags": { "core": ["#Funny"], "pool": ["#GamingMemes", "#FunnyMoments"] }
+        },
+        "fail": {
+          "titles": ["{game} fail. Wait for it", "That did not go to plan. {game}", "{game} fail of the stream"],
+          "captions": ["It looked so good until it did not. {game} live.", "Everyone has these moments. {game} fail."],
+          "hashtags": { "core": ["#Fail"], "pool": ["#GamingFails", "#FunnyMoments"] }
+        },
+        "top5": {
+          "titles": ["Top 5 {game} plays of the stream", "Top 5 {game} kills this week", "5 {game} moments you missed"],
+          "captions": ["Top 5 {game} plays from the stream. Which is your number 1?"],
+          "hashtags": { "core": ["#Top5"], "pool": ["#Highlights", "#Killstreak"] }
+        },
+        "long-highlights": {
+          "titles": ["{game} stream highlights, best moments", "Full {game} highlights: kills, clutches, wins"],
+          "captions": ["The best moments of the stream in the order they happened."],
+          "hashtags": { "core": ["#Highlights"], "pool": ["#Montage"] }
+        }
+      }
+    },
+    "instagram-reels": {
+      "titleSoftMax": 60,
+      "hashtags": { "recommendedMax": 5, "core": ["{gameTag}"], "pool": ["{gameTag2}", "#MobileGaming", "#Reels", "#GamingReels", "#MobileFPS", "#Highlights"], "pick": 3, "note": "Instagram: 3-5 focused tags recommended (UNVERIFIED hard cap of 5 in the app since Dec 2025); the API allows 30." },
+      "ctas": ["Follow for daily {game} clips.", "Follow for more. Live streams every day.", "Share this with your squad."],
+      "live": ["Live on {channel}", "Community: {community}"],
+      "kinds": {
+        "kill-streak": {
+          "titles": ["{killsText} in {game}. Watch the last one", "{killsText} and nobody saw it coming", "{mode}: {killsText} in seconds"],
+          "captions": ["{killsText} back to back in {game}. Watch till the end.", "{killsText} in {mode}. Live on stream.", "{game}: the whole lobby, {killsText}."],
+          "hashtags": { "core": [], "pool": ["#Killstreak", "#Clutch"] }
+        },
+        "montage": {
+          "titles": ["{game} kill montage. Wait for the drop", "Best {game} kills of the stream"],
+          "captions": ["Every kill from the stream, cut to the beat. {killsText}.", "Which kill was your favourite? Tell me below."],
+          "hashtags": { "core": ["#Montage"], "pool": ["#Killstreak", "#Edit"] }
+        },
+        "beatdrop": {
+          "titles": ["Kills on the beat drop. {game}"],
+          "captions": ["Kills synced to the beat drop. Watch it twice.", "{game} gameplay cut to the music, {killsText}."],
+          "hashtags": { "core": ["#BeatDrop"], "pool": ["#Montage", "#Edit"] }
+        },
+        "clutch": {
+          "titles": ["1 vs many. {game} clutch", "The clutch that won it. {game}"],
+          "captions": ["One play turned the match. {killsText} when it counted.", "{game} {mode}: the clutch of the stream."],
+          "hashtags": { "core": ["#Clutch"], "pool": ["#Killstreak"] }
+        },
+        "victory": {
+          "titles": ["{result} in {game}. How it ended", "{game} win. Watch the finish"],
+          "captions": ["{result} in {mode}, {killsText} on the way. Watch the finish.", "A win in {game}, live on stream."],
+          "hashtags": { "core": ["#Victory"], "pool": ["#Win", "#Clutch"] }
+        },
+        "funny": {
+          "titles": ["This {game} moment was not planned"],
+          "captions": ["Funniest {game} moment of the stream. Tag your squad."],
+          "hashtags": { "core": ["#Funny"], "pool": ["#GamingMemes", "#FunnyMoments"] }
+        },
+        "fail": {
+          "titles": ["{game} fail. Wait for it"],
+          "captions": ["It looked so good until it did not. {game} live."],
+          "hashtags": { "core": ["#Fail"], "pool": ["#GamingFails", "#FunnyMoments"] }
+        },
+        "top5": {
+          "titles": ["Top 5 {game} plays of the stream"],
+          "captions": ["Top 5 {game} plays from the stream. Which is your number 1?"],
+          "hashtags": { "core": ["#Top5"], "pool": ["#Highlights", "#Killstreak"] }
+        },
+        "long-highlights": {
+          "titles": ["{game} stream highlights"],
+          "captions": ["The best moments of the stream in the order they happened."],
+          "hashtags": { "core": ["#Highlights"], "pool": ["#Montage"] }
+        }
+      }
+    },
+    "youtube-video": {
+      "titleSoftMax": 70,
+      "hashtags": { "recommendedMax": 4, "core": ["{gameTag}"], "pool": ["{gameTag2}", "#MobileGaming", "#MobileFPS", "#Gaming"], "pick": 2, "note": "Long video: no #Shorts." },
+      "ctas": ["Subscribe and catch the next stream live.", "Subscribe for the next {game} stream."],
+      "live": ["Live on {channel}", "Community: {community}"],
+      "kinds": {
+        "long-highlights": {
+          "titles": ["{game} stream highlights: kills, clutches and wins", "Best of the {game} stream, full highlights"],
+          "captions": ["The best moments of the stream: kills, streaks and wins in the order they happened."],
+          "hashtags": { "core": ["#Highlights"], "pool": ["#Montage"] }
+        },
+        "montage": {
+          "titles": ["{game} kill montage, {killsText}", "Best {game} kills of the stream"],
+          "captions": ["Every kill from the stream cut to the beat. {killsText}."],
+          "hashtags": { "core": ["#Montage"], "pool": ["#Killstreak"] }
+        },
+        "kill-streak": {
+          "titles": ["{killsText} in {game}"],
+          "captions": ["{killsText} in {game}, live on stream."],
+          "hashtags": { "core": [], "pool": ["#Killstreak"] }
+        },
+        "victory": {
+          "titles": ["{game} {mode}: {result}", "{game} win, full match"],
+          "captions": ["{result} in {mode}, {killsText} on the way.", "A win in {game}, live on stream."],
+          "hashtags": { "core": ["#Victory"], "pool": [] }
+        }
+      }
+    },
+    "x": {
+      "status": "planned",
+      "titleSoftMax": 200,
+      "hashtags": { "recommendedMax": 2, "core": ["{gameTag}"], "pool": ["#MobileGaming"], "pick": 1, "note": "X: 1-2 hashtags (UNVERIFIED). Not wired to an uploader yet; data only." },
+      "ctas": ["Live on {channel}"],
+      "live": ["Live on {channel}"],
+      "kinds": {
+        "kill-streak": { "titles": ["{killsText} in {game}"], "captions": ["{killsText} in {game}. Watch the last one."], "hashtags": { "core": [], "pool": [] } },
+        "montage": { "titles": ["{game} kill montage"], "captions": ["Every kill from the stream, cut to the beat."], "hashtags": { "core": [], "pool": [] } }
+      }
+    }
+  }
+}

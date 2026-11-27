@@ -167,14 +167,19 @@ const factsLine = (f) => {
 const fill = (s, v) => s.replace(/\{(\w+)\}/g, (m, k) => (Object.hasOwn(v, k) ? String(v[k]) : m));
 const gameVars = (g) => ({ game: g ? g.name : 'mobile shooter', gameShort: g ? g.short : 'the game' });
 
-export function buildPrompt(cfg, { kind, seconds, facts, transcript, game = null }) {
+/** The library draft the model adapts lightly (reach-text.mjs): same structure, same facts, no new claims. '' when none. */
+export const draftBlock = (draft) => (draft?.title
+  ? `\n\nDraft to adapt lightly (keep its structure, hook and every fact; change at most a few words; add nothing new):\nTitle: ${draft.title}${draft.lead ? `\nFirst line: ${draft.lead}` : ''}`
+  : '');
+
+export function buildPrompt(cfg, { kind, seconds, facts, transcript, game = null, draft = null }) {
   const v = {
     language: cfg.language, tone: cfg.tone, kind: String(kind), seconds: Number.isFinite(seconds) ? String(Math.round(seconds)) : 'unknown',
     facts: factsLine(facts ?? {}), transcript: transcript || '', tagMin: cfg.answer.tags.min, tagMax: cfg.answer.tags.max,
     descMin: cfg.answer.description.minLines, descMax: cfg.answer.description.maxLines, hookMin: cfg.answer.thumbHook.minWords, hookMax: cfg.answer.thumbHook.maxWords,
     ...gameVars(game),
   };
-  return fill(cfg.prompt, v);
+  return fill(cfg.prompt, v) + draftBlock(draft);
 }
 export const buildSystem = (cfg, game = null) => fill(cfg.system, gameVars(game));
 // answers that another try may fix (a different answer from the model); OCR, frames and the model itself are not retried
@@ -201,7 +206,7 @@ export async function withAiText(deps, fn) {
   }));
   const fail = (code, detail) => { stats.rejected += 1; stats.rejects[code] = (stats.rejects[code] ?? 0) + 1; return { ok: false, code, detail }; };
   // game: the post's game id (game-text.mjs resolveGame); its name goes into the prompt and must be in the title
-  const gen = async ({ file, seconds, facts = {}, kind, limits, ffmpeg, cover = true, game = null }) => {
+  const gen = async ({ file, seconds, facts = {}, kind, limits, ffmpeg, cover = true, game = null, draft = null }) => {
     const h = await open();
     if (h.err) return fail(h.err instanceof LocalModelError ? h.err.code : 'error', String(h.err?.message ?? '').slice(0, 120));
     const g = deps.gamePost ? deps.gamePost(game) : gamePost(game);
@@ -214,7 +219,7 @@ export async function withAiText(deps, fn) {
       const big = await (deps.grab ?? grabFrames)(ffmpeg, file, seconds, cfg, deps.tmpRoot, cfg.ocr.width);
       screenWords = await (deps.ocr ?? ocrWords)(big, { python: deps.ocrPython, tmpRoot: deps.tmpRoot, timeoutMs: cfg.ocr.timeoutMs });
     } catch (e) { return fail('ocr-unavailable', String(e?.message ?? '').slice(0, 120)); }
-    const prompt = buildPrompt(cfg, { kind, seconds, facts, transcript: transcriptFor(file, cfg.transcriptMaxChars), game: g });
+    const prompt = buildPrompt(cfg, { kind, seconds, facts, transcript: transcriptFor(file, cfg.transcriptMaxChars), game: g, draft });
     const titleMax = Number.isInteger(limits?.fields?.title?.max) ? limits.fields.title.max : null;
     let last = null;
     for (let n = 0; n < Math.max(1, Number(cfg.attempts) || 1); n++) {

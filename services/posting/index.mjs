@@ -31,7 +31,8 @@ import { trustedRow } from './clips-source.mjs';
 import { cleanFacts, createTextHistory, creditMissing, draftText, legacyContext, legacyFor, musicCredit, musicOf, musicStamp, readProvenanceSince, renderMusic } from './post-text.mjs';
 import { applyTextPrefs, readPrefs } from './post-prefs.mjs';
 import { keepsParts } from './ai-text-check.mjs';
-import { dropTemplateLead, gameHashtags, gameLines, gameTags, gameTitleTags, resolveGame } from './game-text.mjs';
+import { dropTemplateLead, gameHashtags, gameLines, gamePost, gameTags, gameTitleTags, resolveGame } from './game-text.mjs';
+import { keepsDraftTitle, reachDraft } from './reach-text.mjs';
 import { makeHookCover } from './ai-cover.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -268,19 +269,20 @@ export function uploadCoverAt(row, seconds) {
  * the user's footer and the music credit; tags = game tags, mode tags, the user's own tags, AI tags, then the
  * template's, within the limit. -> { post } | { reject: code }. Pure.
  */
-export function aiPost({ ai, tpl, ctx, post: base, music, limits, target, titleMax, kind, seed, prefs, game = null, mode = null, templates = null }) {
+export function aiPost({ ai, tpl, ctx, post: base, music, limits, target, titleMax, kind, seed, prefs, game = null, mode = null, templates = null, reach = null }) {
   const miss = new Set(); const tplMiss = new Set();
-  const title = renderText(ai.title, ctx, miss);
+  // reach text (reach-text.mjs): the model only adapts the library title; one that lost its structure is replaced by the draft
+  const title = reach?.title && !keepsDraftTitle(ai.title, reach.title) ? reach.title : renderText(ai.title, ctx, miss);
   const aiDesc = renderText(ai.description, ctx, miss);
   const tags = ai.tags.map((t) => renderText(t, ctx, miss));
   // the template's own opening line ("Highlight 4 from the stream on ...") is replaced by the AI lines; credits stay
   const tplFull = renderText(tpl.description, ctx, tplMiss);
-  const tplDesc = templates ? dropTemplateLead(tplFull, templates) : tplFull;
+  const tplDesc = reach?.live?.length ? reach.live.join('\n') : templates ? dropTemplateLead(tplFull, templates) : tplFull;
   if ([...miss].some((k) => !tplMiss.has(k))) return { reject: 'unresolved' };
   // the game's lines (Featured, subscribe, streamer; 2026-11-25 style) go between the AI lines and the template's credits
   // (game: the gamePost() object from ai-text.mjs gen; null: no game data)
   const lines = gameLines(game, target, mode, (s) => { const m = new Set(); const r = renderText(s, ctx, m); return m.size ? null : r; });
-  const p = { title, description: [aiDesc, lines, tplDesc].filter(Boolean).join('\n\n'), tags: [], hashtags: gameHashtags(game, target) ?? [...base.hashtags], target };
+  const p = { title, description: [aiDesc, reach?.cta, lines, tplDesc].filter(Boolean).join('\n\n'), tags: [], hashtags: reach?.hashtags?.length ? [...reach.hashtags] : (gameHashtags(game, target) ?? [...base.hashtags]), target };
   const fits = limitsFit(p, limits);
   const seen = new Set();
   const own = Array.isArray(prefs?.tags) ? prefs.tags : [];
@@ -512,7 +514,19 @@ export async function packageUploads(opts) {
     const hist = textHistory(opts, templates);
     const titleMax = limits.targets[target]?.fields?.title?.max ?? null;
     const d = draftText({ templates, kind: row.kind, game, facts, seed: sha, recent: hist?.recent() ?? [], maxTitle: titleMax, gamesDir: opts.gamesDir });
-    let post = {
+    // Reach text (2026-11-27): the library draft (hook title, caption, CTA, live lines, 3-5 hashtags) is the base; null when
+    // the library has no entry for this target and kind, then the older text above is used as before.
+    const gameObj = gamePost(resolveGame(game, opts.gamesDir ? { gamesDir: opts.gamesDir } : undefined), opts.gamesDir ? { gamesDir: opts.gamesDir } : undefined);
+    const reach = opts.reachLibrary === false ? null : reachDraft({ library: opts.reachLibrary ?? undefined, target, kind: row.kind, facts, game: gameObj, mode: facts.mode, profile, seed: sha,
+      recent: hist?.recent() ?? [], titleMax });
+    let post = reach ? {
+      title: reach.title,
+      // no live lines from the library (no handle in the profile): the template's own lines stay, so the missing value is listed as unresolved
+      description: reach.live.length ? reach.description : [reach.description, dropTemplateLead(renderText(tpl.description, ctx, missing), templates)].filter(Boolean).join('\n\n'),
+      tags: tpl.tags.map((t) => renderText(t, ctx, missing)),
+      hashtags: [...reach.hashtags],
+      target,
+    } : {
       title: renderText(d.title?.text ?? tpl.title, ctx, missing),
       description: renderText(d.lead ? `${d.lead.text}\n\n${tpl.description}` : tpl.description, ctx, missing),
       tags: tpl.tags.map((t) => renderText(t, ctx, missing)),
@@ -527,8 +541,8 @@ export async function packageUploads(opts) {
     // template text above stays and the reason is recorded.
     const aiMeta = {};
     if (typeof opts.aiText === 'function' || opts.aiWhy) {
-      const tried = typeof opts.aiText === 'function' ? await opts.aiText({ file, seconds, facts, kind: row.kind, limits: limits.targets[target], ffmpeg, game: resolveGame(game, opts.gamesDir ? { gamesDir: opts.gamesDir } : undefined) }) : { ok: false, code: opts.aiWhy };
-      const mixed = tried.ok ? aiPost({ ai: tried.text, tpl, ctx, post, music, limits, target, titleMax, kind: row.kind, seed: sha, prefs: readPrefs(opts.dataDir).prefs.text, game: tried.game ?? null, mode: facts.mode, templates }) : { reject: tried.code };
+      const tried = typeof opts.aiText === 'function' ? await opts.aiText({ file, seconds, facts, kind: row.kind, limits: limits.targets[target], ffmpeg, game: resolveGame(game, opts.gamesDir ? { gamesDir: opts.gamesDir } : undefined), draft: reach ? { title: reach.title, lead: reach.lead } : null }) : { ok: false, code: opts.aiWhy };
+      const mixed = tried.ok ? aiPost({ ai: tried.text, tpl, ctx, post, music, limits, target, titleMax, kind: row.kind, seed: sha, prefs: readPrefs(opts.dataDir).prefs.text, game: tried.game ?? null, mode: facts.mode, templates, reach }) : { reject: tried.code };
       if (mixed.post) {
         post = mixed.post;
         if (opts.aiText.stats) opts.aiText.stats.used += 1;
@@ -539,7 +553,8 @@ export async function packageUploads(opts) {
         Object.assign(aiMeta, { textSource: 'template', aiReject: String(mixed.reject ?? 'error').slice(0, 40) });
       }
     }
-    if (aiMeta.textSource !== 'ai' && hist && (d.title || d.lead)) hist.add(d.title?.line, d.lead?.line);
+    if (hist && reach) hist.add(...reach.used); // the library lines and hashtags used (also after AI text: they are its base)
+    else if (aiMeta.textSource !== 'ai' && hist && (d.title || d.lead)) hist.add(d.title?.line, d.lead?.line);
     let at = uploadCoverAt(row, seconds);
     const coverFile = path.join(dir, 'cover.jpg');
     // D443 T3: with checked AI text, the cover is the frame at thumbTime with the hook as big text (RP6 renderer). A reel that
