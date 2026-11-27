@@ -2,7 +2,7 @@
 
 Plan: `docs/plan/2026-11-27-facebook-live-ig-live-x-posting.md` sections 1 and 2. Branch `feat/fb-ig-live`.
 
-Status: unit tests PASS. Loopback ffprobe: PENDING (waits for the user's go). Real stream: PENDING. Not done until both pass.
+Status: unit tests PASS. Loopback ffprobe: PASS (2026-11-27, below). Real stream: PENDING. Not done until a real stream passes.
 
 ## What was built
 
@@ -18,12 +18,28 @@ Status: unit tests PASS. Loopback ffprobe: PENDING (waits for the user's go). Re
 | File | Result |
 |---|---|
 | tests/facebook-instagram-live.test.mjs (fake Graph server, sink, plan, paste) | 15 pass |
-| tests/instagram-live.test.mjs | 28 pass, 1 fail (pre-existing at HEAD 0c60fb8b: youtube-event-missing) |
+| tests/instagram-live.test.mjs | 29 pass (the "launched with Instagram" failure was test isolation: the studio server read the laptop's real Credential Manager, where a YouTube sign-in made Go live ask for a YouTube event; the test now uses an in-memory secret store and sets the D447 Instagram tick) |
+| app/host/tests/outputs-plan.test.mjs | 19 pass (new: o3-fbig-loopback plan equals preset + addFacebook + addInstagram; facebook on reencode-tk, instagram on ig-v) |
 | tests/outputs/schema.test.mjs | 34 pass |
 | tests/outputs/validate.test.mjs | 49 pass |
 | tests/stream-apply-d387.test.mjs | 10 pass |
 | tests/flags.test.mjs, posting-instagram, golive-routes, feature-settings, platform-connect, studio-launch-d327, studio-ui-connect, studio-ui-readiness | all pass |
-| tests/studio-qml-golive.test.mjs | NOT RUN (needs the studio build) |
+| tests/studio-qml-golive.test.mjs | 11 pass (headless, 339 s, studio built) |
+
+## Loopback ffprobe (2026-11-27, PASS 65/65)
+
+Command: `node app/host/tools/o1-loopback.mjs --plan app/host/outputs/o3-fbig-loopback.json --seconds 60` (UJWALAM_HEADLESS=1, studio closed, live-check off air). Local ffmpeg listeners on 127.0.0.1 only; no platform, no keys. Result: `out/host/o3-fbig/2026-11-27T20-05-05/result.json` (gitignored).
+
+| Sink | Rung | ffprobe | Limit (data/platforms) |
+|---|---|---|---|
+| facebook | reencode-tk (shared with twitch, kick) | H.264 1920x1080, 60.00 fps, 6002 kbps CBR, keyframe gap 2.000 s (26 keyframes), AAC 48 kHz stereo 160 kbps | 1080p60, 4500-9000 kbps, keyframe <= 4 s (2 s recommended), AAC <= 256 kbps |
+| instagram | ig-v (own V rung, GPU-scaled 1080x1920 -> 720x1280) | H.264 720x1280, 29.98 fps, 4009 kbps, keyframe gap 2.000 s, AAC 48 kHz stereo 160 kbps | 720x1280, <= 30 fps, 2250-6000 kbps, AAC <= 256 kbps |
+| youtube-h / youtube-v / twitch / kick | yt-h / vert / reencode-tk | 2560x1440@60 34012 kbps / 1080x1920@60 7505 kbps / 1920x1080@60 6002 kbps / 6001 kbps | unchanged |
+
+- No extra encoder for Facebook: 4 rungs for 6 sinks; NVENC sessions probed at configure (probe started 4 of 4), NVML 0 before, steady median 4 = rungs, not sinks.
+- twitch and facebook files carry identical packets (video 3009 of 3009, audio 2350 of 2350): one encoder, audio encoded once (one AAC encoder in the host log).
+- Instagram's own rung: the V rung `vert` (7500 kbps) is above Instagram's 6000 kbps, so `ig-v` was added (the validator decided).
+- Kick drop and reconnect, other sinks stayed live 16/16 samples; 0 skipped or lagged frames.
 
 ## Sources (checked 2026-11-27)
 
@@ -33,6 +49,4 @@ Status: unit tests PASS. Loopback ffprobe: PENDING (waits for the user's go). Re
 
 ## Pending
 
-- Loopback ffprobe assertions for both sinks.
-- QML probe test after a studio build.
 - One real stream each, no high-severity feedback.
