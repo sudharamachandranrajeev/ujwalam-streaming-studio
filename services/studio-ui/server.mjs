@@ -100,6 +100,8 @@ import { createDeviceRoutes } from './device-routes.mjs';
 import { connectTargets, readSetup } from './stream-setup.mjs';
 import { integrationsInEffect } from './integrations.mjs';
 import { isHostError } from './backends.mjs';
+import { createLiveExtras, readExtras } from './live-extras-routes.mjs';
+import { FACEBOOK_FLAG } from '../outputs/facebook.mjs';
 
 // Scene transition types and easing curves (D327 TR1, data/transitions/easing.json), read once.
 let easingCache = null;
@@ -531,9 +533,13 @@ export function createStudioServer(opts) {
       // IG1 (D351): with instagram-live on, a key that is not this broadcast's fails the check (null = flag off).
       instagram: () => {
         if (!instagramOn()) return null;
+        // D447: only when Instagram is ticked in the Go live window (it is left out of the start otherwise).
+        if (!readExtras(opts.dataDir).instagram) return null;
         const f = instagramFreshness(opts.dataDir);
         return f.fresh ? { fresh: true, state: f.state } : { fresh: false, state: f.state, ...instagramText(f, { connectOn: connectOn() }) };
       },
+      // D447: the facebook key is made at Go live (never present before); instagram is checked above only when ticked.
+      skipKeys: () => ['facebook', ...(opts.dataDir && readExtras(opts.dataDir).instagram ? [] : ['instagram'])],
       ...(opts.readinessDeps ?? {}),
     });
     return readinessRunner;
@@ -571,6 +577,19 @@ export function createStudioServer(opts) {
   // says the launched plan has the instagram sink: readiness and key tracking follow that, not the flag's current value.
   const instagramOn = () => opts.instagramLive === true && typeof opts.dataDir === 'string';
   const instagramFlag = () => !!flags && flags.isOn(INSTAGRAM_FLAG);
+  // D447: Facebook Live is in the launched plan (cli --facebook-live) and its flag is still on (switching it off while
+  // the studio runs stops new Facebook live videos at once; the sink leaves the plan at the next start).
+  const facebookOn = () => opts.facebookLive === true && typeof opts.dataDir === 'string' && !!flags && flags.isOn(FACEBOOK_FLAG);
+  // The Go live Facebook and Instagram cards and their stream start / stop hooks (D447). opts.liveExtras: test seams.
+  const liveExtras = typeof opts.dataDir === 'string' ? createLiveExtras({
+    dataDir: opts.dataDir, facebookOn, instagramOn: () => instagramOn(), log: (m) => log(m), ...(opts.liveExtras ?? {}),
+    outputLive: (id) => outputLive(id),
+    // Title and description of the Facebook live video: the YouTube Go live choice's fields when there are any.
+    templateText: () => {
+      const c = Object.values(readYtChoices(opts.dataDir) ?? {}).find((x) => x && (x.fields?.title || x.title));
+      return c ? { title: c.fields?.title ?? c.title, description: c.fields?.description ?? c.description } : {};
+    },
+  }) : null;
   // The flag list, with the Instagram flag marked when its value differs from the running plan (applies at next start).
   const flagList = () => (flags ? flags.list().map((f) => (f.id === INSTAGRAM_FLAG && !!f.on !== instagramOn()
     ? { ...f, effective: instagramOn(), note: 'applies at next start (this start runs ' + (instagramOn() ? 'with' : 'without') + ' Instagram)' } : f)) : []);
@@ -585,7 +604,8 @@ export function createStudioServer(opts) {
     // IG1 (D351): with instagram-live on (or in the running plan), the Instagram output is listed even before a --live
     // start (the URL and key are pasted before each broadcast); a plan row with that id is replaced by it.
     const ig = instagramOn() || instagramFlag() ? (() => { try { return instagramRow(); } catch { return null; } })() : null;
-    const rows = planTargets(planInEffect()).filter((r) => !ig || r.id !== ig.id).concat(ig ? [ig] : []);
+    // D447: the facebook output is not listed: its address and key are made at each Go live, never pasted or signed in here.
+    const rows = planTargets(planInEffect()).filter((r) => (!ig || r.id !== ig.id) && r.id !== 'facebook').concat(ig ? [ig] : []);
     // D385: also before the first Save (the setup is then the seed from the live plan, same output ids), so the 2K and 4K
     // YouTube key rows can be filled before the setup that uses them is saved.
     if (flags && flags.isOn(STREAM_SETTINGS_FLAG) && typeof opts.dataDir === 'string') {
@@ -1809,6 +1829,7 @@ export function createStudioServer(opts) {
     }
     if (req.method === 'GET' && route === '/ui/api/posts/media') return postMedia(req, res, url);
     if (req.method === 'GET' && await igRoutes.handle('GET', route, null, res, json)) return undefined; // D444
+    if (req.method === 'GET' && liveExtras && await liveExtras.handle('GET', route, null, res, json)) return undefined; // D447
     if (req.method === 'GET' && await chRoutes.handle('GET', route, null, res, json)) return undefined; // YM6
     if (req.method === 'GET' && route === '/ui/api/posts/youtube/status') {
       try { const st = await youtubeAuth().status(); return json(res, 200, { signedIn: st.signedIn === true, hasClient: st.hasClient === true }); } catch { return json(res, 502, { error: 'youtube-status-failed' }); }
@@ -1978,6 +1999,7 @@ export function createStudioServer(opts) {
       return json(res, 200, { verdict: 'allow', flags: applyFlag(body.id, true) }); // ON: the click is the decision (D332)
     }
     if (await igRoutes.handle('POST', route, body, res, json)) return undefined; // D444 Instagram (Origin + CSRF checked above)
+    if (liveExtras && await liveExtras.handle('POST', route, body, res, json)) return undefined; // D447 Go live Facebook / Instagram cards
     if (await chRoutes.handle('POST', route, body, res, json)) return undefined; // YM6 YouTube channels (Origin + CSRF checked above)
     if (route.startsWith('/ui/api/connect/')) return connectRoute(res, route, body);
     if (route === '/ui/api/youtube/templates' || route === '/ui/api/youtube/event/set' || route === '/ui/api/youtube/event/auto') return ytEventsRoute(req, res, route, body); // D386, D388
@@ -2341,6 +2363,19 @@ export function createStudioServer(opts) {
             log(`[studio-ui] youtube-events: ${ytMade.length} event(s) ${mode === 'existing' ? 'linked' : 'made'} (${mode}), ${ytMade.reduce((n, e) => n + e.warnings.length, 0)} warning(s)`);
           }
         }
+        // D447: the Go live Facebook and Instagram ticks decide whether those sinks are in this start; with Facebook in it,
+        // its live video is made now (server address and key to Credential Manager for this broadcast; ended again in
+        // finally when the start is not accepted).
+        if (p.method === 'stream.start' && liveExtras && (facebookOn() || instagramOn())) {
+          let planned = null;
+          try { const st = await host.call('outputs.status', {}); planned = Array.isArray(st?.sinks) ? st.sinks.filter((s) => s && s.kind === 'stream').map((s) => String(s.id)) : null; } catch { planned = null; }
+          const ex = await liveExtras.beforeStart({ sinks: Array.isArray(callParams?.sinks) ? callParams.sinks : null, planned });
+          if (!ex.ok) return json(res, 200, { verdict: 'refuse', reason: ex.reason, detail: ex.detail });
+          if (Array.isArray(ex.sinks)) {
+            if (!ex.sinks.length) return json(res, 200, { verdict: 'refuse', reason: 'no-outputs-enabled', detail: 'No output is switched on. Switch one on in the Outputs panel or Settings > Stream.' });
+            callParams = { ...(callParams ?? {}), sinks: ex.sinks };
+          }
+        }
         if (Number.isInteger(startGen) || startEpoch !== null) {
           if (startPauseMs) await new Promise((r) => setTimeout(r, startPauseMs));
           // A Stop / End all confirmed since this start began wins: the start is not sent.
@@ -2384,6 +2419,8 @@ export function createStudioServer(opts) {
         // The click's own stop epoch: a Stop that came in at any point after it wins (Codex review of LC2).
         if (p.method === 'stream.start') recordWarning = (await recordLive.afterStreamStart({ epoch: startEpoch })).warning ?? null;
         if (p.method === 'stream.stop') await recordLive.streamEnded('the stream was stopped');
+        if (p.method === 'stream.stop' && liveExtras && (!Array.isArray(p.params?.sinks) || p.params.sinks.some((s) => s === 'facebook' || s === 'instagram'))) await liveExtras.streamEnded(); // D447
+        if (p.method === 'stream.start' && liveExtras) liveExtras.startAccepted();
         if (p.method === 'record.start' || p.method === 'record.stop') recordLive.handOff();
         const warning = [p.warning, recordWarning].filter(Boolean).join(' ') || null;
         // A layout change confirmed while live autosaves like an instant one (P5b).
@@ -2413,6 +2450,8 @@ export function createStudioServer(opts) {
             if (undo.length) { try { const svc = ytEvents(); await Promise.all(undo.map((e) => svc.deleteEvent(e.broadcastId))); } catch { /* best effort */ } }
             log(`[studio-ui] youtube-events: start not accepted, ${undo.length} event(s) deleted again, ${mine.length - undo.length} kept (output not shown idle), ${all.length - mine.length} not ours kept`);
           }
+          // D447: a start not accepted ends the Facebook live video it made (best effort; else a left-over at the next start).
+          if (p.method === 'stream.start' && liveExtras && !ytKept) await liveExtras.startFailed();
           if (starting) { startsInFlight -= 1; lastStartAt = now(); }
         }
       }
@@ -2420,6 +2459,7 @@ export function createStudioServer(opts) {
         stopEpoch += 1;
         if (authority) await authority.revoke('end-all');
         const endAll = await endAllStreams();
+        if (liveExtras) await liveExtras.streamEnded(); // D447: Facebook live video ended, Instagram's one-time key deleted
         // Record while live (LC2): a recording started with the stream ends with it; one started by hand keeps running.
         const recordingStopped = await recordLive.streamEnded('all streams were ended');
         return json(res, 200, { verdict: 'allow', endAll: recordingStopped ? { ...endAll, recording: false, recordingStopped: true } : endAll });
