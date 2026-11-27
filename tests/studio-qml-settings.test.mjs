@@ -98,7 +98,10 @@ describe('QML studio Settings (headless probe)', { skip }, () => {
     assert.equal(s.settings.motion, 'system');
     assert.equal(s.flagsInSettings, true);
     const rows = s.settings.flagRows;
-    assert.equal(rows.length, s.flags.length, 'a row for every flag the server lists');
+    // A finished feature ("setting": true in data/flags.json, 2026-11-26) has its own switch in its section, not a FEATURES row.
+    const featureFlags = s.flags.filter((f) => DEFS.find((x) => x.id === f.id)?.setting !== true);
+    assert.equal(rows.length, featureFlags.length, 'a row for every flag the server lists that is not a finished feature');
+    assert.ok(featureFlags.length < s.flags.length, 'some flags are finished features with their own switch');
     for (const r of rows) {
       const f = { ...DEFS.find((x) => x.id === r.id), ...s.flags.find((x) => x.id === r.id) };
       assert.equal(r.on, f.on, r.id);
