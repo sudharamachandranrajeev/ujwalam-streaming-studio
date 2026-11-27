@@ -368,6 +368,19 @@ export function parseSafepoint(line) {
   let j; try { j = JSON.parse(m[1]); } catch { return null; }
   return j && typeof j.stage === 'string' && Number.isSafeInteger(j.done) ? { stage: j.stage, done: j.done } : null;
 }
+// Job pacing (2026-11-27, clip_common.pace_line): `ujwalam-pace {"pace":"<pace>"}` when the clip work changes pace;
+// shown on the running task in plain words.
+const PACE_RE = /^ujwalam-pace (\{.{1,80}\})$/;
+export const PACE_TEXT = Object.freeze({ full: 'Full speed (you are away)', gentle: 'Going slowly while you use the PC',
+  'hold-fullscreen': 'Paused while a game is full screen', 'hold-presentation': 'Paused while you present',
+  'hold-busy': 'Paused while a full-screen app runs', 'hold-battery': 'Paused on battery' });
+/** One clipper stderr line -> the pace id when it is a pace line, else null. */
+export function parsePace(line) {
+  const m = typeof line === 'string' ? PACE_RE.exec(line.trim()) : null;
+  if (!m) return null;
+  let j; try { j = JSON.parse(m[1]); } catch { return null; }
+  return j && Object.hasOwn(PACE_TEXT, j.pace) ? j.pace : null;
+}
 /** Is this safe point one where this job may be ended for a pause? */
 export function isSafePoint(sp, job) {
   if (!sp || !pauseInfo(job).pausable || !(Number(sp.done) >= 1)) return false;
@@ -508,8 +521,11 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       // No progress line yet: the stage is the first one expected, with no count (the panel says "Starting").
       const words = p ? stageWords(st, j) : { stageText: 'Starting', unit: null, measured: true };
       return { ...base, title: j.type === 'beatdrop' ? beatdropTitle(j) : `${STAGE_TITLE[st]} ${nm}`, state: 'running', stage: st, done: p?.done ?? null, total: p?.total ?? null, note: p?.note ?? null,
-        ...(p?.note ? {} : { note: j.captionsOk === false ? CAPTIONS_SKIPPED : null }), ...(j.pauseAt ? { note: 'Pausing at the next safe point' } : {}),
-        stages: jobStages(j), ...words, activeAt: j.activeAt ?? null, progressAt: j.progressAt ?? null, parts: partsOf(p ? st : null) };
+        ...(p?.note ? {} : { note: j.captionsOk === false ? CAPTIONS_SKIPPED : null }),
+        // job pacing: slow or paused shows over the progress note; full speed only when there is no other note
+        ...(j.pace && j.pace !== 'full' ? { note: PACE_TEXT[j.pace] } : j.pace === 'full' && !p?.note && j.captionsOk !== false ? { note: PACE_TEXT.full } : {}),
+        ...(j.pauseAt ? { note: 'Pausing at the next safe point' } : {}),
+        stages: jobStages(j), ...words, ...(j.pace?.startsWith('hold') ? { measured: false } : {}), activeAt: j.activeAt ?? null, progressAt: j.progressAt ?? null, parts: partsOf(p ? st : null) };
     }
     return { ...base, title: j.type === 'train' ? 'Game pack check' : j.type === 'beatdrop' ? beatdropTitle(j) : j.type === 'long' ? `Long highlights video from ${nm}` : `Clips from ${nm}`, state: 'waiting', stage: null, done: null, total: null,
       note: j === current ? (liveNow ? 'Paused while the stream runs' : 'Paused while recording')
@@ -642,7 +658,7 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
       current = job;
       // Codex round 2: the files' identity when the job starts reading them; the finish record needs the same files.
       job.hId = typeof job.h === 'string' && job.h ? fileIdentity(job.h) : null; job.vId = typeof job.v === 'string' && job.v ? fileIdentity(job.v) : null;
-      progress = null;
+      progress = null; delete job.pace;
       job.activeAt = now(); job.progressAt = null; // the stall warning measures silence from here (tasks.mjs stallOf)
       // stdin: the parent pipe (D234): when the launcher is gone (even hard-killed) the clipper ends itself and its ffmpeg
       // children (clip_common.end_tree_when_parent_gone), so nothing runs on unseen after Ujwalam closed (D311 proposed).
@@ -672,6 +688,8 @@ export function createRecordClips({ clipRoot, dataDir, project = null, log, spaw
         // D442 log tail: typed events only (tasks.mjs pushLogEvent); the raw line stays in the local log file.
         const p = parseProgress(line);
         const sp = p ? null : parseSafepoint(line);
+        const pc = p || sp ? null : parsePace(line);
+        if (pc) { job.pace = pc; job.progressAt = now(); if (writeOk) writeTasks(); continue; } // held: never called stuck
         if (p) {
           progress = p; job.progressAt = now();
           pushLogEvent(job.logEvents ??= [], { type: 'progress', stage: p.stage, done: p.done, total: p.total });

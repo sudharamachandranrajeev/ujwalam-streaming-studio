@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CAPTIONS_SKIPPED, CLIP_MAKER_FIX, clipRunSpec, clipTools, countClips, countSaves, createRecordClips, finishedRecording, isLive, jobStages, liveClipperTask, longNotMade, parseProgress, reelsNotMade, stageWords, trainNote } from '../services/studio-ui/record-clips.mjs';
+import { CAPTIONS_SKIPPED, CLIP_MAKER_FIX, clipRunSpec, clipTools, countClips, countSaves, createRecordClips, finishedRecording, isLive, jobStages, liveClipperTask, longNotMade, parsePace, parseProgress, reelsNotMade, stageWords, trainNote } from '../services/studio-ui/record-clips.mjs';
 import { folderProblem, readSettings, settingsProblems, writeSettings } from '../services/studio-ui/user-settings.mjs';
 
 const RUNGS = [{ id: 'rec-h', canvas: 'H' }, { id: 'rec-v', canvas: 'V' }];
@@ -60,6 +60,8 @@ test('settings: defaults ask/ask, plain folders only, bad values refused, merge 
     assert.deepEqual(readSettings(d), { exists: false, clips: { recording: 'ask', live: 'ask', recordLive: true, matchGate: gate }, folders: { recordings: null, clips: null } });
     assert.deepEqual(settingsProblems({ clips: { recordLive: 'yes' } }), ['clips.recordLive must be true or false'], 'LC2: a plain on/off');
     assert.deepEqual(settingsProblems({ clips: { recordLive: false } }), []);
+    assert.deepEqual(settingsProblems({ clips: { goEasy: 'on' } }), ['clips.goEasy must be true or false'], 'job pacing switch');
+    assert.deepEqual(settingsProblems({ clips: { goEasy: false } }), []);
     assert.deepEqual(settingsProblems({ clips: { recording: 'sometimes' } }), ['clips.recording must be one of ask, after, while, off']);
     assert.match(settingsProblems({ folders: { clips: 'relative\\x' } })[0], /full path/);
     assert.match(settingsProblems({ folders: { clips: path.join(d, 'app', 'clips') } }, { forbidden: [path.join(d, 'app')] })[0], /may not be inside/);
@@ -351,6 +353,13 @@ test('no clip maker: reported in plain words, nothing spawned', () => {
   } finally { rmSync(s.d, { recursive: true, force: true }); }
 });
 
+test('job pacing: parsePace takes only known paces', () => {
+  assert.equal(parsePace('ujwalam-pace {"pace":"hold-battery"}'), 'hold-battery');
+  assert.equal(parsePace('ujwalam-pace {"pace":"warp"}'), null);
+  assert.equal(parsePace('ujwalam-pace {nope'), null);
+  assert.equal(parsePace('ujwalam-progress {"pace":"full"}'), null);
+});
+
 test('parseProgress: only well-formed ujwalam-progress lines count; lengths capped, paths dropped', () => {
   assert.deepEqual(parseProgress('ujwalam-progress {"stage":"render","done":3,"total":7,"note":"clip 3"}'), { stage: 'render', done: 3, total: 7, note: 'clip 3' });
   assert.equal(parseProgress('ujwalam-progress {"stage":"bogus","done":1,"total":2}'), null);
@@ -440,6 +449,13 @@ test('tasks: stderr progress lines drive the task title and bar; exit makes it d
     assert.equal(task().title, 'Editing clips from practice-h-1');
     assert.deepEqual([task().stageText, task().unit], ['Making clip videos', 'clip']);
     assert.equal(task().state, 'running');
+    // job pacing (2026-11-27): a pace line shows in plain words; a held job is never called stuck
+    err.write('ujwalam-pace {"pace":"gentle"}\n'); await tick();
+    assert.equal(task().note, 'Going slowly while you use the PC');
+    err.write('ujwalam-pace {"pace":"hold-fullscreen"}\n'); await tick();
+    assert.deepEqual([task().note, task().measured], ['Paused while a game is full screen', false]);
+    err.write('ujwalam-pace {"pace":"full"}\n'); await tick();
+    assert.deepEqual([task().note, task().measured], ['Full speed (you are away)', null]);
     s.spawned[0].c.emit('exit', 1);
     assert.equal(task().state, 'failed');
     assert.match(task().title, /did not finish/);

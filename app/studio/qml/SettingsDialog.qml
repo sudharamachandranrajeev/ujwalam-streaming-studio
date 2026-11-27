@@ -178,6 +178,8 @@ Dialog {
             live: modes.some(m => m.value === c.live) ? c.live : "ask",
             hadRecordLive: c.recordLive !== undefined,
             recordLive: c.recordLive !== false,
+            hadGoEasy: c.goEasy !== undefined, // job pacing (2026-11-27): on unless set off
+            goEasy: c.goEasy !== false,
             hadGate: c.matchGate !== undefined,
             top3: gate.top3 !== undefined ? gate.top3 === true : true,
             killsN: kills > 0 ? kills : -1,
@@ -284,7 +286,7 @@ Dialog {
     function transMsNow(d) { return kindRange(d.transKind) ? d.transMs : 0 }
     function isDirty() {
         const d = draft, s = start;
-        for (const k of ["recording", "live", "recordLive", "top3", "theme", "effects", "motion", "snap", "transKind"])
+        for (const k of ["recording", "live", "recordLive", "goEasy", "top3", "theme", "effects", "motion", "snap", "transKind"])
             if (d[k] !== s[k]) return true;
         if ((d.killsOn ? d.kills : -1) !== s.killsN) return true;
         if (!same(d.reel, s.reel) || !same(d.hooks, s.hooks) || !same(d.look, s.look) || !same(d.reelStyles, s.reelStyles) || !same(d.montageMusic, s.montageMusic) || !same(d.realismLooks, s.realismLooks)) return true;
@@ -300,6 +302,7 @@ Dialog {
         // each newer key is sent only when it matters: an older server refuses a key it does not know
         if (s.hadGate || d.top3 !== s.top3 || kills !== s.killsN) clips.matchGate = { top3: d.top3, minKills: kills > 0 ? kills : null };
         if (s.hadRecordLive || d.recordLive !== s.recordLive) clips.recordLive = d.recordLive;
+        if (s.hadGoEasy || d.goEasy !== s.goEasy) clips.goEasy = d.goEasy;
         const reel = {};
         for (const id in d.reel) if (!same(d.reel[id], s.reel[id])) reel[id] = { minSec: d.reel[id].lo, maxSec: d.reel[id].hi };
         if (Object.keys(reel).length) clips.reelLengths = reel;
@@ -956,6 +959,8 @@ Dialog {
             reelTransition: k ? { kind: k.id, label: k.label, ms: transMsNow(draft), msEnabled: !!r, min: r ? r.min : 0, max: r ? r.max : 0 } : null,
             recordLive: { on: draft.recordLive, text: "Record while live", visible: page === "Clips",
                 hint: "Records the stream (H and V) to your recordings folder so reels can be made after it ends. Uses about 10 GB per hour." },
+            goEasy: { on: draft.goEasy, text: "Go easy while I use the PC", visible: page === "Clips",
+                hint: "Clip work after a stream runs slowly while you use the PC, pauses while a game is full screen or the laptop is on battery, and runs at full speed when you are away." },
             snap: draft.snap, unsavedOpen: unsaved.opened, guide: guide, streamPage: streamPg.active ? streamPg.probe() : null,
             transitionsPage: transPg.active ? transPg.probe() : null,
             postingPage: postPg.active ? postPg.probe() : null,
@@ -1011,6 +1016,7 @@ Dialog {
         case "settings-flag": if (!flagList.some(f => f.id === p[1])) return false; setFlagDraft(p[1], on(p[2])); return true;
         case "settings-motion": if (!motionChoices.some(m => m.value === p[1])) return false; set("motion", p[1]); return true;
         case "settings-record-live": set("recordLive", on(p[1])); return true;
+        case "settings-go-easy": set("goEasy", on(p[1])); return true;
         case "settings-snap": set("snap", on(p[1])); return true;
         case "settings-theme": if (!Theme.themes().some(t => t.id === p[1])) return false; pickTheme(p[1]); return true;
         case "settings-reduce-effects": if (draft.effects === "performance") return false; setReduce(on(p[1])); return true;

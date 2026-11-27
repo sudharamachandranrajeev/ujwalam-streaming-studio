@@ -89,6 +89,15 @@ Column {
     UCard {
         title: "AFTER EACH STREAM OR RECORDING"
         objectName: "settingsAfterEach"
+        // job pacing (2026-11-27): settings.json clips.goEasy, on by default (services/clip/clip_common.py run_tool)
+        USwitch {
+            objectName: "settingsGoEasy"
+            width: parent.width
+            text: "Go easy while I use the PC"
+            hint: "Clip work after a stream runs slowly while you use the PC, pauses while a game is full screen or the laptop is on battery, and runs at full speed when you are away."
+            checked: cp.d.goEasy === true
+            onToggled: cp.box.set("goEasy", checked)
+        }
         FeatureSwitch {
             box: cp.box; fid: "beatdrop"
             text: "BeatDrop montage after each stream"
