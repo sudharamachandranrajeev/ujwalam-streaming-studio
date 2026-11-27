@@ -85,6 +85,7 @@ export const REPO_FILES = Object.freeze([
   'data/outputs/alpha-live.json', 'data/outputs/alpha-practice.json', 'data/outputs/guard/live-test-budget.json', 'data/outputs/addons/instagram-live.json',
   'data/posting/templates.json', 'data/posting/limits.json',
   'data/posting/instagram.json', // D444 Instagram Reels autopost (services/posting/instagram.mjs)
+  'data/posting/post-text-library.json', // 2026-11-27 reach text library (services/posting/reach-text.mjs)
   'data/posting/channels.json', // YM several YouTube channels: per-channel posts a day (services/posting/accounts.mjs)
   // read at run time by shipped services; missing before alpha.23 (dataRefProblems below now catches this)
   'data/posting/auto-post-rules.json', 'data/posting/schedule.json', 'data/posting/quota.json', 'data/clip/targets.json', 'data/stream/stream-options.json',
