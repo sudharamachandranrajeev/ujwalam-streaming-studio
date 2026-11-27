@@ -20,6 +20,7 @@ import { ALPHA_LIVE_PLAN, livePlanFile } from '../services/studio-ui/launch.mjs'
 import { createConnect, createMemoryStores, outputsFromPlan, sameSecret } from '../services/platform-connect/index.mjs';
 import { createFakeHost } from '../services/studio-ui/backends.mjs';
 import { createStudioServer } from '../services/studio-ui/server.mjs';
+import { writeExtras } from '../services/studio-ui/live-extras-routes.mjs';
 import { loadReadinessConfig, planTargets, runReadiness } from '../services/studio-ui/readiness.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -391,7 +392,10 @@ describe('studio server: Instagram latched at start, starts consume the key', ()
     const fake = createFakeHost({ outputsReady: true });
     const host = { describe: () => fake.describe(), call: async (m, p) => (m === 'outputs.status' ? status() : fake.call(m, p)) };
     const core = { describe: () => ({ available: false }), call: async () => null, confirm: async () => null };
-    const srv = createStudioServer({ uiRoot: path.join(REPO, 'ui'), core, host, launchKey: LKEY, dataDir, instagramLive, limits: { statusPollMs: 30 }, log: () => {} });
+    const srv = createStudioServer({ uiRoot: path.join(REPO, 'ui'), core, host, launchKey: LKEY, dataDir, instagramLive, limits: { statusPollMs: 30 }, log: () => {},
+      // Isolation: an empty in-memory secret store, never the laptop's Credential Manager (a real YouTube sign-in there
+      // made stream.start refuse with youtube-event-missing on the dev machine only).
+      connect: { storeFor: createMemoryStores({}).storeFor, sleep: async () => {}, browserOpen: async () => {} } });
     servers.push(srv);
     const { port } = await srv.listen();
     const login = await req(port, { url: '/login?k=' + LKEY });
@@ -415,6 +419,7 @@ describe('studio server: Instagram latched at start, starts consume the key', ()
   test('launched with Instagram: Start stream marks the key started before the host call; the end between polls makes it used', async () => {
     let sinks = [{ id: 'instagram', kind: 'stream', state: 'stopped', attempts: 0 }];
     const c = await boot({ instagramLive: true, flagOn: false, status: () => ({ sinks }) });
+    writeExtras(c.dataDir, { instagram: true }); // D447: Instagram ticked in the Go live window
     noteKeySaved(c.dataDir);
     const r = await c.post('/ui/api/host', { method: 'stream.start', params: {} });
     assert.equal(r.verdict, 'allow', JSON.stringify(r));
