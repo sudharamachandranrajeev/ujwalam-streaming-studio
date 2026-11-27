@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "source": "user decisions 2026-11-27, docs/plan/2026-11-27-background-job-pacing.md",
+  "awaySec": 300,
+  "gentle": { "runSec": 1, "pauseSec": 3 },
+  "battery": { "hold": true, "belowPercent": 101 },
+  "holdOn": ["fullscreen", "presentation", "busy"]
+}

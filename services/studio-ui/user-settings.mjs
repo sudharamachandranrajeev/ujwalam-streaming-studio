@@ -21,6 +21,9 @@
 //   clips.look: the clip look (FX1-FX4, D411): ticks per style group, randomise, locks and tunables (data/clip/look.json).
 //   clips.realismLooks: the realism look per reel type (RL4, D445): off, one look, or random from ticked looks.
 //   clips.montageMusic: the NCS library for BeatDrop montages (D413/D414): { on, folder, mode, fixedTrack, avoidLast }.
+//   clips.goEasy: true (default, absent) | false: "Go easy while I use the PC" (2026-11-27): post-stream clip work runs at
+//                 a quarter speed while the user is at the PC and waits during a full-screen game or on battery
+//                 (services/clip/clip_common.py run_tool pacing, values in data/clip/pacing.json). Stored only once set.
 //   folders.recordings: where recordings are saved (used from the next start); null = <host data>/recordings
 //   folders.clips: where finished clips are saved; null = <dataDir>/clips
 //   ui.motion (D290), ui.guide (D294 proposed): see the blocks below
@@ -578,7 +581,8 @@ export function readSettings(dataDir) {
       ...(readLook(c.look) ? { look: readLook(c.look) } : {}), // clip look
       ...(readReelStyles(c.reelStyles) ? { reelStyles: readReelStyles(c.reelStyles) } : {}), // reel styles
       ...(readRealismLooks(c.realismLooks) ? { realismLooks: readRealismLooks(c.realismLooks) } : {}), // realism looks
-      ...(readMontageMusic(c.montageMusic) ? { montageMusic: readMontageMusic(c.montageMusic) } : {}) }, // montage music
+      ...(readMontageMusic(c.montageMusic) ? { montageMusic: readMontageMusic(c.montageMusic) } : {}), // montage music
+      ...(typeof c.goEasy === 'boolean' ? { goEasy: c.goEasy } : {}) }, // job pacing (absent = on)
     folders: { recordings: dir(f.recordings), clips: dir(f.clips) },
     ...uiRead(j), // D290
     ...featuresRead(j), // feature settings (2026-11-26)
@@ -614,6 +618,7 @@ export function settingsProblems(patch, { forbidden = [] } = {}) {
     else if (k === 'realismLooks') out.push(...realismLooksProblems(v)); // realism looks
     else if (k === 'montageMusic') out.push(...montageMusicProblems(v)); // montage music
     else if (k === 'recordLive') { if (typeof v !== 'boolean') out.push('clips.recordLive must be true or false'); } // LC2
+    else if (k === 'goEasy') { if (typeof v !== 'boolean') out.push('clips.goEasy must be true or false'); } // job pacing
     else if (!['recording', 'live'].includes(k)) out.push(`unknown clip setting ${k}`);
     else if (!CLIP_MODES.includes(v)) out.push(`clips.${k} must be one of ${CLIP_MODES.join(', ')}`);
   }

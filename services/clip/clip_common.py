@@ -471,7 +471,195 @@ def _resume(process_handle):
     return nt.NtResumeProcess(wintypes.HANDLE(int(process_handle))) == 0
 
 
-def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=2.0, setup_sec=300.0, stop=None):
+def _suspend(process_handle):
+    """Suspends every thread of a process (ntdll NtSuspendProcess). -> True on success. Pacing only (2026-11-27)."""
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+    nt = ctypes.WinDLL("ntdll")
+    nt.NtSuspendProcess.argtypes = [wintypes.HANDLE]
+    nt.NtSuspendProcess.restype = ctypes.c_long
+    return nt.NtSuspendProcess(wintypes.HANDLE(int(process_handle))) == 0
+
+
+# ---------------------------------------------------------------- pacing (2026-11-27, docs/plan/2026-11-27-background-job-pacing.md)
+# Post-stream clip children give the PC back to the user: full speed while the user is away, a quarter (run ~1 s,
+# suspended ~3 s) while the user is at the PC, held while a full-screen game or presentation runs or on battery.
+# The live clipper never calls enable_pacing, so it is never paced.
+
+PACING_FILE = os.path.join(REPO_ROOT, "data", "clip", "pacing.json")
+PACING_DEFAULTS = {"awaySec": 300.0, "runSec": 1.0, "pauseSec": 3.0, "batteryHold": True, "batteryBelowPercent": 101,
+                   "holdOn": ("fullscreen", "presentation", "busy")}
+PACE_PREFIX = "ujwalam-pace "
+PACES = ("full", "gentle", "hold-fullscreen", "hold-presentation", "hold-busy", "hold-battery")
+_QUNS = {2: "busy", 3: "fullscreen", 4: "presentation"}  # SHQueryUserNotificationState: BUSY, RUNNING_D3D_FULL_SCREEN, PRESENTATION_MODE
+
+
+def pacing_config(path=PACING_FILE):
+    """data/clip/pacing.json merged over the defaults; a missing or bad value keeps its default."""
+    out = dict(PACING_DEFAULTS)
+    try:
+        j = load_json(path)
+    except (OSError, ClipError):
+        return out
+    if not isinstance(j, dict):
+        return out
+    num = lambda v, lo, hi: isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi  # noqa: E731
+    if num(j.get("awaySec"), 10, 86400):
+        out["awaySec"] = float(j["awaySec"])
+    g = j.get("gentle") if isinstance(j.get("gentle"), dict) else {}
+    if num(g.get("runSec"), 0.2, 60) and num(g.get("pauseSec"), 0, 600):
+        out["runSec"], out["pauseSec"] = float(g["runSec"]), float(g["pauseSec"])
+    b = j.get("battery") if isinstance(j.get("battery"), dict) else {}
+    if isinstance(b.get("hold"), bool):
+        out["batteryHold"] = b["hold"]
+    if num(b.get("belowPercent"), 0, 101):
+        out["batteryBelowPercent"] = b["belowPercent"]
+    h = j.get("holdOn")
+    if isinstance(h, list) and all(x in _QUNS.values() for x in h):
+        out["holdOn"] = tuple(h)
+    return out
+
+
+def choose_pace(signals, cfg):
+    """Pure: the pace for the user's state. signals: {"idleSec": float|None, "state": "fullscreen"|"presentation"|
+    "busy"|None, "onBattery": bool|None, "batteryPercent": int|None}. Unknown values never hold and never give full
+    speed (unknown idle = gentle). -> one of PACES."""
+    if cfg.get("batteryHold") and signals.get("onBattery") is True:
+        pct = signals.get("batteryPercent")
+        if pct is None or pct < cfg.get("batteryBelowPercent", 101):
+            return "hold-battery"
+    st = signals.get("state")
+    if st in cfg.get("holdOn", ()):
+        return "hold-" + st
+    idle = signals.get("idleSec")
+    if isinstance(idle, (int, float)) and idle >= cfg.get("awaySec", 300.0):
+        return "full"
+    return "gentle"
+
+
+def read_user_signals():
+    """The user's state from three cheap Win32 calls (no process, no WMI). Anything that fails is None."""
+    out = {"idleSec": None, "state": None, "onBattery": None, "batteryPercent": None}
+    if os.name != "nt":
+        return out
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    class SYSTEM_POWER_STATUS(ctypes.Structure):
+        _fields_ = [("ACLineStatus", ctypes.c_ubyte), ("BatteryFlag", ctypes.c_ubyte), ("BatteryLifePercent", ctypes.c_ubyte),
+                    ("SystemStatusFlag", ctypes.c_ubyte), ("BatteryLifeTime", wintypes.DWORD), ("BatteryFullLifeTime", wintypes.DWORD)]
+    try:
+        lii = LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO), 0)
+        u = ctypes.windll.user32
+        if u.GetLastInputInfo(ctypes.byref(lii)):
+            k = ctypes.windll.kernel32
+            k.GetTickCount.restype = wintypes.DWORD
+            out["idleSec"] = ((k.GetTickCount() - lii.dwTime) & 0xFFFFFFFF) / 1000.0
+    except (OSError, AttributeError):
+        pass
+    try:
+        q = ctypes.c_int(0)
+        if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(q)) == 0:
+            out["state"] = _QUNS.get(q.value)
+    except (OSError, AttributeError):
+        pass
+    try:
+        ps = SYSTEM_POWER_STATUS()
+        if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(ps)):
+            out["onBattery"] = {0: True, 1: False}.get(ps.ACLineStatus)
+            out["batteryPercent"] = None if ps.BatteryLifePercent == 255 else int(ps.BatteryLifePercent)
+    except (OSError, AttributeError):
+        pass
+    return out
+
+
+class PaceGate:
+    """Duty cycle and running-time clock for one child. step(now) -> True when the child should be suspended now.
+    The caller suspends/resumes and then calls set_suspended(flag, now). run_time(now) counts only time the child ran
+    (the stall watchdog and the timeout use it, so a paced child is never killed as hung)."""
+
+    def __init__(self, cfg, read_signals=read_user_signals, t0=0.0):
+        self.cfg, self.read_signals = cfg, read_signals
+        self.t0, self.suspended, self.susp_since, self.susp_total = t0, False, None, 0.0
+        self.pace, self.phase_end = None, None
+
+    def run_time(self, now):
+        held = (now - self.susp_since) if self.suspended and self.susp_since is not None else 0.0
+        return now - self.t0 - self.susp_total - held
+
+    def set_suspended(self, flag, now):
+        if flag and not self.suspended:
+            self.suspended, self.susp_since = True, now
+        elif not flag and self.suspended:
+            self.susp_total += now - self.susp_since
+            self.suspended, self.susp_since = False, None
+
+    def step(self, now):
+        try:
+            pace = choose_pace(self.read_signals(), self.cfg)
+        except Exception:  # noqa: BLE001 - a signal that cannot be read never stops the job
+            pace = "gentle"
+        if pace != self.pace:
+            self.pace = pace
+            self.phase_end = now + self.cfg["runSec"] if pace == "gentle" else None
+        if pace == "full":
+            return False
+        if pace != "gentle":
+            return True
+        if self.cfg["pauseSec"] <= 0:
+            return False
+        if now >= self.phase_end:  # flip phase: running -> paused for pauseSec, paused -> running for runSec
+            want = not self.suspended
+            self.phase_end = now + (self.cfg["pauseSec"] if want else self.cfg["runSec"])
+            return want
+        return self.suspended
+
+    def next_wake(self, now):
+        """Seconds until the next phase flip (gentle), else None."""
+        return None if self.phase_end is None else max(0.0, self.phase_end - now)
+
+
+_PACING = None  # the pacing config while enabled (enable_pacing), else None
+_LAST_PACE = None  # the last pace written (one ujwalam-pace line per change, not per child)
+
+
+def pacing_on(data_dir):
+    """Settings > Clips "Go easy while I use the PC": <data>/settings.json clips.goEasy, on when unset or invalid."""
+    if not data_dir:
+        return True
+    try:
+        j = load_json(os.path.join(data_dir, SETTINGS_FILE))
+    except (OSError, ClipError):
+        return True
+    c = j.get("clips") if isinstance(j, dict) else None
+    v = c.get("goEasy") if isinstance(c, dict) else None
+    return v if isinstance(v, bool) else True
+
+
+def enable_pacing(data_dir, path=PACING_FILE):
+    """Post-stream jobs only (clipper.py main): run_tool paces its children from now on when the user's switch is on.
+    Windows only. -> True when pacing is on."""
+    global _PACING
+    _PACING = pacing_config(path) if os.name == "nt" and pacing_on(data_dir) else None
+    return _PACING is not None
+
+
+def pace_line(pace):
+    """ujwalam-pace {"pace":"<pace>"} on stderr (the studio shows it in plain words on the task). Once per change."""
+    global _LAST_PACE
+    if pace not in PACES or pace == _LAST_PACE:
+        return None
+    _LAST_PACE = pace
+    line = PACE_PREFIX + json.dumps({"pace": pace}, separators=(",", ":"))
+    print(line, file=sys.stderr, flush=True)
+    return line
+
+
+def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=2.0, setup_sec=300.0, stop=None,
+             pacing=None):
     """Runs a child at below-normal priority; returns CompletedProcess (text, utf-8, errors replaced).
 
     watch + stall_sec (2026-11-12, a render hung for 30 min after a GPU driver reset): the child is stopped when the
@@ -487,8 +675,16 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
     suspended (CREATE_SUSPENDED, then resumed), so nothing it starts escapes; every stop path ends the whole job. When
     Windows refuses the job, the run runs nothing and returns NO_JOB_RC (guarded or not: there is no job-less path).
     Elsewhere the child gets its own session and the group is killed, also after the child's normal exit, so no
-    descendant outlives run_tool. timeout: a child that finishes after the deadline counts as timed out."""
+    descendant outlives run_tool. timeout: a child that finishes after the deadline counts as timed out.
+
+    pacing (2026-11-27): None = as enable_pacing set it (post-stream jobs), False = never, or {"cfg": pacing_config(),
+    "read": callable -> signals} (tests). While paced the child is suspended and resumed (Windows only); the stall
+    watchdog and timeout count only its running time; stop() still wins; the child is always resumed before any kill."""
     import tempfile  # noqa: PLC0415
+    if pacing is None:
+        pacing = {"cfg": _PACING, "read": read_user_signals} if _PACING is not None else False
+    if pacing and os.name != "nt":
+        pacing = False
     path = None if watch is None or not stall_sec else (watch if os.path.isabs(watch) or not cwd else os.path.join(cwd, watch))
     with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:  # files, not pipes: no pipe can fill and block
         nt = os.name == "nt"
@@ -520,7 +716,21 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
                 except OSError:
                     pass
 
+        gate = PaceGate(pacing["cfg"], pacing["read"], t0=time.monotonic()) if pacing else None
+
+        def set_pace(want, now):
+            if gate is None or want == gate.suspended or p.poll() is not None:
+                return
+            if (_suspend if want else _resume)(p._handle):
+                gate.set_suspended(want, now)
+
         def kill():
+            if gate is not None and gate.suspended:
+                try:
+                    _resume(p._handle)  # never end (or leave) a suspended child
+                except OSError:
+                    pass
+                gate.set_suspended(False, time.monotonic())
             try:
                 end_job_members(job)
             except OSError:
@@ -529,24 +739,34 @@ def run_tool(argv, cwd=None, timeout=None, watch=None, stall_sec=None, poll_sec=
             if p.poll() is None:
                 p.kill()
             p.wait()
-        t0 = last = time.monotonic()
+        # clock(): the child's running time (wall time when not paced); stall and timeout use it
+        clock = (lambda: gate.run_time(time.monotonic())) if gate is not None else time.monotonic
+        t0 = last = clock()
         size, stalled, grew, stopped = -1, False, False, False
+        if gate is not None:
+            set_pace(gate.step(time.monotonic()), time.monotonic())
+            pace_line(gate.pace)
         try:
             while True:
-                wait = poll_sec if timeout is None else max(0.0, min(poll_sec, t0 + timeout - time.monotonic()))
+                wait = poll_sec if timeout is None else max(0.0, min(poll_sec, t0 + timeout - clock()))
+                if gate is not None and gate.next_wake(time.monotonic()) is not None:
+                    wait = max(0.05, min(wait, gate.next_wake(time.monotonic())))
                 try:
                     p.wait(timeout=wait)
-                    if timeout is not None and time.monotonic() - t0 > timeout:
+                    if timeout is not None and clock() - t0 > timeout:
                         raise subprocess.TimeoutExpired(argv, timeout)  # finished after the deadline: timed out
                     break
                 except subprocess.TimeoutExpired:
-                    if p.poll() is not None and timeout is not None and time.monotonic() - t0 > timeout:
+                    if p.poll() is not None and timeout is not None and clock() - t0 > timeout:
                         raise
                 if stop is not None and stop() and p.poll() is None:
                     stopped = True
                     kill()
                     break
-                now = time.monotonic()
+                if gate is not None:
+                    set_pace(gate.step(time.monotonic()), time.monotonic())
+                    pace_line(gate.pace)
+                now = clock()
                 if path is not None:
                     try:
                         s = os.path.getsize(path)
