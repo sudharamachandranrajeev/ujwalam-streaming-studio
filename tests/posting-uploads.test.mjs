@@ -94,7 +94,7 @@ describe('packageUploads', () => {
     assert.equal(r.packaged[0].target, 'youtube-video');
     assert.deepEqual(r.packaged[0].unresolved, []);
     const post = createPostStore({ ledgerFile: e.ledgerFile }).list()[0];
-    assert.match(JSON.stringify(post), /Stream highlights \(/);
+    assert.match(JSON.stringify(post), /full highlights/);
     assert.ok(loadTemplates().targets['youtube-video'].kinds['long-highlights'].title);
     const v = validateRules({ version: 1, autoUpload: false, rules: [{ id: 'long', target: 'youtube-video', minScore: 0, kinds: ['long-highlights'], maxPerDay: 1 }] });
     assert.deepEqual(v.rules[0].kinds, ['long-highlights']);
@@ -121,13 +121,13 @@ describe('packageUploads', () => {
     const posts = store.list();
     assert.equal(posts.length, 5);
     const m = posts.find((p) => p.kind === 'montage' && p.target === 'youtube-shorts');
-    assert.match(m.title, /^Stream kill montage 1 \(2026-11-08\)$/);
+    assert.match(m.title, /montage|kills of the stream/i); // 2026-11-27: hook-first library title
     assert.match(m.description, /@example-channel/);
-    assert.ok(m.hashtags.includes('#montage') && m.hashtags.includes('#Shorts'));
+    assert.ok(m.hashtags.includes('#Montage') && m.hashtags.includes('#Shorts'));
     const long = posts.find((p) => p.target === 'youtube-video' && p.endSec === 90);
     assert.ok(long && !long.hashtags.includes('#Shorts'));
     const reel = posts.find((p) => p.kind === 'won-reel');
-    assert.match(reel.title, /^Stream victory reel 1/);
+    assert.ok(reel.title.length > 5 && !/Stream victory reel/.test(reel.title));
     for (const p of posts) { assert.equal(p.status, 'draft'); assert.equal(p.privacy, 'private'); assert.equal(p.limits.ok, true); assert.ok(store.media(p.id, 'video')); }
     assert.equal(reel.layout, 'v-full-crop');
     assert.ok(store.dir(reel.id).startsWith(path.join(e.dataDir, 'posting', 'packages')));

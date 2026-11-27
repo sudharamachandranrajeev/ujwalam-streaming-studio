@@ -22,7 +22,7 @@ const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } ca
 export function cleanFacts(f) {
   if (!isPlain(f)) return {};
   const out = {};
-  for (const k of ['medal', 'killsText', 'result', 'mode']) {
+  for (const k of ['medal', 'killsText', 'result', 'mode', 'weapon', 'map']) {
     const v = f[k];
     if (typeof v === 'string' && v.trim() && v.length <= 40 && !/[{}<>\n]/.test(v)) out[k] = v.trim();
   }
