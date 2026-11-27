@@ -2,6 +2,14 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.49 — 2026-11-27
+
+- Task Start works: a click on Start or Resume in the task panel reached nothing when a task notice popped up after the panel opened. The task panel, the schedule panel and the task notices are now small windows of their own, so each gets its own clicks. The task chip and the status bar now show the same count, for example "1 task running, 1 waiting". Not yet tried with your own click in the full studio.
+- Realism and duplicated scenes show a copied overlay straight away, not only after a restart. If that overlay needs data the stream does not send yet, the studio says it shows fully after the next start.
+- BeatDrop montages now run after your clip jobs (they only listened for a clip mode you do not use). They still wait until you are off air.
+- Crash reports: reports older than 14 days are cleared, and there is always room for the next one. Before, ten old reports stopped any new crash from being written.
+- Task requests that are ignored or cannot be saved now leave a line in the log instead of vanishing.
+
 ## 0.1.0-alpha.48 — 2026-11-26
 
 - Clicks and freezes: the studio no longer stops answering clicks while the previews draw. The preview windows used to wait on the same lock as the studio, so one slow update froze buttons, menus, Settings, close and maximise together. Clip jobs after a stream now run in Windows background mode, so your clicks come first. Not yet tried in a long real session.
