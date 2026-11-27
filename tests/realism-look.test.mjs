@@ -161,7 +161,11 @@ test('realismScene: no game capture, the effect limit and unknown scenes are ref
   const full = structuredClone(doc);
   full.scenes[0].layers.find((l) => l.id === 'game').effects = [{ type: 'rounded', radius: 64 }, { type: 'blur', strength: 2 }, { type: 'mirror' }, { type: 'flip' }];
   assert.ok(validateProject(full).ok);
-  assert.deepEqual(realismScene(full, { scene: s }), { error: 'too-many-effects', layer: 'game' });
+  // 4 own effects + Filmic's 3 = 7: fits by leaving out the sharpen, nothing of its own is touched
+  const fitted = realismScene(full, { scene: s });
+  assert.ok(!fitted.error, JSON.stringify(fitted));
+  assert.deepEqual(fitted.dropped, ['sharpen']);
+  assert.equal(fitted.layers.find((l) => l.name === 'Game').effects.length, 6);
   // no role origin: the project's only capture card is the game
   const noRole = structuredClone(doc);
   for (const d of noRole.devices) delete d.origin;
@@ -408,4 +412,49 @@ test('server: scene.realism and scene.duplicate send overlay URLs, so an overlay
     assert.equal(r.body.later, 1);
     assert.equal(sent[0].browserUrls, undefined);
   } finally { await srv.close(); }
+});
+
+test('realismScene: a look that passes 6 effects on a layer leaves look effects out (sharpen, grain, clarity, vignette), never the layer\'s own', () => {
+  const OWN = [{ type: 'rounded', radius: 64 }, { type: 'shadow', color: '#000000', opacity: 0.5, size: 20, distance: 8, angle: 45 }, { type: 'mirror' }, { type: 'flip' }, { type: 'glow', color: '#ffffff', opacity: 0.5, size: 10, spread: 0.2 }, { type: 'rounded', radius: 8 }]; // no blur: a blurred layer counts as a backdrop and gets fewer look effects
+  const withOwn = (n) => {
+    const doc = alphaLike();
+    doc.scenes[0].layers.find((l) => l.id === 'game').effects = OWN.slice(0, n).map((e) => structuredClone(e));
+    assert.ok(validateProject(doc).ok, `own ${n}`);
+    return doc;
+  };
+  const types = (r) => r.layers.find((l) => l.name === 'Game').effects.map((e) => e.type);
+  const sid = (d) => d.scenes[0].id;
+  // the user's case: 2 own + a 5-effect look
+  for (const look of ['gritty-war', 'dark-cinematic']) {
+    const doc = withOwn(2);
+    const r = realismScene(doc, { scene: sid(doc), look });
+    assert.ok(!r.error, JSON.stringify(r));
+    assert.deepEqual(r.dropped, ['sharpen'], look);
+    const t = types(r);
+    assert.equal(t.length, 6);
+    assert.deepEqual(t.slice(0, 2), ['rounded', 'shadow']);
+    assert.ok(t.includes('lut') && !t.includes('sharpen'), t.join());
+    assert.ok(validateProject(r.project).ok);
+  }
+  const d1 = withOwn(1);
+  assert.deepEqual(realismScene(d1, { scene: sid(d1), look: 'gritty-war' }).dropped, []);
+  const d3 = withOwn(3);
+  const r3 = realismScene(d3, { scene: sid(d3), look: 'gritty-war' });
+  assert.deepEqual(r3.dropped, ['sharpen', 'grain']);
+  assert.deepEqual(types(r3).slice(3), ['lut', 'clarity', 'vignette']);
+  const d4 = withOwn(4);
+  const r4 = realismScene(d4, { scene: sid(d4), look: 'gritty-war' });
+  assert.deepEqual(r4.dropped, ['sharpen', 'grain', 'clarity']);
+  assert.deepEqual(types(r4).slice(4), ['lut', 'vignette']);
+  // 5 own: only the lut still fits for Gritty war; Dark cinematic keeps lut + bloom (2), so it is refused
+  const d5 = withOwn(5);
+  const r5 = realismScene(d5, { scene: sid(d5), look: 'gritty-war' });
+  assert.deepEqual(r5.dropped, ['sharpen', 'grain', 'clarity', 'vignette']);
+  assert.deepEqual(types(r5).slice(5), ['lut']);
+  assert.deepEqual(realismScene(d5, { scene: sid(d5), look: 'dark-cinematic' }), { error: 'too-many-effects', layer: 'game' });
+  // 6 own: no room for even the lut; refused, source untouched
+  const d6 = withOwn(6);
+  const before = JSON.stringify(d6);
+  assert.deepEqual(realismScene(d6, { scene: sid(d6), look: 'gritty-war' }), { error: 'too-many-effects', layer: 'game' });
+  assert.equal(JSON.stringify(d6), before);
 });

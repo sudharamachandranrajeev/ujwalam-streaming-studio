@@ -216,7 +216,7 @@ QtObject {
             "host-unavailable": "The studio host is not reachable.",
             "realism-look-off": "Turn on Realism scene in Settings > Editing first.",
             "no-game-capture": "This scene shows no game capture, so there is nothing to grade.",
-            "too-many-effects": "A game layer already has too many effects for this look (6 at most).",
+            "too-many-effects": "A game layer already has too many effects of its own for this look (6 at most; remove one of its effects first).",
             "unknown-look": "That look is not installed any more."
         };
         return words[code] || code;
@@ -269,7 +269,10 @@ QtObject {
                 if ((b.op === "layer.add" || b.op === "layer.duplicate") && b.layer && b.layer.id) selected = b.layer.id; // the new layer
                 const waiting = b.waiting ? String(b.waiting) : ""; // a capture layer added without its device
                 const done = b.op === "scene.realism" ? "Realism scene made: " + (b.scene ? b.scene.name : "") + " (" + (b.graded || 0) + " game layer(s) graded)" : "Done: " + b.op;
-                say((waiting ? "Layer added. " + waiting : done) + (b.later ? ". " + b.later + " layer(s) show after Ujwalam restarts" : "") +
+                let lookName = b.look ? String(b.look) : "The look";
+                for (let i = 0; i < looks.length; i++) if (looks[i].id === b.look) lookName = looks[i].name;
+                const left = b.dropped && b.dropped.length ? ". " + lookName + ": left out " + b.dropped.join(", ") + " to stay within 6 effects on a layer" : "";
+                say((waiting ? "Layer added. " + waiting : done + left) + (b.later ? ". " + b.later + " layer(s) show after Ujwalam restarts" : "") +
                     (b.saved ? "" : ". Not saved to the project file: the change is live only."));
             }
             loadScenes();

@@ -280,7 +280,7 @@ export function duplicateScene(doc, { scene } = {}) {
 // ---- Realism scene (D381, flag realism-look; looks D445). A per-pixel grade, not a neural filter: a neural "photoreal"
 // pass does not fit live on a 6 GB laptop GPU next to three NVENC encodes.
 //
-//   realismScene(doc, { scene, look }, looks?) -> { project, scene, layers, graded, look }
+//   realismScene(doc, { scene, look }, looks?) -> { project, scene, layers, graded, look, dropped }
 //     look: a look id from the library (data/looks, services/project/looks.mjs; default "filmic"). duplicateScene, named
 //     "<name> <look name>" (then "<name> <look name> 2", ...), id "<id>-<look id>"; on every layer of the copy that
 //     shows the game capture (the capture layer itself, now a duplicate of it, and every duplicate of it, such as the
@@ -288,8 +288,10 @@ export function duplicateScene(doc, { scene } = {}) {
 //     backdrop copies) gets only the look's `backdrop` types (the detail effects would only cost GPU under a blur).
 //     Effects of any look already on a layer are taken off first, so a realism copy of a realism scene changes the look
 //     instead of stacking two. graded: the ids of those layers. The source scene is never changed.
-//     Refused: unknown-look, no-game-capture (the scene shows no game capture), too-many-effects (a game layer would pass
-//     the 6-effect limit). The game device: the one bound to the game-capture role (origin role/game-capture), else the
+//     dropped: the look effect types left out so a game layer stays within 6 effects (order sharpen, grain, clarity,
+//     vignette; never lut, bloom, chromatic or the layer's own effects).
+//     Refused: unknown-look, no-game-capture (the scene shows no game capture), too-many-effects (even with the droppable
+//     look effects left out a layer would pass the 6-effect limit). The game device: the one bound to the game-capture role (origin role/game-capture), else the
 //     project's only capture card.
 // REALISM_EFFECTS: the Filmic look (data/looks/filmic.json; a test checks both); [0] equals preset fx-realism-grade.
 export const REALISM_EFFECTS = Object.freeze([
@@ -297,6 +299,7 @@ export const REALISM_EFFECTS = Object.freeze([
   Object.freeze({ type: 'sharpen', amount: 0.3 }),
   Object.freeze({ type: 'vignette', amount: 0.25, size: 0.55, softness: 0.8, color: '#000000' }),
 ]);
+const DROP_ORDER = Object.freeze(['sharpen', 'grain', 'clarity', 'vignette']);
 const MAX_EFFECTS = 6; // data/schemas/project.schema.json layer effects maxItems
 
 function gameDevices(doc) {
@@ -345,12 +348,28 @@ export function realismScene(doc, { scene, look = DEFAULT_LOOK } = {}, looks = l
   // a user look's LUT stays a look effect after that look is deleted, so a new look replaces it, never stacks on it
   const userLut = (e) => e.type === 'lut' && e.file?.base === USER_BASE && /^user-[^/\\]*\.cube$/.test(e.file?.rel ?? '');
   const own = (l) => (l.effects ?? []).filter((e) => !userLut(e) && !anyLook.some((x) => same(x, e)));
-  const extraFor = (l) => {
+  // The look's effects for a layer, fitted to the 6-effect limit: when the layer's own effects plus the look's pass it,
+  // look effects are dropped in the order DROP_ORDER (the user's own effects, lut, bloom and chromatic never).
+  const fit = (l) => {
     const backdrop = own(l).some((e) => e.type === 'blur');
-    return lk.effects.filter((e) => !backdrop || lk.backdrop.includes(e.type)).map((e) => structuredClone(e));
+    const effects = lk.effects.filter((e) => !backdrop || lk.backdrop.includes(e.type)).map((e) => structuredClone(e));
+    const dropped = [];
+    for (const type of DROP_ORDER) {
+      while (own(l).length + effects.length > MAX_EFFECTS) {
+        const i = effects.findIndex((e) => e.type === type);
+        if (i < 0) break;
+        effects.splice(i, 1);
+        if (!dropped.includes(type)) dropped.push(type);
+      }
+    }
+    return { effects, dropped, over: own(l).length + effects.length > MAX_EFFECTS };
   };
+  const extraFor = (l) => fit(l).effects;
+  const droppedAll = [];
   for (const l of graded) {
-    if (own(l).length + extraFor(l).length > MAX_EFFECTS) return { error: 'too-many-effects', layer: l.id };
+    const f = fit(l);
+    if (f.over) return { error: 'too-many-effects', layer: l.id };
+    for (const t of f.dropped) if (!droppedAll.includes(t)) droppedAll.push(t);
   }
   const d = duplicateScene(doc, { scene });
   if (d.error) return d;
@@ -373,5 +392,5 @@ export function realismScene(doc, { scene, look = DEFAULT_LOOK } = {}, looks = l
     l.effects = [...own(l), ...extraFor(l)];
     gradedIds.push(l.id);
   });
-  return checked(project, { scene: copy, layers: copy.layers, graded: gradedIds, look: lk.id });
+  return checked(project, { scene: copy, layers: copy.layers, graded: gradedIds, look: lk.id, dropped: droppedAll });
 }

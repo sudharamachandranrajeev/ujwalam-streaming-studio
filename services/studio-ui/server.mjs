@@ -1457,7 +1457,7 @@ export function createStudioServer(opts) {
     history.clear();
     broadcast('edits', history.state());
     broadcast('layers', { source: 'structure', edit: { op, scene: r.scene?.id ?? body.scene, layer: r.layer?.id ?? body.layer ?? null } });
-    return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(note ? { note } : {}), ...(r.graded ? { graded: r.graded.length } : {}), ...(r.look ? { look: r.look } : {}), ...(later.length ? { later: later.length } : {}), saved });
+    return json(res, 200, { ok: true, op, ...(r.scene ? { scene: { id: r.scene.id, name: r.scene.name } } : {}), ...(r.layer ? { layer: { id: r.layer.id, name: r.layer.name, type: r.layer.type } } : {}), ...(waiting ? { waiting } : {}), ...(note ? { note } : {}), ...(r.graded ? { graded: r.graded.length } : {}), ...(r.look ? { look: r.look } : {}), ...(r.dropped?.length ? { dropped: r.dropped } : {}), ...(later.length ? { later: later.length } : {}), saved });
   }
   // B7 (2026-11-18): a capture layer's own sound whose card's audio input is in the mix already carries sameAs (the name
   // of that sound), so the studio shows it once instead of offering it twice. The project file is read only for this.
