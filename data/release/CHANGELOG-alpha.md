@@ -2,6 +2,11 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.51 — 2026-11-27
+
+- Post text made for reach: titles open with a hook ("<game> montage: 9 KILLS cut to the beat"), the caption asks viewers a question and ends with a follow line, and each post gets 3 to 5 hashtags (a fixed core set plus a few that change per post). Your live and community lines stay. The local AI only lightly rewords this text; with the AI off the same text is used. Posts already uploaded keep their old text. Not yet measured on real views.
+- Everything from alpha.50 (clip jobs go easy while you use the PC, captions cannot freeze a job, Instagram queue unstuck).
+
 ## 0.1.0-alpha.50 — 2026-11-27
 
 - Clip jobs go easy while you use the PC: they run at about a quarter speed while you type or move the mouse, pause while a full-screen game or a presentation runs or the laptop is on battery, and go full speed when you have been away for 5 minutes. The task panel says which, for example "Going slowly while you use the PC". Switch: Settings > Clips > "Go easy while I use the PC" (on). Not yet measured on a real job.
