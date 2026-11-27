@@ -112,8 +112,9 @@ describe('plan: the instagram sink on the V canvas', () => {
     const p = planFile(w.file, { allowLive: true });
     const ig = p.params.sinks.find((s) => s.id === 'instagram');
     assert.equal(ig.rung, 'ig-v');
-    assert.deepEqual(ig.target, { transport: 'auto', urlRef: ADDON.target.serverRef, keyRef: ADDON.target.keyRef });
-    assert.ok(p.unresolved.includes('instagram'), 'auto stays unresolved without the stored scheme');
+    // rtmps since D447 (auto needed the per-broadcast address stored before the studio started, so it was always left out)
+    assert.deepEqual(ig.target, { transport: 'rtmps', urlRef: ADDON.target.serverRef, keyRef: ADDON.target.keyRef });
+    assert.ok(!p.unresolved.includes('instagram'), 'planned without a stored address');
     const rung = p.params.rungs.find((r) => r.id === 'ig-v');
     assert.deepEqual([rung.canvas, rung.w, rung.h, rung.fps, rung.bitrate, rung.gopSec], ['V', 720, 1280, 30, ADDON.rung.bitrate, 2]);
     assert.equal(p.params.rungs.length, 4, 'yt-h, reencode-tk, vert and ig-v: four encoders, no more');
@@ -129,10 +130,11 @@ describe('plan: the instagram sink on the V canvas', () => {
 });
 
 describe('flag instagram-live', () => {
-  test('is defined and off by default', () => {
+  test('is defined and on by default (D447: requested feature)', () => {
     const f = loadDefinitions().find((x) => x.id === INSTAGRAM_FLAG);
     assert.ok(f);
-    assert.equal(f.default, false);
+    assert.equal(f.default, true);
+    assert.equal(f.onBy, 'D447');
   });
   test('livePlanFile: off = the plan in effect unchanged; on = the generated instagram plan', () => {
     const d = mk();
@@ -140,7 +142,7 @@ describe('flag instagram-live', () => {
     assert.equal(livePlanFile({ dataDir: d, streamSettingsOn: false, instagramOn: false }), ALPHA_LIVE_PLAN);
     const f = livePlanFile({ dataDir: d, streamSettingsOn: false, instagramOn: true });
     assert.equal(f, path.join(d, 'outputs', ADDON.planName));
-    assert.ok(planTargets(f).some((t) => t.id === 'instagram' && t.transport === 'auto' && t.schemes.join() === 'rtmp,rtmps'));
+    assert.ok(planTargets(f).some((t) => t.id === 'instagram' && t.transport === 'rtmps'));
   });
 });
 
@@ -244,10 +246,10 @@ describe('Settings > Connections: the Instagram entry', () => {
     const c = createConnect({ dataDir, outputs, storeFor: mem.storeFor, outputLive: async () => 'idle', sleep: async () => {} });
     return { c, mem, dataDir };
   }
-  test('the row: Instagram, V canvas, both rtmp and rtmps, per broadcast, no sign-in', () => {
+  test('the row: Instagram, V canvas, rtmps (D447), per broadcast, no sign-in', () => {
     const o = outputsFromPlan([connectRow()])[0];
     assert.deepEqual([o.id, o.platform, o.label, o.keyRef, o.serverRef, o.schemes.join(), o.signIn, o.perBroadcast],
-      ['instagram', 'instagram', 'Instagram', 'Ujwalam/stream/instagram', 'Ujwalam/stream/instagram-server', 'rtmp,rtmps', null, true]);
+      ['instagram', 'instagram', 'Instagram', 'Ujwalam/stream/instagram', 'Ujwalam/stream/instagram-server', 'rtmps', null, true]);
   });
   test('the URL and the key are pasted together; status shows the last 4 characters only; used after the broadcast', async () => {
     const { c, mem, dataDir } = setup();
