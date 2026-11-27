@@ -304,7 +304,9 @@ def make_transcript(ffmpeg, src, pieces, cfg, style, opts, workdir, duration=Non
         r = run_tool(pieces_wav_argv(ffmpeg, src, pieces, wav), timeout=900)
         if r.returncode != 0 or not os.path.isfile(wav):
             return None, {"backend": cfg["backend"], "status": "unavailable", "reason": "audio extract failed"}
-        segs, info = transcribe(cfg["backend"], wav, dict(opts, multilingual=bool(cfg.get("multilingual")),
+        # isolate (2026-11-27): faster-whisper runs in a child with a time limit, so a hung GPU call cannot freeze the job
+        segs, info = transcribe(cfg["backend"], wav, dict(opts, isolate=cfg.get("isolate"),
+                                                          multilingual=bool(cfg.get("multilingual")),
                                                           full_json=True, language=cfg.get("language"), words=words))
     if info.get("status") != "ok":
         return None, info

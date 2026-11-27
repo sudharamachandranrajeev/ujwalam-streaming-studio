@@ -10,6 +10,8 @@
   "model": "faster-whisper-small",
   "gpuModel": { "model": "faster-whisper-large-v3-turbo", "computeType": "int8_float16" },
   "gpuModelNote": "C3 (user yes 2026-11-24): used instead of model when <models>/<gpuModel.model> exists and the studio is off air (reel_captions.model_opts); a GPU failure falls back to model on the CPU. int8_float16 keeps it near 1 GB of the 6 GB VRAM (UNVERIFIED: measure). Fetched from the studio's Downloads (data/downloads/speech-captions.json, item speech-captions-turbo).",
+  "isolate": { "setupSec": 300, "perAudioSec": 4 },
+  "isolateNote": "2026-11-27 (alpha.49, a GPU caption run hung inside ctranslate2 and froze a review job): faster-whisper runs in a child process (no console window, kill-on-close job). The child may run setupSec (model load) + perAudioSec x the clip audio's length; past that it is killed. A GPU child that fails or is killed falls back to the CPU model, and the GPU is not tried again in that run; a CPU child that is killed leaves that clip without captions and the job goes on. Limits are a first guess (UNVERIFIED: measure on real runs). Remove the key to run in-process as before.",
   "modelNote": "Looked up as <models>/<model>, where <models> is the folder next to the event-core data folder (paths.event_core_data/../models), unless --whisper-model is given. Never downloaded.",
   "language": null,
   "languageNote": "null = detected per segment (faster-whisper multilingual): the speech is mixed Malayalam and English. The task is always transcribe, never translate; no transliteration step exists.",
