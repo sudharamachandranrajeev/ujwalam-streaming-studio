@@ -579,13 +579,16 @@ test('launcher --alpha with a fake host: flags, tokens by env, host config, feed
     h = JSON.parse(readFileSync(rec, 'utf8'));
     assert.ok(h.argv.includes('--allow-live'));
     assert.equal(h.argv[h.argv.indexOf('--outputs') + 1], path.join(root, 'host', 'outputs-params.json'));
-    assert.deepEqual(h.outputsParams.sinks.map((s) => s.id), ['youtube-h', 'youtube-v', 'twitch', 'kick', 'record', 'record-v']);
+    // D447: the instagram-live and facebook-live flags are on by default, so both add-on sinks are in the planned graph
+    // (configured, not started: each starts only when ticked in the Go live window).
+    assert.deepEqual(h.outputsParams.sinks.map((s) => s.id), ['youtube-h', 'youtube-v', 'twitch', 'kick', 'instagram', 'facebook', 'record', 'record-v']);
     for (const s of h.outputsParams.sinks) assert.ok(!Object.hasOwn(s.target, 'key'), `${s.id}: no key field`);
     // Twitch "auto" (D309 proposed): a stand-in (script) host reaches no platform, so no server address is read.
     assert.equal(h.outputsParams.sinks.find((s) => s.id === 'twitch').target.transport, 'auto');
     assert.match(r.out, /outputs: twitch transport "auto" not chosen \(stand-in host: no server address read\)/);
-    assert.match(r.out, /LIVE plan: data[\\/]outputs[\\/]alpha-live\.json/);
-    assert.match(r.out, /\[studio\] outputs: real targets ALLOWED \(--live\); 6 sink\(s\)/); // LC1: + record-v
+    // D447: alpha-live.json plus the instagram then the facebook sink, written to <dataDir>/outputs/live-plan-facebook.json.
+    assert.match(r.out, /LIVE plan: \S*[\\/]outputs[\\/]live-plan-facebook\.json/);
+    assert.match(r.out, /\[studio\] outputs: real targets ALLOWED \(--live\); 8 sink\(s\)/); // LC1: + record-v; D447: + instagram, facebook
     assert.match(r.out, /sink youtube-h: youtube live, keyPresent no, idle/);
     assert.match(r.out, /sink twitch: twitch live, keyPresent no, urlPresent no, idle/);
     assert.match(r.out, /sink kick: kick live, keyPresent no, urlPresent no, idle/);

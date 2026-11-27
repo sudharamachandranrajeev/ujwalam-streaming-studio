@@ -82,7 +82,7 @@ export const REPO_FILES = Object.freeze([
   'data/effects/guards.json', 'data/effects/flash-measurements.json',
   'data/moderation/blocklist.json', 'data/moderation/blocklist.schema.json',
   'data/overlays/feed-scopes.json',
-  'data/outputs/alpha-live.json', 'data/outputs/alpha-practice.json', 'data/outputs/guard/live-test-budget.json', 'data/outputs/addons/instagram-live.json',
+  'data/outputs/alpha-live.json', 'data/outputs/alpha-practice.json', 'data/outputs/guard/live-test-budget.json', 'data/outputs/addons/instagram-live.json', 'data/outputs/addons/facebook-live.json',
   'data/posting/templates.json', 'data/posting/limits.json',
   'data/posting/instagram.json', // D444 Instagram Reels autopost (services/posting/instagram.mjs)
   'data/posting/post-text-library.json', // 2026-11-27 reach text library (services/posting/reach-text.mjs)
