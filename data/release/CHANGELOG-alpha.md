@@ -2,6 +2,12 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.52 — 2026-11-27
+
+- Make clips again: a clip task you stopped (or that failed) keeps a "Make clips again" button. Clips menu > "Make clips from a recording…" lists recent recordings without finished clips; one click queues it. Work already done (screen reading, finished clips) is reused. It waits while you are live or recording. Not yet tried with your own click.
+- Facebook Live to your Page: connect Meta again in Settings and tick your Page, then pick the Page once in the Go live window. Each stream Ujwalam makes the Facebook stream itself and ends it when you stop. Facebook gets the horizontal picture (1080p60, sharing the Twitch/Kick encoder). Your Page needs Meta's live rules (100 followers, account at least 60 days old). Tested on this PC with a local test server only; no real Facebook stream yet.
+- Instagram Live: in the Go live window, "Set up Instagram Live" opens Instagram's live page; paste the stream URL and key into one box and Save. Instagram gets the vertical picture (720x1280, 30 fps). The key is kept for that stream only. After the stream starts, click "Go live" on Instagram. No real Instagram stream yet.
+
 ## 0.1.0-alpha.51 — 2026-11-27
 
 - Post text made for reach: titles open with a hook ("<game> montage: 9 KILLS cut to the beat"), the caption asks viewers a question and ends with a follow line, and each post gets 3 to 5 hashtags (a fixed core set plus a few that change per post). Your live and community lines stay. The local AI only lightly rewords this text; with the AI off the same text is used. Posts already uploaded keep their old text. Not yet measured on real views.

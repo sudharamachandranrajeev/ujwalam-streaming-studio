@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 51,
+  "current": 52,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -62,6 +62,7 @@
     { "n": 48, "date": "2026-11-26", "title": "Clicks no longer freeze, task panel fixes, scenes kept, Instagram winners to YouTube" },
     { "n": 49, "date": "2026-11-27", "title": "Task Start works, overlays in new scenes at once, BeatDrop runs, crash reports kept" },
     { "n": 50, "date": "2026-11-27", "title": "Clip jobs go easy while you use the PC, captions cannot freeze a job, Instagram queue unstuck" },
-    { "n": 51, "date": "2026-11-27", "title": "Post text made for reach: hook titles, questions, focused hashtags" }
+    { "n": 51, "date": "2026-11-27", "title": "Post text made for reach: hook titles, questions, focused hashtags" },
+    { "n": 52, "date": "2026-11-27", "title": "Make clips again, Facebook Live to your Page, Instagram Live setup" }
   ]
 }
