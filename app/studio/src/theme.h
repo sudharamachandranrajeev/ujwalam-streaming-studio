@@ -70,6 +70,13 @@ Spring spring();
 // or empty. The QML studio's Theme merges it over its defaults (qml_bridge.cpp), so a pack may leave any part out.
 QJsonObject systemBlock();
 
+// Molten Stone (2026-11-27): the pack's texture block ({slices: {name: {margin, outset, tile}}, art: [names]}) and ambient
+// block ({smoke, drip}), empty unless the pack's v2 parts are read. Pictures live at :/theme-tex/<id>/<name>.png.
+QJsonObject textureBlock();
+QJsonObject ambientBlock();
+const QStringList &textureSlices();
+const QStringList &textureArt();
+
 // ---- Theme components (schema v2, D336, flag theme-components) ----
 // The flag (Settings > Advanced / control page) switches the components block on or off; off, every pack draws the base
 // look. A pack marked componentsAlways uses its components with the flag off too (D376).

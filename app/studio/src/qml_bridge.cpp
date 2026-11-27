@@ -11,9 +11,11 @@
 #include <QClipboard>
 #include <QColorDialog>
 #include <QDesktopServices>
+#include <QFile>
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QJSEngine>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QPainter>
 #include <QQuickItem>
@@ -268,6 +270,55 @@ QVariantMap QmlTheme::mo() const
 	return m;
 }
 
+namespace {
+QString texUrl(const QString &name)
+{
+	const QString p = QStringLiteral(":/theme-tex/%1/%2.png").arg(theme::currentId(), name);
+	return QFile::exists(p) ? QStringLiteral("qrc") + p : QString(); // a custom pack without embedded pictures keeps flat fills
+}
+} // namespace
+
+QVariantMap QmlTheme::tex() const
+{
+	QVariantMap out;
+	if (fx() == QStringLiteral("plain"))
+		return out;
+	const QJsonObject sl = theme::textureBlock().value(QStringLiteral("slices")).toObject();
+	for (auto it = sl.begin(); it != sl.end(); ++it) {
+		const QString src = texUrl(it.key());
+		if (src.isEmpty())
+			continue;
+		const QJsonObject s = it.value().toObject();
+		out.insert(it.key(), QVariantMap{{QStringLiteral("src"), src}, {QStringLiteral("m"), s.value(QStringLiteral("margin")).toInt()},
+						 {QStringLiteral("o"), s.value(QStringLiteral("outset")).toInt()},
+						 {QStringLiteral("tile"), s.value(QStringLiteral("tile")).toString(QStringLiteral("round"))}});
+	}
+	return out;
+}
+
+QVariantMap QmlTheme::art() const
+{
+	QVariantMap out;
+	if (fx() == QStringLiteral("plain"))
+		return out;
+	for (const QJsonValue &a : theme::textureBlock().value(QStringLiteral("art")).toArray())
+		if (const QString src = texUrl(a.toString()); !src.isEmpty())
+			out.insert(a.toString(), src);
+	return out;
+}
+
+QVariantMap QmlTheme::ambient() const
+{
+	QVariantMap out;
+	if (fx() != QStringLiteral("full") || onAir_ || !motion())
+		return out;
+	const QJsonObject a = theme::ambientBlock();
+	for (const char *k : {"smoke", "drip"})
+		if (a.value(QLatin1String(k)).toBool())
+			if (const QString src = texUrl(QLatin1String(k)); !src.isEmpty())
+				out.insert(QLatin1String(k), src);
+	return out;
+}
 void QmlTheme::setOnAir(bool on)
 {
 	if (on == onAir_)

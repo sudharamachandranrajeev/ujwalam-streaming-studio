@@ -519,6 +519,69 @@ void apply(QApplication &app)
 	rememberFile(g_cur.id);
 }
 
+// ---- Texture and ambient blocks (Molten Stone, 2026-11-27) ----
+// Painted 9-slice pictures per surface class and a few plain pictures, embedded from data/theme-textures/<id>/ as
+// :/theme-tex/<id>/<name>.png (with @2x twins). The names are a closed list like the components: a typo is refused.
+const QStringList &textureSlices()
+{
+	static const QStringList v = {QStringLiteral("base"), QStringLiteral("raised"), QStringLiteral("inset"), QStringLiteral("pressed"),
+				      QStringLiteral("buttonNormal"), QStringLiteral("buttonPressed"), QStringLiteral("buttonDisabled"),
+				      QStringLiteral("field"), QStringLiteral("fieldError"), QStringLiteral("track"), QStringLiteral("fill"),
+				      QStringLiteral("card"), QStringLiteral("plate"), QStringLiteral("modal"), QStringLiteral("toast")};
+	return v;
+}
+
+const QStringList &textureArt()
+{
+	static const QStringList v = {QStringLiteral("smoke"), QStringLiteral("drip"), QStringLiteral("empty"), QStringLiteral("avatar"),
+				      QStringLiteral("spinner"), QStringLiteral("gear")};
+	return v;
+}
+
+namespace {
+bool wholeIn(const QJsonValue &v, int lo, int hi)
+{
+	return v.isDouble() && v.toDouble() == std::floor(v.toDouble()) && v.toDouble() >= lo && v.toDouble() <= hi;
+}
+
+// Empty when the texture and ambient blocks are usable (or absent); else why not.
+QString textureProblem(const QJsonObject &pack)
+{
+	if (pack.contains(QStringLiteral("texture"))) {
+		if (!pack.value(QStringLiteral("texture")).isObject())
+			return QStringLiteral("texture must be an object");
+		const QJsonObject t = pack.value(QStringLiteral("texture")).toObject();
+		for (auto it = t.begin(); it != t.end(); ++it)
+			if (it.key() != QStringLiteral("slices") && it.key() != QStringLiteral("art"))
+				return QStringLiteral("texture.%1 is not known").arg(it.key());
+		const QJsonObject sl = t.value(QStringLiteral("slices")).toObject();
+		for (auto it = sl.begin(); it != sl.end(); ++it) {
+			if (!textureSlices().contains(it.key()))
+				return QStringLiteral("texture.slices.%1 is not a known surface").arg(it.key());
+			const QJsonObject s = it.value().toObject();
+			for (auto k = s.begin(); k != s.end(); ++k)
+				if (k.key() != QStringLiteral("margin") && k.key() != QStringLiteral("outset") && k.key() != QStringLiteral("tile"))
+					return QStringLiteral("texture.slices.%1.%2 is not known").arg(it.key(), k.key());
+			if (!wholeIn(s.value(QStringLiteral("margin")), 1, 48) || !wholeIn(s.value(QStringLiteral("outset")), 0, 16)
+			    || s.value(QStringLiteral("outset")).toInt() >= s.value(QStringLiteral("margin")).toInt())
+				return QStringLiteral("texture.slices.%1 needs a margin 1 to 48 and an outset 0 to 16, smaller than the margin").arg(it.key());
+			const QString tile = s.value(QStringLiteral("tile")).toString(QStringLiteral("round"));
+			if (tile != QStringLiteral("round") && tile != QStringLiteral("repeat") && tile != QStringLiteral("stretch"))
+				return QStringLiteral("texture.slices.%1.tile must be round, repeat or stretch").arg(it.key());
+		}
+		for (const QJsonValue &a : t.value(QStringLiteral("art")).toArray())
+			if (!textureArt().contains(a.toString()))
+				return QStringLiteral("texture.art: %1 is not a known picture").arg(a.toString());
+	}
+	if (pack.contains(QStringLiteral("ambient"))) {
+		const QJsonObject a = pack.value(QStringLiteral("ambient")).toObject();
+		for (auto it = a.begin(); it != a.end(); ++it)
+			if ((it.key() != QStringLiteral("smoke") && it.key() != QStringLiteral("drip")) || !it.value().isBool())
+				return QStringLiteral("ambient.%1 must be smoke or drip, true or false").arg(it.key());
+	}
+	return {};
+}
+} // namespace
 QString packProblem(const QByteArray &bytes, const QString &id)
 {
 	QJsonParseError err;
@@ -541,6 +604,8 @@ QString packProblem(const QByteArray &bytes, const QString &id)
 	for (const QString &k : kColorKeys)
 		if (!hex.match(c.value(k).toString()).hasMatch())
 			return QStringLiteral("colors.%1 must be a colour like #1a2b3c").arg(k);
+	if (const QString why = textureProblem(o); !why.isEmpty())
+		return why;
 	return componentsProblem(o); // D336: unknown components or variants are refused
 }
 
@@ -737,6 +802,17 @@ Spring spring()
 QJsonObject systemBlock()
 {
 	return g_cur.src.value(QStringLiteral("system")).toObject();
+}
+
+// Read with the other v2 parts (the flag theme-components, or componentsAlways).
+QJsonObject textureBlock()
+{
+	return compOn() ? g_cur.src.value(QStringLiteral("texture")).toObject() : QJsonObject();
+}
+
+QJsonObject ambientBlock()
+{
+	return compOn() ? g_cur.src.value(QStringLiteral("ambient")).toObject() : QJsonObject();
 }
 
 bool probeAction(const QString &action)

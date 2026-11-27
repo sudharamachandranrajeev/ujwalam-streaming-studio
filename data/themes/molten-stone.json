@@ -1,0 +1,152 @@
+{
+  "$schema": "./theme.schema.json",
+  "id": "molten-stone",
+  "name": "Molten Stone",
+  "topic": "Carved grey stone with molten rose-gold rims: cracked slabs, twisted wire edges, a warm glow on the main action, smoke and drips off air.",
+  "version": 1,
+  "dark": true,
+  "colors": {
+    "bg": "#2e2e32",
+    "panel": "#3a3a3e",
+    "field": "#2a2a2d",
+    "border": "#626266",
+    "text": "#f2efec",
+    "muted": "#c9c3be",
+    "accent": "#e8a27c",
+    "accentHi": "#f4c2a0",
+    "danger": "#ff8a7a",
+    "ok": "#8fd18a",
+    "onAccent": "#2a2a2c",
+    "disabled": "#8a898a",
+    "warn": "#f0c060",
+    "info": "#f4c2a0"
+  },
+  "gradients": {
+    "window": { "from": "#3c3c40", "to": "#26262a", "angle": 90 },
+    "accent": { "from": "#f0b090", "to": "#d88e68", "angle": 90 },
+    "panel": { "from": "#3e3e42", "to": "#333337", "angle": 90 },
+    "control": { "from": "#46464a", "to": "#38383c", "angle": 90 }
+  },
+  "typography": {
+    "family": "Inter",
+    "fallbacks": ["Barlow", "Segoe UI"],
+    "baseSize": 10.5,
+    "captionSize": 8.5,
+    "titleSize": 16,
+    "headingWeight": 700,
+    "letterSpacing": 0.2,
+    "captionLetterSpacing": 1.4,
+    "captionCaps": true,
+    "buttonCaps": true,
+    "tabCaps": true,
+    "headingCaps": true,
+    "scale": { "h1": 16, "h2": 12, "subtitle": 10, "body": 10.5, "caption": 8.5, "button": 10 }
+  },
+  "geometry": {
+    "radius": { "small": 4, "medium": 8, "large": 12 },
+    "spacing": { "small": 6, "medium": 10, "large": 14 },
+    "borderWidth": 2,
+    "controlHeight": 20,
+    "roundControl": 52,
+    "controlPadding": { "y": 6, "x": 14 }
+  },
+  "depth": {
+    "card": {
+      "shadow": { "blur": 20, "offsetX": 0, "offsetY": 8, "color": "#000000", "opacity": 0.55 },
+      "rim": { "from": "#f4c2a0", "to": "#c06a4a", "width": 1 }
+    },
+    "button": {},
+    "primaryButton": {
+      "shadow": { "blur": 8, "offsetX": 0, "offsetY": 2, "color": "#000000", "opacity": 0.5 },
+      "glow": { "blur": 12, "color": "accent", "opacity": 0.5, "when": "always" },
+      "rim": { "from": "accentHi", "to": "#c06a4a", "width": 2, "innerGlow": { "color": "accent", "opacity": 0.45, "width": 1 } },
+      "inset": { "blur": 8, "offsetX": 0, "offsetY": 2, "color": "#000000", "opacity": 0.6, "when": "pressed" }
+    },
+    "roundControl": {
+      "shadow": { "blur": 10, "offsetX": 0, "offsetY": 3, "color": "#000000", "opacity": 0.55 },
+      "glow": { "blur": 14, "color": "auto", "opacity": 0.55, "when": "active" },
+      "extrusion": { "depth": 3, "color": "#1c1c1e", "color2": "#56565a" }
+    },
+    "toast": {
+      "shadow": { "blur": 20, "offsetX": 0, "offsetY": 6, "color": "#000000", "opacity": 0.6 },
+      "rim": { "from": "accent", "to": "#5a3b2b", "width": 1 }
+    },
+    "menu": {
+      "shadow": { "blur": 18, "offsetX": 0, "offsetY": 6, "color": "#000000", "opacity": 0.6 }
+    },
+    "taskPanel": {
+      "shadow": { "blur": 22, "offsetX": 0, "offsetY": 8, "color": "#000000", "opacity": 0.55 },
+      "rim": { "from": "#e8a27c", "to": "#4a3b36", "width": 1 }
+    }
+  },
+  "motion": {
+    "fastMs": 110,
+    "normalMs": 180,
+    "slowMs": 260,
+    "easing": "outCubic",
+    "hoverLift": 1,
+    "pressSink": 2,
+    "enterMs": 320,
+    "exitMs": 200,
+    "loopMs": 0
+  },
+  "system": {
+    "space": { "xs": 4, "s": 6, "m": 10, "l": 16, "xl": 24, "xxl": 32 },
+    "type": { "caption": 12, "small": 13, "body": 14, "subtitle": 16, "title": 20, "display": 28, "displayFamily": "Barlow" },
+    "elevation": {
+      "e1": { "keyBlur": 6, "keyY": 2, "keyAlpha": 0.30, "ambBlur": 12, "ambAlpha": 0.12 },
+      "e2": { "keyBlur": 10, "keyY": 4, "keyAlpha": 0.36, "ambBlur": 22, "ambAlpha": 0.16 },
+      "e3": { "keyBlur": 18, "keyY": 8, "keyAlpha": 0.42, "ambBlur": 34, "ambAlpha": 0.2 },
+      "e4": { "keyBlur": 28, "keyY": 14, "keyAlpha": 0.5, "ambBlur": 50, "ambAlpha": 0.24 }
+    },
+    "ring": { "width": 2, "offset": 2, "alpha": 0.85 },
+    "state": { "hover": 0.08, "pressed": 0.16, "disabled": 0.6 },
+    "motion": { "enter": 320, "exit": 200 }
+  },
+  "background": {
+    "kind": "gradient",
+    "pattern": "none",
+    "patternColor": "#8a8a8c",
+    "patternOpacity": 0,
+    "patternSpacing": 24
+  },
+  "texture": {
+    "slices": {
+      "base": { "margin": 12, "outset": 0, "tile": "round" },
+      "raised": { "margin": 20, "outset": 6, "tile": "round" },
+      "inset": { "margin": 12, "outset": 0, "tile": "round" },
+      "pressed": { "margin": 16, "outset": 4, "tile": "round" },
+      "buttonNormal": { "margin": 17, "outset": 6, "tile": "round" },
+      "buttonPressed": { "margin": 17, "outset": 6, "tile": "round" },
+      "buttonDisabled": { "margin": 17, "outset": 6, "tile": "round" },
+      "field": { "margin": 11, "outset": 2, "tile": "round" },
+      "fieldError": { "margin": 11, "outset": 2, "tile": "round" },
+      "track": { "margin": 3, "outset": 0, "tile": "round" },
+      "fill": { "margin": 3, "outset": 0, "tile": "round" },
+      "card": { "margin": 24, "outset": 8, "tile": "round" },
+      "plate": { "margin": 13, "outset": 3, "tile": "round" },
+      "modal": { "margin": 40, "outset": 10, "tile": "round" },
+      "toast": { "margin": 14, "outset": 4, "tile": "round" }
+    },
+    "art": ["smoke", "drip", "empty", "avatar", "spinner", "gear"]
+  },
+  "ambient": { "smoke": true, "drip": true },
+  "icons": { "stroke": 1.5 },
+  "componentsAlways": true,
+  "components": {
+    "button": { "shape": "pill", "style": "metal", "caps": true },
+    "tabs": "segmented",
+    "input": "inset",
+    "focus": "glow",
+    "switch": "bezel",
+    "slider": { "track": "inset", "handle": "sphere", "valueBubble": true },
+    "sectionHeader": "caps",
+    "card": "raised",
+    "list": "plates",
+    "chip": "pill",
+    "density": "normal",
+    "tooltip": "plain",
+    "toast": { "style": "stack", "richColors": true },
+    "spinner": "ring"
+  }
+}

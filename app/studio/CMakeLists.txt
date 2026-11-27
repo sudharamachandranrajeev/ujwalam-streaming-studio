@@ -49,6 +49,10 @@ add_executable(ujwalam-studio WIN32
 file(GLOB UJW_THEME_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../data/themes/*.json")
 list(FILTER UJW_THEME_FILES EXCLUDE REGEX "\.schema\.json$")
 qt_add_resources(ujwalam-studio themes PREFIX "/themes" BASE "${CMAKE_CURRENT_SOURCE_DIR}/../../data/themes" FILES ${UJW_THEME_FILES})
+# Painted theme pictures (Molten Stone, 2026-11-27): data/theme-textures/<id>/*.png (1x and @2x, made by
+# tools/theme-textures/<id>.mjs) embedded as :/theme-tex/<id>/<name>.png. Read only by a pack whose texture block names them.
+file(GLOB UJW_THEME_TEX CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../data/theme-textures/*/*.png")
+qt_add_resources(ujwalam-studio themetex PREFIX "/theme-tex" BASE "${CMAKE_CURRENT_SOURCE_DIR}/../../data/theme-textures" FILES ${UJW_THEME_TEX})
 # App icon: PNG sizes embedded for the window icon (QIcon needs no imageformats plugin); the .rc embeds the .ico in the exes.
 file(GLOB UJW_ICON_PNGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/res/png/ujwalam-*.png")
 qt_add_resources(ujwalam-studio appicon PREFIX "/icon" BASE "${CMAKE_CURRENT_SOURCE_DIR}/res/png" FILES ${UJW_ICON_PNGS})

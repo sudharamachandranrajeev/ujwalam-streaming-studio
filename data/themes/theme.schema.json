@@ -284,7 +284,27 @@
         }
       }
     },
-    "icons": {
+    "texture": {
+      "type": "object", "additionalProperties": false,
+      "description": "Optional (Molten Stone, 2026-11-27): painted pictures for this pack, embedded from data/theme-textures/<id>/<name>.png (1x and @2x, made by a committed script, tools/theme-textures/<id>.mjs). slices are 9-slice pictures per surface class (equal margin on all four sides, outset = the part of the margin outside the control: glow and shadow, inside the room the layout reserves); art are plain pictures. Read with the other v2 parts; never drawn in plain fx (on air, High performance): flat fills there. A custom pack without embedded pictures keeps flat fills.",
+      "properties": {
+        "slices": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "base": { "$ref": "#/$defs/slice" }, "raised": { "$ref": "#/$defs/slice" }, "inset": { "$ref": "#/$defs/slice" }, "pressed": { "$ref": "#/$defs/slice" },
+            "buttonNormal": { "$ref": "#/$defs/slice" }, "buttonPressed": { "$ref": "#/$defs/slice" }, "buttonDisabled": { "$ref": "#/$defs/slice" },
+            "field": { "$ref": "#/$defs/slice" }, "fieldError": { "$ref": "#/$defs/slice" }, "track": { "$ref": "#/$defs/slice" }, "fill": { "$ref": "#/$defs/slice" },
+            "card": { "$ref": "#/$defs/slice" }, "plate": { "$ref": "#/$defs/slice" }, "modal": { "$ref": "#/$defs/slice" }, "toast": { "$ref": "#/$defs/slice" }
+          }
+        },
+        "art": { "type": "array", "uniqueItems": true, "items": { "enum": ["smoke", "drip", "empty", "avatar", "spinner", "gear"] } }
+      }
+    },
+    "ambient": {
+      "type": "object", "additionalProperties": false,
+      "description": "Optional (Molten Stone, 2026-11-27): slow decoration from the art pictures: smoke rising (the on switch, the busy step, the modal) and molten drips (the progress fill, the deepest shadow). Moves only in full fx with animations on and the item visible; never on air, in calm, in High performance or plain: there the pictures stand still or are not drawn.",
+      "properties": { "smoke": { "type": "boolean" }, "drip": { "type": "boolean" } }
+    },    "icons": {
       "type": "object",
       "additionalProperties": false,
       "required": ["stroke"],
@@ -293,6 +313,10 @@
   },
   "$defs": {
     "hex": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+    "slice": {
+      "type": "object", "additionalProperties": false, "required": ["margin", "outset"],
+      "properties": { "margin": { "type": "integer", "minimum": 1, "maximum": 48 }, "outset": { "type": "integer", "minimum": 0, "maximum": 16 }, "tile": { "enum": ["round", "repeat", "stretch"], "description": "middle span: round (default; whole tiles, nothing stretched), repeat or stretch" } }
+    },
     "px": { "type": "integer", "minimum": 0, "maximum": 40 },
     "pt": { "type": "number", "minimum": 6, "maximum": 28 },
     "shadowPart": {

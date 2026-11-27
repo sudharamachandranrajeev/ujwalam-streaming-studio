@@ -23,7 +23,7 @@ const packs = readdirSync(THEMES).filter((f) => f.endsWith('.json') && f !== 'th
 const KEY = 'k'.repeat(48);
 
 describe('generator over the shipped themes', () => {
-  test('there are 11 packs', () => assert.equal(packs.length, 11));
+  test('there are 12 packs', () => assert.equal(packs.length, 12)); // Molten Stone added 2026-11-27
   for (const p of packs) {
     test(`${p.id}: valid CSS, every variable present, colours equal the pack`, () => {
       assert.deepEqual(packProblems(p), []);
