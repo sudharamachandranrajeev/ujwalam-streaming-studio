@@ -103,7 +103,7 @@ import music_gen as mgen  # noqa: E402
 import music_library as mlib  # noqa: E402
 from clip_common import (  # noqa: E402
     CLIP_DATA, EXIT_FLAG_OFF, EXIT_NOT_STARTED, EXIT_ON_AIR, FLAG, PROFILE_FILE, ClipError, check_out_dir, clips_allowed, contain_children, corpus_dir,
-    HeavyJobLock, end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
+    HeavyJobLock, enable_pacing, end_tree_when_parent_gone, ensure_provenance_since, eprint, find_tool, flag_on, load_config,
     load_json, lower_own_priority, match_gate_settings, media_info, on_air, progress_line, resolve_data_dir, run_tool,
     safepoint_line, write_json_atomic,
 )
@@ -2768,6 +2768,7 @@ def main(argv=None):
             a.out = os.path.abspath(a.out)
             check_out_dir(a.out, corpus_dir())
         lower_own_priority(background_io=True)  # post-stream job: the user's clicks come first (2026-11-26)
+        enable_pacing(data_dir)  # 2026-11-27: children go easy while the user is at the PC (Settings > Clips)
         contain_children()  # ffmpeg and other children end with this process, however it ends (D311 proposed)
         end_tree_when_parent_gone()  # started by Ujwalam: ends with it, ffmpeg children included (D311 proposed)
         return a.fn(a)
