@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 
 from clip_common import ClipError, FFMPEG_THREADS, eprint, run_tool
 
@@ -128,27 +129,155 @@ def transcribe(backend, wav, opts):
             segs = parse_whisper_cpp_json(json.load(f))
         return segs, {"backend": backend, "status": "ok", "segments": len(segs)}
     if backend == "faster-whisper":
-        try:
-            from faster_whisper import WhisperModel  # noqa: PLC0415 (optional, not installed)
-        except ImportError:
-            return [], {"backend": backend, "status": "unavailable", "reason": "faster_whisper not installed"}
+        iso = opts.get("isolate") if isinstance(opts.get("isolate"), dict) else None
+        if iso:  # the child imports it; the parent never loads ctranslate2 or CUDA
+            import importlib.util  # noqa: PLC0415
+            if importlib.util.find_spec("faster_whisper") is None:
+                return [], {"backend": backend, "status": "unavailable", "reason": "faster_whisper not installed"}
+            WhisperModel = None  # noqa: N806
+        else:
+            try:
+                from faster_whisper import WhisperModel  # noqa: PLC0415 (optional, not installed)
+            except ImportError:
+                return [], {"backend": backend, "status": "unavailable", "reason": "faster_whisper not installed"}
         model = opts.get("whisper_model")
         if not model:
             return [], {"backend": backend, "status": "unavailable", "reason": "no --whisper-model (local path)"}
+        fb = opts.get("fallback") or {}
+        can_fall_back = opts.get("device") == "cuda" and bool(fb.get("whisper_model"))
         try:
-            out, lang = _faster_whisper(WhisperModel, model, opts, wav)
+            if can_fall_back and _GPU_FAILED:
+                # 2026-11-27 (alpha.49): a second GPU try in the same run hung inside ctranslate2 and froze the job.
+                # Once the GPU model failed in this process, every later clip goes straight to the CPU model.
+                raise _StickyGpuFailure(_GPU_FAILED[0])
+            out, lang = _attempt(WhisperModel, model, opts, wav, iso)
         except Exception as e:  # noqa: BLE001 - C3: a GPU model that fails (driver, memory) falls back to the CPU one
-            fb = opts.get("fallback") or {}
-            if opts.get("device") != "cuda" or not fb.get("whisper_model"):
+            if not can_fall_back:
+                if isinstance(e, CaptionTimeout):
+                    return [], _timed_out(backend, model, opts, e)
                 raise
-            eprint(f"captions: {os.path.basename(model)} on the GPU failed ({type(e).__name__}); "
-                  f"using {os.path.basename(fb['whisper_model'])} on the CPU")
+            if not isinstance(e, _StickyGpuFailure):
+                _GPU_FAILED[:] = [error_line(e) if isinstance(e, _ChildError) else f"{type(e).__name__}: {error_line(e)}"]
+                eprint(f"captions: {os.path.basename(model)} on the GPU failed ({_GPU_FAILED[0]}); "
+                       f"using {os.path.basename(fb['whisper_model'])} on the CPU")
             opts = dict(opts, **fb)
             model = fb["whisper_model"]
-            out, lang = _faster_whisper(WhisperModel, model, opts, wav)
+            try:
+                out, lang = _attempt(WhisperModel, model, opts, wav, iso)
+            except CaptionTimeout as t:
+                return [], _timed_out(backend, model, opts, t)
         return out, {"backend": backend, "status": "ok", "segments": len(out), "language": lang,
                      "model": os.path.basename(model), "device": opts.get("device", "cpu")}
     raise ClipError(f"unknown captions backend {backend}")
+
+
+# ---------------------------------------------------------------- GPU failure memory and the child process
+
+_GPU_FAILED = []  # [reason] once the GPU caption model failed in this process (sticky for the rest of the run)
+
+
+class _StickyGpuFailure(RuntimeError):
+    """The GPU model already failed earlier in this process: not tried again."""
+
+
+class _ChildError(RuntimeError):
+    """The child failed; its text already names the error type."""
+
+
+class CaptionTimeout(RuntimeError):
+    """The speech to text child ran past its limit and was stopped (a hung native call cannot be interrupted)."""
+
+
+def reset_gpu_failure():
+    """Forget an earlier GPU failure (tests; a new process starts clean anyway)."""
+    _GPU_FAILED.clear()
+
+
+def error_line(e, limit=160):
+    """The first line of an error's text, cut to `limit` characters ('' when it has none)."""
+    s = str(e).strip().splitlines()
+    s = s[0].strip() if s else ""
+    return s if len(s) <= limit else s[:limit - 3] + "..."
+
+
+def _timed_out(backend, model, opts, e):
+    eprint(f"captions: the speech to text with {os.path.basename(model)} on the {opts.get('device', 'cpu').upper()} "
+           f"did not finish in {e.limit:g} s and was stopped; this clip has no captions, the job goes on")
+    return {"backend": backend, "status": "unavailable", "reason": f"speech to text stopped after {e.limit:g} s"}
+
+
+def wav_seconds(wav):
+    """Length of a PCM wav in seconds, or 0.0 when it cannot be read."""
+    import wave  # noqa: PLC0415
+    try:
+        with wave.open(wav, "rb") as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except (OSError, EOFError, wave.Error):
+        return 0.0
+
+
+def child_limit(iso, wav):
+    """Seconds the child may run: setupSec (model load) + perAudioSec x the wav's length (data/clip/reel-captions.json
+    `isolate`)."""
+    return float(iso.get("setupSec", 300)) + float(iso.get("perAudioSec", 4)) * wav_seconds(wav)
+
+
+def _attempt(WhisperModel, model, opts, wav, iso):  # noqa: N803
+    if not iso:
+        return _faster_whisper(WhisperModel, model, opts, wav)
+    return _faster_whisper_child(model, opts, wav, iso)
+
+
+def _child_argv(req_path):
+    """The child: this interpreter, isolated (-I drops the script folder from sys.path, so it is added back)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    code = (f"import sys; sys.path.insert(0, {here!r}); import clip_captions as c; "
+            f"sys.exit(c._child_main({req_path!r}))")
+    return [sys.executable, "-I", "-c", code]
+
+
+def _faster_whisper_child(model, opts, wav, iso):
+    """One faster-whisper run in a child process (run_tool: no console window, kill-on-close job). A child that runs
+    past child_limit() is killed with its whole tree -> CaptionTimeout. A child that fails -> RuntimeError with its
+    error text. The result comes back as a JSON file: {segments, language} or {error}."""
+    import subprocess  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    limit = child_limit(iso, wav)
+    keep = {k: v for k, v in opts.items() if k not in ("fallback", "isolate")}
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(wav)) or None) as td:
+        req, res = os.path.join(td, "req.json"), os.path.join(td, "res.json")
+        with open(req, "w", encoding="utf-8") as f:
+            json.dump({"model": model, "opts": keep, "wav": os.path.abspath(wav), "out": res}, f)
+        try:
+            r = run_tool(_child_argv(req), timeout=limit)
+        except subprocess.TimeoutExpired:
+            t = CaptionTimeout(f"speech to text did not finish in {limit:g} s")
+            t.limit = limit
+            raise t from None
+        try:
+            with open(res, encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            last = (r.stderr or "").strip().splitlines()[-1:]
+            doc = {"error": f"speech to text child exit {r.returncode}" + (f": {last[0][:160]}" if last else "")}
+        if r.returncode != 0 or "error" in doc:
+            raise _ChildError(doc.get("error") or f"speech to text child exit {r.returncode}")
+        return doc["segments"], doc.get("language")
+
+
+def _child_main(req_path):
+    """Child entry: runs _faster_whisper and writes {segments, language} or {error} to the request's out file."""
+    with open(req_path, encoding="utf-8") as f:
+        req = json.load(f)
+    try:
+        from faster_whisper import WhisperModel  # noqa: PLC0415
+        segs, lang = _faster_whisper(WhisperModel, req["model"], req["opts"], req["wav"])
+        doc, rc = {"segments": segs, "language": lang}, 0
+    except Exception as e:  # noqa: BLE001 - reported to the parent as text
+        doc, rc = {"error": f"{type(e).__name__}: {error_line(e)}"}, 1
+    with open(req["out"], "w", encoding="utf-8") as f:
+        json.dump(doc, f)
+    return rc
 
 
 def _faster_whisper(WhisperModel, model, opts, wav):  # noqa: N803 (the class, passed in: an optional import)
