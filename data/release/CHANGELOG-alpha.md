@@ -2,6 +2,12 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.50 — 2026-11-27
+
+- Clip jobs go easy while you use the PC: they run at about a quarter speed while you type or move the mouse, pause while a full-screen game or a presentation runs or the laptop is on battery, and go full speed when you have been away for 5 minutes. The task panel says which, for example "Going slowly while you use the PC". Switch: Settings > Clips > "Go easy while I use the PC" (on). Not yet measured on a real job.
+- Captions can no longer freeze a clip job: when the GPU caption model fails once, the rest of the job uses the CPU one, and captions run with a time limit; a clip whose captions hang gets none and the job goes on. The log now shows the real error text. Not yet tried on a real job.
+- Instagram: an upload Instagram never finishes is dropped after 2 hours and sent again, and it no longer holds up the other clips waiting to post. Not yet tried against real Instagram.
+
 ## 0.1.0-alpha.49 — 2026-11-27
 
 - Task Start works: a click on Start or Resume in the task panel reached nothing when a task notice popped up after the panel opened. The task panel, the schedule panel and the task notices are now small windows of their own, so each gets its own clicks. The task chip and the status bar now show the same count, for example "1 task running, 1 waiting". Not yet tried with your own click in the full studio.
