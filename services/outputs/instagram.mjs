@@ -59,13 +59,15 @@ export function rungProblems(config, rungId, { platforms, addon = loadAddon() } 
  * reused = an existing V rung fits; why = the first problem of each V rung that did not fit (for the report).
  * The add-on rung takes the encoder and encoder options of the plan's own V rung, and an fps that divides the V canvas fps.
  */
-export function addInstagram(config, { platforms = loadPlatforms(PLATFORMS_DIR), addon = loadAddon() } = {}) {
+export function addInstagram(config, { platforms = loadPlatforms(PLATFORMS_DIR), addon = loadAddon(), preferPlatforms = [] } = {}) {
   const sinkId = addon.sink.id;
   if ((config.sinks ?? []).some((s) => s.id === sinkId)) throw new Error(`the plan already has a sink "${sinkId}"`);
   const canvasId = addon.rung.canvas;
   const canvas = (config.canvases ?? []).find((c) => c.id === canvasId);
-  if (!canvas) throw new Error(`the plan has no ${canvasId} canvas for Instagram (9:16)`);
-  const vRungs = (config.encoders ?? []).filter((e) => e.canvas === canvasId);
+  if (!canvas) throw new Error(`the plan has no ${canvasId} canvas for ${platforms[addon.sink.platform]?.name ?? addon.sink.platform}`);
+  // Rungs that already feed a sink of a preferred platform are tried first (Facebook: the shared Twitch/Kick rung).
+  const prefers = (e) => (config.sinks ?? []).some((s) => s.encoder === e.id && preferPlatforms.includes(s.platform));
+  const vRungs = (config.encoders ?? []).filter((e) => e.canvas === canvasId).sort((a, b) => Number(prefers(b)) - Number(prefers(a)));
   const why = {};
   for (const e of vRungs) {
     const p = rungProblems(config, e.id, { platforms, addon });
@@ -90,15 +92,15 @@ export function addInstagram(config, { platforms = loadPlatforms(PLATFORMS_DIR),
  * Writes <dataDir>/outputs/<planName>: the plan file `basePlan` with the instagram sink, rung and target added, its
  * config inlined. Returns { file, rung, reused, why }. The plan holds target names only, never a key or a URL.
  */
-export function writeInstagramPlan(dataDir, basePlan, { platformsDir = PLATFORMS_DIR, addon = loadAddon() } = {}) {
+export function writeInstagramPlan(dataDir, basePlan, { platformsDir = PLATFORMS_DIR, addon = loadAddon(), preferPlatforms = [] } = {}) {
   const w = JSON.parse(readFileSync(basePlan, 'utf8'));
   const cfg = typeof w.config === 'string' ? JSON.parse(readFileSync(path.resolve(REPO, w.config), 'utf8')) : w.config;
   if ((w.extraSinks ?? []).some((s) => s.id === addon.sink.id) || Object.hasOwn(w.targets ?? {}, addon.sink.id)) {
     throw new Error(`the live plan already names an output "${addon.sink.id}"`);
   }
-  const r = addInstagram(cfg, { platforms: loadPlatforms(platformsDir), addon });
+  const r = addInstagram(cfg, { platforms: loadPlatforms(platformsDir), addon, preferPlatforms });
   const plan = {
-    $comment: `Generated at the --live start (IG1, D351, flag ${addon.flag}): ${path.basename(basePlan)} plus the ${addon.sink.id} sink (data/outputs/addons/instagram-live.json). Rebuilt on every start; edit the source plans, not this file.`,
+    $comment: `Generated at the --live start (flag ${addon.flag}): ${path.basename(basePlan)} plus the ${addon.sink.id} sink (data/outputs/addons/${addon.flag}.json). Rebuilt on every start; edit the source plans, not this file.`,
     config: r.config,
     ...(w.extraSinks ? { extraSinks: w.extraSinks } : {}),
     targets: { ...(w.targets ?? {}), [addon.sink.id]: { ...addon.target } },
