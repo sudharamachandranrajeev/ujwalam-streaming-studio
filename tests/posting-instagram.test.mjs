@@ -3,7 +3,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { InstagramError, createInstagramAuth, dialogUrl, loadIgConfig, pickAccount, publishReel, reelCaption, safeUrl } from '../services/posting/instagram.mjs';
@@ -347,5 +347,68 @@ describe('instagram queue (IP2)', async () => {
     const q = readInstagramStates(d);
     assert.deepEqual(Object.keys(q).sort(), ['a', 'c']);
     assert.equal(Date.parse(q.c.dueAt) - Date.parse(q.a.dueAt), 15 * 60e3);
+  });
+});
+
+describe('instagram queue: stuck container and fairness (2026-11-27)', async () => {
+  const { createInstagramPoster, IG_REASON_TEXT } = await import('../services/posting/instagram-queue.mjs');
+  const T = Date.parse('2026-11-27T12:00:00Z');
+  const hoursAgo = (h) => new Date(T - h * 3600e3).toISOString();
+  const store = { get: () => ({ status: 'approved', description: 'x', hashtags: [] }), media: () => ({ file: video() }) };
+  const auth = { status: async () => ({ connected: true }), session: async () => ({ token: 't', igUserId: '1784000000' }) };
+  const qcfg = { ...cfg, pollMaxMs: 50, stuckContainerMs: 2 * 3600e3 };
+  const tick = async () => { await new Promise((r) => setTimeout(r, 15)); };
+  const mk = (meta, d, over = {}) => createInstagramPoster({ dataDir: d, flags: { isOn: () => true }, auth, liveBlock: async () => null, nowMs: () => T, gapMs: () => 1000,
+    endpoints: meta.endpoints, cfg: qcfg, sleep: tick, ...over });
+  const seed = (d, items) => {
+    mkdirSync(path.join(d, 'posting'), { recursive: true });
+    const base = { state: 'waiting', attempts: 0, nextAt: null, reason: null, containerId: null, mediaId: null, postedAt: null, enqueuedAt: hoursAgo(30), updatedAt: hoursAgo(30) };
+    writeFileSync(path.join(d, 'posting', 'instagram-queue.json'), JSON.stringify({ version: 1, lastPostedAt: null, items: Object.fromEntries(items.map((i) => [i.id, { ...base, ...i }])) }));
+  };
+
+  test('stuck container past the ceiling: id dropped, attempt counted, plain reason', async () => {
+    const meta = await fakeMeta({ status: 'IN_PROGRESS' });
+    try {
+      const d = mkdtempSync(path.join(tmpdir(), 'ujw-igq-'));
+      seed(d, [{ id: 'a', dueAt: hoursAgo(24), containerId: '9990001', containerSince: hoursAgo(3) }]);
+      const p = mk(meta, d);
+      assert.deepEqual(await p.pass(store), { skipped: 'container-stuck' });
+      const j = p.queue.get('a');
+      assert.equal(j.containerId, null); assert.equal(j.containerSince, null);
+      assert.equal(j.attempts, 1); assert.equal(j.state, 'waiting'); assert.equal(j.reason, 'container-stuck');
+      assert.ok(Date.parse(j.nextAt) > T);
+      assert.match(IG_REASON_TEXT['container-stuck'], /uploading it again/);
+    } finally { await meta.close(); }
+  });
+
+  test('within the ceiling the id is kept; old queue shape (no containerSince) starts the clock; max attempts fails it', async () => {
+    const meta = await fakeMeta({ status: 'IN_PROGRESS' });
+    try {
+      const d = mkdtempSync(path.join(tmpdir(), 'ujw-igq-'));
+      seed(d, [{ id: 'old', dueAt: hoursAgo(24), containerId: '9990001' }]); // old file: no containerSince field
+      const p = mk(meta, d);
+      assert.equal(p.queue.get('old').containerSince, undefined);
+      await p.pass(store);
+      const j = p.queue.get('old');
+      assert.equal(j.containerId, '9990001', 'not dropped on first sight');
+      assert.equal(j.containerSince, new Date(T).toISOString());
+      assert.equal(j.attempts, 0);
+      seed(d, [{ id: 'last', dueAt: hoursAgo(24), containerId: '9990001', containerSince: hoursAgo(3), attempts: 5 }]);
+      const p2 = mk(meta, d);
+      await p2.pass(store);
+      assert.equal(p2.queue.get('last').state, 'failed');
+    } finally { await meta.close(); }
+  });
+
+  test('a deferred stuck job does not block a second due job', async () => {
+    const meta = await fakeMeta();
+    try {
+      const d = mkdtempSync(path.join(tmpdir(), 'ujw-igq-'));
+      seed(d, [{ id: 'stuck', dueAt: hoursAgo(24), containerId: '9990001', containerSince: hoursAgo(1), nextAt: hoursAgo(0.5), reason: 'processing-timeout' },
+        { id: 'fresh', dueAt: hoursAgo(1) }]);
+      const p = mk(meta, d);
+      assert.deepEqual(await p.pass(store), { posted: 'fresh' });
+      assert.equal(p.queue.get('stuck').state, 'waiting');
+    } finally { await meta.close(); }
   });
 });

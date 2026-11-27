@@ -60,6 +60,7 @@ export function loadIgConfig(file = DEFAULT_IG_CONFIG) {
   for (const [k, lo, hi] of [['redirectPort', 1024, 65535], ['pollEveryMs', 100, 600000], ['pollMaxMs', 1000, 3600000], ['renewDaysBefore', 1, 50], ['retryMinutes', 1, 1440], ['maxAttempts', 1, 50]]) {
     if (!okInt(j[k], lo, hi)) throw new InstagramError('bad-config', `${k} must be a whole number from ${lo} to ${hi}`);
   }
+  if (j.stuckContainerMs !== undefined && !okInt(j.stuckContainerMs, 60000, 86400000)) throw new InstagramError('bad-config', 'stuckContainerMs must be a whole number from 60000 to 86400000');
   return j;
 }
 

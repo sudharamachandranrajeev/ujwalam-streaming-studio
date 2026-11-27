@@ -25,6 +25,7 @@ import { IG_FLAG, InstagramError, loadIgConfig, publishReel, reelCaption } from 
 export const IG_QUEUE_NAME = 'instagram-queue.json';
 const SHORTS = 'youtube-shorts';
 const WAIT_MS = 30 * 60 * 1000;
+const DEFAULT_STUCK_MS = 2 * 60 * 60 * 1000;
 const LIMIT_WAIT_MS = 60 * 60 * 1000;
 const FINAL = new Set(['over-limit', 'video-missing', 'not-approved', 'unknown-post']);
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -45,6 +46,7 @@ export const IG_REASON_TEXT = Object.freeze({
   'unknown-post': 'The package was not found',
   'request-timeout': 'Waiting: Instagram did not answer in time',
   'network-error': 'Waiting: Instagram could not be reached',
+  'container-stuck': 'Instagram never finished the upload; uploading it again',
   'container-unknown': 'Waiting: the started Instagram upload could not be checked; checked again shortly',
   'dropped-by-user': 'Dropped from the Instagram queue by you',
 });
@@ -161,7 +163,9 @@ export function createInstagramPoster(opts) {
     if (!recovered) { recovered = true; queue.recover(); }
     const t = nowMs();
     const due = queue.items().filter((i) => i.state === 'waiting' && ms(i.dueAt) !== null && ms(i.dueAt) <= t && (!i.nextAt || ms(i.nextAt) <= t))
-      .sort((a, b) => ms(a.dueAt) - ms(b.dueAt));
+      // Fairness (2026-11-27): a job already tried and deferred (nextAt set) goes behind every job not tried yet, so one stuck
+      // job cannot win every pass. Untried jobs go by dueAt; deferred ones by nextAt (the longest-waiting retry first).
+      .sort((a, b) => (a.nextAt ? 1 : 0) - (b.nextAt ? 1 : 0) || (a.nextAt ? ms(a.nextAt) - ms(b.nextAt) : ms(a.dueAt) - ms(b.dueAt)));
     if (!due.length) return { skipped: 'none-due' };
     const last = ms(queue.lastPostedAt());
     if (last !== null && t - last < gap()) return { skipped: 'gap' };
@@ -182,14 +186,14 @@ export function createInstagramPoster(opts) {
     try {
       const r = await publishReel({ auth: opts.auth, videoPath: video.file, caption: cap.caption, cfg, fetchImpl: opts.fetchImpl, endpoints: opts.endpoints, sleep: opts.sleep,
         resumeContainer: job.containerId ?? undefined,
-        onContainer: (id) => queue.patch(job.id, { containerId: id }),
+        onContainer: (id) => queue.patch(job.id, id === job.containerId ? { containerId: id } : { containerId: id, containerSince: iso(nowMs()) }),
         beforeStep: async () => {
           if (opts.halted?.()) throw new InstagramError('stopped-by-user', 'stopped');
           const b = await opts.liveBlock();
           if (b) throw new InstagramError(b === 'output-live' ? 'stream-live' : b, 'a stream is live or starting');
         } });
       const at = iso(nowMs());
-      queue.patch(job.id, { state: 'done', mediaId: r.mediaId, postedAt: at, reason: null, containerId: null });
+      queue.patch(job.id, { state: 'done', mediaId: r.mediaId, postedAt: at, reason: null, containerId: null, containerSince: null });
       log(`posting: posted 1 clip to Instagram${Number.isFinite(r.left) ? ` (${r.left} left in Instagram's 24 hours)` : ''}`);
       return { posted: job.id };
     } catch (e) {
@@ -198,7 +202,22 @@ export function createInstagramPoster(opts) {
       if (['stream-live', 'output-state-unreadable', 'stopped-by-user'].includes(code)) later(0);
       else if (code === 'reauth-needed' || code === 'no-app') { wantCache = null; later(WAIT_MS); }
       else if (code === 'limit-reached' || code === 'rate-limited') later(LIMIT_WAIT_MS);
-      else if (code === 'processing-timeout' || code === 'request-timeout' || code === 'network-error' || code === 'container-unknown') later(cfg.pollEveryMs * 12);
+      else if ((code === 'processing-timeout' || code === 'container-unknown') && job.containerId) {
+        // A container Instagram never finishes is not retried for ever: past stuckContainerMs on the same container id
+        // (clock = containerSince; old queue files lack it, so it starts at the first such failure) the id is dropped, the
+        // next try uploads again, and it counts as an attempt.
+        const since = ms(job.containerSince) ?? nowMs();
+        if (nowMs() - since < (cfg.stuckContainerMs ?? DEFAULT_STUCK_MS)) later(cfg.pollEveryMs * 12, { containerSince: iso(since) });
+        else {
+          const attempts = (job.attempts ?? 0) + 1;
+          const drop = { attempts, containerId: null, containerSince: null };
+          if (attempts >= cfg.maxAttempts) queue.patch(job.id, { state: 'failed', reason: 'container-stuck', ...drop });
+          else later(cfg.retryMinutes * 60 * 1000 * 2 ** (attempts - 1), { reason: 'container-stuck', ...drop });
+          log(`posting: Instagram: ${igReasonText('container-stuck')}`);
+          return { skipped: 'container-stuck' };
+        }
+      }
+      else if (code === 'processing-timeout' || code === 'request-timeout'|| code === 'network-error' || code === 'container-unknown') later(cfg.pollEveryMs * 12);
       else if (FINAL.has(code)) fail(code);
       else {
         const attempts = (job.attempts ?? 0) + 1;
