@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ujwalam-host: scene transition heartbeat (src/shader_transition.cpp, ujw_shader_transition). Embedded at build time.
+// Two soft heart beats ("lub-dub", at 25 % and 55 %): the picture swells by up to 3.5 % with a slight zoom blur on each
+// beat, and the new scene takes over between 40 % and 60 %. Scale and blur only, no brightness change, so no flash.
+
+uniform float4x4 ViewProj;
+uniform texture2d tex_a;
+uniform texture2d tex_b;
+uniform float t;
+uniform float2 size;
+uniform float2 dir;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float beat(float x, float at, float w)
+{
+	float d = (x - at) / w;
+	return exp(-d * d);
+}
+
+float4 PSHeartbeat(VertData v_in) : TARGET
+{
+	float p = beat(t, 0.25, 0.09) + 0.7 * beat(t, 0.55, 0.09);
+	float scale = 1.0 + 0.035 * p;
+	float2 c = (v_in.uv - 0.5) / scale + 0.5;
+	float2 toC = (float2(0.5, 0.5) - c) * (0.03 * p);
+	float m = smoothstep(0.4, 0.6, t);
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	for (int i = 0; i < 8; i++) {
+		float2 uv = c + toC * (float(i) / 7.0);
+		sum += lerp(tex_a.Sample(linearClamp, uv), tex_b.Sample(linearClamp, uv), m);
+	}
+	return sum / 8.0;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSHeartbeat(v_in);
+	}
+}

@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ujwalam-host: scene transition motionSwipe (src/shader_transition.cpp, ujw_shader_transition). Embedded at build time.
+// The new scene pushes the old one out along dir (unit vector in uv: where the old scene goes) with a directional motion
+// blur that is strongest at full speed (halfway). t = eased progress 0..1. No brightness change, so no flash.
+
+uniform float4x4 ViewProj;
+uniform texture2d tex_a;
+uniform texture2d tex_b;
+uniform float t;
+uniform float2 size;
+uniform float2 dir;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float bump(float x) { return sin(3.14159265 * saturate(x)); }
+
+float4 pick(float2 uv)
+{
+	// The old scene moves by dir * t: a screen point shows the old scene at uv - dir * t while that is inside it, else
+	// the new scene (which follows it in) at uv - dir * t + dir.
+	float2 ua = uv - dir * t;
+	float2 ub = ua + dir;
+	float inA = (all(ua >= 0.0) && all(ua <= 1.0)) ? 1.0 : 0.0;
+	return lerp(tex_b.Sample(linearClamp, ub), tex_a.Sample(linearClamp, ua), inA);
+}
+
+float4 PSMotionSwipe(VertData v_in) : TARGET
+{
+	float k = bump(t) * 0.05;
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	for (int i = 0; i < 10; i++)
+		sum += pick(v_in.uv + dir * k * (float(i) / 9.0 - 0.5));
+	return sum / 10.0;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSMotionSwipe(v_in);
+	}
+}

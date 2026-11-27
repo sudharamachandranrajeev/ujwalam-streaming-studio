@@ -314,7 +314,8 @@ private:
 		obs_source_t *routed = nullptr; // the transition on channel 0
 		std::string tr_type = "cut";
 		uint32_t tr_ms = 0;
-		std::string tr_ease = "linear"; // fade easing curve (D327 TR1)
+		std::string tr_ease = "linear"; // fade or shader-style easing curve (D327 TR1)
+		bool tr_fallback = false;       // a shader style whose shader failed: it runs as a fade on tr (no st)
 		std::string st_ref; // "base:rel" of the stinger file
 		uint32_t st_point = 0;
 		bool st_audio = true; // the stinger's own sound in the canvas mix (Meld "audio" switch)

@@ -4,6 +4,7 @@
 #include "audio_tools.h"
 #include "checks.h"
 #include "effects.h"
+#include "shader_transition.h"
 #include "log.h"
 #include "obs_runtime.h"
 #include "rpc_server.h"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <regex>
@@ -271,9 +273,18 @@ static obs_source_t *create_transition(const char *kind, const std::string &name
 	return cand;
 }
 
+// Test seam (host tests only): UJWALAM_TEST_SHADER_FAIL=<style> with UJWALAM_HEADLESS=1 acts as if that style's shader
+// did not compile, so the fade fallback can be tested. It only ever makes a transition plainer.
+static bool test_shader_fail(const std::string &style)
+{
+	const char *h = std::getenv("UJWALAM_HEADLESS");
+	const char *f = std::getenv("UJWALAM_TEST_SHADER_FAIL");
+	return h && f && std::strcmp(h, "1") == 0 && style == f;
+}
+
 static bool uses_st(const std::string &t)
 {
-	return t == "stinger" || t == "slide" || t == "swipe" || t == "wipe" || t == "fadeColor";
+	return t == "stinger" || t == "slide" || t == "swipe" || t == "wipe" || t == "fadeColor" || shadertr::is_style(t);
 }
 
 // D391: project type -> libobs transition id (nullptr: not a type).
@@ -291,6 +302,8 @@ static const char *obs_transition_id(const std::string &t)
 		return "fade_to_color_transition";
 	if (t == "fade" || t == "cut")
 		return "fade_transition";
+	if (shadertr::is_style(t)) // 2026-11-28 shader styles (shader_transition.h)
+		return shadertr::ID;
 	return nullptr;
 }
 
@@ -331,13 +344,23 @@ void Studio::set_channel(Canvas &c, Scene *s, bool animate)
 	bool change = animate && src && !c.active.empty() && (!s || c.active != s->id);
 	if (easer_)
 		easer_->end(c.id); // a new switch (or a cut) takes over from a running eased fade
+	const bool fade_like = c.tr_type == "fade" || c.tr_fallback; // a failed shader style runs as a fade
 	if (change && want == c.st && c.tr_type != "stinger" && c.tr_ms == 0) {
 		obs_transition_set(c.st, src); // a D391 type with no duration: a cut
+	} else if (change && want == c.st && shadertr::is_style(c.tr_type)) {
+		// Shader styles always run in manual mode under the easer (linear included), so every style takes a curve.
+		if (obs_transition_start(c.st, OBS_TRANSITION_MODE_MANUAL, c.tr_ms, src)) {
+			if (!easer_)
+				easer_ = std::make_unique<ease::Easer>();
+			easer_->begin(c.id, c.st, c.tr_ms, c.tr_ease);
+		} else {
+			obs_transition_set(c.st, src);
+		}
 	} else if (change && want == c.st) {
 		// stinger: tr_ms is 0 and its own length is the duration (fixed); D391 types run over tr_ms
 		if (!obs_transition_start(c.st, OBS_TRANSITION_MODE_AUTO, c.tr_ms, src))
 			obs_transition_set(c.st, src);
-	} else if (change && c.tr_type == "fade" && c.tr_ms > 0 && c.tr_ease != "linear") {
+	} else if (change && fade_like && c.tr_ms > 0 && c.tr_ease != "linear") {
 		// D327 TR1: eased fade = manual mode driven by the easer's tick callback (transition_ease.h).
 		if (obs_transition_start(c.tr, OBS_TRANSITION_MODE_MANUAL, c.tr_ms, src)) {
 			if (!easer_)
@@ -346,7 +369,7 @@ void Studio::set_channel(Canvas &c, Scene *s, bool animate)
 		} else {
 			obs_transition_set(c.tr, src);
 		}
-	} else if (change && c.tr_type == "fade" && c.tr_ms > 0) {
+	} else if (change && fade_like && c.tr_ms > 0) {
 		if (!obs_transition_start(c.tr, OBS_TRANSITION_MODE_AUTO, c.tr_ms, src))
 			obs_transition_set(c.tr, src);
 	} else {
@@ -364,11 +387,12 @@ json::Value Studio::transition_set(const std::string &cv, const TransitionSpec &
 	const bool audio = t.audio;
 	const std::string &easing = t.easing;
 	if (!obs_transition_id(type))
-		throw Error(rpc::INVALID_PARAMS, "type must be cut, fade, stinger, slide, swipe, wipe or fadeColor");
+		throw Error(rpc::INVALID_PARAMS, "type must be cut, fade, stinger, slide, swipe, wipe, fadeColor, blurZoom, "
+						 "lightLeak, motionSwipe, glitch, heartbeat or pop");
 	if (!ease::known(easing))
 		throw Error(rpc::INVALID_PARAMS, "unknown easing curve");
-	if (easing != "linear" && type != "fade")
-		throw Error(rpc::INVALID_PARAMS, "easing is for a fade only");
+	if (easing != "linear" && type != "fade" && !shadertr::is_style(type))
+		throw Error(rpc::INVALID_PARAMS, "easing is for a fade or a shader style only");
 	if (t.ms < 0 || t.ms > 10000)
 		throw Error(rpc::INVALID_PARAMS, "durationMs must be 0..10000");
 	Canvas *c = canvas(norm_canvas(cv));
@@ -376,7 +400,46 @@ json::Value Studio::transition_set(const std::string &cv, const TransitionSpec &
 		throw Error(rpc::INVALID_PARAMS, "unknown canvas");
 	obs_source_t *old_st = c->st; // released below once it is off the channel (a type change, or back to cut/fade)
 	json::Value info;               // D391: the type's own fields as transitions() reports them
-	if (type == "stinger") {
+	bool fallback = false;
+	if (shadertr::is_style(type)) {
+		// 2026-11-28: a fresh ujw_shader_transition for the style (never an update of the one in use, as D391 below).
+		std::string dirn = t.direction;
+		if (type == "motionSwipe") {
+			if (dirn.empty())
+				dirn = "left";
+			if (dirn != "left" && dirn != "right" && dirn != "up" && dirn != "down")
+				throw Error(rpc::INVALID_PARAMS, "direction must be left, right, up or down");
+		} else if (!dirn.empty()) {
+			throw Error(rpc::INVALID_PARAMS, "direction is not a field of a " + type + " transition");
+		}
+		obs_data_t *d = obs_data_create();
+		obs_data_set_string(d, "style", type.c_str());
+		// where the old scene goes, in uv units (y down)
+		obs_data_set_double(d, "dir_x", dirn == "left" ? -1.0 : dirn == "right" ? 1.0 : 0.0);
+		obs_data_set_double(d, "dir_y", dirn == "up" ? -1.0 : dirn == "down" ? 1.0 : 0.0);
+		std::string name = std::string("ujw:transition-") + type + ":" + c->id;
+		obs_source_t *cand = test_shader_fail(type) ? nullptr : create_transition(shadertr::ID, name, d, c->w, c->h);
+		obs_data_release(d);
+		info = json::Value::object();
+		if (type == "motionSwipe")
+			info.set("direction", dirn);
+		if (cand) {
+			c->st = cand;
+			c->st_kind = shadertr::ID;
+		} else {
+			// The shader did not compile (or the type is not registered): a fade of the same length and curve on tr,
+			// never a black frame and never a refusal the UI would have to handle.
+			hlog::warn("transition %s: %s shader unavailable; running a fade instead", c->id.c_str(), type.c_str());
+			c->st = nullptr;
+			c->st_kind.clear();
+			fallback = true;
+			info.set("fallback", true);
+		}
+		c->st_ref.clear();
+		c->st_point = 0;
+		c->st_audio = true;
+		c->tr_ms = (uint32_t)t.ms;
+	} else if (type == "stinger") {
 		if (!file || !file->is_object())
 			throw Error(rpc::INVALID_PARAMS, "a stinger needs file {base, rel}");
 		std::string path = model::resolve_path_ref(*file, last_opts_.bases, "stinger");
@@ -478,6 +541,7 @@ json::Value Studio::transition_set(const std::string &cv, const TransitionSpec &
 	}
 	c->tr_type = type;
 	c->tr_ease = easing;
+	c->tr_fallback = fallback;
 	c->st_info = info;
 	if (c->tr && c->routed) { // put the right transition on the channel now, showing the same scene
 		Scene *cur = c->active.empty() ? nullptr : scene(c->active, c->id);
@@ -513,6 +577,13 @@ json::Value Studio::transition_types()
 		{"swipe", {"durationMs", "direction", "swipeIn"}},
 		{"wipe", {"durationMs", "pattern", "softness", "invert"}},
 		{"fadeColor", {"durationMs", "color", "pointPct"}},
+		// 2026-11-28 shader styles (shader_transition.h): eased like a fade
+		{"blurZoom", {"durationMs", "easing"}},
+		{"lightLeak", {"durationMs", "easing"}},
+		{"motionSwipe", {"durationMs", "easing", "direction"}},
+		{"glitch", {"durationMs", "easing"}},
+		{"heartbeat", {"durationMs", "easing"}},
+		{"pop", {"durationMs", "easing"}},
 	};
 	json::Value types = json::Value::array();
 	for (auto &x : all) {
@@ -586,7 +657,7 @@ json::Value Studio::transitions() const
 		json::Value o = json::Value::object();
 		o.set("type", c.tr_type);
 		o.set("durationMs", (int64_t)c.tr_ms);
-		if (c.tr_type == "fade" && c.tr_ease != "linear")
+		if ((c.tr_type == "fade" || shadertr::is_style(c.tr_type)) && c.tr_ease != "linear")
 			o.set("easing", c.tr_ease);
 		if (c.tr_type == "stinger") {
 			o.set("file", c.st_ref);
