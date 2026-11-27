@@ -38,6 +38,10 @@ Dialog {
     property var categories: []
     property var others: []              // plain names of the other switched-on outputs ("Twitch", "Kick")
     property int gen: 0
+    property var extras: ({})            // golive/extras: { facebook: {...}, instagram: {...} } (D447)
+    property var fbPages: []             // [{ id, name, canLive }] while picking a Page
+    property string igPaste: ""          // the Instagram paste box (emptied on Save)
+    property string extrasError: ""
 
     readonly property var modes: [
         { id: "existing", title: "Use an event on your channel", text: "Go live in an upcoming or running YouTube event you already made.", icon: "flag" },
@@ -110,7 +114,37 @@ Dialog {
         };
         loadCategories();
         loadOthers();
+        loadExtras();
         open();
+        return true;
+    }
+
+    // ---- Facebook and Instagram cards (D447): ticks for this Go live, Facebook Page pick, Instagram paste ----
+    // Nothing pasted is kept here after the click: the box is emptied and the server never sends a key back.
+    function extrasText(b, err) { return b && typeof b.text === "string" && b.text !== "" ? b.text : "That did not work (" + String(err || "error") + ")." }
+    function loadExtras() {
+        const g = gen;
+        extrasError = ""; fbPages = []; igPaste = "";
+        Api.get("ui/api/golive/extras", (ok, b) => { if (g === gen && ok && b && typeof b === "object") extras = b })
+    }
+    function setExtra(k, v) {
+        const body = {}; body[k] = v === true;
+        Api.post("ui/api/golive/extras", body, (ok, b, err) => { if (ok && b) { extras = b; extrasError = "" } else extrasError = extrasText(b, err) })
+        return true;
+    }
+    function loadPages() {
+        Api.get("ui/api/golive/facebook/pages", (ok, b, err) => { if (ok && b && Array.isArray(b.pages)) { fbPages = b.pages; extrasError = b.pages.length ? "" : "Facebook shared no Page with Ujwalam. Click Connect again and tick your Page." } else extrasError = extrasText(b, err) })
+        return true;
+    }
+    function pickPage(id) {
+        Api.post("ui/api/golive/facebook/page", { pageId: String(id) }, (ok, b, err) => { if (ok) { fbPages = []; loadExtras() } else extrasError = extrasText(b, err) })
+        return true;
+    }
+    function openInstagram() { Api.post("ui/api/golive/instagram/open", {}, (ok, b, err) => { if (!ok) extrasError = extrasText(b, err) }); return true }
+    function pasteInstagram() {
+        const t = igPaste;
+        igPaste = "";
+        Api.post("ui/api/golive/instagram/paste", { text: t }, (ok, b, err) => { if (ok && b) { extras = b; extrasError = "" } else extrasError = extrasText(b, err) })
         return true;
     }
     function loadCategories() {
@@ -656,6 +690,126 @@ Dialog {
             id: tail
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
             spacing: Theme.sp.s
+            // D447: Facebook and Instagram cards, shown when their switch is on (Settings > Advanced).
+            Flow {
+                objectName: "glExtras"
+                width: parent.width
+                spacing: Theme.sp.m
+                visible: (dlg.extras.facebook && dlg.extras.facebook.available) || (dlg.extras.instagram && dlg.extras.instagram.available)
+                readonly property int cardW: width >= 720 ? Math.floor((width - spacing) / 2) : width
+                Rectangle {
+                    objectName: "glFacebook"
+                    visible: !!(dlg.extras.facebook && dlg.extras.facebook.available)
+                    width: parent.cardW
+                    height: fbCol.implicitHeight + Theme.sp.m * 2
+                    radius: Theme.radiusMedium
+                    color: Theme.c.panel
+                    border.width: 1
+                    border.color: Theme.c.border
+                    Column {
+                        id: fbCol
+                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: Theme.sp.m }
+                        spacing: Theme.sp.s
+                        USwitch {
+                            objectName: "glFacebookOn"
+                            width: parent.width
+                            text: "Facebook (your Page, landscape)"
+                            hint: dlg.extras.facebook ? String(dlg.extras.facebook.text || "") : ""
+                            checked: !!(dlg.extras.facebook && dlg.extras.facebook.on)
+                            onToggled: dlg.setExtra("facebook", checked)
+                        }
+                        Text {
+                            objectName: "glFacebookStatus"
+                            width: parent.width
+                            visible: text !== ""
+                            wrapMode: Text.Wrap
+                            textFormat: Text.PlainText
+                            color: Theme.c.muted
+                            font.family: Theme.family
+                            font.pixelSize: Theme.ty.small
+                            text: dlg.extras.facebook && dlg.extras.facebook.liveStatus ? "Facebook says: " + dlg.safe(dlg.extras.facebook.liveStatus) : ""
+                        }
+                        UButton {
+                            objectName: "glFacebookPages"
+                            visible: !!(dlg.extras.facebook && dlg.extras.facebook.connected)
+                            text: dlg.extras.facebook && dlg.extras.facebook.page ? "Change Page" : "Pick your Page"
+                            onClicked: dlg.loadPages()
+                        }
+                        Repeater {
+                            model: dlg.fbPages
+                            delegate: UButton {
+                                required property var modelData
+                                objectName: "glFacebookPage:" + modelData.id
+                                width: fbCol.width
+                                enabled: modelData.canLive === true
+                                text: dlg.safe(modelData.name) + (modelData.canLive === true ? "" : " (you cannot post on this Page)")
+                                onClicked: dlg.pickPage(modelData.id)
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    objectName: "glInstagram"
+                    visible: !!(dlg.extras.instagram && dlg.extras.instagram.available)
+                    width: parent.cardW
+                    height: igCol.implicitHeight + Theme.sp.m * 2
+                    radius: Theme.radiusMedium
+                    color: Theme.c.panel
+                    border.width: 1
+                    border.color: Theme.c.border
+                    Column {
+                        id: igCol
+                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: Theme.sp.m }
+                        spacing: Theme.sp.s
+                        USwitch {
+                            objectName: "glInstagramOn"
+                            width: parent.width
+                            text: "Instagram Live (portrait)"
+                            hint: dlg.extras.instagram ? String(dlg.extras.instagram.text || "") : ""
+                            checked: !!(dlg.extras.instagram && dlg.extras.instagram.on)
+                            onToggled: dlg.setExtra("instagram", checked)
+                        }
+                        UButton {
+                            objectName: "glInstagramOpen"
+                            text: "Set up Instagram Live"
+                            onClicked: dlg.openInstagram()
+                        }
+                        Row {
+                            width: parent.width
+                            spacing: Theme.sp.s
+                            UField {
+                                id: igField
+                                objectName: "glInstagramPaste"
+                                width: parent.width - igSave.width - parent.spacing
+                                // hidden like a password: the studio window may be on the stream
+                                echoMode: TextInput.Password
+                                placeholderText: "Paste the stream URL and key here"
+                                label: "Instagram stream URL and key"
+                                text: dlg.igPaste
+                                onTextEdited: dlg.igPaste = text
+                            }
+                            UButton {
+                                id: igSave
+                                objectName: "glInstagramSave"
+                                text: "Save"
+                                enabled: dlg.igPaste !== ""
+                                onClicked: dlg.pasteInstagram()
+                            }
+                        }
+                    }
+                }
+            }
+            Text {
+                objectName: "glExtrasProblem"
+                width: parent.width
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+                visible: text !== ""
+                color: Theme.c.danger
+                font.family: Theme.family
+                font.pixelSize: Theme.ty.small
+                text: dlg.extrasError
+            }
             Text {
                 objectName: "glSummary"
                 width: parent.width
