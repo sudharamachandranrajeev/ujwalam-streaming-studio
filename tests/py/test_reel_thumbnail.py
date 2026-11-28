@@ -79,6 +79,12 @@ class TitleTests(unittest.TestCase):
         self.assertEqual(th.title_lines({"pieces": [piece(1, 9, 0)], "kills": 0, "resultText": "#1"}, "impact-play", CFG),
                          [("main", "IMPACT PLAY"), ("sub", "#1")])
 
+    def test_live_clip_without_a_count_shows_no_count(self):
+        # 2026-11-28: a live clip keeps only its trigger peak; it read "1 KILL" under "TRIPLE KILL"
+        r = {"pieces": [piece(0, 20, 0)], "peaks": [5.0], "medals": [{"t": 5.0, "w": 2.0, "label": "Triple Kill"}]}
+        self.assertNotIn("killsText", th.facts(r))
+        self.assertNotIn("1 KILL", [t for _, t in th.title_lines(r, "live-clip", CFG)])
+
     def test_story_montage_uses_its_own_facts(self):
         r = reel(story={"result": "DEFEAT", "mode": "mp"})
         self.assertEqual(th.title_lines(r, "match-reel", CFG)[0], ("main", "DEFEAT"))

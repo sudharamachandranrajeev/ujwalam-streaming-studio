@@ -115,10 +115,11 @@ def facts(reel):
     if m and m.get("label"):
         out["medal"] = m["label"]
     story = reel.get("story") or {}
+    # Only a count the reel carries (montages and match reels count their own kills). Never the number of peaks: a
+    # live clip keeps only the moment that triggered it, so every live clip read "1 KILL", under "TRIPLE KILL" too
+    # (user report 2026-11-28). No count is better than a wrong one; the medal line says what happened.
     kills = reel.get("kills")
-    if not (isinstance(kills, int) and kills > 0):
-        kills = len({round(float(x), 3) for x in reel.get("peaks") or [] if _num(x)})
-    if kills > 0:
+    if isinstance(kills, int) and not isinstance(kills, bool) and kills > 0:
         out["killsText"] = f"{kills} KILL" + ("S" if kills > 1 else "")
     # resultText/mode: the reel's match from matches.json (the caller adds them); a story montage carries its own
     res = reel.get("resultText") or story.get("result")
