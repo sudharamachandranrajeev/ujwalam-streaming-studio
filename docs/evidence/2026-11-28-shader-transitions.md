@@ -53,7 +53,7 @@ about 16). Flashes = pairs of opposite mean-luma changes of at least 22 steps in
 
 The darkest frame is the warm scene itself: no transition goes darker than its scenes.
 
-forceComplete: a running 8 s heartbeat ended at once (), and a second call reported nothing running.
+forceComplete: a running 8 s heartbeat ended at once (completed: true), and a second call reported nothing running.
 
 Render cost, 1920x1080 at 60 fps, measured during an 8 s transition. Frame ms = the render thread's average time per
 frame (CPU side, from the host status); GPU % = NVML load. Laptop RTX 4050.
