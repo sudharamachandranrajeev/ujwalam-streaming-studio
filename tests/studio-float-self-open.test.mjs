@@ -28,7 +28,7 @@ describe('self-opening surfaces are FloatSurface, never Popup.Window', () => {
   test('"Make clips?" keeps its names, Escape = Not now, the keys and the centred placement', () => {
     const s = src('ClipsAsk.qml');
     for (const n of ['clipsAsk"', 'clipsAskRemember', 'clipsAskNo', 'clipsAskYes', 'clipsAskLook_']) assert.ok(s.includes(`objectName: "${n}`), n);
-    assert.match(s, /Keys\.onEscapePressed:\s*dlg\.answer\(false\)/);
+    assert.match(s, /sequence: "Escape"; enabled: dlg\.opened; onActivated: dlg\.answer\(false\)/);
     assert.match(s, /takesFocus:\s*true/);
     assert.match(s, /px:\s*Math\.round\(\(dlg\.width - pw\) \/ 2\)/);
     assert.match(s, /py:\s*Math\.round\(\(dlg\.height - ph\) \/ 2\)/);

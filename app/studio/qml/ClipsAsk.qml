@@ -48,10 +48,17 @@ Item {
     }
 
     // ---- probe (tests): clips-ask (put the next waiting question), clips-answer:<yes|no>[:remember] ----
-    function probe() { return { open: opened, message: message, remember: remember.text, lookGroups: lookGroups.map(x => x.g), look: lookPick } }
+    function probe() { return { open: opened, message: message, remember: remember.text, lookGroups: lookGroups.map(x => x.g), look: lookPick,
+                                inWindow: surface.inWindow, surfaceOpened: surface.opened } }
     function probeAction(a) {
         if (a === "clips-ask") return store.nextClipsAsk();
         if (a.startsWith("clips-look:") && opened) { const q = a.slice(11).split(":"); pickLook(q[0], q[1] || ""); return true } // clips-look:<group>:<id|off|>
+        if (a.startsWith("clips-click:") && opened) { // the real button: its click handler is what answers
+            const b = a.slice(12) === "yes" ? yesBtn : noBtn;
+            if (!b.enabled) return false;
+            b.clicked();
+            return true;
+        }
         if (!a.startsWith("clips-answer:") || !opened) return false;
         const p = a.slice(13).split(":");
         remember.checked = p[1] === "remember";
@@ -80,7 +87,7 @@ Item {
             id: keys
             anchors.fill: parent
             focus: true
-            Keys.onEscapePressed: dlg.answer(false)
+            Shortcut { sequence: "Escape"; enabled: dlg.opened; onActivated: dlg.answer(false) } // Escape = Not now
             Text {
                 id: head
                 text: dlg.title
@@ -151,8 +158,8 @@ Item {
                 Row {
                     anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
                     spacing: 10
-                    UButton { objectName: "clipsAskNo"; text: "Not now"; onClicked: dlg.answer(false) }
-                    UButton { objectName: "clipsAskYes"; text: "Make clips"; kind: "primary"; onClicked: dlg.answer(true) }
+                    UButton { id: noBtn; objectName: "clipsAskNo"; text: "Not now"; onClicked: dlg.answer(false) }
+                    UButton { id: yesBtn; objectName: "clipsAskYes"; text: "Make clips"; kind: "primary"; onClicked: dlg.answer(true) }
                 }
             }
         }
