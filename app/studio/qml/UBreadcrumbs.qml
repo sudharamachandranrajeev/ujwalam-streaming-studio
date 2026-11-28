@@ -11,10 +11,13 @@ Item {
     property bool links: true      // false: the labels are only a trail (no hover, no click)
     signal picked(int index)
     implicitHeight: 22
-    implicitWidth: row.implicitWidth
+    implicitWidth: row.implicitWidth + 3
 
     Row {
         id: row
+        // x 3: the first bead's 14 px glow ring reaches 3 px past its 8 px bead; start the row there so the ring stays
+        // inside this item (a clipped parent would otherwise cut it: studio-qml-layout found -3,4 in Settings).
+        x: 3
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.sp.s
         Repeater {
