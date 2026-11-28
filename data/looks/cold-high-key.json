@@ -59,6 +59,11 @@
   "backdrop": [
     "lut"
   ],
+  "transition": {
+    "type": "pop",
+    "durationMs": 400,
+    "easing": "out-cubic"
+  },
   "swatch": [
     "#33363c",
     "#d6baac",

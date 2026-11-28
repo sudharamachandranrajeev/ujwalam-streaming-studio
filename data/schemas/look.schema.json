@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ujwalam/look.schema.json",
   "title": "Realism look (D445, RL1)",
-  "description": "One realism look (data/looks/<id>.json, or the user's own in <data>/looks/user-<name>.json, RL5): a name, what it looks like in plain words, the colour grade its LUT is generated from (tools/make-look-luts.mjs; Filmic keeps tools/make-realism-lut.mjs), and the layer effects a realism scene puts on each game layer, in order, the LUT first (services/project/looks.mjs and tests/realism-looks.test.mjs check that). Effects are project layer effects (data/schemas/project.schema.json $defs/effect; the project validator checks them). backdrop: the effect types that also go on the blurred backdrop copies of the game (the others only add GPU cost under a blur). swatch: SWATCH_REFS of the generator through the look, for the studio menu.",
+  "description": "One realism look (data/looks/<id>.json, or the user's own in <data>/looks/user-<name>.json, RL5): a name, what it looks like in plain words, the colour grade its LUT is generated from (tools/make-look-luts.mjs; Filmic keeps tools/make-realism-lut.mjs), and the layer effects a realism scene puts on each game layer, in order, the LUT first (services/project/looks.mjs and tests/realism-looks.test.mjs check that). Effects are project layer effects (data/schemas/project.schema.json $defs/effect; the project validator checks them). backdrop: the effect types that also go on the blurred backdrop copies of the game (the others only add GPU cost under a blur). swatch: SWATCH_REFS of the generator through the look, for the studio menu. transition (2026-11-28): the realism scene's default scene transition.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "id", "name", "summary", "status", "effects", "backdrop", "swatch"],
@@ -63,6 +63,16 @@
     "backdrop": {
       "type": "array", "uniqueItems": true, "minItems": 1,
       "items": { "type": "string" }
+    },
+    "transition": {
+      "$comment": "2026-11-28: the scene transition a realism scene of this look starts with (its own scene transition; the user can change it per scene). Subtle: 300..800 ms. Same fields as a project transition (project.schema.json canvas.transition).",
+      "type": "object", "additionalProperties": false, "required": ["type", "durationMs"],
+      "properties": {
+        "type": { "enum": ["cut", "fade", "blurZoom", "lightLeak", "motionSwipe", "glitch", "heartbeat", "pop"] },
+        "durationMs": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "easing": { "type": "string", "pattern": "^[a-z]+(-[a-z]+)*$" },
+        "direction": { "enum": ["left", "right", "up", "down"] }
+      }
     },
     "swatch": {
       "type": "array", "minItems": 5, "maxItems": 5,

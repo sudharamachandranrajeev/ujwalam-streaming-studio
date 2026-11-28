@@ -288,6 +288,7 @@ export function duplicateScene(doc, { scene } = {}) {
 //     backdrop copies) gets only the look's `backdrop` types (the detail effects would only cost GPU under a blur).
 //     Effects of any look already on a layer are taken off first, so a realism copy of a realism scene changes the look
 //     instead of stacking two. graded: the ids of those layers. The source scene is never changed.
+//     transition (2026-11-28): the copy gets the look's default scene transition as its own (scene.transition).
 //     dropped: the look effect types left out so a game layer stays within 6 effects (order sharpen, grain, clarity,
 //     vignette; never lut, bloom, chromatic or the layer's own effects).
 //     Refused: unknown-look, no-game-capture (the scene shows no game capture), too-many-effects (even with the droppable
@@ -385,6 +386,10 @@ export function realismScene(doc, { scene, look = DEFAULT_LOOK } = {}, looks = l
   if (!id || !name) return { error: 'too-many-scenes' };
   copy.id = id;
   copy.name = name;
+  // 2026-11-28: the look's default scene transition becomes the new scene's own (a user look uses the one of the look it
+  // was based on). The user can change it per scene afterwards; the source scene keeps its own.
+  const base = lk.transition ? lk : looks.find((x) => x.id === lk.measured?.basedOn);
+  if (base?.transition) copy.transition = structuredClone(base.transition);
   const gradedIds = [];
   s.layers.forEach((src, i) => {
     if (!graded.includes(src)) return;

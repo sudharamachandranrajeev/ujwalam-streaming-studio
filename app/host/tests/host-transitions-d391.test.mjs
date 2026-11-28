@@ -52,7 +52,7 @@ async function code(params) {
 test('transitions.types: every type with its fields and availability; the wipe ids match data/transitions/luma-wipes.json', async () => {
   const t = await c.call('transitions.types', {});
   const by = Object.fromEntries(t.types.map((x) => [x.type, x]));
-  assert.deepEqual(Object.keys(by), ['cut', 'fade', 'stinger', 'slide', 'swipe', 'wipe', 'fadeColor']);
+  assert.deepEqual(Object.keys(by), ['cut', 'fade', 'stinger', 'slide', 'swipe', 'wipe', 'fadeColor', 'blurZoom', 'lightLeak', 'motionSwipe', 'glitch', 'heartbeat', 'pop']);
   for (const x of t.types) assert.equal(x.available, true, `${x.type} available (obs-transitions loaded)`);
   assert.deepEqual(by.slide.fields, ['durationMs', 'direction']);
   assert.deepEqual(by.swipe.fields, ['durationMs', 'direction', 'swipeIn']);

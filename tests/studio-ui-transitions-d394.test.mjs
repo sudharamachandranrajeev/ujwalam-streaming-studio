@@ -54,7 +54,7 @@ test('D394: kinds and wipes with availability; every new type saved through the 
     const post = (body) => req('POST', '/ui/api/project/transition', { cookie, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-ujwalam-csrf': csrf }, JSON.stringify(body));
     const saved = (i) => JSON.parse(readFileSync(file, 'utf8')).canvases[i].transition;
     const ch = (await req('GET', '/ui/api/project/transitions', { cookie })).body;
-    assert.deepEqual(ch.kinds.map((k) => k.id), ['stinger', 'cut', 'fade', 'slide', 'swipe', 'wipe', 'fadeColor']);
+    assert.deepEqual(ch.kinds.map((k) => k.id), ['stinger', 'cut', 'fade', 'slide', 'swipe', 'wipe', 'fadeColor', 'blurZoom', 'lightLeak', 'motionSwipe', 'glitch', 'heartbeat', 'pop']);
     assert.equal(ch.kinds.find((k) => k.id === 'swipe').available, false);
     assert.match(ch.kinds.find((k) => k.id === 'swipe').reason, /swipe/);
     assert.equal(ch.kinds.find((k) => k.id === 'slide').available, true);

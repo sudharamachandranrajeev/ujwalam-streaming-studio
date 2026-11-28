@@ -16,8 +16,12 @@ const CANVAS_IDS = ['h', 'v'];
 const DEVICE_KINDS = ['capture-card', 'camera', 'microphone', 'audio-output'];
 const LAYER_TYPES = ['capture', 'browser', 'image', 'media', 'text', 'color', 'duplicate', 'screen', 'window']; // screen, window: D390
 // Scene transition types (D239, D242 stinger, D391 slide/swipe/wipe/fadeColor) and the fields only that type takes.
-export const TRANSITION_TYPES = ['cut', 'fade', 'stinger', 'slide', 'swipe', 'wipe', 'fadeColor'];
-const TRANSITION_OWN = { slide: ['direction'], swipe: ['direction', 'swipeIn'], wipe: ['pattern', 'softness', 'invert'], fadeColor: ['color', 'pointPct'] };
+// 2026-11-28: shader styles (host ujw_shader_transition, app/host/src/shader_transition.h), eased like a fade.
+export const SHADER_TRANSITIONS = ['blurZoom', 'lightLeak', 'motionSwipe', 'glitch', 'heartbeat', 'pop'];
+export const TRANSITION_TYPES = ['cut', 'fade', 'stinger', 'slide', 'swipe', 'wipe', 'fadeColor', ...SHADER_TRANSITIONS];
+// The types that take an easing curve (D327 TR1).
+export const EASED_TYPES = ['fade', ...SHADER_TRANSITIONS];
+const TRANSITION_OWN = { slide: ['direction'], swipe: ['direction', 'swipeIn'], wipe: ['pattern', 'softness', 'invert'], fadeColor: ['color', 'pointPct'], motionSwipe: ['direction'] };
 // Own fields of a transition type; [] for cut, fade, stinger and anything else. Object.hasOwn: a type such as
 // 'constructor' must not resolve to an inherited property (the validator reports, it never throws).
 export const ownFields = (type) => (typeof type === 'string' && Object.hasOwn(TRANSITION_OWN, type) ? TRANSITION_OWN[type] : []);
@@ -162,8 +166,14 @@ export function validateProject(doc) {
       if ('fps' in c) num(c.fps, `${p}.fps`, 1, 240, true);
       // Scene transition of this canvas (D239): cut, or a fade of durationMs (Meld sceneTransition / verticalSceneTransition).
       // D242: stinger = a video (file) played over the switch; the scene changes pointMs into it.
-      if ('transition' in c) {
-        const t = c.transition; const tp = `${p}.transition`;
+      if ('transition' in c) checkTransition(c.transition, `${p}.transition`, c.id === 'v');
+    });
+  }
+  // One transition object: a canvas's (D239) or a scene's own (2026-11-28, used when switching to that scene). mirrorOk:
+  // the portrait canvas only.
+  function checkTransition(t, tp, mirrorOk) {
+    {
+      {
         if (!isObj(t)) err(tp, 'must be an object');
         else {
           noExtra(t, ['type', 'durationMs', 'file', 'pointMs', 'audio', 'easing', 'mirror', 'direction', 'swipeIn', 'pattern', 'softness', 'invert', 'color', 'pointPct'], tp);
@@ -173,13 +183,13 @@ export function validateProject(doc) {
           if ('easing' in t && (typeof t.easing !== 'string' || !/^[a-z]+(-[a-z]+)*$/.test(t.easing))) err(`${tp}.easing`, 'must be an easing id');
           if ('easing' in t && t.type === 'stinger') err(`${tp}.easing`, 'is not for a stinger');
           if ('mirror' in t && typeof t.mirror !== 'boolean') err(`${tp}.mirror`, 'must be true or false');
-          if ('mirror' in t && c.id !== 'v') err(`${tp}.mirror`, 'is for the portrait canvas (v) only');
+          if ('mirror' in t && !mirrorOk) err(`${tp}.mirror`, 'is for the portrait canvas (v) only');
           if ('type' in t && !TRANSITION_TYPES.includes(t.type)) err(`${tp}.type`, `must be one of ${TRANSITION_TYPES.join(', ')}`);
           // D391: each type's own fields only on that type; slide/swipe need direction, wipe a pattern, fadeColor a colour.
           for (const k of new Set(Object.values(TRANSITION_OWN).flat())) {
             if (k in t && !ownFields(t.type).includes(k)) err(`${tp}.${k}`, `is not a field of a ${t.type} transition`);
           }
-          if ('easing' in t && ownFields(t.type).length) err(`${tp}.easing`, 'is for a fade only');
+          if ('easing' in t && t.type !== 'stinger' && !EASED_TYPES.includes(t.type)) err(`${tp}.easing`, 'is for a fade or a shader style only');
           if (t.type === 'slide' || t.type === 'swipe') req(t, ['direction'], tp);
           if (t.type === 'wipe') req(t, ['pattern'], tp);
           if (t.type === 'fadeColor') req(t, ['color'], tp);
@@ -197,7 +207,7 @@ export function validateProject(doc) {
           if ('pointMs' in t) num(t.pointMs, `${tp}.pointMs`, ...TRANSITION_RANGES.pointMs, true);
         }
       }
-    });
+    }
   }
 
   // devices
@@ -416,7 +426,8 @@ export function validateProject(doc) {
     doc.scenes.forEach((sc, i) => {
       const p = `.scenes[${i}]`;
       if (!isObj(sc)) { err(p, 'must be an object'); return; }
-      noExtra(sc, ['id', 'name', 'layers', 'music', 'origin'], p); req(sc, ['id', 'name', 'layers'], p);
+      noExtra(sc, ['id', 'name', 'layers', 'music', 'transition', 'origin'], p); req(sc, ['id', 'name', 'layers'], p);
+      if ('transition' in sc) checkTransition(sc.transition, `${p}.transition`, false); // 2026-11-28: this scene's own transition
       if ('id' in sc) idOf(sc.id, `${p}.id`);
       if ('music' in sc) for (const e of sceneMusicProblems(sc.music, `${p}.music`)) err(e.path, e.message); // MU2
       if ('name' in sc) str(sc.name, `${p}.name`, 1, 120);

@@ -55,6 +55,11 @@
   "backdrop": [
     "lut"
   ],
+  "transition": {
+    "type": "blurZoom",
+    "durationMs": 600,
+    "easing": "in-out-sine"
+  },
   "swatch": [
     "#222529",
     "#e1ad88",

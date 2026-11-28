@@ -238,7 +238,7 @@ describe('QML studio Settings > Transitions (headless probe)', { skip }, () => {
     assert.deepEqual(canvasOf(r.doc(), 'v'), { type: 'wipe', durationMs: 900, pattern: 'clock', softness: 0.4, invert: true });
     const b = r.s.transitionsBox;
     assert.equal(b.stingers, 3);
-    assert.deepEqual(b.kinds.map((k) => k.id), ['stinger', 'cut', 'fade', 'slide', 'swipe', 'wipe', 'fadeColor']);
+    assert.deepEqual(b.kinds.map((k) => k.id), ['stinger', 'cut', 'fade', 'slide', 'swipe', 'wipe', 'fadeColor', 'blurZoom', 'lightLeak', 'motionSwipe', 'glitch', 'heartbeat', 'pop']);
     assert.equal(b.type, 'swipe');
     assert.deepEqual([b.dirOn, b.swipeInOn, b.patternOn, b.softnessOn, b.invertOn, b.colorOn, b.pctOn, b.msOn, b.stingerOn], [true, true, false, false, false, false, false, true, false]);
     assert.match(b.help, /swipe/i);

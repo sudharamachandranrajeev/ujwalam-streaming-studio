@@ -67,6 +67,11 @@
   "backdrop": [
     "lut"
   ],
+  "transition": {
+    "type": "heartbeat",
+    "durationMs": 650,
+    "easing": "in-out-sine"
+  },
   "swatch": [
     "#18191a",
     "#d5ac8f",
