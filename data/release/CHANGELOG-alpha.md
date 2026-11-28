@@ -2,6 +2,12 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.53 — 2026-11-28
+
+- Gritty war and Dark cinematic looks work again on a game layer that already has effects: a look now leaves out its least important parts (sharpen first, then grain, clarity, vignette) to stay within 6 effects, and says what it left out.
+- Six new scene transitions: blur and zoom, light leak, motion swipe, glitch, heartbeat and pop. Smooth easing, sound crossfades, and a plain fade if one cannot load. Each realism look brings a matching transition for its scene; change it per scene in the Transitions box ("Same as the canvas" goes back to the canvas one). Not yet used on a real stream.
+- New theme Molten Stone (Settings > Appearance): carved stone with molten rose-gold rims, cracks, smoke and drips (smoke and drips move only when you are not live). New controls in every theme: checkboxes, radio buttons, breadcrumbs, pages, steps, avatars, table headers, loading rows, progress bars, empty-state pictures and a busy swirl.
+
 ## 0.1.0-alpha.52 — 2026-11-27
 
 - Make clips again: a clip task you stopped (or that failed) keeps a "Make clips again" button. Clips menu > "Make clips from a recording…" lists recent recordings without finished clips; one click queues it. Work already done (screen reading, finished clips) is reused. It waits while you are live or recording. Not yet tried with your own click.
