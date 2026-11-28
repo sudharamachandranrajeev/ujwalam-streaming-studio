@@ -3271,3 +3271,10 @@ cards only (docs/evidence/2026-11-28-shader-transitions.md).
 - New controls for every theme, each in a real place: UCheckbox, URadio, UBreadcrumbs, UPagination, USteps, UTipDrop, UAvatar, UTableHeader, USkeleton, UProgress, UEmptyState, UBusySwirl, UBadge (NEW on posts waiting for approval).
 - Stats cards stay flat (the stone rim crossed the labels at 44-58 px). No tab bar was added.
 - Off air the ambient loops cost about 3.7 % of one core over violet-night (headless measure); on air the cost matches violet-night.
+
+## D450 — Spoken chat through Speaker.bot, Facebook Page comments read (2026-11-28, user choices)
+
+Every chat message from every platform Ujwalam reads is spoken by the user's Speaker.bot, after a filter and a
+skip-ahead queue, and heard on the stream through a "Spoken chat" mixer strip (Speaker.bot's app audio). Facebook
+Page Live comments are read through the Meta Page connection. Instagram Live comments are not built (webhook only;
+UNVERIFIED). Ujwalam stays read-only towards Streamer.bot. Plan: `docs/plan/2026-11-28-spoken-chat.md`.
