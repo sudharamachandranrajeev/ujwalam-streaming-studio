@@ -78,6 +78,15 @@ test('addFromProject: a duplicate in another scene shares the source; refusals c
   assert.deepEqual(await ids('other', 'H'), ['bg-copy']);
 });
 
+test('addFromProject: a scene with its own transition in the file is accepted (alpha.53: realism copies carry one)', async () => {
+  const doc = structuredClone(PROJECT);
+  doc.scenes[1].transition = { type: 'fade', durationMs: 400 };
+  doc.scenes[0].layers.push({ id: 'tr-probe', type: 'color', name: 'Probe', source: { color: '#0000ff' }, placements: { h: full('h') } });
+  await c.call('layers.addFromProject', { project: doc, scene: 'main', layer: 'tr-probe' });
+  assert.ok((await ids('main', 'H')).includes('tr-probe'));
+  await c.call('layers.remove', { scene: 'main', layer: 'tr-probe' });
+});
+
 test('scenes.create / scenes.remove / layers.remove on project v1 scenes', async () => {
   for (const canvas of ['H', 'V']) await c.call('scenes.create', { scene: { id: 'new', canvas, name: 'New' } });
   const list = (await c.call('scenes.list')).scenes.filter((s) => s.id === 'new');

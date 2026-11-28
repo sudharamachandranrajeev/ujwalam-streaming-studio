@@ -68,6 +68,7 @@ test('repo file set: no tests, docs or local files, Python only the clip and fac
   for (const f of ['data/posting/auto-post-rules.json', 'data/posting/schedule.json', 'data/clip/targets.json', 'data/stream/stream-options.json']) assert.ok(files.includes(f), f);
   assert.ok(files.includes('data/luts/realism-filmic.cube'), 'the shipped LUTs (base luts, D381)');
   assert.ok(files.includes('data/looks/dark-cinematic.json') && files.includes('data/luts/look-dark-cinematic.cube'), 'the realism looks and their LUTs (D445)');
+  assert.ok(files.includes('data/scene-templates/gameplay.json'), 'the scenario templates (Add a scene for a scenario; missing up to alpha.53)');
   for (const f of ['data/clip/themes/cyberpunk.json', 'data/clip/themes/romance-pink.json', 'data/clip/themes/moods/romance-glow.json', 'data/music/moods/starting-soon.json', 'data/schemas/music-mood.schema.json']) {
     assert.ok(files.includes(f), f);
   }

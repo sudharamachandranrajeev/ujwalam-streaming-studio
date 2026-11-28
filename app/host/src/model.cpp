@@ -673,7 +673,10 @@ Plan build(const json::Value &doc, const Options &o)
 	std::map<std::string, LayerRef> layers;
 	const json::Value &scenes = arr(doc, "scenes", 256, "project");
 	for (auto &sc : scenes.as_array()) {
-		chk::only_keys(sc, {"id", "name", "layers", "music", "origin"}, "scene");
+		// "transition" (a scene's own, D244; realism looks set one, D448) is not built here either: the UI server applies
+		// it with transitions.set when the scene is switched to. Refusing it made every layers.addFromProject fail once
+		// one scene in the file had one (alpha.53: no realism scene could be made).
+		chk::only_keys(sc, {"id", "name", "layers", "music", "origin", "transition"}, "scene");
 		std::string sid = mid(sc.find("id"), "scene");
 		for (auto &l : arr(sc, "layers", 256, "scene " + sid).as_array()) {
 			chk::only_keys(l, {"id", "type", "name", "visible", "locked", "source", "placements", "effects", "origin"},
