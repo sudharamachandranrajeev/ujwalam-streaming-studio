@@ -204,20 +204,33 @@ Item {
         }
     }
 
-    Text {
+    // Molten Stone (2026-11-27), every theme: the empty list as a picture with words, skeleton rows until the first list
+    // arrives, and a table header over the posts.
+    UEmptyState {
         objectName: "schedEmpty"
         visible: view.center.loaded && view.center.shownRows === 0
-        anchors { left: parent.left; top: top.bottom; topMargin: Theme.sp.m }
-        text: view.center.filtered ? "No post matches this search." : "Nothing is scheduled."
-        color: Theme.c.muted
-        font.family: Theme.family
-        font.pixelSize: Theme.ty.body
+        anchors { left: parent.left; right: parent.right; top: top.bottom; topMargin: Theme.sp.m }
+        title: view.center.filtered ? "No post matches this search." : "Nothing is scheduled."
+        text: view.center.filtered ? "Clear the search or the filters to see every post." : "Clips that are ready to post show here with their time."
+    }
+    USkeleton {
+        visible: !view.center.loaded
+        anchors { left: parent.left; right: parent.right; top: top.bottom; topMargin: Theme.sp.m }
+        rows: 4
+    }
+    UTableHeader {
+        id: schedHead
+        objectName: "schedHead"
+        visible: view.center.loaded && view.center.shownRows > 0
+        anchors { left: parent.left; right: parent.right; rightMargin: Theme.sp.m; top: top.bottom; topMargin: Theme.sp.s }
+        height: visible ? 36 : 0
+        columns: [{ title: "Time, where and status", w: 3 }, { title: "Actions", w: 1 }]
     }
 
     ListView {
         id: list
         objectName: "schedRows"
-        anchors { left: parent.left; right: parent.right; top: top.bottom; topMargin: Theme.sp.s; bottom: parent.bottom }
+        anchors { left: parent.left; right: parent.right; top: schedHead.bottom; topMargin: Theme.sp.s; bottom: parent.bottom }
         clip: true
         spacing: 2
         model: view.center.rowIds
@@ -269,9 +282,10 @@ Item {
                     objectName: "schedRow:" + cell.r.key
                     readonly property bool busy: view.center.busy[cell.r.key] === true || view.center.bulkBusy
                     radius: Theme.radiusMedium
-                    color: Theme.c.field
-                    border.width: 1
+                    color: rowTex.on ? "transparent" : Theme.c.field
+                    border.width: rowTex.on && cell.r.state !== "failed" ? 0 : 1
                     border.color: cell.r.state === "failed" ? Theme.c.danger : Theme.c.border
+                    UTexture { id: rowTex; surface: "toast"; inset: true } // a dark stone row (the list clips: kept inside)
                     Row {
                         id: topLine
                         anchors { left: parent.left; leftMargin: Theme.sp.m; top: parent.top; topMargin: 6 }

@@ -98,6 +98,12 @@ class QmlTheme : public QObject {
 	Q_PROPERTY(QVariantMap ring READ ring NOTIFY changed)
 	Q_PROPERTY(QVariantMap st READ st NOTIFY changed)
 	Q_PROPERTY(QVariantMap mo READ mo NOTIFY changed)
+	// Molten Stone (2026-11-27): painted surfaces. tex = {surface: {src, m, o, tile}} for each 9-slice picture the pack ships
+	// (empty in plain fx: on air and High performance draw flat fills); art = {name: src} for its still pictures (every fx);
+	// ambient = {smoke, drip: src} only in full fx with animations on, never on air. Notifies on fxChanged (a theme switch too).
+	Q_PROPERTY(QVariantMap tex READ tex NOTIFY fxChanged)
+	Q_PROPERTY(QVariantMap art READ art NOTIFY fxChanged)
+	Q_PROPERTY(QVariantMap ambient READ ambient NOTIFY fxChanged)
 public:
 	explicit QmlTheme(QObject *parent = nullptr);
 	QString id() const;
@@ -118,6 +124,9 @@ public:
 	QVariantMap ring() const;
 	QVariantMap st() const;
 	QVariantMap mo() const;
+	QVariantMap tex() const;
+	QVariantMap art() const;
+	QVariantMap ambient() const;
 	bool onAir() const { return onAir_; }
 	void setOnAir(bool on);
 	bool rareui() const { return rareui_; }

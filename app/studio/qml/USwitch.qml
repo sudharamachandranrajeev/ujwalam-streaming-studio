@@ -37,6 +37,15 @@ Switch {
             font.pixelSize: 10
             font.weight: Font.Bold
         }
+        UAmbient { // Molten Stone (2026-11-27): smoke rising from the knob when on: 10 x 12 over the knob's top, starting at the
+            // switch's own top edge (the track sits 2 px down), so it never reaches past the switch's box
+            visible: s.checked && still !== ""
+            kind: "smoke"
+            width: 10; height: 12
+            x: parent.width - 18
+            y: -2
+            strength: 0.7
+        }
         Rectangle { // the knob, with a small key shadow of its own
             id: knob
             width: 20

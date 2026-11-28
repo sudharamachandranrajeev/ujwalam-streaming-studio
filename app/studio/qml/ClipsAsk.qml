@@ -119,19 +119,10 @@ Dialog {
                 }
             }
         }
-        CheckBox {
+        UCheckbox {
             id: remember
             objectName: "clipsAskRemember"
             text: dlg.live ? "Do this every time a stream ends" : "Do this every time I stop recording"
-            font.family: Theme.family
-            font.pixelSize: 13
-            contentItem: Text {
-                leftPadding: remember.indicator.width + 8
-                text: remember.text
-                color: Theme.c.text
-                font: remember.font
-                verticalAlignment: Text.AlignVCenter
-            }
         }
     }
     footer: Item {

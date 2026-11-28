@@ -372,7 +372,12 @@ Dialog {
                 width: parent.width
                 height: 170
                 clip: true
-                model: dlg.posts
+                // 20 a page (Molten Stone, 2026-11-27, every theme): the pebbles under the list move between pages; one page = all.
+                property int page: 0
+                readonly property int pages: Math.max(1, Math.ceil((dlg.posts || []).length / 20))
+                onPagesChanged: if (page >= pages) page = pages - 1
+                model: (dlg.posts || []).slice(page * 20, page * 20 + 20)
+                id: postsList
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar {}
                 delegate: Rectangle {
@@ -384,8 +389,15 @@ Dialog {
                     height: 30
                     radius: Theme.radiusSmall
                     color: row.modelData.id === dlg.selected ? Theme.c.accent : hover.hovered ? Theme.c.field : "transparent"
+                    // NEW (D449, every theme): the package still waits for the user's look (not approved, not uploaded).
+                    UBadge {
+                        id: newBadge
+                        objectName: "postsNew:" + row.index
+                        visible: row.modelData.status !== "approved" && row.modelData.status !== "uploaded"
+                        anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                    }
                     Text {
-                        anchors { left: parent.left; right: parent.right; leftMargin: 8; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                        anchors { left: parent.left; right: newBadge.visible ? newBadge.left : parent.right; leftMargin: 8; rightMargin: 8; verticalCenter: parent.verticalCenter }
                         text: dlg.rowText(row.modelData)
                         elide: Text.ElideRight
                         color: row.modelData.id === dlg.selected ? Theme.c.onAccent : Theme.c.text
@@ -395,6 +407,12 @@ Dialog {
                     HoverHandler { id: hover }
                     TapHandler { onTapped: dlg.pick(row.modelData.id) }
                 }
+            }
+            UPagination {
+                objectName: "postsPages"
+                page: postsList.page
+                pages: postsList.pages
+                onMoved: (p) => { postsList.page = p }
             }
             Column {
                 objectName: "postsForm"

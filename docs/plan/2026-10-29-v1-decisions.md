@@ -3262,3 +3262,12 @@ it can only make a transition plainer. (4) Shader-style easing needs no stream-s
 equal-power crossfade (the fade transition's linear one dips). (6) Built-in stinger presets stay per canvas, not per
 scene. (7) Flash safety by design (one light-leak glow per switch, glitch adds no brightness) and measured on test
 cards only (docs/evidence/2026-11-28-shader-transitions.md).
+
+## D449 — Molten Stone theme: painted surfaces, ambient smoke, new controls for every theme (2026-11-27, plan approved)
+
+- Plan: `docs/plan/2026-11-27-molten-stone-theme.md`. Evidence: `docs/evidence/2026-11-27-molten-stone-theme.md`.
+- Pack `molten-stone` with an optional `texture` block (9-slice PNGs made by `tools/theme-textures/molten-stone.mjs`, deterministic, 384 KiB) and `ambient` block (smoke, drips).
+- Painted surfaces are dropped in plain fx (on air, High performance). The ambient loops exist only in full fx, off air, animations on, visible and active window. Still pictures (empty state, avatar) show in every fx.
+- New controls for every theme, each in a real place: UCheckbox, URadio, UBreadcrumbs, UPagination, USteps, UTipDrop, UAvatar, UTableHeader, USkeleton, UProgress, UEmptyState, UBusySwirl, UBadge (NEW on posts waiting for approval).
+- Stats cards stay flat (the stone rim crossed the labels at 44-58 px). No tab bar was added.
+- Off air the ambient loops cost about 3.7 % of one core over violet-night (headless measure); on air the cost matches violet-night.

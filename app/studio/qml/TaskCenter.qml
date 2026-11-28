@@ -330,11 +330,13 @@ Item {
         ph: Math.min(panelCol.implicitHeight + 2 * Theme.sp.m, center.windowHeight - center.topY - 40)
         Rectangle {
             anchors.fill: parent
+            visible: !panelTex.on
             color: Theme.c.panel
             radius: Theme.radiusLarge
             border.width: 1
             border.color: Theme.c.border
         }
+        UTexture { id: panelTex; surface: "card"; inset: true } // Molten Stone: a stone card (its own window: kept inside)
         Column {
             id: panelCol
             anchors { fill: parent; margins: Theme.sp.m }
@@ -353,6 +355,13 @@ Item {
                     font.pixelSize: Theme.ty.caption
                     font.weight: Font.Bold
                     font.letterSpacing: 1
+                }
+                UBusySwirl { // turns while a task runs (a status light, like the task chip)
+                    x: 52
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: center.running > 0
+                    running: visible
+                    size: 16
                 }
                 Text {
                     objectName: "taskCount"
@@ -396,12 +405,11 @@ Item {
                     onClicked: center.clearFinished()
                 }
             }
-            Text {
+            UEmptyState { // the empty task list (Molten Stone: the moon landscape)
                 visible: center.listed === 0
-                text: "Nothing is running."
-                color: Theme.c.muted
-                font.family: Theme.family
-                font.pixelSize: Theme.ty.small
+                width: parent.width
+                title: "Nothing is running."
+                text: "Clip jobs, uploads and downloads show here while they work."
             }
             ListView {
                 id: rowList
@@ -422,9 +430,10 @@ Item {
                     width: ListView.view.width
                     height: rowCol.implicitHeight + 20
                     radius: Theme.radiusMedium
-                    color: Theme.c.field
-                    border.width: 1
+                    color: rowTex.on ? "transparent" : Theme.c.field
+                    border.width: rowTex.on && !row.modelData.stalled ? 0 : 1
                     border.color: row.modelData.stalled ? Theme.c.danger : Theme.c.border
+                    UTexture { id: rowTex; surface: "toast"; inset: true } // a dark stone row; the list clips, so it stays inside
                     readonly property string stateText: center.stateWord(modelData)
                     readonly property bool held: center.held(modelData)
                     Column {
@@ -488,38 +497,14 @@ Item {
                             font.family: Theme.family
                             font.pixelSize: Theme.ty.small
                         }
-                        Rectangle { // progress: the fraction, a sweep when the amount of work is unknown
+                        UProgress { // the fraction, a sweep when the amount of work is unknown; clip jobs get the busy bar with the gear
+                            objectName: "taskProgress"
                             visible: row.modelData.state !== "done"
                             width: rowCol.width
-                            height: 6
-                            radius: 3
-                            color: Theme.c.border
-                            clip: true
-                            readonly property real f: row.modelData.state === "waiting" ? 0 : row.modelData.l.fraction
-                            readonly property color ink: row.modelData.state === "failed" ? Theme.c.danger
-                                                       : row.modelData.state === "waiting" ? Theme.c.muted : Theme.c.accent
-                            Rectangle {
-                                id: fill
-                                height: parent.height
-                                radius: 3
-                                color: parent.ink
-                                visible: parent.f >= 0 && parent.f > 0
-                                width: Math.max(parent.height, parent.width * Math.max(0, parent.f))
-                                Behavior on width { enabled: Theme.motion; NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                            }
-                            Rectangle {
-                                id: sweep
-                                height: parent.height
-                                radius: 3
-                                color: parent.ink
-                                width: parent.width * 0.32
-                                visible: parent.f < 0 && row.modelData.state === "running"
-                                SequentialAnimation on x {
-                                    running: sweep.visible && Theme.motion
-                                    loops: Animation.Infinite
-                                    NumberAnimation { from: 0; to: rowCol.width * 0.68; duration: 1400; easing.type: Easing.InOutSine }
-                                }
-                            }
+                            kind: row.modelData.category === "clips" ? "processing" : "linear"
+                            value: row.modelData.state === "waiting" ? 0 : row.modelData.l.fraction
+                            running: row.modelData.state === "running"
+                            ink: row.modelData.state === "failed" ? Theme.c.danger : row.modelData.state === "waiting" ? Theme.c.muted : Theme.c.accent
                         }
                         Text {
                             visible: text !== ""
@@ -634,15 +619,29 @@ Item {
                     objectName: "toast:" + index
                     width: 360
                     height: tCol.implicitHeight + 24
+                    // The tone (Molten Stone, 2026-11-27; every theme): a failure red, a warning (may be stuck, unstable) amber, a
+                    // finished job green, anything else the accent. It colours the edge bar and, on a stone plate, the plate's rim.
+                    readonly property color tone: t.failed ? Theme.c.danger
+                        : /stuck|unstable|warning|waiting/i.test(t.title) ? Theme.c.warn
+                        : /^(done|saved|finished|ready|posted|uploaded)\b/i.test(t.title) ? Theme.c.ok : Theme.c.accent
                     radius: Theme.radiusMedium
-                    color: Theme.c.panel
+                    color: toastTex.on ? "transparent" : Theme.c.panel
                     border.width: 1
-                    border.color: Theme.c.border
-                    Rectangle { // the coloured edge: accent, danger for a failure
+                    border.color: toastTex.on ? "transparent" : Theme.c.border
+                    UTexture { id: toastTex; surface: "toast"; inset: true } // a dark stone plate (its own window: kept inside)
+                    Rectangle { // the plate's coloured rim, just inside the stone's edge
+                        visible: toastTex.on
+                        anchors { fill: parent; margins: 4 }
+                        radius: 10
+                        color: "transparent"
+                        border.width: 1.5
+                        border.color: t.tone
+                    }
+                    Rectangle { // the coloured edge: the tone
                         width: 4
                         radius: 2
                         anchors { left: parent.left; top: parent.top; bottom: parent.bottom; margins: Theme.sp.s }
-                        color: t.failed ? Theme.c.danger : Theme.c.accent
+                        color: t.tone
                     }
                     Column {
                         id: tCol

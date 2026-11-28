@@ -280,11 +280,18 @@ Column {
                 spacing: Theme.sp.s
                 Item {
                     width: parent.width
-                    height: Math.max(nameText.implicitHeight, stText.implicitHeight)
+                    height: Math.max(24, nameText.implicitHeight, stText.implicitHeight)
+                    UAvatar { // the account disc (a spiral, never a face or a name); lit when connected
+                        objectName: "connAvatar:" + row.modelData.id
+                        size: 24
+                        on: row.modelData.state === "connected"
+                    }
                     Text {
                         id: nameText
                         objectName: "connRow:" + row.modelData.id
-                        width: 110
+                        x: 30
+                        y: Math.max(0, (24 - implicitHeight) / 2)
+                        width: 80
                         elide: Text.ElideRight
                         textFormat: Text.PlainText
                         text: row.modelData.label || row.modelData.id

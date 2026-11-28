@@ -55,6 +55,8 @@ QString fxLevel(const QString &effectsMode, bool onAir);
 
 // A colour token: bg panel field border text muted accent accentHi danger ok onAccent disabled
 QColor color(const QString &token);
+// An optional colour of the pack (warn, info: RareUI slice 0), or the given required token when the pack leaves it out.
+QColor optionalColor(const QString &token, const QString &fallback);
 int radius(Radius size); // corner radius in px from the pack
 qreal iconStroke();
 
@@ -69,6 +71,13 @@ Spring spring();
 // The pack's optional design-system block (schema "system": space, type, elevation, ring, state, motion ms): the raw object,
 // or empty. The QML studio's Theme merges it over its defaults (qml_bridge.cpp), so a pack may leave any part out.
 QJsonObject systemBlock();
+
+// Molten Stone (2026-11-27): the pack's texture block ({slices: {name: {margin, outset, tile}}, art: [names]}) and ambient
+// block ({smoke, drip}), empty unless the pack's v2 parts are read. Pictures live at :/theme-tex/<id>/<name>.png.
+QJsonObject textureBlock();
+QJsonObject ambientBlock();
+const QStringList &textureSlices();
+const QStringList &textureArt();
 
 // ---- Theme components (schema v2, D336, flag theme-components) ----
 // The flag (Settings > Advanced / control page) switches the components block on or off; off, every pack draws the base

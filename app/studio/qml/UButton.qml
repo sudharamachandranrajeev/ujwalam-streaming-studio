@@ -41,7 +41,14 @@ Button {
     // Soft and pixel turn to the accent (or the danger colour) under the pointer.
     readonly property color hotFill: kind === "danger" ? Theme.c.danger : Theme.c.accent
     readonly property bool lit: (look === "soft" || look === "pixel") && hovered && enabled
-    readonly property color ink: (lit || look === "premium") ? Theme.c.onAccent : kind === "normal" ? Theme.c.text : Theme.c.onAccent
+    // Molten Stone (2026-11-27): the pack's painted face for the plain look (Theme.tex; never in plain fx). A primary button is a
+    // dark stone pill with a glowing rose-gold rim and a light caps label; a pressed or busy one is cracked open; a disabled one
+    // is flat pale stone; a normal one is a dark stone plate. A danger button keeps its flat fill (the live state must read at once).
+    property bool busy: false // a long action runs: the cracked face and the busy swirl after the label
+    readonly property string texSurface: look !== "" || bare || kind === "danger" ? ""
+        : busy || down ? "buttonPressed" : !enabled ? "buttonDisabled" : kind === "primary" ? "buttonNormal" : "toast"
+    readonly property bool textured: btex.on
+    readonly property color ink: textured ? (enabled || busy ? Theme.c.text : Theme.c.onAccent) : (lit || look === "premium") ? Theme.c.onAccent : kind === "normal" ? Theme.c.text : Theme.c.onAccent
     // Where the pixel block and arrow are (0 rest, 1 hover); the premium gradient slide (0 rest, 2/3 hover).
     readonly property real px: full && look === "pixel" ? pixelSpring.value : 0
     readonly property real slide: full && look === "premium" && hovered ? 2 / 3 : 0
@@ -56,7 +63,8 @@ Button {
     font.family: look === "pixel" ? Theme.ty.displayFamily : Theme.family // bundled OFL only (D384 Q7)
     font.pixelSize: Theme.ty.body
     font.weight: kind === "normal" ? Font.Normal : Font.DemiBold
-    font.letterSpacing: look === "soft" || look === "glass" ? 0.5 : 0
+    font.letterSpacing: look === "soft" || look === "glass" ? 0.5 : textured && kind === "primary" ? 0.8 : 0
+    font.capitalization: textured && kind === "primary" ? Font.AllUppercase : Font.MixedCase
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
     Accessible.name: text
@@ -123,8 +131,14 @@ Button {
                 anchors.verticalCenter: parent.verticalCenter
                 text: b.text
                 font: b.font
-                color: b.enabled ? b.ink : Theme.c.disabled
+                color: b.enabled || b.textured ? b.ink : Theme.c.disabled
                 Behavior on color { enabled: b.look === "pixel" && b.full; ColorAnimation { duration: 200 } }
+            }
+            UBusySwirl {
+                visible: b.busy
+                running: b.busy
+                size: 14
+                anchors.verticalCenter: parent.verticalCenter
             }
         }
     }
@@ -133,7 +147,7 @@ Button {
         id: bg
         objectName: "ubuttonBg"
         property string look: b.look // read by the probe
-        opacity: b.enabled ? 1 : Theme.st.disabled
+        opacity: b.enabled || btex.on ? 1 : Theme.st.disabled
 
         // Everything a look paints. Not created in "plain" or with the flag off.
         Loader {
@@ -146,12 +160,14 @@ Button {
         // The plain look (D389): a flat fill, one edge, the hover and press as a tint of the label colour, a soft key shadow under a
         // filled button (not in "plain"); with a RareUI look it only keeps the focus ring.
         ShadowLayers {
-            visible: b.look === "" && !b.bare && b.kind !== "normal" && b.enabled && !b.down
+            visible: b.look === "" && !b.bare && b.kind !== "normal" && b.enabled && !b.down && !btex.on
             level: 1
             radius: b.rad
         }
+        UTexture { id: btex; surface: b.texSurface }
         Rectangle {
             id: face
+            visible: !btex.on
             anchors.fill: parent
             radius: b.rad
             readonly property color tintInk: b.kind === "normal" ? Theme.c.text : Theme.c.onAccent

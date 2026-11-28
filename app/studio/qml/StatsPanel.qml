@@ -65,6 +65,8 @@ Item {
         color: Theme.c.panel
         border.color: Theme.c.border
         border.width: 1
+        // Molten Stone (2026-11-27, D449): flat on purpose. The stone card's rim crossed the labels at these heights
+        // (44-58 px; seen in the 150% specimen shot), so the stats keep the flat panel in every theme.
     }
     component Spark: Card {
         id: sc

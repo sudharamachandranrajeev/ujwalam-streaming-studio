@@ -361,11 +361,9 @@ Dialog {
         font.weight: Font.DemiBold
     }
 
-    background: Rectangle {
-        color: Theme.c.panel
-        radius: Theme.radiusLarge
-        border.width: 1
-        border.color: Theme.c.border
+    background: Item { // Molten Stone (2026-11-27): the cracked stone slab, kept inside the dialog's window; flat elsewhere
+        Rectangle { anchors.fill: parent; visible: !glSlab.on; color: Theme.c.panel; radius: Theme.radiusLarge; border.width: 1; border.color: Theme.c.border }
+        UTexture { id: glSlab; surface: "modal"; inset: true }
     }
     header: Text {
         text: "Go live on YouTube"
@@ -837,6 +835,13 @@ Dialog {
     }
     footer: Item {
         implicitHeight: 64
+        USteps { // where the start is: details, then the check while it gets ready, then live (the dialog closes)
+            objectName: "glSteps"
+            anchors { left: parent.left; leftMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
+            width: 240
+            steps: ["Details", "Check", "Live"]
+            current: dlg.busy ? 1 : 0
+        }
         Row {
             anchors { right: parent.right; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }
             spacing: Theme.sp.m
@@ -850,6 +855,7 @@ Dialog {
                 objectName: "glGo"
                 text: dlg.busy ? "Getting ready..." : "Go live"
                 kind: "primary"
+                busy: dlg.busy
                 enabled: !dlg.busy && dlg.problem() === ""
                 onClicked: dlg.go()
                 Keys.onReturnPressed: dlg.go()

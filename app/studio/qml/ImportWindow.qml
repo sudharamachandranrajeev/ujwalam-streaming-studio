@@ -127,22 +127,12 @@ Dialog {
                 font.pixelSize: 13
             }
         }
-        CheckBox {
+        UCheckbox {
             id: skipBox
             objectName: "importSkip"
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
             visible: dlg.unavailable
             text: "Skip the items the host cannot show (missing files or devices)"
-            font.family: Theme.family
-            font.pixelSize: 13
-            contentItem: Text {
-                leftPadding: skipBox.indicator.width + 8
-                text: skipBox.text
-                wrapMode: Text.Wrap
-                color: Theme.c.text
-                font: skipBox.font
-                verticalAlignment: Text.AlignVCenter
-            }
         }
     }
     footer: Item {

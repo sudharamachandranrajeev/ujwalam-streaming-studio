@@ -24,17 +24,35 @@ Dialog {
     function ask(p) { pending = p || {}; open(); cancelBtn.forceActiveFocus() }
     onRejected: store.answer(pending.pendingId, false)
 
-    background: Rectangle {
-        color: Theme.c.panel
-        radius: Theme.radiusLarge
-        border.width: 1
-        border.color: dlg.anyway ? Theme.c.danger : Theme.c.border
+    // Molten Stone (2026-11-27): a cracked stone slab (the modal picture, kept inside the dialog's own window) with smoke
+    // rising from its top corners off air; the title in the accent caps. Other themes: the flat panel as before.
+    background: Item {
+        Rectangle {
+            anchors.fill: parent
+            visible: !slab.on
+            color: Theme.c.panel
+            radius: Theme.radiusLarge
+            border.width: 1
+            border.color: dlg.anyway ? Theme.c.danger : Theme.c.border
+        }
+        UTexture { id: slab; surface: "modal"; inset: true }
+        Rectangle { // the problem state keeps its red edge on the slab
+            visible: slab.on && dlg.anyway
+            anchors { fill: parent; margins: 12 }
+            radius: 14
+            color: "transparent"
+            border.width: 1.5
+            border.color: Theme.c.danger
+        }
+        UAmbient { visible: slab.on && still !== ""; kind: "smoke"; x: 14; y: 6; width: 30; height: 44; strength: 0.7 }
+        UAmbient { visible: slab.on && still !== ""; kind: "smoke"; x: parent.width - 44; y: 6; width: 30; height: 44; strength: 0.7 }
     }
     header: Text {
         text: dlg.title
         padding: Theme.sp.l
         bottomPadding: Theme.sp.s
-        color: Theme.c.text
+        font.capitalization: slab.on ? Font.AllUppercase : Font.MixedCase
+        color: slab.on ? Theme.c.accentHi : Theme.c.text
         font.family: Theme.ty.displayFamily
         font.pixelSize: Theme.ty.subtitle
         font.weight: Font.DemiBold
