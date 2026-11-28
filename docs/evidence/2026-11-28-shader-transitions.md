@@ -1,6 +1,6 @@
 # 2026-11-28 Shader scene transitions
 
-Status: code and unit tests done; host GPU tests PENDING (UNVERIFIED) until the user's studio is closed.
+Status: done in tests (headless host, NVENC recordings, 2026-11-28). Not yet used on a real stream.
 
 ## What was built
 
@@ -31,9 +31,46 @@ gritty-war heartbeat 650, hdr-vivid blurZoom 450, night-neon glitch 400.
 | Unit, schema, server | `node --test tests/shader-transitions.test.mjs` | PASS 16/16 |
 | Existing transitions, looks, structure, schema | `node --test tests/studio-ui-transitions*.test.mjs tests/realism-look*.test.mjs tests/project-structure.test.mjs tests/project-schema.test.mjs tests/user-looks.test.mjs ...` | PASS 203/203 |
 | Quick CI (commit hook, includes studio QML compile) | git hook | PASS 9/9 |
-| Host recorded tests | `node --test app/host/tests/host-shader-transitions.test.mjs` | PENDING |
-| Render cost | `UJWALAM_TR_BENCH=1 node --test app/host/tests/host-shader-transitions.test.mjs` | PENDING |
+| Studio QML transitions | `node --test tests/studio-qml-transitions.test.mjs` | PASS 14/14 |
+| Host: shader, D239 and D391 transitions + bench | `UJWALAM_TR_BENCH=1 node --test --test-timeout=600000 --test-concurrency=1 app/host/tests/host-shader-transitions.test.mjs app/host/tests/host-transitions.test.mjs app/host/tests/host-transitions-d391.test.mjs` | PASS 25/25, 0 skipped |
 
 ## Measurements
 
-PENDING: in-between frames, minimum mean luma, flashes per second, and frame time per transition.
+Recorded switch, 640x360 at 30 fps, warm test card to cool test card, 600 ms, easing in-out-sine. "In between" = frames
+that differ from both scenes (18 frames = 600 ms). Darkest frame = lowest mean luma of the whole recording (black is
+about 16). Flashes = pairs of opposite mean-luma changes of at least 22 steps in any 1 s window (limit 3).
+
+| Style | In-between frames | Darkest frame (mean luma) | Flashes/s |
+|---|---|---|---|
+| blurZoom | 18 | 79.7 | 0 |
+| lightLeak | 18 | 79.7 | 0 |
+| motionSwipe | 18 | 79.7 | 0 |
+| glitch | 18 | 79.7 | 0 |
+| heartbeat | 18 | 79.7 | 0 |
+| pop | 18 | 79.7 | 0 |
+| glitch with a forced shader failure (fade fallback) | 14 | 79.6 | n/a |
+| type changed during a running glitch, while recording | n/a | 79.7 | n/a |
+
+The darkest frame is the warm scene itself: no transition goes darker than its scenes.
+
+forceComplete: a running 8 s heartbeat ended at once (), and a second call reported nothing running.
+
+Render cost, 1920x1080 at 60 fps, measured during an 8 s transition. Frame ms = the render thread's average time per
+frame (CPU side, from the host status); GPU % = NVML load. Laptop RTX 4050.
+
+| Transition | Frame ms | +ms vs idle | GPU % |
+|---|---|---|---|
+| none (cut, idle) | 0.195 | 0.000 | 7 |
+| blurZoom | 0.205 | 0.010 | 29 |
+| lightLeak | 0.201 | 0.006 | 13 |
+| motionSwipe | 0.197 | 0.002 | 26 |
+| glitch | 0.204 | 0.009 | 13 |
+| heartbeat | 0.197 | 0.002 | 23 |
+| pop | 0.198 | 0.003 | 12 |
+| fade (reference) | 0.197 | 0.002 | 11 |
+
+All fit easily in a 60 fps frame (16.7 ms). The blur styles (blurZoom, motionSwipe, heartbeat) cost the most GPU, about
+16 to 22 points above idle, and only while a transition runs (300 to 700 ms).
+
+Limits: flashes were measured on still test cards, not on game footage. The flash and darkness checks use whole-frame
+means. A live feature is done only after one real stream with no high-severity feedback.
