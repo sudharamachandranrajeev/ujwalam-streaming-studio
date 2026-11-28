@@ -75,3 +75,8 @@ ci: 9/9 passed
   inside a tool window, transparent rendering and scaling on the user's displays, click routing with a user popup
   open) is UNVERIFIED. The 2026-11-27 harness (Win32, system mouse input) shows the fix shape works for panels.
 - Tooltips: not checked whether a tooltip window opened after a popup can take its click.
+
+## Run after merge (2026-11-28, main checkout, headless)
+
+`node app/studio/tools/build.mjs` then `UJWALAM_HEADLESS=1 node --test tests/studio-qml-clips.test.mjs tests/studio-float-self-open.test.mjs`
+-> pass 14, fail 0. Real-window click routing stays UNVERIFIED (headless uses Popup.Item).
