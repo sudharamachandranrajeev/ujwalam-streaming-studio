@@ -3,7 +3,7 @@
   "product": "ujwalam",
   "base": "0.1.0",
   "channel": "alpha",
-  "current": 53,
+  "current": 54,
   "nodeMin": "22.13.0",
   "obsRuntime": {
     "version": "32.1.2",
@@ -64,6 +64,7 @@
     { "n": 50, "date": "2026-11-27", "title": "Clip jobs go easy while you use the PC, captions cannot freeze a job, Instagram queue unstuck" },
     { "n": 51, "date": "2026-11-27", "title": "Post text made for reach: hook titles, questions, focused hashtags" },
     { "n": 52, "date": "2026-11-27", "title": "Make clips again, Facebook Live to your Page, Instagram Live setup" },
-    { "n": 53, "date": "2026-11-28", "title": "Realism looks fit, six new scene transitions, Molten Stone theme" }
+    { "n": 53, "date": "2026-11-28", "title": "Realism looks fit, six new scene transitions, Molten Stone theme" },
+    { "n": 54, "date": "2026-11-28", "title": "Realism scenes and scenario templates work again" }
   ]
 }

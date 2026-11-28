@@ -2,6 +2,11 @@
 
 One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the section for the build into the zip as `CHANGELOG-alpha.md`.
 
+## 0.1.0-alpha.54 — 2026-11-28
+
+- Realism scenes work again: in alpha.53 the studio engine refused the transition a realism look gives its scene, so no realism scene could be made (and adding layers failed once any scene had its own transition).
+- "Add a scene for a scenario" opens its templates again (it showed "HTTP 500: templates-unreadable"; the templates were missing from the installer).
+
 ## 0.1.0-alpha.53 — 2026-11-28
 
 - Gritty war and Dark cinematic looks work again on a game layer that already has effects: a look now leaves out its least important parts (sharpen first, then grain, clarity, vignette) to stay within 6 effects, and says what it left out.
