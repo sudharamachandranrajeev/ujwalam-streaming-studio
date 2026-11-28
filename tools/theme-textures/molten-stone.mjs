@@ -47,6 +47,13 @@ export const SLICES = {
   modal: { m: 40, o: 10, r: 14 },
   toast: { m: 14, o: 4, r: 10 },
 };
+// The face greys (darkest, lightest) of the slices that carry text: tests/molten-stone-theme.test.mjs checks the pack's
+// text colours against the lightest (plus the top light, at most 8 percent toward white inside the top 5 px margin).
+export const FACES = {
+  card: [[0x36, 0x36, 0x3a], [0x3e, 0x3e, 0x42]], modal: [[0x3a, 0x3a, 0x3e], [0x42, 0x42, 0x46]],
+  plate: [[0x2c, 0x2c, 0x30], [0x3a, 0x3a, 0x3e]], toast: [[0x2c, 0x2c, 0x30], [0x3a, 0x3a, 0x3e]],
+  buttonNormal: [[0x26, 0x26, 0x29], [0x3a, 0x3a, 0x3e]], buttonDisabled: [[0x8e, 0x8d, 0x8e], [0xa4, 0xa3, 0xa3]],
+};
 // Plain pictures (not 9-sliced): name -> logical size.
 export const ART = {
   smoke: [48, 72], drip: [12, 28], empty: [240, 140], avatar: [40, 40], spinner: [40, 40], gear: [14, 14],
@@ -124,7 +131,7 @@ function stone(X, Y, i, j, d, top, bottom, lo = C.stoneLo, hi = C.stoneHi, seed 
   const g = (hash(i, j, seed) - 0.5) * 18;
   c = c.map((v) => v + g);
   const tl = 1 - smooth(0, 5, Y - top), bs = 1 - smooth(0, 7, bottom - Y);
-  c = mix(c, [235, 232, 228], 0.22 * tl);
+  c = mix(c, [235, 232, 228], 0.08 * tl);
   c = mix(c, [20, 20, 22], 0.35 * bs);
   c = mix(c, [24, 24, 26], 0.35 * (1 - smooth(-3, 0, d)) * 0); // reserved: no extra darkening (kept for tuning)
   return mix(c, [30, 30, 32], 0.25 * smooth(-2.5, 0, d));
@@ -234,7 +241,7 @@ function slice(name, s) {
     }
     case 'buttonNormal': {
       im.paint((X, Y) => glow(D(X, Y), o));
-      plainStone(C.darker, C.dark);
+      plainStone(FACES.buttonNormal[0], FACES.buttonNormal[1]);
       im.paint((X, Y) => rope(X, Y, D(X, Y), 2));
       break;
     }
@@ -285,21 +292,21 @@ function slice(name, s) {
       // A second slab peeking out behind (down-right), then the card with a fine rim.
       const D2 = (X, Y) => sdRound(X, Y, x0 + 4, y0 + 5, x1 + 4, y1 + 5, r) + wobble(X + 3, Y, 0.4);
       im.paint((X, Y) => shadow(D2(X, Y), o, 0.45));
-      im.paint((X, Y, i, j) => { const d = D2(X, Y); const a = inside(d); return a > 0 ? [...stone(X, Y, i, j, d, y0 + 5, y1 + 5, [0x4a, 0x4a, 0x4e], [0x5a, 0x5a, 0x5e], seed + 9), a] : null; });
-      plainStone([0x5c, 0x5c, 0x60], [0x6e, 0x6e, 0x72]);
+      im.paint((X, Y, i, j) => { const d = D2(X, Y); const a = inside(d); return a > 0 ? [...stone(X, Y, i, j, d, y0 + 5, y1 + 5, [0x30, 0x30, 0x34], [0x3a, 0x3a, 0x3e], seed + 9), a] : null; });
+      plainStone(FACES.card[0], FACES.card[1]);
       im.paint((X, Y) => rope(X, Y, D(X, Y), 1));
       break;
     }
     case 'plate':
     case 'toast': {
       im.paint((X, Y) => shadow(D(X, Y), o, 0.55));
-      plainStone([0x2c, 0x2c, 0x30], [0x3a, 0x3a, 0x3e]);
+      plainStone(FACES.plate[0], FACES.plate[1]);
       if (name === 'plate') im.paint((X, Y) => rope(X, Y, D(X, Y), 1.2));
       break;
     }
     case 'modal': {
       im.paint((X, Y) => shadow(D(X, Y, 0.8), o, 0.6));
-      plainStone([0x5a, 0x5a, 0x5e], [0x70, 0x70, 0x74], { amp: 0.8 });
+      plainStone(FACES.modal[0], FACES.modal[1], { amp: 0.8 });
       // Cracks only in the corners and edges (inside the 40 px margins), so the middle tiles stay plain.
       const crk = cracks(seed, [[x0 + 2, y0 + 8, 0.5], [x1 - 6, y0 + 1, 2.2], [x0 + 1, y1 - 12, -0.4], [x1 - 1, y1 - 7, 3.6]], 6, 4.2);
       im.paint((X, Y) => {

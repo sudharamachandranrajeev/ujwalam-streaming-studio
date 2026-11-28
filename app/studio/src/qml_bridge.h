@@ -99,7 +99,7 @@ class QmlTheme : public QObject {
 	Q_PROPERTY(QVariantMap st READ st NOTIFY changed)
 	Q_PROPERTY(QVariantMap mo READ mo NOTIFY changed)
 	// Molten Stone (2026-11-27): painted surfaces. tex = {surface: {src, m, o, tile}} for each 9-slice picture the pack ships
-	// (empty in plain fx: on air and High performance draw flat fills); art = {name: src} for its plain pictures (same rule);
+	// (empty in plain fx: on air and High performance draw flat fills); art = {name: src} for its still pictures (every fx);
 	// ambient = {smoke, drip: src} only in full fx with animations on, never on air. Notifies on fxChanged (a theme switch too).
 	Q_PROPERTY(QVariantMap tex READ tex NOTIFY fxChanged)
 	Q_PROPERTY(QVariantMap art READ art NOTIFY fxChanged)

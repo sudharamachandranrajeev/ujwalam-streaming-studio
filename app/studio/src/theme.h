@@ -55,6 +55,8 @@ QString fxLevel(const QString &effectsMode, bool onAir);
 
 // A colour token: bg panel field border text muted accent accentHi danger ok onAccent disabled
 QColor color(const QString &token);
+// An optional colour of the pack (warn, info: RareUI slice 0), or the given required token when the pack leaves it out.
+QColor optionalColor(const QString &token, const QString &fallback);
 int radius(Radius size); // corner radius in px from the pack
 qreal iconStroke();
 

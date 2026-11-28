@@ -764,6 +764,12 @@ QColor color(const QString &token)
 	return g_cur.colors.value(token, QColor());
 }
 
+QColor optionalColor(const QString &token, const QString &fallback)
+{
+	const QColor c(g_cur.src.value(QStringLiteral("colors")).toObject().value(token).toString());
+	return c.isValid() ? c : color(fallback);
+}
+
 int radius(Radius size)
 {
 	return size == Radius::Small ? g_cur.rs : size == Radius::Large ? g_cur.rl : g_cur.rm;

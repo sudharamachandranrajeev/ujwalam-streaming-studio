@@ -186,6 +186,8 @@ QVariantMap QmlTheme::colors() const
 	QVariantMap m;
 	for (const char *t : {"bg", "panel", "field", "border", "text", "muted", "accent", "accentHi", "danger", "ok", "onAccent", "disabled"})
 		m.insert(QLatin1String(t), theme::color(QLatin1String(t)));
+	m.insert(QStringLiteral("warn"), theme::optionalColor(QStringLiteral("warn"), QStringLiteral("danger"))); // toasts, the warning plate
+	m.insert(QStringLiteral("info"), theme::optionalColor(QStringLiteral("info"), QStringLiteral("accent")));
 	return m;
 }
 
@@ -298,9 +300,8 @@ QVariantMap QmlTheme::tex() const
 
 QVariantMap QmlTheme::art() const
 {
+	// Still pictures in every fx (the user, 2026-11-27: on air the smoke and drips stand still); nothing here moves.
 	QVariantMap out;
-	if (fx() == QStringLiteral("plain"))
-		return out;
 	for (const QJsonValue &a : theme::textureBlock().value(QStringLiteral("art")).toArray())
 		if (const QString src = texUrl(a.toString()); !src.isEmpty())
 			out.insert(a.toString(), src);
