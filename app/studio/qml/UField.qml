@@ -7,6 +7,7 @@ import Ujwalam.Core
 TextField {
     id: f
     property string label: ""
+    property bool error: false // Molten Stone (2026-11-27): the torn red-rimmed plate; every theme: a danger edge
     implicitHeight: 36
     leftPadding: Theme.sp.m
     rightPadding: Theme.sp.m
@@ -20,9 +21,10 @@ TextField {
     Accessible.name: label !== "" ? label : placeholderText
     background: Rectangle {
         radius: Theme.radiusSmall
-        color: Theme.c.field
-        border.width: f.activeFocus ? 2 : 1
-        border.color: f.activeFocus ? Theme.c.accentHi : f.hovered ? Theme.c.muted : Theme.c.border
+        color: fieldTex.on ? "transparent" : Theme.c.field
+        border.width: fieldTex.on && !f.activeFocus ? 0 : f.activeFocus ? 2 : 1
+        border.color: f.error ? Theme.c.danger : f.activeFocus ? Theme.c.accentHi : f.hovered ? Theme.c.muted : Theme.c.border
+        UTexture { id: fieldTex; surface: f.error ? "fieldError" : "field" } // a recessed dark input with a rose-gold rim (2 px outset)
         opacity: f.enabled ? 1 : Theme.st.disabled
         Behavior on border.color { enabled: Theme.motion; ColorAnimation { duration: Theme.mo.fast } }
     }

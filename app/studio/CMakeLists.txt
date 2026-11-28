@@ -90,6 +90,20 @@ qt_add_qml_module(ujwalam-studio
 		qml/USpin.qml
 		qml/UCombo.qml
 		qml/UCard.qml
+		qml/UTexture.qml
+		qml/UAmbient.qml
+		qml/UCheckbox.qml
+		qml/URadio.qml
+		qml/UBreadcrumbs.qml
+		qml/UPagination.qml
+		qml/USteps.qml
+		qml/UTipDrop.qml
+		qml/UAvatar.qml
+		qml/UTableHeader.qml
+		qml/USkeleton.qml
+		qml/UProgress.qml
+		qml/UEmptyState.qml
+		qml/UBusySwirl.qml
 		qml/FeaturesCard.qml
 		qml/FeatureSwitch.qml
 		qml/SettingsPage.qml

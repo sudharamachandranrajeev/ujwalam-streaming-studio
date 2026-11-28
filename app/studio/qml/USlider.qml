@@ -24,12 +24,19 @@ Slider {
         width: s.availableWidth
         height: 6
         radius: 3
-        color: Theme.c.field
-        border.width: 1
+        color: trackTex.on ? "transparent" : Theme.c.field
+        border.width: trackTex.on ? 0 : 1
         border.color: Theme.c.border
         opacity: s.enabled ? 1 : Theme.st.disabled
+        UTexture { id: trackTex; surface: "track" } // Molten Stone (2026-11-27): a cracked stone groove
+        Item { // the molten fill (Molten Stone), from the left to the handle; the flat fill below elsewhere
+            visible: s.meter <= 0 && fillTex.on
+            width: s.visualPosition * (parent.width - 16) + 8
+            height: parent.height
+            UTexture { id: fillTex; surface: s.meter <= 0 ? "fill" : "" }
+        }
         Rectangle { // the filled part: from the left to the handle
-            visible: s.meter <= 0
+            visible: s.meter <= 0 && !fillTex.on
             width: s.visualPosition * (parent.width - 16) + 8
             height: parent.height
             radius: 3
