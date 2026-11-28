@@ -67,6 +67,12 @@
   "backdrop": [
     "lut"
   ],
+  "transition": {
+    "type": "motionSwipe",
+    "durationMs": 550,
+    "easing": "in-out-cubic",
+    "direction": "left"
+  },
   "swatch": [
     "#08141e",
     "#f0a168",

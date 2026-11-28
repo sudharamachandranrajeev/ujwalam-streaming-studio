@@ -7,6 +7,7 @@
 #include "audio_tools.h"
 #include "scene_music.h"
 #include "effects.h"
+#include "shader_transition.h"
 #include "log.h"
 
 #include <windows.h>
@@ -173,6 +174,7 @@ bool start(const Options &o, std::string &err)
 	obs_log_loaded_modules();
 	startupclock::mark("modules");
 	fx::register_types(); // host-owned effect sources (effects.h)
+	shadertr::register_type(); // shader scene transitions (shader_transition.h)
 	hlog::info("main video %ux%u@%u NV12 709 partial; audio 48000 Hz stereo; adapter %s", o.width, o.height, o.fps,
 		   adapter_name().c_str());
 	return true;

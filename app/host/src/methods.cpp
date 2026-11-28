@@ -652,7 +652,9 @@ std::map<std::string, rpc::Method> make_methods(App &a)
 		t.type = q.str("type", 16);
 		static const std::map<std::string, std::set<std::string>> own = {
 			{"slide", {"direction"}}, {"swipe", {"direction", "swipeIn"}},
-			{"wipe", {"pattern", "softness", "invert"}}, {"fadeColor", {"color", "pointPct"}}};
+			{"wipe", {"pattern", "softness", "invert"}}, {"fadeColor", {"color", "pointPct"}},
+			// 2026-11-28 shader styles (shader_transition.h); easing is checked in Studio::transition_set
+			{"blurZoom", {}}, {"lightLeak", {}}, {"motionSwipe", {"direction"}}, {"glitch", {}}, {"heartbeat", {}}, {"pop", {}}};
 		for (const char *k : {"direction", "swipeIn", "pattern", "softness", "invert", "color", "pointPct"}) {
 			auto it = own.find(t.type);
 			if (q.has(k) && (it == own.end() || !it->second.count(k)))

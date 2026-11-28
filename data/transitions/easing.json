@@ -1,5 +1,5 @@
 {
-  "$comment": "Scene transition choices (D327, TR1): the types and easing curves Settings > Transitions offers. The host (app/host/src/transition_ease.cpp ease::value) knows the formula of each curve (Penner easing equations; all monotonic in 0..1, so a fade never overshoots). An id the host does not know is refused there. linear = the plain libobs fade.",
+  "$comment": "Scene transition choices (D327, TR1): the types and easing curves Settings > Transitions offers. The host (app/host/src/transition_ease.cpp ease::value) knows the formula of each curve (Penner easing equations; all monotonic in 0..1, so a fade never overshoots). An id the host does not know is refused there. linear = the plain libobs fade. Kinds with shader: true (2026-11-28) are the host's shader styles; they take a curve too, and subtle lengths (300 to 700 ms) suit them best.",
   "types": [
     { "id": "cut", "label": "Cut" },
     { "id": "fade", "label": "Fade" },
@@ -12,7 +12,13 @@
     { "id": "slide", "label": "Slide", "help": "The new scene pushes the old one out of the frame in the direction you pick." },
     { "id": "swipe", "label": "Swipe", "help": "One scene moves over the other, which stays still. Switch on 'Swipe in' to bring the new scene in over the old one; off to swipe the old one away." },
     { "id": "wipe", "label": "Wipe", "help": "The new scene is revealed through a pattern, such as a clock hand or blinds. Softness blurs the edge; Invert plays the pattern the other way round." },
-    { "id": "fadeColor", "label": "Colour fade", "help": "The picture fades to one colour, then from that colour to the new scene. The point is how far through the colour is at its strongest." }
+    { "id": "fadeColor", "label": "Colour fade", "help": "The picture fades to one colour, then from that colour to the new scene. The point is how far through the colour is at its strongest." },
+    { "id": "blurZoom", "label": "Blur zoom", "help": "The old scene pushes in and blurs, and the new scene settles into focus. Smooth and cinematic.", "shader": true },
+    { "id": "lightLeak", "label": "Light leak", "help": "A warm streak of film light sweeps across while the scenes cross. One soft glow, never a strobe.", "shader": true },
+    { "id": "motionSwipe", "label": "Motion swipe", "help": "The new scene pushes the old one out with a fast camera-style motion blur, in the direction you pick.", "shader": true },
+    { "id": "glitch", "label": "Glitch", "help": "A short digital glitch: colours split and thin bands jump sideways at the switch. Safe for viewers: no flashing.", "shader": true },
+    { "id": "heartbeat", "label": "Heartbeat", "help": "The picture swells twice like a heartbeat, with a slight blur, as the new scene takes over.", "shader": true },
+    { "id": "pop", "label": "Pop", "help": "The new scene pops in from slightly smaller with a quick bounce and settles in place.", "shader": true }
   ],
   "easing": [
     { "id": "linear", "label": "Linear" },

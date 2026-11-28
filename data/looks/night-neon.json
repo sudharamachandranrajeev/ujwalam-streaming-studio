@@ -55,6 +55,11 @@
   "backdrop": [
     "lut"
   ],
+  "transition": {
+    "type": "glitch",
+    "durationMs": 400,
+    "easing": "in-out-quad"
+  },
   "swatch": [
     "#16121d",
     "#eaa075",

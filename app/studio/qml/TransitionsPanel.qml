@@ -5,6 +5,9 @@
 // and on air (D332: a click acts). A type the engine does not include is shown off, with the reason. Settings > Transitions
 // holds the easings and the mirror. Every row is always there (a row that does not belong to the chosen type is switched
 // off, not hidden), so the box never changes height when the type changes.
+// 2026-11-28: shader styles (blur zoom, light leak, motion swipe, glitch, heartbeat, pop) with an easing curve, and a
+// Scene row: "Every scene" edits the canvas transition; a scene edits that scene's own one (a realism scene starts with
+// its look's), and "Same as the canvas" takes it off again.
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
@@ -38,7 +41,11 @@ UPanel {
     readonly property var presets: info.stingers || []
     readonly property var swatches: [{ name: "Black", hex: "#000000" }, { name: "White", hex: "#ffffff" }, { name: "Magenta", hex: "#ff2bd6" }, { name: "Cyan", hex: "#18e0ff" }]
     readonly property var sidesText: ({ left: "Left", right: "Right", up: "Up", down: "Down" })
-    readonly property bool usesMs: ["fade", "slide", "swipe", "wipe", "fadeColor"].indexOf(kind) >= 0
+    readonly property bool isShader: cur.shader === true
+    readonly property bool usesMs: ["fade", "slide", "swipe", "wipe", "fadeColor"].indexOf(kind) >= 0 || isShader
+    readonly property bool usesDir: kind === "slide" || kind === "swipe" || kind === "motionSwipe"
+    readonly property bool forScene: String(sceneBox.value || "") !== ""
+    readonly property var curves: info.curves || [{ id: "linear", label: "Linear" }]
     readonly property bool isStinger: kind === "stinger"
 
     // The numeric limits come from the server (the project validator's table), never from a copy here. fallback: before the answer.
@@ -60,6 +67,10 @@ UPanel {
         });
     }
     function saved(canvas) {
+        if (forScene) {
+            for (const sc of (info.scenes || [])) if (sc.id === sceneBox.value) return sc.transition || ({ type: "inherit" });
+            return ({ type: "inherit" });
+        }
         for (const c of (info.canvases || [])) if (c.id === canvas) return c.transition || ({});
         return ({});
     }
@@ -73,6 +84,7 @@ UPanel {
         const t = saved(canvasBox.value);
         kind = t.type || "cut";
         msBox.value = typeof t.durationMs === "number" && t.durationMs > 0 ? t.durationMs : (t.type === "fade" ? 500 : 600);
+        if (!easeBox.pick(t.easing || "in-out-sine")) easeBox.currentIndex = 0;
         pointBox.value = typeof t.pointMs === "number" ? t.pointMs : 0;
         audioBox.checked = t.audio !== false;
         const f = t.file && typeof t.file.rel === "string" ? t.file : null;
@@ -92,16 +104,20 @@ UPanel {
         pctBox.value = typeof t.pointPct === "number" ? t.pointPct : 50;
     }
     function setKind(id) {
-        if (!kindInfo(id).available) return false;
+        if (id === "inherit" ? !forScene : !kindInfo(id).available) return false;
         kind = id;
+        if (kindInfo(id).shader === true && (msBox.value < 300 || msBox.value > 800)) msBox.value = 500; // subtle by default
         return true;
     }
     readonly property bool builtIn: isStinger && String(stingerBox.value || "").indexOf("preset:") === 0
     // What Apply sends; null (with a plain note) when a field cannot be sent.
     function body() {
-        const b = { canvas: canvasBox.value, type: kind };
+        const b = forScene ? { scene: sceneBox.value, type: kind } : { canvas: canvasBox.value, type: kind };
+        if (kind === "inherit") return b;
         if (usesMs) b.durationMs = msBox.value;
-        if (kind === "slide" || kind === "swipe") b.direction = dirBox.value;
+        if (usesDir) b.direction = dirBox.value;
+        if (isShader && easeBox.value && easeBox.value !== "linear") b.easing = easeBox.value;
+        if (isStinger && forScene && String(stingerBox.value || "").indexOf("preset:") === 0) { store.say("A scene uses a video from the stream assets folder; built-in stingers are for the whole canvas."); return null }
         if (kind === "swipe") b.swipeIn = swipeInBox.checked;
         if (kind === "wipe") { b.pattern = wipeBox.value; b.softness = softBox.value; b.invert = invertBox.checked }
         if (kind === "fadeColor") {
@@ -120,7 +136,7 @@ UPanel {
         return b;
     }
     function apply() {
-        if (!cur.available) return store.say("Not done: " + cur.reason);
+        if (kind !== "inherit" && !cur.available) return store.say("Not done: " + cur.reason);
         const b = body();
         if (!b) return;
         Api.post("ui/api/project/transition", b, (ok, r, err) => {
@@ -131,10 +147,11 @@ UPanel {
 
     // ---- probe (tests): trbox-canvas:<h|v>, trbox-type:<id>, trbox-ms:<n>, trbox-stinger:<preset:id|file:rel>, trbox-file:<rel>,
     // trbox-point:<n>, trbox-audio:<on|off>, trbox-dir:<left|right|up|down>, trbox-swipein:<on|off>, trbox-pattern:<id>,
-    // trbox-softness:<0-1>, trbox-invert:<on|off>, trbox-color:<#rrggbb>, trbox-pct:<n>, trbox-apply. Each acts as the
+    // trbox-scene:<id or empty>, trbox-ease:<curve id>, trbox-softness:<0-1>, trbox-invert:<on|off>, trbox-color:<#rrggbb>, trbox-pct:<n>, trbox-apply. Each acts as the
     // user would and is refused when that control is off.
     function probe() {
-        return { shown: visible, enabled: form.enabled, canvas: canvasBox.value ?? "", type: kind,
+        return { shown: visible, enabled: form.enabled, canvas: canvasBox.value ?? "", scene: sceneBox.value ?? "", type: kind,
+                 ease: easeBox.value ?? "", easeOn: easeBox.enabled, shader: isShader,
                  ms: msBox.value, msOn: msBox.enabled, file: stingerBox.value ?? "", videos: (info.videos || []).length, stingers: presets.length,
                  point: pointBox.value, pointOn: pointBox.enabled, audio: audioBox.checked, stingerOn: stingerBox.enabled, available: info.available === true,
                  dir: dirBox.value ?? "", dirOn: dirBox.enabled, swipeIn: swipeInBox.checked, swipeInOn: swipeInBox.enabled,
@@ -154,6 +171,8 @@ UPanel {
         switch (k) {
         case "trbox-canvas": return choose(canvasBox, v) && true;
         case "trbox-type": { const ok = setKind(v); return ok }
+        case "trbox-scene": if (!sceneBox.pick(v)) return false; sceneBox.chose(v); return true;
+        case "trbox-ease": return choose(easeBox, v);
         case "trbox-stinger": return choose(stingerBox, v);
         case "trbox-file": return choose(stingerBox, "file:" + v);
         case "trbox-ms": return num(msBox);
@@ -190,6 +209,16 @@ UPanel {
             onChose: panel.render()
         }
 
+        FormLabel { text: "Scene" }
+        UCombo {
+            id: sceneBox
+            objectName: "trBoxScene"
+            label: "Scene"
+            width: form.fieldW
+            model: [{ value: "", text: "Every scene (canvas transition)" }].concat((panel.info.scenes || []).map(sc => ({ value: sc.id, text: sc.name + (sc.transition ? " (own transition)" : "") })))
+            onChose: panel.render()
+        }
+
         FormLabel { text: "Type" }
         // Grid skips a zero-size item, which would shift every later row into the wrong column while the types are
         // still loading (an empty Flow has no height); the wrapper keeps the cell
@@ -200,6 +229,15 @@ UPanel {
                 id: kindFlow
                 width: parent.width
                 spacing: 6
+                UToggle {
+                    objectName: "trKind:inherit"
+                    visible: panel.forScene
+                    checkable: false
+                    checked: panel.kind === "inherit"
+                    text: "Same as the canvas"
+                    tip: "This scene uses the canvas transition again."
+                    onClicked: panel.setKind("inherit")
+                }
                 Repeater {
                     model: panel.kinds
                     UToggle {
@@ -235,6 +273,15 @@ UPanel {
             stepSize: 50
             suffix: " ms"
             enabled: panel.usesMs
+        }
+        FormLabel { text: "Easing" }
+        UCombo {
+            id: easeBox
+            objectName: "trBoxEase"
+            label: "Easing"
+            width: form.fieldW
+            enabled: panel.isShader
+            model: panel.curves.map(c => ({ value: c.id, text: c.label }))
         }
 
         FormLabel { text: "Stinger" }
@@ -274,7 +321,7 @@ UPanel {
             objectName: "trBoxDir"
             label: "Direction"
             width: form.fieldW
-            enabled: panel.kind === "slide" || panel.kind === "swipe"
+            enabled: panel.usesDir
             model: (panel.info.directions || ["left", "right", "up", "down"]).map(d => ({ value: d, text: "Moves " + (panel.sidesText[d] || d).toLowerCase() }))
         }
         Item { width: 90; height: 1 }

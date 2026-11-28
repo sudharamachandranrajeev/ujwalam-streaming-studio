@@ -1,0 +1,58 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ujwalam-host: scene transition lightLeak (src/shader_transition.cpp, ujw_shader_transition). Embedded at build time.
+// A warm film light leak sweeps diagonally across the frame while the scenes cross (30 % to 70 %). The leak is one soft
+// glow that rises and falls once per transition (sin^2, at most +0.28 in screen blend), so a switch is one brightness
+// bump: inside the 3 flashes per second limit while switches are at least 1/3 s apart.
+
+uniform float4x4 ViewProj;
+uniform texture2d tex_a;
+uniform texture2d tex_b;
+uniform float t;
+uniform float2 size;
+uniform float2 dir;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float bump(float x) { return sin(3.14159265 * saturate(x)); }
+
+float4 PSLightLeak(VertData v_in) : TARGET
+{
+	float4 a = tex_a.Sample(linearClamp, v_in.uv);
+	float4 b = tex_b.Sample(linearClamp, v_in.uv);
+	float4 c = lerp(a, b, smoothstep(0.3, 0.7, t));
+	float2 p = v_in.uv * float2(size.x / max(size.y, 1.0), 1.0);
+	float along = dot(p, float2(0.8, 0.6));
+	float centre = lerp(-0.4, 2.0, t);
+	float d = (along - centre) * 2.2;
+	float band = exp(-d * d);
+	float glow = bump(t);
+	float3 leak = float3(1.0, 0.62, 0.32) * band * glow * glow * 0.28;
+	c.rgb = 1.0 - (1.0 - c.rgb) * (1.0 - leak);
+	return c;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSLightLeak(v_in);
+	}
+}

@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ujwalam-host: scene transition blurZoom (src/shader_transition.cpp, ujw_shader_transition). Embedded at build time.
+// The old scene pushes in (1.00 -> 1.06) with a radial zoom blur that peaks halfway; the new scene settles from 0.95 to
+// 1.00 as its blur clears. The mix is a smooth cross between 35 % and 65 %. t = eased progress 0..1. No brightness
+// change beyond the crossfade, so no flash.
+
+uniform float4x4 ViewProj;
+uniform texture2d tex_a;
+uniform texture2d tex_b;
+uniform float t;
+uniform float2 size;
+uniform float2 dir;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float bump(float x) { return sin(3.14159265 * saturate(x)); }
+
+float4 zoomBlurA(float2 uv, float scale, float amount)
+{
+	float2 c = (uv - 0.5) / scale + 0.5;
+	float2 toC = (float2(0.5, 0.5) - c) * amount;
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	for (int i = 0; i < 12; i++)
+		sum += tex_a.Sample(linearClamp, c + toC * (float(i) / 11.0));
+	return sum / 12.0;
+}
+
+float4 zoomBlurB(float2 uv, float scale, float amount)
+{
+	float2 c = (uv - 0.5) / scale + 0.5;
+	float2 toC = (float2(0.5, 0.5) - c) * amount;
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	for (int i = 0; i < 12; i++)
+		sum += tex_b.Sample(linearClamp, c + toC * (float(i) / 11.0));
+	return sum / 12.0;
+}
+
+float4 PSBlurZoom(VertData v_in) : TARGET
+{
+	float k = bump(t) * 0.08;
+	float4 a = zoomBlurA(v_in.uv, 1.0 + 0.06 * t, k);
+	float4 b = zoomBlurB(v_in.uv, 0.95 + 0.05 * t, k);
+	return lerp(a, b, smoothstep(0.35, 0.65, t));
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlurZoom(v_in);
+	}
+}

@@ -60,7 +60,7 @@ import { addLayer, addScene, duplicateLayer, duplicateScene, moveLayer, realismS
 import { LOOKS_DIR, loadLooks, lookSummary, userLooksDir } from '../project/looks.mjs';
 import { listAssets } from './assets.mjs';
 import { loadProject, saveProject } from '../project/store.mjs';
-import { TRANSITION_RANGES, TRANSITION_TYPES, ownFields, validateProject } from '../project/validate.mjs';
+import { EASED_TYPES, SHADER_TRANSITIONS, TRANSITION_RANGES, TRANSITION_TYPES, ownFields, validateProject } from '../project/validate.mjs';
 import { listStingerPresets, stingerTransition } from '../project/stinger-presets.mjs';
 import { MAX_NOTE, MAX_TITLE, REPORT_FLAG, createReporter } from './report.mjs';
 import { countsOnly, importSession, resolveSessionFile } from './import.mjs';
@@ -1147,6 +1147,10 @@ export function createStudioServer(opts) {
         const doc = JSON.parse(readFileSync(file, 'utf8'));
         const value = {};
         for (const c of Array.isArray(doc?.canvases) ? doc.canvases : []) if (isPlain(c?.transition) && (c.id === 'h' || c.id === 'v')) value[c.id] = c.transition;
+        // 2026-11-28: a scene's own transition (a realism scene gets its look's), used when switching to that scene
+        const scenes = {};
+        for (const sc of Array.isArray(doc?.scenes) ? doc.scenes : []) if (isPlain(sc?.transition) && typeof sc.id === 'string') scenes[sc.id] = sc.transition;
+        Object.defineProperty(value, 'scenes', { value: scenes, enumerable: false });
         projTr = { mtimeMs: m, value };
       }
     } catch { /* unreadable: keep the last value */ }
@@ -1158,15 +1162,26 @@ export function createStudioServer(opts) {
   const trRefused = {};
   const trKey = (t) => JSON.stringify([t.type, t.durationMs, t.file ?? null, t.pointMs ?? null, t.audio ?? null, t.easing ?? null,
     ...TR_OWN_KEYS.map((k) => t[k] ?? null)]);
-  async function transitionSync(hs) {
+  // target (optional): { <canvas id lower case>: scene id } about to be activated (scenes.activate goes through here first,
+  // so the switch runs with that scene's own transition). Otherwise each canvas's active scene from host.status counts.
+  async function transitionSync(hs, target = null) {
     if (!isPlain(hs.transitions)) return; // older host or fake: nothing to sync
     const on = !!flags && flags.isOn(TRANSITIONS_FLAG);
     const want = on ? projectTransitions() : {};
+    const sceneTr = on && isPlain(want.scenes) ? want.scenes : {};
+    const activeOf = (hid) => {
+      const k = hid.toLowerCase();
+      if (target && Object.hasOwn(target, k)) return target[k];
+      const cv = Array.isArray(hs.canvases) ? hs.canvases.find((x) => typeof x?.id === 'string' && x.id.toLowerCase() === k) : null;
+      return typeof cv?.active === 'string' ? cv.active : null;
+    };
     // D327 TR1 (flag stream-settings): easing curves and "Mirror main canvas transitions" for the portrait canvas.
     const tr1 = !!flags && flags.isOn(STREAM_SETTINGS_FLAG);
     for (const [hid, cur] of Object.entries(hs.transitions)) {
       let t = want[hid.toLowerCase()];
       if (tr1 && hid.toLowerCase() === 'v' && t?.mirror === true) t = want.h;
+      const sid = activeOf(hid);
+      if (sid && Object.hasOwn(sceneTr, sid)) t = sceneTr[sid]; // the scene's own transition wins over the canvas's
       let p = { type: 'cut', durationMs: 0 };
       if (t?.type === 'fade' && Number.isInteger(t.durationMs)) {
         p = { type: 'fade', durationMs: Math.min(10000, Math.max(0, t.durationMs)) };
@@ -1175,13 +1190,19 @@ export function createStudioServer(opts) {
       else if (t?.type === 'stinger' && isPlain(t.file) && typeof t.file.base === 'string' && typeof t.file.rel === 'string' && Number.isInteger(t.pointMs)) {
         p = { type: 'stinger', durationMs: 0, file: { base: t.file.base, rel: t.file.rel }, pointMs: Math.min(10000, Math.max(0, t.pointMs)), audio: t.audio !== false };
       }
+      // 2026-11-28 shader styles: durationMs, easing (any curve, no flag needed), motionSwipe direction
+      else if (SHADER_TRANSITIONS.includes(t?.type) && Number.isInteger(t.durationMs)) {
+        p = { type: t.type, durationMs: Math.min(10000, Math.max(0, t.durationMs)) };
+        if (typeof t.easing === 'string' && t.easing !== 'linear') p.easing = t.easing;
+        for (const k of ownFields(t.type)) if (t[k] !== undefined) p[k] = t[k];
+      }
       // D391: slide, swipe, wipe, fadeColor pass through with their own fields (the project validator checked them;
       // the host checks them again and refuses a wipe image it does not ship). Host defaults fill absent fields.
       else if (trOwn(t?.type) && Number.isInteger(t.durationMs)) {
         p = { type: t.type, durationMs: Math.min(10000, Math.max(0, t.durationMs)) };
         for (const k of trOwn(t.type)) if (t[k] !== undefined) p[k] = t[k];
       }
-      const ownKind = p.type === 'stinger' || !!trOwn(p.type);
+      const ownKind = p.type === 'stinger' || !!trOwn(p.type) || SHADER_TRANSITIONS.includes(p.type);
       if (ownKind && trRefused[hid] === trKey(p)) p = { type: 'cut', durationMs: 0 };
       const same = cur?.type === p.type && cur?.durationMs === p.durationMs && (cur?.easing ?? 'linear') === (p.easing ?? 'linear')
         && (p.type !== 'stinger' || (cur?.file === `${p.file.base}:${p.file.rel}` && cur?.pointMs === p.pointMs && (cur?.audio ?? true) === p.audio))
@@ -1311,12 +1332,14 @@ export function createStudioServer(opts) {
     const kinds = easingChoices().kinds.map((k) => {
       const h = hostTypes?.types?.find((t) => t?.type === k.id);
       const missing = !!hostTypes && (!h || h.available !== true);
-      return { id: k.id, label: k.label, help: k.help, fields: ownFields(k.id), available: !missing,
+      return { id: k.id, label: k.label, help: k.help, fields: ownFields(k.id), available: !missing, ...(k.shader === true ? { shader: true } : {}),
         ...(missing ? { reason: `This copy of the studio engine does not include the ${k.label.toLowerCase()} transition.` } : {}) };
     });
     const hostWipes = Array.isArray(hostTypes?.wipes) ? new Set(hostTypes.wipes) : null;
     const wipes = lumaWipes().map((w) => ({ ...w, available: !hostWipes || hostWipes.has(w.id) }));
     return json(res, 200, { on, available: true, kinds, wipes, ranges: TRANSITION_RANGES, directions: ['left', 'right', 'up', 'down'], canvases: doc.canvases.map((c) => ({ id: c.id, transition: c.transition ?? { type: 'cut', durationMs: 0 } })),
+      // 2026-11-28: each scene's own transition (null: the canvas's), and the curves a shader style takes (no flag needed)
+      scenes: doc.scenes.map((sc) => ({ id: sc.id, name: sc.name, transition: sc.transition ?? null })), curves: easingChoices().easing,
       videos: listAssets(assetsDir).filter((a) => a.kind === 'media').map((a) => a.rel),
       // D391: the built-in cyberpunk stingers, picked by id (`preset`), never by path
       stingers: listStingerPresets().map((p) => ({ id: p.id, label: p.label, description: p.description, pointMs: p.pointMs, default: p.default })),
@@ -1332,14 +1355,20 @@ export function createStudioServer(opts) {
     const file = projectSync?.status?.().file;
     if (typeof file !== 'string') return json(res, 409, { error: 'no-project-file' });
     // easing / mirror (D327 TR1) only with flag stream-settings.
-    const keys = ['canvas', 'type', 'durationMs', 'file', 'pointMs', 'audio', 'preset', ...TR_OWN_KEYS, ...(flags.isOn(STREAM_SETTINGS_FLAG) ? ['easing', 'mirror'] : [])];
-    if (!isPlain(body) || Object.keys(body).some((k) => !keys.includes(k)) || !['h', 'v'].includes(body.canvas) || !TRANSITION_TYPES.includes(body.type)) return json(res, 400, { error: 'bad-params' });
-    if (body.easing !== undefined && (body.type !== 'fade' || !easingChoices().easing.some((e) => e.id === body.easing))) return json(res, 400, { error: 'bad-params' });
+    // easing / mirror (D327 TR1) with flag stream-settings; a shader style's easing needs no flag (2026-11-28).
+    // scene (2026-11-28): set that scene's own transition instead of a canvas's; type 'inherit' takes it off again.
+    const keys = ['canvas', 'scene', 'type', 'durationMs', 'file', 'pointMs', 'audio', 'preset', 'easing', ...TR_OWN_KEYS, ...(flags.isOn(STREAM_SETTINGS_FLAG) ? ['mirror'] : [])];
+    const forScene = isPlain(body) && body.scene !== undefined;
+    if (!isPlain(body) || Object.keys(body).some((k) => !keys.includes(k))) return json(res, 400, { error: 'bad-params' });
+    if (forScene ? (typeof body.scene !== 'string' || body.canvas !== undefined || body.mirror !== undefined || (body.type !== 'inherit' && !TRANSITION_TYPES.includes(body.type)))
+      : (!['h', 'v'].includes(body.canvas) || !TRANSITION_TYPES.includes(body.type))) return json(res, 400, { error: 'bad-params' });
+    if (body.easing !== undefined && (!EASED_TYPES.includes(body.type) || (body.type === 'fade' && !flags.isOn(STREAM_SETTINGS_FLAG)) || !easingChoices().easing.some((e) => e.id === body.easing))) return json(res, 400, { error: 'bad-params' });
     if (body.mirror !== undefined && (typeof body.mirror !== 'boolean' || body.canvas !== 'v')) return json(res, 400, { error: 'bad-params' });
     const ms = (v) => Number.isInteger(v) && v >= TRANSITION_RANGES.durationMs[0] && v <= TRANSITION_RANGES.durationMs[1];
-    if ((body.type === 'fade' || trOwn(body.type)) && !ms(body.durationMs)) return json(res, 400, { error: 'bad-params' });
+    const timed = (type) => type === 'fade' || !!trOwn(type) || SHADER_TRANSITIONS.includes(type);
+    if (timed(body.type) && !ms(body.durationMs)) return json(res, 400, { error: 'bad-params' });
     // a stinger is either a video from the stream assets folder (`file` + `pointMs`) or a built-in preset by id (`preset`, D391; its own pointMs)
-    if (body.preset !== undefined && (body.type !== 'stinger' || typeof body.preset !== 'string' || body.file !== undefined || body.pointMs !== undefined)) return json(res, 400, { error: 'bad-params' });
+    if (body.preset !== undefined && (forScene || body.type !== 'stinger' || typeof body.preset !== 'string' || body.file !== undefined || body.pointMs !== undefined)) return json(res, 400, { error: 'bad-params' });
     if (body.type === 'stinger' && ((body.preset === undefined && (!ms(body.pointMs) || typeof body.file !== 'string')) || (body.audio !== undefined && typeof body.audio !== 'boolean'))) return json(res, 400, { error: 'bad-params' });
     if (body.type !== 'stinger' && body.audio !== undefined) return json(res, 400, { error: 'bad-params' });
     if (body.preset !== undefined && !listStingerPresets().some((p) => p.id === body.preset)) return json(res, 409, { error: 'unknown-stinger' });
@@ -1353,17 +1382,23 @@ export function createStudioServer(opts) {
     try {
       const ht = await host.call('transitions.types', {});
       const t = Array.isArray(ht?.types) ? ht.types.find((x) => x?.type === body.type) : null;
-      if (Array.isArray(ht?.types) && body.type !== 'cut' && (!t || t.available !== true)) return json(res, 409, { error: 'type-unavailable' });
+      if (Array.isArray(ht?.types) && body.type !== 'cut' && body.type !== 'inherit' && (!t || t.available !== true)) return json(res, 409, { error: 'type-unavailable' });
       if (body.type === 'wipe' && body.pattern !== undefined && Array.isArray(ht?.wipes) && !ht.wipes.includes(body.pattern)) return json(res, 409, { error: 'unknown-pattern' });
     } catch { /* no list: the host's own refusal comes from the status poll */ }
     projectSync.reload();
     let doc;
     try { doc = loadProject(file).project; } catch { return json(res, 409, { error: 'project-unreadable' }); }
-    const c = doc.canvases.find((x) => x.id === body.canvas);
-    if (!c) return json(res, 409, { error: 'unknown-canvas' });
+    const c = forScene ? doc.scenes.find((x) => x.id === body.scene) : doc.canvases.find((x) => x.id === body.canvas);
+    if (!c) return json(res, 409, { error: forScene ? 'unknown-scene' : 'unknown-canvas' });
+    if (forScene && body.type === 'inherit') {
+      delete c.transition;
+      try { saveProject(file, doc); } catch { return json(res, 409, { error: 'not-saved' }); }
+      projectSync.reload();
+      return json(res, 200, { ok: true, scene: c.id, transition: null });
+    }
     c.transition = body.type === 'stinger' && body.preset !== undefined ? { ...stingerTransition(body.preset, c.id), ...(body.audio === false ? { audio: false } : {}) }
       : body.type === 'stinger' ? { type: 'stinger', durationMs: 0, file: { base: 'media', rel: body.file }, pointMs: body.pointMs, ...(body.audio === false ? { audio: false } : {}) }
-      : { type: body.type, durationMs: body.type === 'fade' || trOwn(body.type) ? body.durationMs : 0, ...(body.easing && body.easing !== 'linear' ? { easing: body.easing } : {}),
+      : { type: body.type, durationMs: timed(body.type) ? body.durationMs : 0, ...(body.easing && body.easing !== 'linear' ? { easing: body.easing } : {}),
         ...Object.fromEntries(TR_OWN_KEYS.filter((k) => body[k] !== undefined).map((k) => [k, body[k]])) };
     if (body.mirror === true) c.transition.mirror = true;
     // The project validator is the one rule set (services/project/validate.mjs): every problem it finds on this transition is a bad request.
@@ -1371,7 +1406,7 @@ export function createStudioServer(opts) {
     if (bad.length > 0) return json(res, 400, { error: 'bad-params', problems: bad.slice(0, 5).map((e) => `${e.path}: ${e.message}`) });
     try { saveProject(file, doc); } catch { return json(res, 409, { error: 'not-saved' }); }
     projectSync.reload();
-    return json(res, 200, { ok: true, canvas: c.id, transition: c.transition });
+    return json(res, 200, { ok: true, ...(forScene ? { scene: c.id } : { canvas: c.id }), transition: c.transition });
   }
   // What the add-layer form can offer (D240): ids and names from the project file only (shown on this local page).
   // Each device carries `connected` (true / false) when the host's device watcher has listed devices (D329); absent
@@ -1988,6 +2023,14 @@ export function createStudioServer(opts) {
       }
       let result;
       const before = await readBefore(body.method, params);
+      // 2026-11-28: a scene with its own transition switches with it: the canvas transition is set first.
+      if (body.method === 'scenes.activate' && host.describe().kind === 'host') {
+        try {
+          const hs = await host.call('host.status', {});
+          const target = params.canvas ? { [String(params.canvas).toLowerCase()]: params.scene } : { h: params.scene, v: params.scene };
+          if (isPlain(hs)) await transitionSync(hs, target);
+        } catch { /* the status poll applies it later */ }
+      }
       const pt = body.method === 'preview.open' ? tasks.start({ title: `Opening the ${params.canvas === 'v' ? 'vertical' : 'horizontal'} preview`, kind: 'preview' }) : null;
       try { result = await host.call(body.method, params) ?? null; } catch (e) { pt?.fail('Could not open'); return json(res, 502, { error: 'host-error', detail: String(e?.code ?? e?.message ?? 'error').slice(0, 80) }); }
       pt?.done();

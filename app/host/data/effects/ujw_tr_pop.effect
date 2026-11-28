@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// ujwalam-host: scene transition pop (src/shader_transition.cpp, ujw_shader_transition). Embedded at build time.
+// The new scene pops in from 88 % size with a quick overshoot (back-out curve, peak about 103 %) and settles at 100 %; it
+// fades in over the first 35 %. Behind it the old scene eases back to 97 %; where the new scene does not cover the frame
+// yet, the old one shows. Scale only, no brightness change of its own.
+
+uniform float4x4 ViewProj;
+uniform texture2d tex_a;
+uniform texture2d tex_b;
+uniform float t;
+uniform float2 size;
+uniform float2 dir;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float backOut(float x)
+{
+	float c1 = 1.70158;
+	float c3 = c1 + 1.0;
+	float y = x - 1.0;
+	return 1.0 + c3 * y * y * y + c1 * y * y;
+}
+
+float4 PSPop(VertData v_in) : TARGET
+{
+	float sa = 1.0 - 0.03 * t;
+	float4 a = tex_a.Sample(linearClamp, (v_in.uv - 0.5) / sa + 0.5);
+	float sb = 0.88 + 0.12 * backOut(saturate(t));
+	float2 ub = (v_in.uv - 0.5) / sb + 0.5;
+	float inside = (all(ub >= 0.0) && all(ub <= 1.0)) ? 1.0 : 0.0;
+	float4 b = tex_b.Sample(linearClamp, ub);
+	return lerp(a, b, inside * smoothstep(0.0, 0.35, t));
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPop(v_in);
+	}
+}

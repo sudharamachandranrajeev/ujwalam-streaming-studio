@@ -3248,3 +3248,17 @@ paste box, rtmps:// only), stored for this stream only and deleted at stream end
 ON by default (requested features). Renumbered from D446 (the X posting branch uses D446). Temporary per-broadcast
 keys in Credential Manager, deleted at stream end, were accepted by the coordinator on 2026-11-27 as matching AGENTS.md
 (stream keys in Credential Manager only).
+## D448
+
+2026-11-28, shader scene transitions (feat/shader-transitions; renumber if another branch took D448). Six styles
+(blurZoom, lightLeak, motionSwipe, glitch, heartbeat, pop) on one host transition type `ujw_shader_transition`, always
+eased by the existing easer. Each realism look carries a default transition that a new realism scene gets as its own
+`scene.transition`; the user changes it per scene in the Transitions box (Scene row, "Same as the canvas" removes it).
+Choices made without asking: (1) a scene's own transition is applied by the UI server just before `scenes.activate`
+through `/ui/api/host`; a switch by another path (direct host call, hotkey) uses the canvas transition until the next
+status poll. (2) A shader that fails to compile runs a fade of the same length and curve (`fallback: true`), never a
+refusal. (3) Test seam `UJWALAM_TEST_SHADER_FAIL=<style>`, honoured only with `UJWALAM_HEADLESS=1`, forces that path;
+it can only make a transition plainer. (4) Shader-style easing needs no stream-settings flag. (5) Audio is an
+equal-power crossfade (the fade transition's linear one dips). (6) Built-in stinger presets stay per canvas, not per
+scene. (7) Flash safety by design (one light-leak glow per switch, glitch adds no brightness) and measured on test
+cards only (docs/evidence/2026-11-28-shader-transitions.md).
