@@ -322,7 +322,39 @@ ApplicationWindow {
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: win.pad + Theme.sp.s; rightMargin: win.pad + Theme.sp.s }
         height: 28
         // The shared tooltip opens as its own window (Qt 6.8), so a preview never covers it.
-        Component.onCompleted: ToolTip.toolTip.popupType = studioHidden ? Popup.Item : Popup.Window // hidden mode: nothing on screen
+        // Molten Stone (2026-11-27), every theme: a dark pill with an accent edge and a molten drop pointer under it, all
+        // inside the tooltip's own bounds (its window clips anything outside: the drop sits in a 6 px bottom padding).
+        Component.onCompleted: {
+            const t = ToolTip.toolTip;
+            t.popupType = studioHidden ? Popup.Item : Popup.Window; // hidden mode: nothing on screen
+            t.background = tipBack.createObject(t);
+            t.contentItem = tipText.createObject(t);
+            t.bottomPadding = 6 + 6;
+        }
+        Component {
+            id: tipBack
+            Item {
+                objectName: "tipBack"
+                Rectangle {
+                    anchors { fill: parent; bottomMargin: 6 }
+                    radius: Math.min(12, height / 2)
+                    color: Theme.c.field
+                    border.width: 1
+                    border.color: Theme.c.accent
+                }
+                UTipDrop { anchors.horizontalCenter: parent.horizontalCenter; y: parent.height - 7 }
+            }
+        }
+        Component {
+            id: tipText
+            Text {
+                text: ToolTip.toolTip.text
+                color: Theme.c.text
+                font.family: Theme.family
+                font.pixelSize: Theme.ty.small
+                wrapMode: Text.Wrap
+            }
+        }
         Text {
             objectName: "note"
             anchors { left: parent.left; right: health.left; rightMargin: Theme.sp.l; verticalCenter: parent.verticalCenter }

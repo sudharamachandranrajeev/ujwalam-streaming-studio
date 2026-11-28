@@ -30,6 +30,11 @@ ScrollView {
         id: outer
         width: pg.availableWidth - 12
         spacing: Theme.sp.m
+        UBreadcrumbs { // where this page sits (Molten Stone, 2026-11-27; every theme)
+            objectName: "settingsCrumbs:" + pg.title
+            path: ["Studio", "Settings", pg.title]
+            links: false
+        }
         Text {
             objectName: "settingsTitle:" + pg.title
             text: pg.title

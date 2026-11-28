@@ -372,7 +372,12 @@ Dialog {
                 width: parent.width
                 height: 170
                 clip: true
-                model: dlg.posts
+                // 20 a page (Molten Stone, 2026-11-27, every theme): the pebbles under the list move between pages; one page = all.
+                property int page: 0
+                readonly property int pages: Math.max(1, Math.ceil((dlg.posts || []).length / 20))
+                onPagesChanged: if (page >= pages) page = pages - 1
+                model: (dlg.posts || []).slice(page * 20, page * 20 + 20)
+                id: postsList
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar {}
                 delegate: Rectangle {
@@ -395,6 +400,12 @@ Dialog {
                     HoverHandler { id: hover }
                     TapHandler { onTapped: dlg.pick(row.modelData.id) }
                 }
+            }
+            UPagination {
+                objectName: "postsPages"
+                page: postsList.page
+                pages: postsList.pages
+                onMoved: (p) => { postsList.page = p }
             }
             Column {
                 objectName: "postsForm"

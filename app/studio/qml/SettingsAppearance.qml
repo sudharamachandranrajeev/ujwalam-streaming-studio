@@ -209,13 +209,19 @@ Column {
             font.family: Theme.family
             font.pixelSize: Theme.ty.body
         }
-        UCombo {
+        Row { // three choices, all in sight: radio buttons (Molten Stone, 2026-11-27; every theme)
             objectName: "settingsMotion"
-            width: 260
-            label: "Motion in the window"
-            model: ap.box.motionChoices
-            currentIndex: Math.max(0, ap.box.motionChoices.findIndex(m => m.value === ap.d.motion))
-            onChose: (v) => ap.box.set("motion", v)
+            spacing: Theme.sp.l
+            Repeater {
+                model: ap.box.motionChoices
+                URadio {
+                    required property var modelData
+                    objectName: "settingsMotion:" + modelData.value
+                    text: modelData.text
+                    checked: ap.d.motion === modelData.value
+                    onClicked: ap.box.set("motion", modelData.value)
+                }
+            }
         }
     }
 }

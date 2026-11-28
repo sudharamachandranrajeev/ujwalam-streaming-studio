@@ -62,9 +62,12 @@ Item {
 
     component Card: Rectangle {
         radius: Theme.radiusMedium
-        color: Theme.c.panel
+        color: cardTex.on ? "transparent" : Theme.c.panel
         border.color: Theme.c.border
-        border.width: 1
+        border.width: cardTex.on ? 0 : 1
+        // Molten Stone (2026-11-27): the stone card with its rim and a slab peeking behind; the line chart is drawn into it.
+        // Kept inside the card's box; a compact card is too low for the picture's corners and stays flat.
+        UTexture { id: cardTex; surface: "card"; inset: true }
     }
     component Spark: Card {
         id: sc
