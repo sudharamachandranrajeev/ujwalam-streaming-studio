@@ -104,6 +104,7 @@ qt_add_qml_module(ujwalam-studio
 		qml/UProgress.qml
 		qml/UEmptyState.qml
 		qml/UBusySwirl.qml
+		qml/UBadge.qml
 		qml/FeaturesCard.qml
 		qml/FeatureSwitch.qml
 		qml/SettingsPage.qml

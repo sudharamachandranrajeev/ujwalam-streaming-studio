@@ -25,7 +25,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const text = (...p) => readFileSync(path.join(REPO, ...p), 'utf8');
 const pack = JSON.parse(text('data', 'themes', 'molten-stone.json'));
 const QML = path.join(REPO, 'app', 'studio', 'qml');
-const NEW = ['UTexture', 'UAmbient', 'UCheckbox', 'URadio', 'UBreadcrumbs', 'UPagination', 'USteps', 'UTipDrop', 'UAvatar', 'UTableHeader', 'USkeleton', 'UProgress', 'UEmptyState', 'UBusySwirl'];
+const NEW = ['UTexture', 'UAmbient', 'UCheckbox', 'URadio', 'UBreadcrumbs', 'UPagination', 'USteps', 'UTipDrop', 'UAvatar', 'UTableHeader', 'USkeleton', 'UProgress', 'UEmptyState', 'UBusySwirl', 'UBadge'];
 const hex = (rgb) => `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`;
 const lift = (rgb) => rgb.map((v, i) => v + ([235, 232, 228][i] - v) * 0.08); // the top light the generator adds (8 percent)
 
@@ -108,7 +108,7 @@ describe('Molten Stone files', () => {
     const uses = (n) => files.filter((f) => f !== `${n}.qml` && new RegExp(`\\b${n} \\{`).test(readFileSync(path.join(QML, f), 'utf8'))).map((f) => f.replace('.qml', ''));
     const outside = (n) => uses(n).filter((f) => !NEW.includes(f));
     for (const n of NEW) assert.ok(uses(n).length > 0, `${n} is used`);
-    for (const n of ['UCheckbox', 'URadio', 'UBreadcrumbs', 'UPagination', 'USteps', 'UAvatar', 'UTableHeader', 'USkeleton', 'UProgress', 'UEmptyState', 'UBusySwirl', 'UTexture'])
+    for (const n of ['UCheckbox', 'URadio', 'UBreadcrumbs', 'UPagination', 'USteps', 'UAvatar', 'UTableHeader', 'USkeleton', 'UProgress', 'UEmptyState', 'UBusySwirl', 'UTexture', 'UBadge'])
       assert.ok(outside(n).length > 0, `${n} sits in a screen of the studio: ${uses(n)}`);
     const cm = text('app', 'studio', 'CMakeLists.txt');
     for (const n of NEW) assert.ok(cm.includes(`qml/${n}.qml`), `${n} in CMakeLists.txt`);

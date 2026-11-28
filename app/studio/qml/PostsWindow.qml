@@ -389,8 +389,15 @@ Dialog {
                     height: 30
                     radius: Theme.radiusSmall
                     color: row.modelData.id === dlg.selected ? Theme.c.accent : hover.hovered ? Theme.c.field : "transparent"
+                    // NEW (D449, every theme): the package still waits for the user's look (not approved, not uploaded).
+                    UBadge {
+                        id: newBadge
+                        objectName: "postsNew:" + row.index
+                        visible: row.modelData.status !== "approved" && row.modelData.status !== "uploaded"
+                        anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                    }
                     Text {
-                        anchors { left: parent.left; right: parent.right; leftMargin: 8; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                        anchors { left: parent.left; right: newBadge.visible ? newBadge.left : parent.right; leftMargin: 8; rightMargin: 8; verticalCenter: parent.verticalCenter }
                         text: dlg.rowText(row.modelData)
                         elide: Text.ElideRight
                         color: row.modelData.id === dlg.selected ? Theme.c.onAccent : Theme.c.text
