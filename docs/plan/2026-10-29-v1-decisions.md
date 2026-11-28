@@ -3248,3 +3248,12 @@ paste box, rtmps:// only), stored for this stream only and deleted at stream end
 ON by default (requested features). Renumbered from D446 (the X posting branch uses D446). Temporary per-broadcast
 keys in Credential Manager, deleted at stream end, were accepted by the coordinator on 2026-11-27 as matching AGENTS.md
 (stream keys in Credential Manager only).
+
+## D449 — Molten Stone theme: painted surfaces, ambient smoke, new controls for every theme (2026-11-27, plan approved)
+
+- Plan: `docs/plan/2026-11-27-molten-stone-theme.md`. Evidence: `docs/evidence/2026-11-27-molten-stone-theme.md`.
+- Pack `molten-stone` with an optional `texture` block (9-slice PNGs made by `tools/theme-textures/molten-stone.mjs`, deterministic, 384 KiB) and `ambient` block (smoke, drips).
+- Painted surfaces are dropped in plain fx (on air, High performance). The ambient loops exist only in full fx, off air, animations on, visible and active window. Still pictures (empty state, avatar) show in every fx.
+- New controls for every theme, each in a real place: UCheckbox, URadio, UBreadcrumbs, UPagination, USteps, UTipDrop, UAvatar, UTableHeader, USkeleton, UProgress, UEmptyState, UBusySwirl, UBadge (NEW on posts waiting for approval).
+- Stats cards stay flat (the stone rim crossed the labels at 44-58 px). No tab bar was added.
+- Off air the ambient loops cost about 3.7 % of one core over violet-night (headless measure); on air the cost matches violet-night.
