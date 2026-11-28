@@ -6,6 +6,8 @@ One section per alpha build (`0.1.0-alpha.N`, D133). The packager copies the sec
 
 - Realism scenes work again: in alpha.53 the studio engine refused the transition a realism look gives its scene, so no realism scene could be made (and adding layers failed once any scene had its own transition).
 - "Add a scene for a scenario" opens its templates again (it showed "HTTP 500: templates-unreadable"; the templates were missing from the installer).
+- Live clip covers no longer say "1 KILL" under every medal: a count shows only when the clip really has one.
+- The "Make clips?" question after a stream is its own small window, so it can no longer take clicks meant for another open window.
 
 ## 0.1.0-alpha.53 — 2026-11-28
 
