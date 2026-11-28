@@ -153,4 +153,19 @@ describe('QML studio: clips chip, question and My clips (headless probe)', { ski
     assert.deepEqual(JSON.parse(readFileSync(path.join(r.dataDir, 'clips', 'answer.json'), 'utf8')),
       { id: ask.id, make: true, remember: false, look: { music: 'drop', transitions: 'off' } });
   });
+
+  test('2026-11-28 "Make clips?" is a FloatSurface (tool window on a real screen): the question is drawn in the hidden studio window, and the real buttons answer', async () => {
+    const ask = { id: 'rec-11', name: 'rec-11', kind: 'recording', minutes: 4 };
+    let r = await probe({ status: { state: 'idle', available: true, asks: [ask], queued: [], last: null }, actions: ['clips-ask'] });
+    assert.equal(r.c.ask.open, true);
+    assert.equal(r.c.ask.inWindow, false, 'hidden mode: no window of its own');
+    assert.equal(r.c.ask.surfaceOpened, true);
+    r = await probe({ status: { state: 'idle', available: true, asks: [ask], queued: [], last: null }, actions: ['clips-ask', 'clips-click:yes'] });
+    assert.deepEqual(done(r.p), [true, true]);
+    assert.equal(r.c.ask.open, false, 'answered: the surface is gone');
+    assert.deepEqual(JSON.parse(readFileSync(path.join(r.dataDir, 'clips', 'answer.json'), 'utf8')), { id: ask.id, make: true, remember: false });
+    r = await probe({ status: { state: 'idle', available: true, asks: [ask], queued: [], last: null }, actions: ['clips-click:no', 'clips-ask', 'clips-click:no'] });
+    assert.deepEqual(done(r.p), [false, true, true], 'no button answers while no question is open');
+    assert.equal(JSON.parse(readFileSync(path.join(r.dataDir, 'clips', 'answer.json'), 'utf8')).make, false);
+  });
 });
