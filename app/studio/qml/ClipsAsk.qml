@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // "Make clips?" after a recording or stream (setting: Ask me each time; the widget's askClips). Not modal: the studio
 // keeps working. Make clips / Not now, and "Do this every time" saves the choice as the setting (ui/api/clips/answer).
-// One question at a time; the next one opens when this one is answered. Its own window (Popup.Window).
+// One question at a time; the next one opens when this one is answered.
+// It opens by itself (the store's poll, once a stream or recording has ended), so it is a FloatSurface tool window and
+// never a Popup.Window: a popup window opened without a click takes the clicks of the popup the user is using
+// (FloatSurface.qml, docs/evidence/2026-11-28-float-self-open.md).
 // D411: a music, transition and name style for this one recording only ("As in Settings" by default; nothing is saved).
 import QtQuick
 import QtQuick.Controls.Basic
 import Ujwalam.Core
 
-Dialog {
+Item {
     id: dlg
     objectName: "clipsAsk"
     required property var store
-    popupType: studioHidden ? Popup.Item : Popup.Window
-    modal: false
-    anchors.centerIn: parent
-    implicitWidth: Math.min(480, parent ? parent.width - 40 : 480)
-    title: "Make clips?"
-    closePolicy: Popup.CloseOnEscape
+    readonly property string title: "Make clips?"
+    readonly property bool opened: surface.opened
 
     property var ask: null
     readonly property bool live: !!ask && ask.kind === "live"
@@ -35,17 +34,14 @@ Dialog {
         });
     }
     function pickLook(g, v) { const m = Object.assign({}, lookPick); if (v === "") delete m[g]; else m[g] = v; lookPick = m }
-    function put(a) { ask = a; remember.checked = false; lookPick = ({}); loadLook(); open(); return true }
-    // Escape or the X counts as Not now, as the widget's message box does.
-    property bool answered: false
-    onOpened: { answered = false; store.clipsAsking = true }
-    onClosed: { store.clipsAsking = false; if (!answered && ask) answer(false); }
+    function put(a) { ask = a; remember.checked = false; lookPick = ({}); loadLook(); store.clipsAsking = true; surface.shown = true; return true }
+    // Escape counts as Not now, as the widget's message box does.
     function answer(make) {
         if (!ask) return false;
-        answered = true;
         const id = ask.id, keep = remember.checked, look = Object.keys(lookPick).length ? lookPick : null;
         ask = null;
-        close();
+        surface.shown = false;
+        store.clipsAsking = false;
         store.answerClips(id, make, keep, make ? look : null);
         Qt.callLater(store.nextClipsAsk);
         return true;
@@ -62,76 +58,103 @@ Dialog {
         return answer(p[0] === "yes");
     }
 
-    background: Rectangle {
-        color: Theme.c.panel
-        radius: Theme.radiusLarge
-        border.width: 1
-        border.color: Theme.c.border
-    }
-    header: Text {
-        text: dlg.title
-        padding: 18
-        bottomPadding: 6
-        color: Theme.c.text
-        font.family: Theme.family
-        font.pixelSize: 18
-        font.weight: Font.DemiBold
-    }
-    contentItem: Column {
-        spacing: 10
-        Text {
-            width: parent.width
-            text: dlg.message
-            wrapMode: Text.Wrap
-            color: Theme.c.text
-            font.family: Theme.family
-            font.pixelSize: 14
+    // The look the Dialog had: panel with a border, a title row (18 px inset), 12 px round the content, a 60 px footer.
+    FloatSurface {
+        id: surface
+        objectName: "clipsAskSurface"
+        anchors.fill: parent
+        takesFocus: true // Escape = Not now needs the keys
+        pw: Math.min(480, dlg.width - 40)
+        ph: head.height + col.implicitHeight + 24 + foot.implicitHeight
+        px: Math.round((dlg.width - pw) / 2)
+        py: Math.round((dlg.height - ph) / 2)
+        onShownChanged: if (shown) keys.forceActiveFocus()
+        Rectangle {
+            anchors.fill: parent
+            color: Theme.c.panel
+            radius: Theme.radiusLarge
+            border.width: 1
+            border.color: Theme.c.border
         }
-        Text {
-            visible: dlg.lookGroups.length > 0
-            width: parent.width
-            text: "Style for this recording (optional)"
-            color: Theme.c.muted
-            font.family: Theme.family
-            font.pixelSize: 13
-        }
-        Repeater {
-            model: dlg.lookGroups
-            delegate: Row {
-                id: lr
-                required property var modelData
-                spacing: 8
+        FocusScope {
+            id: keys
+            anchors.fill: parent
+            focus: true
+            Keys.onEscapePressed: dlg.answer(false)
+            Text {
+                id: head
+                text: dlg.title
+                padding: 18
+                bottomPadding: 6
+                color: Theme.c.text
+                font.family: Theme.family
+                font.pixelSize: 18
+                font.weight: Font.DemiBold
+            }
+            Column {
+                id: col
+                x: 12
+                y: head.height + 12
+                width: parent.width - 24
+                spacing: 10
                 Text {
-                    width: 96
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: lr.modelData.title
+                    width: parent.width
+                    text: dlg.message
+                    wrapMode: Text.Wrap
                     color: Theme.c.text
+                    font.family: Theme.family
+                    font.pixelSize: 14
+                }
+                Text {
+                    visible: dlg.lookGroups.length > 0
+                    width: parent.width
+                    text: "Style for this recording (optional)"
+                    color: Theme.c.muted
                     font.family: Theme.family
                     font.pixelSize: 13
                 }
-                UCombo {
-                    objectName: "clipsAskLook_" + lr.modelData.g
-                    width: 260
-                    label: lr.modelData.title + " for this recording"
-                    model: [{ value: "", text: "As in Settings" }].concat(lr.modelData.options.map(o => ({ value: o.id, text: o.label }))).concat([{ value: "off", text: "None" }])
-                    currentIndex: Math.max(0, model.findIndex(m => m.value === (dlg.lookPick[lr.modelData.g] || "")))
-                    onChose: (v) => dlg.pickLook(lr.modelData.g, v)
+                Repeater {
+                    model: dlg.lookGroups
+                    delegate: Row {
+                        id: lr
+                        required property var modelData
+                        spacing: 8
+                        Text {
+                            width: 96
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: lr.modelData.title
+                            color: Theme.c.text
+                            font.family: Theme.family
+                            font.pixelSize: 13
+                        }
+                        UCombo {
+                            objectName: "clipsAskLook_" + lr.modelData.g
+                            width: 260
+                            label: lr.modelData.title + " for this recording"
+                            model: [{ value: "", text: "As in Settings" }].concat(lr.modelData.options.map(o => ({ value: o.id, text: o.label }))).concat([{ value: "off", text: "None" }])
+                            currentIndex: Math.max(0, model.findIndex(m => m.value === (dlg.lookPick[lr.modelData.g] || "")))
+                            onChose: (v) => dlg.pickLook(lr.modelData.g, v)
+                        }
+                    }
+                }
+                UCheckbox {
+                    id: remember
+                    objectName: "clipsAskRemember"
+                    text: dlg.live ? "Do this every time a stream ends" : "Do this every time I stop recording"
                 }
             }
-        }
-        UCheckbox {
-            id: remember
-            objectName: "clipsAskRemember"
-            text: dlg.live ? "Do this every time a stream ends" : "Do this every time I stop recording"
-        }
-    }
-    footer: Item {
-        implicitHeight: 60
-        Row {
-            anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
-            spacing: 10
-            UButton { objectName: "clipsAskNo"; text: "Not now"; onClicked: dlg.answer(false) }
-            UButton { objectName: "clipsAskYes"; text: "Make clips"; kind: "primary"; onClicked: dlg.answer(true) }
+            Item {
+                id: foot
+                y: parent.height - implicitHeight
+                width: parent.width
+                implicitHeight: 60
+                Row {
+                    anchors { right: parent.right; rightMargin: 18; verticalCenter: parent.verticalCenter }
+                    spacing: 10
+                    UButton { objectName: "clipsAskNo"; text: "Not now"; onClicked: dlg.answer(false) }
+                    UButton { objectName: "clipsAskYes"; text: "Make clips"; kind: "primary"; onClicked: dlg.answer(true) }
+                }
+            }
         }
     }
 }
